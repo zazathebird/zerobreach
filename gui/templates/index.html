@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ZeroBreach V23 — Kraken Console</title>
+<link rel="stylesheet" href="/static/css/main.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- BOOT SEQUENCE OVERLAY -->
+<div id="boot-overlay">
+  <div id="boot-content">
+    <div id="boot-logo">
+      <div class="boot-hex-grid" id="hexGrid"></div>
+      <div id="boot-title">
+        <span class="boot-char" style="--i:0">Z</span><span class="boot-char" style="--i:1">E</span><span class="boot-char" style="--i:2">R</span><span class="boot-char" style="--i:3">O</span><span class="boot-char boot-space"> </span><span class="boot-char" style="--i:5">B</span><span class="boot-char" style="--i:6">R</span><span class="boot-char" style="--i:7">E</span><span class="boot-char" style="--i:8">A</span><span class="boot-char" style="--i:9">C</span><span class="boot-char" style="--i:10">H</span>
+      </div>
+      <div id="boot-sub">PROJECT KRAKEN // V23 // OMNI-TIER FORENSIC EXORCIST</div>
+      <div id="boot-bar-wrap"><div id="boot-bar"></div></div>
+      <div id="boot-status">INITIALIZING SYSTEMS...</div>
+    </div>
+  </div>
+</div>
+
+<!-- SCAN FLASH OVERLAY -->
+<div id="scan-flash"></div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<!--  MAIN APP                                                                  -->
+<!-- ═══════════════════════════════════════════════════════════════════════════ -->
+<div id="app" class="hidden">
+
+  <!-- HEADER -->
+  <header id="header">
+    <div id="header-left">
+      <div id="logo-mark">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <polygon points="16,2 30,9 30,23 16,30 2,23 2,9" stroke="var(--accent)" stroke-width="1.5" fill="none" class="logo-hex"/>
+          <text x="16" y="21" text-anchor="middle" fill="var(--accent)" font-size="14" font-family="monospace" font-weight="bold">☠</text>
+        </svg>
+      </div>
+      <div id="logo-text">
+        <span class="logo-name">ZEROBREACH</span>
+        <span class="logo-version">V23</span>
+      </div>
+    </div>
+    <div id="header-center">
+      <div class="sysinfo-pill" id="pill-host"><span class="pill-label">HOST</span><span class="pill-val" id="si-host">—</span></div>
+      <div class="sysinfo-pill" id="pill-user"><span class="pill-label">USER</span><span class="pill-val" id="si-user">—</span></div>
+      <div class="sysinfo-pill" id="pill-os"><span class="pill-label">OS</span><span class="pill-val" id="si-os">—</span></div>
+      <div class="sysinfo-pill" id="pill-mode" style="display:none"><span class="pill-label">MODE</span><span class="pill-val" id="si-mode">—</span></div>
+    </div>
+    <div id="header-right">
+      <div id="msp-badge" class="hidden">MSP MODE</div>
+      <div id="live-clock"></div>
+      <div id="conn-indicator"><span class="conn-dot" id="connDot"></span><span id="connLabel">OFFLINE</span></div>
+    </div>
+    <div id="header-accent-line"></div>
+  </header>
+
+  <!-- MAIN LAYOUT -->
+  <div id="layout">
+
+    <!-- LEFT NAV -->
+    <nav id="sidenav">
+      <div class="nav-item active" data-view="launchpad" title="Launch Pad">
+        <span class="nav-icon">⚡</span><span class="nav-label">LAUNCH PAD</span>
+      </div>
+      <div class="nav-item" data-view="scanmonitor" title="Scan Monitor">
+        <span class="nav-icon">🔍</span><span class="nav-label">SCAN MONITOR</span>
+      </div>
+      <div class="nav-item nav-locked" data-view="findings" title="Findings Tree" id="nav-findings">
+        <span class="nav-icon">🌲</span><span class="nav-label">FINDINGS</span>
+        <span class="nav-badge" id="findings-badge" style="display:none">0</span>
+      </div>
+      <div class="nav-item nav-locked" data-view="remediation" title="Remediation" id="nav-remediation">
+        <span class="nav-icon">🔧</span><span class="nav-label">REMEDIATION</span>
+        <span class="nav-lock-icon">🔒</span>
+      </div>
+      <div class="nav-item" data-view="report" title="Threat Report">
+        <span class="nav-icon">📊</span><span class="nav-label">REPORT</span>
+      </div>
+      <div class="nav-item" data-view="ioc" title="IOC Manager">
+        <span class="nav-icon">📁</span><span class="nav-label">IOC MANAGER</span>
+      </div>
+      <div class="nav-item" data-view="settings" title="Settings">
+        <span class="nav-icon">⚙</span><span class="nav-label">SETTINGS</span>
+      </div>
+      <!-- System Vitals -->
+      <div id="vitals">
+        <div class="vitals-title">SYSTEM VITALS</div>
+        <div class="vital-row">
+          <span class="vital-label">CPU</span>
+          <div class="vital-bar-wrap"><div class="vital-bar" id="vbar-cpu"></div></div>
+          <span class="vital-pct" id="vpct-cpu">0%</span>
+        </div>
+        <div class="vital-row">
+          <span class="vital-label">RAM</span>
+          <div class="vital-bar-wrap"><div class="vital-bar" id="vbar-ram"></div></div>
+          <span class="vital-pct" id="vpct-ram">0%</span>
+        </div>
+        <div class="vital-row">
+          <span class="vital-label">DEFENDER</span>
+          <span class="vital-status" id="vstat-defender">●</span>
+        </div>
+      </div>
+    </nav>
+
+    <!-- CENTER VIEWS -->
+    <main id="main-content">
+
+      <!-- ── VIEW: LAUNCH PAD ─────────────────────────────────────── -->
+      <div class="view active" id="view-launchpad">
+        <div class="view-title">MISSION PARAMETERS</div>
+
+        <!-- Mode selector -->
+        <div class="section-label">DEPLOYMENT MODE</div>
+        <div id="mode-tiles">
+          <div class="mode-tile" data-mode="QUICK">
+            <div class="mode-tile-icon">⚡</div>
+            <div class="mode-tile-name">QUICK</div>
+            <div class="mode-tile-phases">30 PHASES</div>
+            <div class="mode-tile-desc">Core triage · ~2 min</div>
+          </div>
+          <div class="mode-tile active" data-mode="FULL">
+            <div class="mode-tile-icon">🔍</div>
+            <div class="mode-tile-name">FULL</div>
+            <div class="mode-tile-phases">80 PHASES</div>
+            <div class="mode-tile-desc">Comprehensive · ~8 min</div>
+          </div>
+          <div class="mode-tile" data-mode="DEEP">
+            <div class="mode-tile-icon">🧬</div>
+            <div class="mode-tile-name">DEEP</div>
+            <div class="mode-tile-phases">107 PHASES</div>
+            <div class="mode-tile-desc">APT + YARA + Memory · ~20 min</div>
+          </div>
+          <div class="mode-tile" data-mode="PARANOID">
+            <div class="mode-tile-icon">☣</div>
+            <div class="mode-tile-name">PARANOID</div>
+            <div class="mode-tile-phases">107 PHASES+</div>
+            <div class="mode-tile-desc">Escalated thresholds · ~25 min</div>
+          </div>
+          <div class="mode-tile" data-mode="STEALTH">
+            <div class="mode-tile-icon">👁</div>
+            <div class="mode-tile-name">STEALTH</div>
+            <div class="mode-tile-phases">107 PHASES</div>
+            <div class="mode-tile-desc">Silent · JSON output · ~20 min</div>
+          </div>
+        </div>
+
+        <!-- Time window -->
+        <div class="section-label" style="margin-top:28px">TEMPORAL SCOPE</div>
+        <div id="time-tiles">
+          <div class="time-tile" data-hours="1">1 HR</div>
+          <div class="time-tile" data-hours="6">6 HRS</div>
+          <div class="time-tile" data-hours="24">24 HRS</div>
+          <div class="time-tile" data-hours="168">7 DAYS</div>
+          <div class="time-tile" data-hours="720">30 DAYS</div>
+          <div class="time-tile active" data-hours="0">ALL TIME</div>
+          <div class="time-tile custom-tile" data-hours="custom">
+            CUSTOM: <input type="number" id="custom-hours" placeholder="hrs" min="1" max="8760">
+          </div>
+        </div>
+
+        <!-- Options grid -->
+        <div class="section-label" style="margin-top:28px">OPTIONS</div>
+        <div id="options-grid">
+          <label class="opt-toggle"><input type="checkbox" id="opt-html" checked> <span class="toggle-box"></span> Generate HTML Report</label>
+          <label class="opt-toggle"><input type="checkbox" id="opt-snapshot" checked> <span class="toggle-box"></span> Create Rollback Snapshot</label>
+          <label class="opt-toggle"><input type="checkbox" id="opt-baseline"> <span class="toggle-box"></span> Baseline Diff Mode</label>
+          <label class="opt-toggle"><input type="checkbox" id="opt-paranoid"> <span class="toggle-box"></span> Paranoid Thresholds</label>
+          <label class="opt-toggle"><input type="checkbox" id="opt-csv"> <span class="toggle-box"></span> Export CSV</label>
+          <label class="opt-toggle"><input type="checkbox" id="opt-stealth"> <span class="toggle-box"></span> Stealth (Silent/JSON)</label>
+        </div>
+
+        <!-- IOC file -->
+        <div class="file-input-row">
+          <span class="section-label" style="margin:0">IOC FILE</span>
+          <input type="text" id="ioc-path" class="path-input" placeholder="Optional: path to IOC file...">
+          <button class="cyber-btn-sm" id="btn-browse-ioc">BROWSE</button>
+        </div>
+
+        <!-- MSP code hint -->
+        <div id="msp-hint">CLASSIFIED ACCESS CODE: <span id="msp-input-display">_</span></div>
+        <input type="text" id="msp-input" autocomplete="off" style="position:absolute;opacity:0;pointer-events:none">
+
+        <!-- INITIATE button -->
+        <div id="initiate-wrap">
+          <button id="btn-initiate" class="initiate-btn">
+            <span class="initiate-icon">⚡</span>
+            <span class="initiate-text">INITIATE SCAN</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- ── VIEW: SCAN MONITOR ───────────────────────────────────── -->
+      <div class="view" id="view-scanmonitor">
+        <div id="monitor-top">
+          <div id="phase-display">
+            <div id="phase-number">PHASE <span id="cur-phase">0</span> / <span id="total-phase">107</span></div>
+            <div id="phase-name-display">AWAITING INITIATION</div>
+            <div id="section-display">—</div>
+          </div>
+          <div id="monitor-controls">
+            <button class="cyber-btn" id="btn-pause" disabled>⏸ PAUSE</button>
+            <button class="cyber-btn danger" id="btn-abort" disabled>■ ABORT</button>
+          </div>
+        </div>
+
+        <!-- Live threat counters strip -->
+        <div id="threat-strip">
+          <div class="threat-chip" id="chip-RAT"><span class="chip-label">RAT/C2</span><span class="chip-val" id="cnt-RAT">0</span></div>
+          <div class="threat-chip" id="chip-Rootkit"><span class="chip-label">ROOTKIT</span><span class="chip-val" id="cnt-Rootkit">0</span></div>
+          <div class="threat-chip" id="chip-Ransomware"><span class="chip-label">RANSOM</span><span class="chip-val" id="cnt-Ransomware">0</span></div>
+          <div class="threat-chip" id="chip-Keylogger"><span class="chip-label">KEYLOG</span><span class="chip-val" id="cnt-Keylogger">0</span></div>
+          <div class="threat-chip" id="chip-Worm"><span class="chip-label">WORM</span><span class="chip-val" id="cnt-Worm">0</span></div>
+          <div class="threat-chip" id="chip-Miner"><span class="chip-label">MINER</span><span class="chip-val" id="cnt-Miner">0</span></div>
+          <div class="threat-chip" id="chip-Trojan"><span class="chip-label">TROJAN</span><span class="chip-val" id="cnt-Trojan">0</span></div>
+          <div class="threat-chip" id="chip-Spyware"><span class="chip-label">SPYWARE</span><span class="chip-val" id="cnt-Spyware">0</span></div>
+          <div class="threat-chip" id="chip-Fileless"><span class="chip-label">FILELESS</span><span class="chip-val" id="cnt-Fileless">0</span></div>
+          <div class="threat-chip" id="chip-Other"><span class="chip-label">OTHER</span><span class="chip-val" id="cnt-Other">0</span></div>
+        </div>
+
+        <!-- Log panel -->
+        <div id="log-panel">
+          <div id="log-toolbar">
+            <span class="log-filter active" data-filter="ALL">ALL</span>
+            <span class="log-filter" data-filter="CRITICAL">🔴 CRITICAL</span>
+            <span class="log-filter" data-filter="HIGH">🟠 HIGH</span>
+            <span class="log-filter" data-filter="POSSIBLE">🟡 POSSIBLE</span>
+            <label style="margin-left:auto;color:var(--text-dim);font-size:11px">
+              <input type="checkbox" id="autoscroll" checked> AUTOSCROLL
+            </label>
+          </div>
+          <div id="log-output"></div>
+        </div>
+
+        <!-- Progress bars -->
+        <div id="progress-section">
+          <div class="progress-row">
+            <span class="prog-label">PHASE</span>
+            <div class="prog-bar-wrap"><div class="prog-bar" id="prog-phase"></div></div>
+            <span class="prog-pct" id="prog-phase-pct">0%</span>
+          </div>
+          <div class="progress-row">
+            <span class="prog-label">OVERALL</span>
+            <div class="prog-bar-wrap"><div class="prog-bar" id="prog-overall"></div></div>
+            <span class="prog-pct" id="prog-overall-pct">0%</span>
+          </div>
+          <div id="time-display">
+            <span>ELAPSED: <span id="elapsed-display">00:00</span></span>
+            <span style="margin-left:24px">THREATS: <span id="total-threats-display" style="color:var(--threat-critical)">0</span></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── VIEW: FINDINGS TREE ──────────────────────────────────── -->
+      <div class="view" id="view-findings">
+        <div class="view-title">AUDIT FINDINGS</div>
+        <div id="findings-toolbar">
+          <div id="severity-pills">
+            <span class="sev-pill critical" id="pill-critical">🔴 CRITICAL <span id="count-critical">0</span></span>
+            <span class="sev-pill high" id="pill-high">🟠 HIGH <span id="count-high">0</span></span>
+            <span class="sev-pill possible" id="pill-possible">🟡 POSSIBLE <span id="count-possible">0</span></span>
+            <span class="sev-pill clean" id="pill-clean">🟢 CLEAN <span id="count-clean">0</span></span>
+          </div>
+          <div id="tree-controls">
+            <button class="cyber-btn-sm" id="btn-select-all">SELECT ALL</button>
+            <button class="cyber-btn-sm" id="btn-clear-all">CLEAR ALL</button>
+            <button class="cyber-btn-sm" id="btn-expand-all">EXPAND ALL</button>
+            <button class="cyber-btn-sm" id="btn-collapse-all">COLLAPSE ALL</button>
+          </div>
+        </div>
+        <div id="findings-tree"></div>
+        <div id="findings-footer">
+          <button class="cyber-btn" id="btn-goto-remediation" disabled>🔧 PROCEED TO REMEDIATION</button>
+          <button class="cyber-btn-sm" id="btn-export-findings">📋 EXPORT JSON</button>
+        </div>
+      </div>
+
+      <!-- ── VIEW: REMEDIATION ────────────────────────────────────── -->
+      <div class="view" id="view-remediation">
+        <div class="view-title">REMEDIATION CONSOLE</div>
+        <div id="snapshot-banner">
+          <span class="snap-icon">💾</span>
+          ROLLBACK SNAPSHOT: <span id="snapshot-path">Not yet created</span>
+        </div>
+        <div id="remediation-layout">
+          <div id="remediation-left">
+            <div class="section-label">SELECTED ACTIONS</div>
+            <div id="remediation-tree"></div>
+          </div>
+          <div id="remediation-right">
+            <div class="section-label">ACTION QUEUE</div>
+            <div id="action-queue"></div>
+            <div id="queue-summary">
+              <span id="queue-count">0 actions pending</span>
+            </div>
+            <button class="initiate-btn danger" id="btn-execute" disabled>
+              <span class="initiate-icon">⚡</span>
+              <span class="initiate-text">EXECUTE REMEDIATION</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── VIEW: REPORT ─────────────────────────────────────────── -->
+      <div class="view" id="view-report">
+        <div class="view-title">THREAT REPORT</div>
+        <div id="report-layout">
+          <div id="risk-dial-wrap">
+            <canvas id="riskDial" width="200" height="200"></canvas>
+            <div id="risk-score-label">0</div>
+            <div id="risk-score-sub">RISK SCORE</div>
+          </div>
+          <div id="threat-radar-wrap">
+            <canvas id="threatRadar" width="300" height="300"></canvas>
+          </div>
+          <div id="report-cards"></div>
+        </div>
+        <div id="report-export-bar">
+          <button class="cyber-btn" onclick="exportReport('html')">📄 HTML</button>
+          <button class="cyber-btn" onclick="exportReport('csv')">📊 CSV</button>
+          <button class="cyber-btn" onclick="exportReport('json')">📋 JSON</button>
+          <button class="cyber-btn" onclick="window.print()">🖨 PRINT</button>
+        </div>
+      </div>
+
+      <!-- ── VIEW: IOC MANAGER ────────────────────────────────────── -->
+      <div class="view" id="view-ioc">
+        <div class="view-title">IOC MANAGER</div>
+        <div class="ioc-tabs">
+          <span class="ioc-tab active" data-tab="hashes">HASHES</span>
+          <span class="ioc-tab" data-tab="ips">IPs</span>
+          <span class="ioc-tab" data-tab="domains">DOMAINS</span>
+          <span class="ioc-tab" data-tab="regex">REGEX</span>
+          <span class="ioc-tab" data-tab="files">FILES</span>
+        </div>
+        <div id="ioc-table-wrap">
+          <table id="ioc-table">
+            <thead><tr><th>TYPE</th><th>VALUE</th><th>SOURCE</th><th>ACTION</th></tr></thead>
+            <tbody id="ioc-tbody"></tbody>
+          </table>
+        </div>
+        <div class="file-input-row">
+          <input type="text" id="ioc-add-val" class="path-input" placeholder="Add IOC value...">
+          <button class="cyber-btn-sm" id="btn-ioc-add">+ ADD</button>
+          <button class="cyber-btn-sm" id="btn-ioc-import">📁 IMPORT FILE</button>
+        </div>
+      </div>
+
+      <!-- ── VIEW: SETTINGS ──────────────────────────────────────── -->
+      <div class="view" id="view-settings">
+        <div class="view-title">SETTINGS</div>
+        <div class="settings-group">
+          <div class="settings-label">OUTPUT DIRECTORY</div>
+          <div class="file-input-row">
+            <input type="text" id="set-outdir" class="path-input" placeholder="Default: Desktop">
+            <button class="cyber-btn-sm">BROWSE</button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-label">SMTP (SCHEDULED REPORTS)</div>
+          <input type="text" class="path-input" placeholder="SMTP Server" id="set-smtp-server" style="margin-bottom:8px">
+          <input type="text" class="path-input" placeholder="From address" id="set-smtp-from" style="margin-bottom:8px">
+          <input type="text" class="path-input" placeholder="To address" id="set-smtp-to">
+        </div>
+        <div class="settings-group">
+          <div class="settings-label">THEME</div>
+          <div class="theme-options">
+            <div class="theme-swatch active" data-theme="cyan" style="--c:#00D4FF">KRAKEN BLUE</div>
+            <div class="theme-swatch" data-theme="orange" style="--c:#FF6B00">GANNON ORANGE</div>
+            <div class="theme-swatch" data-theme="red" style="--c:#FF0033">THREAT RED</div>
+            <div class="theme-swatch" data-theme="green" style="--c:#00FF88">GHOST GREEN</div>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-label">SCHEDULE</div>
+          <select class="path-input" id="set-schedule" style="width:200px">
+            <option value="">Disabled</option>
+            <option value="DAILY">Daily</option>
+            <option value="WEEKLY">Weekly</option>
+          </select>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- RIGHT INTEL PANEL -->
+    <aside id="intel-panel">
+      <div class="intel-title">INTEL FEED</div>
+      <div id="intel-feed"></div>
+      <div class="intel-title" style="margin-top:16px">THREAT TALLY</div>
+      <div id="tally-list">
+        <div class="tally-row"><span class="tally-label">RAT/C2</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-RAT"></div></div><span class="tally-num" id="tnum-RAT">0</span></div>
+        <div class="tally-row"><span class="tally-label">ROOTKIT</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Rootkit"></div></div><span class="tally-num" id="tnum-Rootkit">0</span></div>
+        <div class="tally-row"><span class="tally-label">RANSOM</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Ransomware"></div></div><span class="tally-num" id="tnum-Ransomware">0</span></div>
+        <div class="tally-row"><span class="tally-label">KEYLOG</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Keylogger"></div></div><span class="tally-num" id="tnum-Keylogger">0</span></div>
+        <div class="tally-row"><span class="tally-label">WORM</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Worm"></div></div><span class="tally-num" id="tnum-Worm">0</span></div>
+        <div class="tally-row"><span class="tally-label">MINER</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Miner"></div></div><span class="tally-num" id="tnum-Miner">0</span></div>
+        <div class="tally-row"><span class="tally-label">TROJAN</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Trojan"></div></div><span class="tally-num" id="tnum-Trojan">0</span></div>
+        <div class="tally-row"><span class="tally-label">SPYWARE</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Spyware"></div></div><span class="tally-num" id="tnum-Spyware">0</span></div>
+        <div class="tally-row"><span class="tally-label">FILELESS</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Fileless"></div></div><span class="tally-num" id="tnum-Fileless">0</span></div>
+        <div class="tally-row"><span class="tally-label">OTHER</span><div class="tally-bar-wrap"><div class="tally-bar" id="tbar-Other"></div></div><span class="tally-num" id="tnum-Other">0</span></div>
+      </div>
+    </aside>
+
+  </div><!-- /layout -->
+
+  <!-- STATUS BAR -->
+  <footer id="statusbar">
+    <span id="sb-status">● READY</span>
+    <span id="sb-phase">Phase 0/107</span>
+    <div id="sb-progress-wrap"><div id="sb-progress"></div></div>
+    <span id="sb-elapsed">00:00</span>
+    <span id="sb-threats">🔴 0 Threats</span>
+  </footer>
+
+</div><!-- /app -->
+
+<!-- SCAN COMPLETE MODAL -->
+<div id="modal-complete" class="modal hidden">
+  <div class="modal-box">
+    <div class="modal-title">SCAN COMPLETE</div>
+    <div id="modal-summary"></div>
+    <div class="modal-actions">
+      <button class="cyber-btn" id="modal-btn-findings">VIEW FINDINGS</button>
+      <button class="cyber-btn" id="modal-btn-report">VIEW REPORT</button>
+      <button class="cyber-btn-sm" id="modal-btn-close">CLOSE</button>
+    </div>
+  </div>
+</div>
+
+<!-- WARNING MODAL (deselect critical) -->
+<div id="modal-warn" class="modal hidden">
+  <div class="modal-box warn">
+    <div class="modal-title">⚠ WARNING</div>
+    <div id="modal-warn-text"></div>
+    <div class="modal-actions">
+      <button class="cyber-btn danger" id="modal-warn-confirm">DESELECT ANYWAY</button>
+      <button class="cyber-btn" id="modal-warn-cancel">KEEP SELECTED</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>

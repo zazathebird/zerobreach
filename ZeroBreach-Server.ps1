@@ -1,0 +1,630 @@
+﻿#Requires -Version 5.1
+<#
+.SYNOPSIS
+    ZeroBreach V23 "Kraken Console" — Pure PowerShell HTTP Server
+    No Python required. Self-hosted GUI via System.Net.HttpListener + SSE.
+.DESCRIPTION
+    Starts a local HTTP listener, serves the cyberpunk frontend, and bridges to
+    ZeroBreach-V23.ps1 scan engine in real-time via Server-Sent Events (SSE).
+    Admin elevation is handled automatically.
+.PARAMETER Port
+    HTTP port (default 0 = auto-find free port)
+.PARAMETER NoBrowser
+    Skip auto-opening the browser
+#>
+[CmdletBinding()]
+param(
+    [int]$Port      = 0,
+    [switch]$NoBrowser
+)
+
+Set-StrictMode -Off
+$ErrorActionPreference = 'SilentlyContinue'
+
+# ── Self-elevation ──────────────────────────────────────────────────────────────
+$me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Host '[ZeroBreach] Requesting elevation...' -ForegroundColor Cyan
+    $argStr = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+    if ($Port -gt 0) { $argStr += " -Port $Port" }
+    if ($NoBrowser)  { $argStr += " -NoBrowser" }
+    Start-Process powershell $argStr -Verb RunAs
+    exit
+}
+
+# ── Paths ──────────────────────────────────────────────────────────────────────
+$script:ROOT      = $PSScriptRoot
+$script:SCAN_PS   = Join-Path $ROOT 'ZeroBreach-V23.ps1'
+$script:GUI_DIR   = Join-Path $ROOT 'gui'
+$script:REPORTS   = Join-Path $ROOT 'reports'
+if (-not (Test-Path $script:REPORTS)) {
+    New-Item -ItemType Directory -Path $script:REPORTS -Force | Out-Null
+}
+
+# ── Shared State (synchronized — accessed by multiple runspaces) ───────────────
+$script:State = [hashtable]::Synchronized(@{
+    Running      = $false
+    ScanComplete = $false
+    Phase        = 0
+    PhaseTotal   = 107
+    PhaseName    = ''
+    Section      = ''
+    Mode         = 'FULL'
+    Elapsed      = 0
+    StartTime    = [datetime]::MinValue
+    LineCount    = 0
+    ResultsPath  = ''
+    Listening    = $true
+    Process      = $null
+    EventLog     = [System.Collections.ArrayList]::Synchronized(
+                       [System.Collections.ArrayList]::new())
+    Findings     = [System.Collections.ArrayList]::Synchronized(
+                       [System.Collections.ArrayList]::new())
+    ThreatCounts = [hashtable]::Synchronized(@{
+        RAT=0; Rootkit=0; Ransomware=0; Keylogger=0; Worm=0
+        Miner=0; Trojan=0; Spyware=0; Fileless=0; Other=0
+    })
+})
+
+# ── MIME types ─────────────────────────────────────────────────────────────────
+$script:MIME = @{
+    '.html' = 'text/html; charset=utf-8'
+    '.css'  = 'text/css; charset=utf-8'
+    '.js'   = 'application/javascript; charset=utf-8'
+    '.json' = 'application/json; charset=utf-8'
+    '.ico'  = 'image/x-icon'
+    '.png'  = 'image/png'
+    '.svg'  = 'image/svg+xml'
+    '.woff2'= 'font/woff2'
+    '.woff' = 'font/woff'
+    '.ttf'  = 'font/ttf'
+}
+
+# ── Classification patterns (used by main thread and embedded in SCAN_SCRIPT) ──
+$script:SEV_PATTERNS = [ordered]@{
+    CRITICAL = [regex]'\[CRIT\]|CRITICAL|\[!!\]|THREAT BANNER|IOC HIT|BLATANT'
+    HIGH     = [regex]'\[HIGH\]|HIGH SEVERITY|\[WARN\]|SUSPICIOUS'
+    POSSIBLE = [regex]'\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMAL'
+    CLEAN    = [regex]'\[OK\]|CLEAN|NO .* FOUND|->\s*\[OK\]'
+    INFO     = [regex]'\[INFO\]|\[VER\]|EXECUTED|EVALUATED'
+    HUNT     = [regex]'\[HUNT\]|SCANNING|CHECKING|AUDITING'
+}
+
+$script:PHASE_RE = [regex]'PHASE\s+(\d+)[^\d]'
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+function Get-FreePort {
+    $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+    $l.Start()
+    $p = $l.LocalEndpoint.Port
+    $l.Stop()
+    return $p
+}
+
+function Write-JsonResponse {
+    param($Ctx, [string]$Body, [int]$Code = 200)
+    try {
+        $r = $Ctx.Response
+        $r.StatusCode    = $Code
+        $r.ContentType   = 'application/json; charset=utf-8'
+        $r.Headers['Access-Control-Allow-Origin']  = '*'
+        $r.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+        $r.ContentLength64 = $bytes.Length
+        $r.OutputStream.Write($bytes, 0, $bytes.Length)
+        $r.OutputStream.Close()
+    } catch {}
+}
+
+function Send-StaticFile {
+    param($Ctx, [string]$FilePath)
+    if (-not (Test-Path $FilePath -PathType Leaf)) {
+        Write-JsonResponse $Ctx '{"error":"not found"}' 404
+        return
+    }
+    $ext  = [System.IO.Path]::GetExtension($FilePath).ToLower()
+    $mime = $script:MIME[$ext]
+    if (-not $mime) { $mime = 'application/octet-stream' }
+    try {
+        $r = $Ctx.Response
+        $r.StatusCode  = 200
+        $r.ContentType = $mime
+        $r.Headers['Access-Control-Allow-Origin'] = '*'
+        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
+        $r.ContentLength64 = $bytes.Length
+        $r.OutputStream.Write($bytes, 0, $bytes.Length)
+        $r.OutputStream.Close()
+    } catch {}
+}
+
+function Read-RequestBody {
+    param($Ctx)
+    try {
+        $sr = [System.IO.StreamReader]::new(
+            $Ctx.Request.InputStream, [System.Text.Encoding]::UTF8)
+        return $sr.ReadToEnd()
+    } catch { return '{}' }
+}
+
+function Get-SysInfoJson {
+    try {
+        $cpuObj = Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue
+        $cpu    = if ($cpuObj) {
+            ($cpuObj | Measure-Object LoadPercentage -Average).Average
+        } else { 0 }
+
+        $osObj  = Get-CimInstance Win32_OperatingSystem -ErrorAction SilentlyContinue
+        $ramPct = if ($osObj -and $osObj.TotalVisibleMemorySize -gt 0) {
+            [math]::Round(
+                ($osObj.TotalVisibleMemorySize - $osObj.FreePhysicalMemory) /
+                $osObj.TotalVisibleMemorySize * 100, 1)
+        } else { 0 }
+
+        $defender = (Get-MpComputerStatus -ErrorAction SilentlyContinue).AntivirusEnabled
+
+        return [ordered]@{
+            hostname  = $env:COMPUTERNAME
+            username  = $env:USERNAME
+            os        = if ($osObj) { $osObj.Caption } else { 'Windows' }
+            cpu       = [math]::Round([double]($cpu), 1)
+            ram_used  = $ramPct
+            defender  = [bool]$defender
+        } | ConvertTo-Json -Compress
+    } catch {
+        return '{"error":"sysinfo unavailable"}'
+    }
+}
+
+# ── Background runspace launcher ────────────────────────────────────────────────
+function Start-Runspace {
+    param([string]$Script, [hashtable]$Vars = @{})
+    $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+    $rs.Open()
+    foreach ($k in $Vars.Keys) {
+        $rs.SessionStateProxy.SetVariable($k, $Vars[$k])
+    }
+    $ps = [System.Management.Automation.PowerShell]::Create()
+    $ps.Runspace = $rs
+    [void]$ps.AddScript($Script)
+    $null = $ps.BeginInvoke()
+    return $ps
+}
+
+# ── SSE Stream Script (self-contained, runs in its own runspace) ───────────────
+# Variables injected: $SseState (SharedState hashtable), $SseCtx (HttpListenerContext)
+$script:SSE_SCRIPT = @'
+$response = $SseCtx.Response
+$response.StatusCode = 200
+$response.ContentType = 'text/event-stream; charset=utf-8'
+$response.Headers['Cache-Control']       = 'no-cache, no-store'
+$response.Headers['X-Accel-Buffering']   = 'no'
+$response.Headers['Access-Control-Allow-Origin'] = '*'
+$response.Headers['Connection']          = 'keep-alive'
+$response.SendChunked = $true
+
+$enc    = [System.Text.Encoding]::UTF8
+$stream = $response.OutputStream
+
+function Push {
+    param([string]$Data)
+    $bytes = $enc.GetBytes("data: $Data`n`n")
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush()
+}
+
+function Ping {
+    $bytes = $enc.GetBytes(": ka`n`n")
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush()
+}
+
+# Send initial sync so page-reload during a scan gets full state
+$syncObj = [ordered]@{
+    type          = 'sync'
+    running       = $SseState.Running
+    scan_complete = $SseState.ScanComplete
+    phase         = $SseState.Phase
+    phase_total   = $SseState.PhaseTotal
+    phase_name    = $SseState.PhaseName
+    elapsed       = $SseState.Elapsed
+    threat_counts = $SseState.ThreatCounts
+    findings_count = $SseState.Findings.Count
+}
+Push ($syncObj | ConvertTo-Json -Compress -Depth 3)
+
+$idx  = 0
+$last = [datetime]::Now
+
+try {
+    while ($SseState.Listening) {
+        $count = $SseState.EventLog.Count
+        while ($idx -lt $count) {
+            Push $SseState.EventLog[$idx]
+            $idx++
+        }
+        if (([datetime]::Now - $last).TotalSeconds -gt 20) {
+            Ping
+            $last = [datetime]::Now
+        }
+        Start-Sleep -Milliseconds 40
+    }
+} catch {
+    # client disconnected — normal exit
+} finally {
+    try { $stream.Close() }    catch {}
+    try { $response.Close() }  catch {}
+}
+'@
+
+# ── Scan Engine Script (self-contained, runs in its own runspace) ──────────────
+# Variables injected: $ScanState, $ScanConfig (hashtable), $ScanPsPath, $ScanReports
+$script:SCAN_SCRIPT = @'
+# ── Inline classification (can't reference main-script functions from runspace) ─
+$SEV = [ordered]@{
+    CRITICAL = [regex]'\[CRIT\]|CRITICAL|\[!!\]|THREAT BANNER|IOC HIT|BLATANT'
+    HIGH     = [regex]'\[HIGH\]|HIGH SEVERITY|\[WARN\]|SUSPICIOUS'
+    POSSIBLE = [regex]'\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMAL'
+    CLEAN    = [regex]'\[OK\]|CLEAN|NO .* FOUND|->\s*\[OK\]'
+    INFO     = [regex]'\[INFO\]|\[VER\]|EXECUTED|EVALUATED'
+    HUNT     = [regex]'\[HUNT\]|SCANNING|CHECKING|AUDITING'
+}
+
+$TKW = @{
+    RAT        = @('rat','c2','beacon','asyncrat','njrat','remcos','darkcomet')
+    Rootkit    = @('rootkit','kernel driver','bootkit','mbr','hidden process')
+    Ransomware = @('ransomware','ransom','extension velocity','high entropy','ransom note')
+    Keylogger  = @('keylogger','keystroke','clipboard')
+    Worm       = @('worm','autorun','usb spread','network share')
+    Miner      = @('cryptominer','miner','cpu abuse','xmrig')
+    Trojan     = @('trojan','dropper','downloader','loader')
+    Spyware    = @('spyware','adware','pup','info-stealer','stealer')
+    Fileless   = @('fileless','base64 blob','registry payload','amsi bypass','etw')
+    Other      = @('backdoor','exploit','cve-','lolbin','uac bypass')
+}
+
+$PREX = [regex]'PHASE\s+(\d+)[^\d]'
+
+$MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=107; PARANOID=107; STEALTH=107 }
+
+function Classify {
+    param([string]$L)
+    $sev = 'INFO'
+    foreach ($k in $SEV.Keys) { if ($SEV[$k].IsMatch($L)) { $sev = $k; break } }
+    $ll = $L.ToLower()
+    $tt = $null
+    foreach ($k in $TKW.Keys) {
+        foreach ($kw in $TKW[$k]) { if ($ll.Contains($kw)) { $tt = $k; break } }
+        if ($tt) { break }
+    }
+    return @{ sev = $sev; tt = $tt }
+}
+
+function Enqueue {
+    param([hashtable]$Ev)
+    [void]$ScanState.EventLog.Add(($Ev | ConvertTo-Json -Compress -Depth 4))
+}
+
+# ── Extract config ──────────────────────────────────────────────────────────────
+$mode     = if ($ScanConfig.mode)    { "$($ScanConfig.mode)" }   else { 'FULL' }
+$hours    = if ($null -ne $ScanConfig.hours) { [int]$ScanConfig.hours } else { 0 }
+$doHtml   = [bool]$ScanConfig.html_report
+$paranoid = [bool]$ScanConfig.paranoid
+$stealth  = [bool]$ScanConfig.stealth
+$iocFile  = "$($ScanConfig.ioc_file)"
+
+# ── Reset state for new scan ────────────────────────────────────────────────────
+$ScanState.Mode         = $mode
+$ScanState.PhaseTotal   = if ($MODE_PHASES[$mode]) { $MODE_PHASES[$mode] } else { 107 }
+$ScanState.Phase        = 0
+$ScanState.PhaseName    = ''
+$ScanState.Section      = ''
+$ScanState.Elapsed      = 0
+$ScanState.LineCount    = 0
+$ScanState.ResultsPath  = ''
+$ScanState.Running      = $true
+$ScanState.ScanComplete = $false
+$ScanState.StartTime    = [datetime]::Now
+$ScanState.Findings.Clear()
+$ScanState.EventLog.Clear()
+foreach ($k in @($ScanState.ThreatCounts.Keys)) { $ScanState.ThreatCounts[$k] = 0 }
+
+# ── Build PowerShell command ────────────────────────────────────────────────────
+$psArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$ScanPsPath`""
+$psArgs += " -Mode $mode -Hours $hours -Auto -OutDir `"$ScanReports`""
+if ($doHtml)   { $psArgs += ' -Html' }
+if ($paranoid) { $psArgs += ' -Paranoid' }
+if ($stealth)  { $psArgs += ' -Stealth' }
+if ($iocFile -and (Test-Path $iocFile)) { $psArgs += " -IocFile `"$iocFile`"" }
+
+$psi = [System.Diagnostics.ProcessStartInfo]::new()
+$psi.FileName               = 'powershell.exe'
+$psi.Arguments              = $psArgs
+$psi.RedirectStandardOutput = $true
+$psi.RedirectStandardError  = $true
+$psi.UseShellExecute        = $false
+$psi.CreateNoWindow         = $true
+$psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+
+$proc = $null
+try {
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $ScanState.Process = $proc
+
+    # Drain stderr asynchronously so its buffer never fills and deadlocks the child
+    $proc.BeginErrorReadLine()
+
+    while (-not $proc.StandardOutput.EndOfStream) {
+        if (-not $ScanState.Running) {
+            try { $proc.Kill() } catch {}
+            break
+        }
+
+        $raw = $proc.StandardOutput.ReadLine()
+        if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+
+        $elapsed = [int]([datetime]::Now - $ScanState.StartTime).TotalSeconds
+        $ScanState.Elapsed = $elapsed
+
+        # Phase number
+        $pm = $PREX.Match($raw)
+        if ($pm.Success) { $ScanState.Phase = [int]$pm.Groups[1].Value }
+
+        # Phase name from banner lines like  "──── PHASE 5 ── Description ────"
+        if ($raw.Contains('PHASE') -and $raw.Contains([char]0x2500)) {
+            $parts = $raw -split [char]0x2500
+            if ($parts.Count -ge 3) {
+                $ScanState.PhaseName = ($parts[2].Trim().Trim([char]0x2500)).Trim()
+            }
+        }
+
+        $cl = Classify $raw
+        $ScanState.LineCount++
+
+        # Log event for every line
+        Enqueue @{
+            type     = 'log_line'
+            text     = $raw
+            severity = $cl.sev
+            phase    = $ScanState.Phase
+            elapsed  = $elapsed
+        }
+
+        # Finding event for notable severity
+        if ($cl.sev -in @('CRITICAL','HIGH','POSSIBLE')) {
+            $f = [ordered]@{
+                type        = 'finding'
+                id          = $ScanState.Findings.Count
+                line        = $raw
+                severity    = $cl.sev
+                threat_type = $cl.tt
+                phase       = $ScanState.Phase
+                timestamp   = [datetime]::Now.ToString('HH:mm:ss')
+            }
+            [void]$ScanState.Findings.Add($f)
+
+            $tt = $cl.tt
+            if ($tt) {
+                if ($ScanState.ThreatCounts.ContainsKey($tt)) { $ScanState.ThreatCounts[$tt]++ }
+                else { $ScanState.ThreatCounts['Other']++ }
+            }
+
+            Enqueue $f
+        }
+
+        # Periodic scan_state broadcast
+        if ($ScanState.LineCount % 12 -eq 0) {
+            Enqueue @{
+                type          = 'scan_state'
+                phase         = $ScanState.Phase
+                phase_total   = $ScanState.PhaseTotal
+                phase_name    = $ScanState.PhaseName
+                section       = $ScanState.Section
+                elapsed       = $elapsed
+                threat_counts = $ScanState.ThreatCounts
+                running       = $true
+            }
+        }
+    }
+
+    $proc.WaitForExit()
+
+} catch {
+    Enqueue @{
+        type     = 'log_line'
+        text     = "[SCAN ERROR] $($_.Exception.Message)"
+        severity = 'CRITICAL'
+        phase    = $ScanState.Phase
+        elapsed  = $ScanState.Elapsed
+    }
+} finally {
+    $ScanState.Running    = $false
+    $ScanState.ScanComplete = $true
+
+    # Save JSON report
+    $ts = [datetime]::Now.ToString('yyyyMMdd_HHmmss')
+    $rp = Join-Path $ScanReports "audit_$ts.json"
+    try {
+        [ordered]@{
+            findings      = @($ScanState.Findings)
+            threat_counts = $ScanState.ThreatCounts
+            mode          = $ScanState.Mode
+            elapsed       = $ScanState.Elapsed
+            timestamp     = [datetime]::Now.ToString('o')
+        } | ConvertTo-Json -Depth 6 | Out-File -FilePath $rp -Encoding utf8 -Force
+        $ScanState.ResultsPath = $rp
+    } catch {}
+
+    # Final state broadcast
+    Enqueue @{
+        type          = 'scan_state'
+        phase         = $ScanState.Phase
+        phase_total   = $ScanState.PhaseTotal
+        phase_name    = $ScanState.PhaseName
+        section       = $ScanState.Section
+        elapsed       = $ScanState.Elapsed
+        threat_counts = $ScanState.ThreatCounts
+        running       = $false
+    }
+
+    # Complete event
+    Enqueue @{
+        type           = 'scan_complete'
+        findings_count = $ScanState.Findings.Count
+        threat_counts  = $ScanState.ThreatCounts
+        elapsed        = $ScanState.Elapsed
+        results_path   = $ScanState.ResultsPath
+    }
+}
+'@
+
+# ── HTTP Request Router ────────────────────────────────────────────────────────
+function Handle-Request {
+    param($Ctx)
+
+    $req    = $Ctx.Request
+    $path   = $req.Url.AbsolutePath
+    $method = $req.HttpMethod
+
+    # CORS preflight
+    if ($method -eq 'OPTIONS') {
+        $Ctx.Response.StatusCode = 204
+        $Ctx.Response.Headers['Access-Control-Allow-Origin']  = '*'
+        $Ctx.Response.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        $Ctx.Response.Headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        try { $Ctx.Response.Close() } catch {}
+        return
+    }
+
+    switch -Regex ($path) {
+
+        '^/$' {
+            Send-StaticFile $Ctx (Join-Path $script:GUI_DIR 'templates\index.html')
+        }
+
+        '^/static/' {
+            $rel = $path -replace '^/static/', ''
+            $rel = $rel -replace '/', '\'
+            Send-StaticFile $Ctx (Join-Path $script:GUI_DIR "static\$rel")
+        }
+
+        '^/api/sysinfo$' {
+            Write-JsonResponse $Ctx (Get-SysInfoJson)
+        }
+
+        '^/api/state$' {
+            $s = [ordered]@{
+                running       = $script:State.Running
+                phase         = $script:State.Phase
+                phase_total   = $script:State.PhaseTotal
+                phase_name    = $script:State.PhaseName
+                elapsed       = $script:State.Elapsed
+                threat_counts = $script:State.ThreatCounts
+                scan_complete = $script:State.ScanComplete
+            }
+            Write-JsonResponse $Ctx ($s | ConvertTo-Json -Compress -Depth 3)
+        }
+
+        '^/api/findings$' {
+            Write-JsonResponse $Ctx (@($script:State.Findings) | ConvertTo-Json -Depth 5)
+        }
+
+        '^/api/scan/start$' {
+            if ($method -ne 'POST') { Write-JsonResponse $Ctx '{"error":"POST required"}' 405; return }
+            if ($script:State.Running) { Write-JsonResponse $Ctx '{"error":"scan already running"}' 400; return }
+
+            $body   = Read-RequestBody $Ctx
+            $parsed = $body | ConvertFrom-Json -ErrorAction SilentlyContinue
+            $cfg    = @{}
+            if ($parsed) {
+                $parsed.PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
+            }
+
+            Start-Runspace -Script $script:SCAN_SCRIPT -Vars @{
+                ScanState   = $script:State
+                ScanConfig  = $cfg
+                ScanPsPath  = $script:SCAN_PS
+                ScanReports = $script:REPORTS
+            } | Out-Null
+
+            Write-JsonResponse $Ctx '{"status":"started"}'
+        }
+
+        '^/api/scan/abort$' {
+            $script:State.Running = $false
+            $p = $script:State.Process
+            if ($p -and -not $p.HasExited) { try { $p.Kill() } catch {} }
+            Write-JsonResponse $Ctx '{"status":"aborted"}'
+        }
+
+        '^/api/events$' {
+            # SSE — hand off to a background runspace; do NOT close response
+            Start-Runspace -Script $script:SSE_SCRIPT -Vars @{
+                SseCtx   = $Ctx
+                SseState = $script:State
+            } | Out-Null
+        }
+
+        '^/favicon\.ico$' {
+            $Ctx.Response.StatusCode = 204
+            try { $Ctx.Response.Close() } catch {}
+        }
+
+        default {
+            Write-JsonResponse $Ctx '{"error":"not found"}' 404
+        }
+    }
+}
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+if ($Port -eq 0) { $Port = Get-FreePort }
+
+$Listener = [System.Net.HttpListener]::new()
+$Listener.Prefixes.Add("http://localhost:$Port/")
+
+try { $Listener.Start() }
+catch {
+    Write-Host ('[ZeroBreach] Failed to start listener: ' + $_.Exception.Message) -ForegroundColor Red
+    exit 1
+}
+
+$Url = "http://localhost:$Port"
+
+Write-Host ""
+Write-Host "  ╔══════════════════════════════════════════════════╗" -ForegroundColor Cyan
+Write-Host "  ║    ZEROBREACH V23 — KRAKEN CONSOLE               ║" -ForegroundColor Cyan
+Write-Host "  ║    HTTP Server: $($Url.PadRight(34))║" -ForegroundColor Cyan
+Write-Host "  ║    Press Ctrl+C to stop                          ║" -ForegroundColor Cyan
+Write-Host "  ╚══════════════════════════════════════════════════╝" -ForegroundColor Cyan
+Write-Host ""
+Write-Host ('[ZeroBreach] Serving GUI at ' + $Url) -ForegroundColor Green
+Write-Host ('[ZeroBreach] Scan engine: ' + $script:SCAN_PS) -ForegroundColor DarkCyan
+
+if (-not $NoBrowser) {
+    $urlCapture = $Url
+    $null = Start-Job { Start-Sleep 1; Start-Process $using:urlCapture }
+}
+
+# ── Accept loop ────────────────────────────────────────────────────────────────
+try {
+    while ($script:State.Listening) {
+        try {
+            $ctx = $Listener.GetContext()
+            Handle-Request $ctx
+        }
+        catch [System.Net.HttpListenerException] {
+            if ($script:State.Listening) {
+                Write-Host ('[ZeroBreach] Listener error: ' + $_.Exception.Message) -ForegroundColor Red
+            }
+            break
+        }
+        catch {
+            $errPath = if ($null -ne $ctx) { $ctx.Request.Url.AbsolutePath } else { 'unknown' }
+            Write-Host ('[ZeroBreach] Request error on ' + $errPath + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+        }
+    }
+}
+finally {
+    $script:State.Listening = $false
+    try { $Listener.Stop(); $Listener.Close() } catch {}
+    Write-Host '[ZeroBreach] Server stopped.' -ForegroundColor Cyan
+}

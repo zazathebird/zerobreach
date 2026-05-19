@@ -1,0 +1,20 @@
+﻿{
+    "findings":  [
+
+                 ],
+    "threat_counts":  {
+                          "Other":  0,
+                          "Spyware":  0,
+                          "Ransomware":  0,
+                          "Worm":  0,
+                          "Miner":  0,
+                          "Rootkit":  0,
+                          "RAT":  0,
+                          "Trojan":  0,
+                          "Keylogger":  0,
+                          "Fileless":  0
+                      },
+    "mode":  "QUICK",
+    "elapsed":  0,
+    "timestamp":  "2026-05-19T14:06:30.2981749-04:00"
+}
