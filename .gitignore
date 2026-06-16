@@ -1,0 +1,16 @@
+# Runtime output
+reports/
+zerobreach_launch_error.log
+
+# Python (parked Flask server)
+__pycache__/
+*.pyc
+_python/build/
+_python/dist/
+dist/
+build/
+*.spec.bak
+
+# OS noise
+Thumbs.db
+desktop.ini

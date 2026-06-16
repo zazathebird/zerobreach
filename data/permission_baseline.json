@@ -1,0 +1,164 @@
+{
+  "_comment": "ZeroBreach permission / integrity / privilege-escalation baseline. Externalized from ZeroBreach-V23.ps1 so the engine body holds no path/signature literals (AMSI-safe; data files are not AMSI-scanned). Consumed by the FORENSIC PERMISSION & INTEGRITY AUDIT phases (108-115). All values are filesystem paths, registry keys, account names, and service names — NOT malware signatures. Edit here without touching the engine.",
+
+  "_acl_note": "critical_acl_paths: directories/files that must NEVER be writable by Everyone / BUILTIN\\Users / Authenticated Users. A write/modify/fullcontrol Allow ACE for those identities on these paths = privilege-escalation surface (an attacker can replace a SYSTEM-run binary).",
+  "critical_acl_paths": [
+    "%WINDIR%",
+    "%WINDIR%\\System32",
+    "%WINDIR%\\SysWOW64",
+    "%WINDIR%\\System32\\drivers",
+    "%WINDIR%\\System32\\drivers\\etc",
+    "%WINDIR%\\System32\\config",
+    "%WINDIR%\\System32\\Tasks",
+    "%WINDIR%\\System32\\spool\\drivers",
+    "%WINDIR%\\System32\\wbem",
+    "%WINDIR%\\System32\\WindowsPowerShell\\v1.0",
+    "%WINDIR%\\Tasks",
+    "%ProgramFiles%",
+    "%ProgramFiles(x86)%",
+    "%ProgramData%\\Microsoft\\Windows\\Start Menu\\Programs\\StartUp",
+    "%SystemDrive%\\"
+  ],
+
+  "_protected_files_note": "protected_system_files: high-value binaries frequently targeted for replacement/hijack or used as auto-elevated LOLBins. Integrity phase verifies Authenticode + catalog signature and flags any that are unsigned, invalid, or signed by a non-Microsoft publisher (a Microsoft-named file with a 3rd-party / absent signature is a strong tamper indicator).",
+  "protected_system_files": [
+    "%WINDIR%\\System32\\cmd.exe",
+    "%WINDIR%\\System32\\powershell.exe",
+    "%WINDIR%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "%WINDIR%\\System32\\conhost.exe",
+    "%WINDIR%\\System32\\svchost.exe",
+    "%WINDIR%\\System32\\lsass.exe",
+    "%WINDIR%\\System32\\services.exe",
+    "%WINDIR%\\System32\\winlogon.exe",
+    "%WINDIR%\\System32\\wininit.exe",
+    "%WINDIR%\\System32\\csrss.exe",
+    "%WINDIR%\\System32\\smss.exe",
+    "%WINDIR%\\System32\\userinit.exe",
+    "%WINDIR%\\System32\\taskhostw.exe",
+    "%WINDIR%\\System32\\dllhost.exe",
+    "%WINDIR%\\System32\\rundll32.exe",
+    "%WINDIR%\\System32\\regsvr32.exe",
+    "%WINDIR%\\System32\\mshta.exe",
+    "%WINDIR%\\System32\\wscript.exe",
+    "%WINDIR%\\System32\\cscript.exe",
+    "%WINDIR%\\System32\\certutil.exe",
+    "%WINDIR%\\System32\\bitsadmin.exe",
+    "%WINDIR%\\System32\\schtasks.exe",
+    "%WINDIR%\\System32\\sethc.exe",
+    "%WINDIR%\\System32\\utilman.exe",
+    "%WINDIR%\\System32\\osk.exe",
+    "%WINDIR%\\System32\\Magnify.exe",
+    "%WINDIR%\\System32\\Narrator.exe",
+    "%WINDIR%\\System32\\DisplaySwitch.exe",
+    "%WINDIR%\\System32\\atbroker.exe",
+    "%WINDIR%\\System32\\MsMpEng.exe",
+    "%WINDIR%\\explorer.exe",
+    "%WINDIR%\\System32\\drivers\\etc\\hosts"
+  ],
+
+  "_accessibility_note": "accessibility_binaries: the classic 'sticky keys / utilman' backdoor set — if any of these is replaced (bad signature) or has its IFEO debugger set, an attacker gets a SYSTEM shell from the logon screen. Integrity + IFEO cross-check.",
+  "accessibility_binaries": [
+    "sethc.exe",
+    "utilman.exe",
+    "osk.exe",
+    "Magnify.exe",
+    "Narrator.exe",
+    "DisplaySwitch.exe",
+    "atbroker.exe"
+  ],
+
+  "_reg_acl_note": "critical_reg_acl_keys: registry keys whose ACL should only allow SYSTEM / Administrators / TrustedInstaller to write. A write Allow ACE for Everyone / Users / Authenticated Users here = persistence/privesc surface.",
+  "critical_reg_acl_keys": [
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run",
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce",
+    "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run",
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+    "HKLM:\\SYSTEM\\CurrentControlSet\\Services",
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Svchost",
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Shell Folders",
+    "HKLM:\\SOFTWARE\\Classes\\exefile\\shell\\open\\command",
+    "HKLM:\\SOFTWARE\\Microsoft\\Active Setup\\Installed Components"
+  ],
+
+  "_weak_identity_note": "weak_write_identities: SID-resolvable account names that should never hold write/modify/fullcontrol on the protected paths/keys above. Matched case-insensitively as a substring of IdentityReference.",
+  "weak_write_identities": [
+    "Everyone",
+    "BUILTIN\\Users",
+    "\\Users",
+    "Authenticated Users",
+    "NT AUTHORITY\\Authenticated Users",
+    "ALL APPLICATION PACKAGES",
+    "INTERACTIVE",
+    "Anonymous Logon",
+    "Domain Users",
+    "Guests"
+  ],
+
+  "_trusted_owners_note": "trusted_file_owners: acceptable owners for protected system files. Anything else owning a System32 binary is suspicious (ownership change is a common tamper step).",
+  "trusted_file_owners": [
+    "NT SERVICE\\TrustedInstaller",
+    "NT AUTHORITY\\SYSTEM",
+    "BUILTIN\\Administrators",
+    "Administrators"
+  ],
+
+  "_trusted_publishers_note": "trusted_signers: publisher Subject substrings considered legitimate for OS / mainstream-vendor binaries. Used to flag Microsoft-named files NOT signed by Microsoft, and to lower severity on validly-signed mainstream software.",
+  "trusted_signers": [
+    "O=Microsoft Corporation",
+    "O=Microsoft Windows",
+    "CN=Microsoft Windows",
+    "CN=Microsoft Corporation",
+    "CN=Microsoft Windows Publisher",
+    "Microsoft Code Signing PCA",
+    "O=Google LLC",
+    "O=Mozilla Corporation",
+    "O=Intel Corporation",
+    "O=NVIDIA Corporation",
+    "O=Advanced Micro Devices",
+    "O=Dell Inc",
+    "O=Hewlett-Packard",
+    "O=HP Inc",
+    "O=Lenovo",
+    "O=Realtek Semiconductor",
+    "O=VMware",
+    "O=Citrix Systems"
+  ],
+
+  "_service_note": "privesc_safe_service_publishers mirrors trusted_signers for service-binary checks. unquoted_path_whitelist: substrings of ImagePath that are known-benign even when unquoted with spaces (rare; keep tight).",
+  "unquoted_path_whitelist": [],
+
+  "_path_note": "system_path_extra_dirs: directories that, if writable by a non-admin AND present on the machine/system PATH, create a DLL/binary planting surface. The phase also enumerates the live machine PATH dynamically; this list seeds well-known high-risk locations.",
+  "system_path_extra_dirs": [
+    "%WINDIR%",
+    "%WINDIR%\\System32",
+    "%WINDIR%\\System32\\Wbem",
+    "%WINDIR%\\System32\\WindowsPowerShell\\v1.0",
+    "%WINDIR%\\System32\\OpenSSH"
+  ],
+
+  "_health_note": "expected_running_services: security-relevant services that should be Running on a healthy, protected endpoint. A stopped/disabled one is a strong tamper indicator after an infection. expected_security_values: registry settings that, if changed, indicate protection was disabled.",
+  "expected_running_services": [
+    { "name": "WinDefend",     "display": "Microsoft Defender Antivirus",            "severity": "HIGH" },
+    { "name": "WdNisSvc",      "display": "Defender Network Inspection",             "severity": "POSSIBLE" },
+    { "name": "Sense",         "display": "Defender for Endpoint (EDR)",             "severity": "POSSIBLE" },
+    { "name": "wscsvc",        "display": "Security Center",                         "severity": "HIGH" },
+    { "name": "MpsSvc",        "display": "Windows Firewall",                        "severity": "HIGH" },
+    { "name": "EventLog",      "display": "Windows Event Log",                       "severity": "CRITICAL" },
+    { "name": "Schedule",      "display": "Task Scheduler",                          "severity": "POSSIBLE" },
+    { "name": "BFE",           "display": "Base Filtering Engine (firewall core)",   "severity": "HIGH" },
+    { "name": "SecurityHealthService", "display": "Windows Security Health",         "severity": "POSSIBLE" },
+    { "name": "Sysmon",        "display": "Sysmon (if deployed)",                    "severity": "INFO" }
+  ],
+
+  "_defender_tamper_note": "defender_tamper_values: HKLM policy values that disable Defender. value present and set to the listed 'bad' number = tampered.",
+  "defender_tamper_values": [
+    { "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender", "name": "DisableAntiSpyware", "bad": 1, "desc": "Defender disabled by policy" },
+    { "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender", "name": "DisableAntiVirus", "bad": 1, "desc": "Defender AV disabled by policy" },
+    { "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "name": "DisableRealtimeMonitoring", "bad": 1, "desc": "Real-time protection disabled by policy" },
+    { "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "name": "DisableBehaviorMonitoring", "bad": 1, "desc": "Behavior monitoring disabled by policy" },
+    { "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows Defender\\Real-Time Protection", "name": "DisableScanOnRealtimeEnable", "bad": 1, "desc": "Real-time scan disabled by policy" },
+    { "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows Defender\\Features", "name": "TamperProtection", "bad": 0, "desc": "Tamper Protection turned OFF" }
+  ]
+}
