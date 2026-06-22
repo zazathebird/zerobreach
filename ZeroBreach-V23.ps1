@@ -60,6 +60,27 @@ param(
 Set-StrictMode -Off
 $ErrorActionPreference = 'SilentlyContinue'
 
+# ── Global resilience trap ────────────────────────────────────────────────────
+# A terminating error anywhere (unhandled .NET exception, throw, null .Substring,
+# out-of-range index, ConvertFrom-Json -Stop, a hung cmdlet that faults, etc.)
+# would otherwise kill the whole engine mid-scan and silently skip every remaining
+# phase — the tool would appear to "stop" in an error state. This trap LOGS the
+# failure and RESUMES at the next statement, so a scan always runs to completion.
+# Local try/catch still takes precedence; this only catches what nothing handled.
+# It is fully defensive — it must never throw out of itself.
+$global:RECOVERED_ERRORS = [System.Collections.Generic.List[string]]::new()
+trap {
+    try {
+        $em   = $_.Exception.Message
+        $pos  = (("" + $_.InvocationInfo.PositionMessage) -replace "`r?`n"," ").Trim()
+        $line = "RECOVERED ERROR: $em | $pos"
+        $global:RECOVERED_ERRORS.Add($line)
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log $line }
+        if (-not $global:STEALTH_MODE) { Write-Host "  [!] $line" -ForegroundColor DarkYellow }
+    } catch {}
+    continue
+}
+
 # ── Elevation — pass all params ───────────────────────────────────────────────
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -158,6 +179,13 @@ $global:GUI_KILL_BTN     = $null    # Kill slow output button reference
 $global:TOTAL_PHASES     = 80       # Updated after PhasePlan is set
 $global:CURRENT_PHASE_NUM= 0
 $global:SCAN_COMPLETE    = $false
+# ── Per-phase wall-clock profiling ────────────────────────────────────────────
+# Stop-PhaseTiming closes out the phase currently in flight and emits one clean
+# stdout line ("PHASE N — <name> took X.Xs") so timings flow through SSE into the
+# console/report. Show-PhaseHeader closes the previous phase + starts the next.
+$global:PHASE_SW         = $null    # active [System.Diagnostics.Stopwatch]
+$global:PHASE_TIMING_LBL = ""       # label of the phase currently being timed
+$global:PHASE_TIMINGS    = [System.Collections.Generic.List[object]]::new()
 $global:SHELL_KILL_JOB   = $null    # Background job watching for K keypress
 $global:SHELL_KILL_FLAG  = $null    # Temp file path used as IPC flag for K keypress
 
@@ -355,8 +383,30 @@ function Show-SectionBanner {
     Invoke-GuiDoEvents
 }
 
+function Stop-PhaseTiming {
+    # Closes the phase currently in flight (if any) and emits one clean timing
+    # line. Safe to call repeatedly / when no phase is active. Parse-clean, no
+    # carriage-returns or scramble — flows straight through SSE.
+    if ($null -eq $global:PHASE_SW) { return }
+    $global:PHASE_SW.Stop()
+    $secs = [Math]::Round($global:PHASE_SW.Elapsed.TotalSeconds, 1)
+    $lbl  = $global:PHASE_TIMING_LBL
+    $global:PHASE_TIMINGS.Add([pscustomobject]@{ Phase = $lbl; Seconds = $secs })
+    # STEALTH mode keeps stdout JSON-only; record + log the timing but no console line.
+    if (-not $global:STEALTH_MODE) {
+        Write-Host ("  ⏱  {0} took {1}s" -f $lbl, $secs) -ForegroundColor DarkGray
+    }
+    Write-Log ("TIMING: {0} took {1}s" -f $lbl, $secs)
+    $global:PHASE_SW = $null
+    $global:PHASE_TIMING_LBL = ""
+}
+
 function Show-PhaseHeader {
     param([string]$Phase, [string]$Desc, [string]$Category = "")
+    # Close out the previous phase's wall-clock before announcing the next one.
+    Stop-PhaseTiming
+    $global:PHASE_TIMING_LBL = "$Phase — $Desc"
+    $global:PHASE_SW = [System.Diagnostics.Stopwatch]::StartNew()
     if ($global:STEALTH_MODE) { Write-Log "PHASE: $Phase | $Desc"; return }
     $catStr = if ($Category) { " · $Category" } else { "" }
     Write-Host ""; Write-Host "  ┌─[ " -NoNewline -ForegroundColor DarkRed
@@ -597,16 +647,113 @@ function Test-InScope {
 }
 
 function Get-FileEntropy {
-    param([string]$FilePath)
-    try {
-        $bytes = [System.IO.File]::ReadAllBytes($FilePath)
-        if ($bytes.Length -lt 256) { return 0.0 }
+    param([string]$FilePath, [int]$SampleBytes = 1048576)   # cap the read at 1 MB — entropy of the
+    try {                                                     # leading sample is representative for
+        $fs = [System.IO.File]::OpenRead($FilePath)           # packed/encrypted detection and avoids
+        try {                                                 # reading huge files fully into memory.
+            $len = [int][Math]::Min($fs.Length, [long]$SampleBytes)
+            if ($len -lt 256) { return 0.0 }
+            $bytes = New-Object byte[] $len
+            $read = 0; while ($read -lt $len) { $n = $fs.Read($bytes, $read, $len - $read); if ($n -le 0) { break }; $read += $n }
+            if ($read -lt 256) { return 0.0 }
+        } finally { $fs.Dispose() }
         $freq = @{}
-        foreach ($b in $bytes) { $freq[$b] = if ($freq.ContainsKey($b)) { $freq[$b]+1 } else { 1 } }
+        for ($i = 0; $i -lt $read; $i++) { $b = $bytes[$i]; $freq[$b] = if ($freq.ContainsKey($b)) { $freq[$b]+1 } else { 1 } }
         $entropy = 0.0
-        foreach ($count in $freq.Values) { $p = $count/$bytes.Length; $entropy -= $p*[Math]::Log($p,2) }
+        foreach ($count in $freq.Values) { $p = $count/$read; $entropy -= $p*[Math]::Log($p,2) }
         return [Math]::Round($entropy,4)
     } catch { return 0.0 }
+}
+
+# Content-signature matcher (AMSI-safe — rules live in data\detection_signatures.json).
+# Reads a small text-ish file and returns the highest-severity matching rule, or Hit=$false.
+function Test-ContentRules {
+    param([string]$FilePath, $Rules, [int]$MaxBytes = 5242880)
+    if (-not $Rules -or @($Rules).Count -eq 0) { return @{ Hit = $false } }
+    try {
+        $fi = Get-Item -LiteralPath $FilePath -ErrorAction Stop
+        if ($fi.Length -eq 0 -or $fi.Length -gt $MaxBytes) { return @{ Hit = $false } }
+        $text = [System.IO.File]::ReadAllText($FilePath)
+    } catch { return @{ Hit = $false } }
+    $rank = @{ "CRITICAL" = 3; "HIGH" = 2; "POSSIBLE" = 1 }
+    $best = $null
+    foreach ($r in $Rules) {
+        try {
+            if ($text -match $r.Pattern) {
+                if ($null -eq $best -or [int]$rank[$r.Severity] -gt [int]$rank[$best.Severity]) {
+                    $best = @{ Hit = $true; Name = $r.Name; Severity = $r.Severity }
+                }
+            }
+        } catch {}
+    }
+    if ($best) { return $best } else { return @{ Hit = $false } }
+}
+
+# ── Bounded recursive file enumeration (PERFORMANCE) ─────────────────────────
+# Whole-profile / AppData walks were the #1 cause of phases hanging the web UI:
+# Get-ChildItem -Recurse over $env:USERPROFILE drags in browser caches, Teams,
+# OneDrive, node_modules etc. — often hundreds of thousands of files. Get-ScanFiles
+# does a manual, prunable walk that (a) caps total files, (b) enforces a wall-clock
+# deadline so no single phase can run away, (c) prunes known giant low-signal cache
+# dirs, (d) skips reparse points (junction loops) and OneDrive cloud-only placeholder
+# files (reading those would trigger a download storm). Returns FileInfo[] so callers
+# keep using .FullName/.Name/.Extension/.Length/.LastWriteTime/.DirectoryName.
+$global:SCAN_MAX_FILES   = 20000   # hard cap on files examined per call
+$global:SCAN_DEADLINE_S  = 20      # wall-clock budget (seconds) per call
+$global:SCAN_PRUNE_DIRS  = @(
+    'node_modules','winsxs','$recycle.bin','system volume information','windows.old',
+    'servicing','driverstore','assembly',
+    'inetcache','cache','cache2','code cache','codecache','gpucache','service worker',
+    'cachestorage','dawncache','blob_storage','indexeddb','media cache','crashpad',
+    'minidump','cef','gpucache','shadercache','componentstore'
+)
+function Get-ScanFiles {
+    param(
+        [string[]]$Path,
+        [string]$Filter = '*',
+        [switch]$TimeScoped,                                # apply Test-InScope during the walk
+        [int]$MaxFiles      = $global:SCAN_MAX_FILES,
+        [int]$DeadlineSecs  = $global:SCAN_DEADLINE_S,
+        [string[]]$PruneDirs = $global:SCAN_PRUNE_DIRS
+    )
+    $results  = New-Object System.Collections.Generic.List[System.IO.FileInfo]
+    $deadline = [datetime]::UtcNow.AddSeconds($DeadlineSecs)
+    $prune    = @{}; foreach ($d in $PruneDirs) { $prune[$d.ToLower()] = $true }
+    foreach ($root in $Path) {
+        if (-not $root) { continue }
+        try { if (-not (Test-Path -LiteralPath $root)) { continue } } catch { continue }
+        $stack = New-Object System.Collections.Generic.Stack[string]
+        try { $stack.Push((Convert-Path -LiteralPath $root)) } catch { continue }
+        while ($stack.Count -gt 0) {
+            if ([datetime]::UtcNow -ge $deadline -or $results.Count -ge $MaxFiles) { return ,$results.ToArray() }
+            $dir = $stack.Pop()
+            try {
+                foreach ($f in [System.IO.Directory]::EnumerateFiles($dir, $Filter)) {
+                    if ($results.Count -ge $MaxFiles) { break }
+                    try {
+                        $fi   = New-Object System.IO.FileInfo $f
+                        $attr = [int]$fi.Attributes
+                        if ($attr -band 0x1000)   { continue }   # Offline (cloud-only)
+                        if ($attr -band 0x400000) { continue }   # RecallOnDataAccess (OneDrive placeholder)
+                        if ($TimeScoped -and -not (Test-InScope $fi.LastWriteTime)) { continue }
+                        $results.Add($fi)
+                    } catch {}
+                }
+            } catch {}
+            try {
+                foreach ($sd in [System.IO.Directory]::EnumerateDirectories($dir)) {
+                    $leaf = [System.IO.Path]::GetFileName($sd).ToLower()
+                    if ($prune.ContainsKey($leaf)) { continue }
+                    try {
+                        $di = New-Object System.IO.DirectoryInfo $sd
+                        if ([int]$di.Attributes -band [int][IO.FileAttributes]::ReparsePoint) { continue }
+                    } catch {}
+                    $stack.Push($sd)
+                }
+            } catch {}
+        }
+    }
+    return ,$results.ToArray()
 }
 
 function Get-ExtensionRisk {
@@ -675,6 +822,93 @@ $YARA_LITE_RULES        = Get-Sig 'yara_lite_rules'
 $AUTO_ELEVATE_BINS      = Get-Sig 'auto_elevate_bins'
 $LOLBAS_EXPANDED        = Get-Sig 'lolbas_expanded'
 $SCRIPT_OWN_STRINGS     = Get-Sig 'script_own_strings'
+$KNOWN_MALWARE_HASHES   = @((Get-Sig 'known_malware_hashes') | ForEach-Object { "$_".ToLower().Trim() })
+$EMAIL_PHISHING_TROJANS = Get-Sig 'email_phishing_trojans'
+$EMAIL_CONTENT_RULES    = Get-Sig 'email_content_rules'
+$EMAIL_SCAN_PATHS       = @((Get-Sig 'email_scan_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$EMAIL_ATTACH_EXTS      = @((Get-Sig 'email_attach_extensions') | ForEach-Object { "$_".ToLower() })
+$EMAIL_LURE_PATTERNS    = Get-Sig 'email_lure_filename_patterns'
+$PROACTIVE_PERSIST_REGS = Get-Sig 'proactive_persistence_regs'
+$PROACTIVE_OFFICE_KEYS  = Get-Sig 'proactive_office_keys'
+$PROACTIVE_LURE_EXTS    = @((Get-Sig 'proactive_lure_extensions') | ForEach-Object { "$_".ToLower() })
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
+#  Drives phases 108-115 (FORENSIC PERMISSION & INTEGRITY AUDIT). Path/key/owner
+#  data only — no malware signatures — so it stays out of the script body.
+# ══════════════════════════════════════════════════════════════════════════════
+$PermPath = Join-Path $PSScriptRoot 'data\permission_baseline.json'
+if (Test-Path -LiteralPath $PermPath) {
+    try   { $PERM = Get-Content -LiteralPath $PermPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { $PERM = $null; Write-Host "[ZeroBreach] WARNING: could not parse $PermPath ($($_.Exception.Message))" -ForegroundColor Red }
+} else {
+    $PERM = $null
+    Write-Host "[ZeroBreach] WARNING: permission baseline missing: $PermPath - permission/integrity phases limited." -ForegroundColor Yellow
+}
+function Get-Perm([string]$Name) { if ($PERM -and $null -ne $PERM.$Name) { @($PERM.$Name) } else { @() } }
+
+# Expand %WINDIR% / %ProgramFiles% / %SystemDrive% style tokens to real paths.
+function Expand-EnvPath { param([string]$P)
+    if (-not $P) { return $P }
+    [System.Environment]::ExpandEnvironmentVariables($P)
+}
+
+# Return any ACL access rules that grant write-class rights to a weak identity.
+# Works for both filesystem and registry ACLs (both expose .Access with
+# IdentityReference / AccessControlType / *Rights). $WeakIds = substrings to flag.
+function Get-WeakAces { param($Acl, [string[]]$WeakIds, [string]$RightsRegex = 'Write|Modify|FullControl|ChangePermissions|TakeOwnership|CreateFiles|AppendData|SetValue|CreateSubKey|WriteKey')
+    if ($null -eq $Acl -or $null -eq $Acl.Access) { return @() }
+    $out = @()
+    foreach ($ace in $Acl.Access) {
+        if ($ace.AccessControlType -ne 'Allow') { continue }
+        $rights = "$($ace.FileSystemRights)$($ace.RegistryRights)"
+        if ($rights -notmatch $RightsRegex) { continue }
+        $idr = "$($ace.IdentityReference)"
+        foreach ($w in $WeakIds) {
+            if ($idr -like "*$w*") { $out += $ace; break }
+        }
+    }
+    return $out
+}
+
+# Authenticode verdict for a file: returns a hashtable {Status, Signer, Trusted, IsMs}.
+# Cached per-path to avoid re-verifying the same binary across phases.
+$global:SIG_CACHE = @{}
+function Get-SignatureVerdict { param([string]$FilePath)
+    if ($global:SIG_CACHE.ContainsKey($FilePath)) { return $global:SIG_CACHE[$FilePath] }
+    $result = @{ Status='Unknown'; Signer=''; Trusted=$false; IsMs=$false; Exists=$false }
+    try {
+        if (Test-Path -LiteralPath $FilePath) {
+            $result.Exists = $true
+            $sig = Get-AuthenticodeSignature -LiteralPath $FilePath -ErrorAction SilentlyContinue
+            if ($sig) {
+                $result.Status = "$($sig.Status)"
+                $subj = if ($sig.SignerCertificate) { "$($sig.SignerCertificate.Subject)" } else { "" }
+                $result.Signer = $subj
+                $trusted = Get-Perm 'trusted_signers'
+                foreach ($t in $trusted) { if ($subj -like "*$t*") { $result.Trusted = $true; break } }
+                if ($subj -match 'Microsoft') { $result.IsMs = $true }
+            }
+        }
+    } catch {}
+    $global:SIG_CACHE[$FilePath] = $result
+    return $result
+}
+
+# Classify a finding for the remediation selection-mode presets:
+#   Recommended = high-confidence, worth acting on (CRIT/HIGH with a concrete fix)
+#   Safe        = remediation will not delete user data / break the OS (reversible)
+# Returns 'RECOMMENDED+SAFE','RECOMMENDED','SAFE', or '' .
+function Get-FixClass { param([string]$Severity, [string]$FixAction)
+    $destructive = @('DeleteFile','DeleteReg')          # data/registry loss
+    $safe        = @('Info','RunCmd','KillProcess','Quarantine')
+    $isSafe = ($safe -contains $FixAction)
+    $isRec  = (($Severity -eq 'CRITICAL' -or $Severity -eq 'HIGH') -and $FixAction -ne 'Info')
+    $tag = @()
+    if ($isRec)  { $tag += 'RECOMMENDED' }
+    if ($isSafe) { $tag += 'SAFE' }
+    ($tag -join '+')
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  IOC FILE IMPORT (V21)
@@ -860,12 +1094,25 @@ if (-not ($global:STEALTH_MODE -or $Auto)) {
 if (-not $global:ScanMode) { $global:ScanMode = "FULL" }
 if (-not $global:TW_LABEL) { $global:TIME_LIMIT=[datetime]::MinValue; $global:TW_LABEL="ALL TIME" }
 $PhasePlan = switch ($global:ScanMode) {
-    "QUICK"    { @{ Min=1; Max=30;  Universal=$false; Advanced=$false } }
-    "FULL"     { @{ Min=1; Max=80;  Universal=$false; Advanced=$false } }
-    "DEEP"     { @{ Min=1; Max=107; Universal=$true;  Advanced=$true  } }
-    "PARANOID" { @{ Min=1; Max=107; Universal=$true;  Advanced=$true  } }
-    "STEALTH"  { @{ Min=1; Max=107; Universal=$true;  Advanced=$true  } }
-    default    { @{ Min=1; Max=80;  Universal=$false; Advanced=$false } }
+    "QUICK"    { @{ Min=1; Max=30;  Universal=$false; Advanced=$false; Integrity=$false } }
+    "FULL"     { @{ Min=1; Max=80;  Universal=$false; Advanced=$false; Integrity=$false } }
+    "DEEP"     { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
+    "PARANOID" { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
+    "STEALTH"  { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
+    default    { @{ Min=1; Max=80;  Universal=$false; Advanced=$false; Integrity=$false } }
+}
+
+# ── Full console transcript (interactive runs) ────────────────────────────────
+# Captures EVERYTHING printed to the console to reports/KrakenConsole_<stamp>.log so
+# the operator never has to copy from the window. Skipped in STEALTH (JSON stdout)
+# and harmlessly skipped where the host can't transcribe (e.g. the GUI runspace).
+$global:TRANSCRIPT_ON = $false
+$TRANSCRIPT_PATH = Join-Path $OUT_ROOT "KrakenConsole_$STAMP.log"
+if (-not $global:STEALTH_MODE) {
+    try {
+        Start-Transcript -Path $TRANSCRIPT_PATH -Force -ErrorAction Stop | Out-Null
+        $global:TRANSCRIPT_ON = $true
+    } catch { $global:TRANSCRIPT_ON = $false }
 }
 
 if (-not $global:STEALTH_MODE) {
@@ -883,6 +1130,7 @@ if (-not $global:STEALTH_MODE) {
     Write-Host "  IOC COUNT : " -NoNewline -ForegroundColor DarkGray; Write-Host "$cic2 custom indicators" -ForegroundColor $(if($cic2-gt 0){"Cyan"}else{"DarkGray"})
     Write-Host "  BASELINE  : " -NoNewline -ForegroundColor DarkGray; Write-Host $(if($Baseline){"DIFF — $Baseline"}else{"none"}) -ForegroundColor $(if($Baseline){"Cyan"}else{"DarkGray"})
     Write-Host "  REPORT    : " -NoNewline -ForegroundColor DarkGray; Write-Host $REPORT_PATH -ForegroundColor DarkGray
+    if ($global:TRANSCRIPT_ON) { Write-Host "  CONSOLE LOG: " -NoNewline -ForegroundColor DarkGray; Write-Host $TRANSCRIPT_PATH -ForegroundColor DarkGray }
     if ($global:HTML_REPORT) { Write-Host "  HTML      : " -NoNewline -ForegroundColor DarkGray; Write-Host $HTML_PATH -ForegroundColor DarkGray }
     Write-Host ("▓"*80) -ForegroundColor DarkRed
     Write-Host ""
@@ -969,16 +1217,17 @@ Show-PhaseHeader "PHASE 4" "LOLBIN ABUSE AUDIT (Living-Off-The-Land Binaries)"
 Invoke-QuantumBar "SCANNING LOLBIN EXECUTION TRACES" 10 110
 $lolbins = @("mshta","wscript","cscript","regsvr32","rundll32","certutil","bitsadmin","msiexec","installutil","regasm","regsvcs","msbuild","cmstp","odbcconf","ieexec","pcalua","presentationhost","infdefaultinstall","diskshadow","esentutl","extrac32","findstr","forfiles","gpscript","hh","makecab","mavinject","msdeploy","msdt","pcwrun","replace","rpcping","syncappvpublishingserver","vbc","winrm","wmic","xwizard","msconfig","fodhelper","eventvwr","sdclt","wusa","csc")
 $lolHits = $false
-foreach ($lb in $lolbins) {
-    $procs = Get-WmiObject Win32_Process -Filter "Name='$lb.exe'" -ErrorAction SilentlyContinue
-    foreach ($p in $procs) {
-        if ($p.CommandLine -match "http|AppData|Temp|\.js|Base64|scrobj|unc|\\\\") {
-            $lolHits = $true
-            Out-Decrypt -Text "LOLBIN: $($p.Name) PID:$($p.ProcessId)" -Prefix "  [LOLBIN] "
-            Add-Finding -ID "LOLBIN_$($p.ProcessId)" -Phase "PHASE 4" -ThreatType "LoLBin Abuse" `
-                -Severity $SEV_HIGH -Description "LOLBin $($p.Name) used with suspicious args: $($p.CommandLine.Substring(0,[Math]::Min(100,$p.CommandLine.Length)))" `
-                -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "Live Malicious Processes"
-        }
+# One WMI enumeration + case-insensitive name lookup instead of one filtered
+# Get-WmiObject query per LOLBIN name (was ~46 WMI round-trips per scan).
+$lolSet = @{}; foreach ($lb in $lolbins) { $lolSet["$lb.exe"] = $true }
+foreach ($p in (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)) {
+    if (-not $lolSet.ContainsKey($p.Name)) { continue }
+    if ($p.CommandLine -match "http|AppData|Temp|\.js|Base64|scrobj|unc|\\\\") {
+        $lolHits = $true
+        Out-Decrypt -Text "LOLBIN: $($p.Name) PID:$($p.ProcessId)" -Prefix "  [LOLBIN] "
+        Add-Finding -ID "LOLBIN_$($p.ProcessId)" -Phase "PHASE 4" -ThreatType "LoLBin Abuse" `
+            -Severity $SEV_HIGH -Description "LOLBin $($p.Name) used with suspicious args: $($p.CommandLine.Substring(0,[Math]::Min(100,$p.CommandLine.Length)))" `
+            -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "Live Malicious Processes"
     }
 }
 if (-not $lolHits) { Out-Typewriter "  -> [OK] NO LOLBIN ABUSE DETECTED." "GOOD" }
@@ -1141,8 +1390,7 @@ foreach ($td in $targetDirs) {
     Out-Typewriter "SCANNING: $($td.L)" "INFO"
     if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
     if (-not (Test-Path $td.P)) { Out-Typewriter "  -> [OK] ABSENT." "GOOD"; continue }
-    $recentFiles = Get-ChildItem -Path $td.P -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { Test-InScope $_.LastWriteTime }
+    $recentFiles = Get-ScanFiles -Path $td.P -TimeScoped
     if ($recentFiles.Count -eq 0) { Out-Typewriter "  -> [OK] CLEAN." "GOOD"; continue }
     # Group into executable vs other
     $exeFiles   = $recentFiles | Where-Object { $malExt -contains $_.Extension.ToLower() }
@@ -1206,13 +1454,23 @@ if (Test-Path "$env:WINDIR\Prefetch") {
 Show-SectionBanner "SYSTEM FILE & KERNEL INTEGRITY"
 
 Show-PhaseHeader "PHASE 13" "CRYPTOGRAPHIC SYSTEM FILE VERIFICATION (SFC)"
-Out-Typewriter "EXECUTING SFC /SCANNOW..." "ACT"
-Invoke-QuantumBar "SFC KERNEL VALIDATION" 20 250
-cmd.exe /c "sfc /scannow >nul 2>&1"
-Out-Typewriter "  -> [OK] SFC VALIDATION COMPLETE." "VER"
-Add-Finding -ID "SFC_HARDENING" -Phase "PHASE 13" -ThreatType "System Integrity" -Severity $SEV_INFO `
-    -Description "SFC scan was run — review CBS.log if anomalies found." `
-    -Target "C:\Windows\Logs\CBS\CBS.log" -FixAction "Info" -Group "System Hardening"
+if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) {
+    # sfc /scannow runs 5-15 min with no streamable progress — in server/GUI/auto
+    # runs that reads as a hung phase (the exact failure the perf work targets).
+    # Skip the inline repair and surface it as a one-click manual action instead.
+    Out-Typewriter "  -> SFC SKIPPED IN AUTO/GUI MODE (5-15 min op; offered as a manual fix)." "INFO"
+    Add-Finding -ID "SFC_HARDENING" -Phase "PHASE 13" -ThreatType "System Integrity" -Severity $SEV_INFO `
+        -Description "SFC integrity scan skipped in automated/GUI mode (5-15 min). Run it on demand, then review CBS.log." `
+        -Target "C:\Windows\Logs\CBS\CBS.log" -FixAction "RunCmd" -FixParam "sfc /scannow" -Group "System Hardening"
+} else {
+    Out-Typewriter "EXECUTING SFC /SCANNOW..." "ACT"
+    Invoke-QuantumBar "SFC KERNEL VALIDATION" 20 250
+    cmd.exe /c "sfc /scannow >nul 2>&1"
+    Out-Typewriter "  -> [OK] SFC VALIDATION COMPLETE." "VER"
+    Add-Finding -ID "SFC_HARDENING" -Phase "PHASE 13" -ThreatType "System Integrity" -Severity $SEV_INFO `
+        -Description "SFC scan was run — review CBS.log if anomalies found." `
+        -Target "C:\Windows\Logs\CBS\CBS.log" -FixAction "Info" -Group "System Hardening"
+}
 
 Show-PhaseHeader "PHASE 14" "DISM COMPONENT STORE RESTORATION"
 Out-Typewriter "FLUSHING WUAUSERV CACHE..." "ACT"
@@ -1223,10 +1481,19 @@ if (Test-Path "$env:WINDIR\SoftwareDistribution\Download") {
         -Target "$env:WINDIR\SoftwareDistribution\Download" -FixAction "DeleteFile" -FixParam "$env:WINDIR\SoftwareDistribution\Download" -Group "System Hardening"
 }
 Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-$dismProc = Start-Process -FilePath "dism.exe" -ArgumentList "/Online /Cleanup-Image /RestoreHealth /Quiet" -PassThru -WindowStyle Hidden
-Invoke-QuantumBar "DISM IMAGE REPAIR IN PROGRESS" 30 550
-try { $dismProc | Wait-Process -Timeout 1200 -ErrorAction Stop; Out-Typewriter "  -> [OK] DISM REPAIR COMPLETE." "VER" }
-catch { $dismProc | Stop-Process -Force -ErrorAction SilentlyContinue; Out-Typewriter "  -> DISM TIMEOUT — CONTINUING." "WARN" }
+if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) {
+    # DISM /RestoreHealth can run 10-20 min and may reach out to Windows Update —
+    # same hung-phase problem in server/GUI/auto runs. Offer it as a manual fix.
+    Out-Typewriter "  -> DISM /RESTOREHEALTH SKIPPED IN AUTO/GUI MODE (10-20 min op; offered as a manual fix)." "INFO"
+    Add-Finding -ID "DISM_RESTOREHEALTH" -Phase "PHASE 14" -ThreatType "System Integrity" -Severity $SEV_INFO `
+        -Description "DISM component-store repair skipped in automated/GUI mode (10-20 min, may contact Windows Update). Run on demand." `
+        -Target "Component Store (WinSxS)" -FixAction "RunCmd" -FixParam "DISM /Online /Cleanup-Image /RestoreHealth" -Group "System Hardening"
+} else {
+    $dismProc = Start-Process -FilePath "dism.exe" -ArgumentList "/Online /Cleanup-Image /RestoreHealth /Quiet" -PassThru -WindowStyle Hidden
+    Invoke-QuantumBar "DISM IMAGE REPAIR IN PROGRESS" 30 550
+    try { $dismProc | Wait-Process -Timeout 1200 -ErrorAction Stop; Out-Typewriter "  -> [OK] DISM REPAIR COMPLETE." "VER" }
+    catch { $dismProc | Stop-Process -Force -ErrorAction SilentlyContinue; Out-Typewriter "  -> DISM TIMEOUT — CONTINUING." "WARN" }
+}
 
 Show-PhaseHeader "PHASE 15" "SYSTEM32 UNSIGNED BINARY AUDIT"
 Out-Typewriter "SCANNING SYSTEM32 FOR FORGED/UNSIGNED BINARIES..." "ACT"
@@ -1291,8 +1558,8 @@ foreach ($ht in @($env:PUBLIC,$env:LOCALAPPDATA,$env:TEMP,"$env:USERPROFILE\AppD
     Out-Typewriter "SWEEPING HIDDEN/SYSTEM ATTRS: $ht" "HUNT"
     if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 900 }
     if (Test-Path $ht) {
-        $cloaked = Get-ChildItem -Path $ht -Recurse -Force -ErrorAction SilentlyContinue |
-            Where-Object { $_.Attributes -match "Hidden" -and $_.Attributes -match "System" -and (Test-InScope $_.LastWriteTime) }
+        $cloaked = Get-ScanFiles -Path $ht -TimeScoped |
+            Where-Object { $_.Attributes -match "Hidden" -and $_.Attributes -match "System" }
         foreach ($c in $cloaked) {
             Out-ThreatBanner "CLOAKED FILE (HIDDEN+SYSTEM)" $c.FullName
             Add-Finding -ID "CLOAKED_$($c.Name -replace '[^a-z0-9]','')" -Phase "PHASE 18" -ThreatType "Rootkit/Trojan" `
@@ -1934,20 +2201,16 @@ Out-Typewriter "SCANNING FOR KEYSTROKE LOG FILES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
 $klFilePatterns = @("*keystroke*","*keylog*","*keypress*","*kgb*","*.klg","*.kl","*typed*","*capture*log*","*hook.log*")
 $klSearchPaths  = @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Documents")
+# One bounded walk, anchored regex over all patterns (was 4 roots x 9 patterns = 36 recursions).
+$klRegex = ($klFilePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
 $klFound = $false
-foreach ($sp in $klSearchPaths) {
-    if (-not (Test-Path $sp)) { continue }
-    foreach ($pattern in $klFilePatterns) {
-        $hits = Get-ChildItem -Path $sp -Recurse -Filter $pattern -ErrorAction SilentlyContinue |
-            Where-Object { Test-InScope $_.LastWriteTime }
-        foreach ($hit in $hits) {
-            Out-ThreatBanner "KEYLOGGER LOG FILE" $hit.FullName
-            Add-Finding -ID "KLFILE_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 48" -ThreatType "Keylogger" `
-                -Severity $SEV_CRITICAL -Description "Keystroke log file detected: $($hit.FullName)" `
-                -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Keylogger Artifacts"
-            $global:KeyloggerHits++; $klFound = $true
-        }
-    }
+$klHits = Get-ScanFiles -Path $klSearchPaths -TimeScoped | Where-Object { $_.Name -match $klRegex }
+foreach ($hit in $klHits) {
+    Out-ThreatBanner "KEYLOGGER LOG FILE" $hit.FullName
+    Add-Finding -ID "KLFILE_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 48" -ThreatType "Keylogger" `
+        -Severity $SEV_CRITICAL -Description "Keystroke log file detected: $($hit.FullName)" `
+        -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Keylogger Artifacts"
+    $global:KeyloggerHits++; $klFound = $true
 }
 $klRegPaths = @("HKCU:\SOFTWARE\Ardamax","HKCU:\SOFTWARE\Spyrix","HKCU:\SOFTWARE\Refog","HKCU:\SOFTWARE\KGB Spy","HKCU:\SOFTWARE\Revealer Keylogger","HKCU:\SOFTWARE\Elite Keylogger","HKCU:\SOFTWARE\Actual Keylogger")
 foreach ($kr in $klRegPaths) {
@@ -2000,20 +2263,23 @@ Show-PhaseHeader "PHASE 51" "RANSOMWARE EXTENSION VELOCITY DETECTION" "RANSOMWAR
 Out-Typewriter "SCANNING USER PROFILE FOR RANSOMWARE EXTENSION PATTERNS..." "HUNT"
 Invoke-QuantumBar "EXTENSION ANALYSIS" 12 110
 $encFound = $false
-$searchRoots = @($env:USERPROFILE,"$env:USERPROFILE\Documents","$env:USERPROFILE\Desktop","$env:USERPROFILE\Pictures","$env:USERPROFILE\Downloads")
-foreach ($root in $searchRoots) {
-    if (-not (Test-Path $root)) { continue }
-    $recentFiles = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { Test-InScope $_.LastWriteTime }
-    foreach ($rf in $recentFiles) {
-        $ext = $rf.Extension.ToLower()
-        if ($RANSOMWARE_EXTENSIONS -contains $ext) {
-            Out-ThreatBanner "RANSOMWARE ENCRYPTED FILE EXTENSION" "$($rf.Name) in $root"
-            Add-Finding -ID "RANSOM_EXT_$($rf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 51" -ThreatType "Ransomware" `
-                -Severity $SEV_CRITICAL -Description "File with known ransomware extension: $($rf.FullName) ($ext)" `
-                -Target $rf.FullName -FixAction "Info" -Group "Ransomware Encrypted Files"
-            $global:RansomwareRisk += 5; $encFound = $true
-        }
+# Scope to user-DOCUMENT folders, not the whole profile. Bare $env:USERPROFILE recursion pulls in
+# AppData (browser caches, Teams, OneDrive) → multi-minute hang. Ransomware encrypts user data,
+# which lives in these folders. One bounded walk is shared across phases 51/52/53.
+$searchRoots = @(
+    "$env:USERPROFILE\Documents","$env:USERPROFILE\Desktop","$env:USERPROFILE\Pictures",
+    "$env:USERPROFILE\Downloads","$env:USERPROFILE\Videos","$env:USERPROFILE\Music",
+    "$env:USERPROFILE\OneDrive","$env:PUBLIC"
+)
+$ransomScanFiles = Get-ScanFiles -Path $searchRoots -TimeScoped
+foreach ($rf in $ransomScanFiles) {
+    $ext = $rf.Extension.ToLower()
+    if ($RANSOMWARE_EXTENSIONS -contains $ext) {
+        Out-ThreatBanner "RANSOMWARE ENCRYPTED FILE EXTENSION" "$($rf.Name) in $($rf.DirectoryName)"
+        Add-Finding -ID "RANSOM_EXT_$($rf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 51" -ThreatType "Ransomware" `
+            -Severity $SEV_CRITICAL -Description "File with known ransomware extension: $($rf.FullName) ($ext)" `
+            -Target $rf.FullName -FixAction "Info" -Group "Ransomware Encrypted Files"
+        $global:RansomwareRisk += 5; $encFound = $true
     }
 }
 if (-not $encFound) { Out-Typewriter "  -> [OK] NO RANSOMWARE EXTENSION PATTERNS." "GOOD" }
@@ -2022,20 +2288,18 @@ Show-PhaseHeader "PHASE 52" "HIGH ENTROPY FILE DETECTION (ENCRYPTED PAYLOAD)" "R
 Out-Typewriter "SAMPLING FILES FOR HIGH ENTROPY (ENCRYPTION/PACKING)..." "HUNT"
 Invoke-QuantumBar "ENTROPY ANALYSIS" 15 120
 $entropyHits = $false
-foreach ($root in $searchRoots) {
-    if (-not (Test-Path $root)) { continue }
-    $candidates = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
-        Where-Object { Test-InScope $_.LastWriteTime -and $_.Length -gt 4096 -and $_.Extension -notmatch "\.(mp4|mp3|zip|rar|7z|jpg|png|pdf)$" } |
-        Select-Object -First 50
-    foreach ($cf in $candidates) {
-        $entropy = Get-FileEntropy -FilePath $cf.FullName
-        if ($entropy -gt 7.5) {
-            Out-Typewriter "  -> HIGH ENTROPY ($entropy): $($cf.FullName)" "WARN"
-            Add-Finding -ID "ENTROPY_$($cf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 52" -ThreatType "Ransomware/Packed Malware" `
-                -Severity $SEV_POSSIBLE -Description "High entropy file ($entropy/8.0 bits): $($cf.FullName) — may be encrypted or packed malware" `
-                -Target $cf.FullName -FixAction "Info" -Group "High Entropy Files"
-            $global:RansomwareRisk++; $entropyHits = $true
-        }
+# Reuse the single bounded walk from phase 51 (no second whole-tree recursion).
+$candidates = $ransomScanFiles |
+    Where-Object { $_.Length -gt 4096 -and $_.Extension -notmatch "\.(mp4|mp3|zip|rar|7z|jpg|png|pdf)$" } |
+    Select-Object -First 50
+foreach ($cf in $candidates) {
+    $entropy = Get-FileEntropy -FilePath $cf.FullName
+    if ($entropy -gt 7.5) {
+        Out-Typewriter "  -> HIGH ENTROPY ($entropy): $($cf.FullName)" "WARN"
+        Add-Finding -ID "ENTROPY_$($cf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 52" -ThreatType "Ransomware/Packed Malware" `
+            -Severity $SEV_POSSIBLE -Description "High entropy file ($entropy/8.0 bits): $($cf.FullName) — may be encrypted or packed malware" `
+            -Target $cf.FullName -FixAction "Info" -Group "High Entropy Files"
+        $global:RansomwareRisk++; $entropyHits = $true
     }
 }
 if (-not $entropyHits) { Out-Typewriter "  -> [OK] NO SUSPICIOUSLY HIGH ENTROPY FILES FOUND." "GOOD" }
@@ -2044,20 +2308,17 @@ Show-PhaseHeader "PHASE 53" "RANSOM NOTE DETECTION" "RANSOMWARE"
 Out-Typewriter "SCANNING FOR RANSOM NOTE ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
 $ransomNotePatterns = @("*readme*.txt","*DECRYPT*","*RECOVER*","*ransom*","*YOUR_FILES*","*HOW_TO_DECRYPT*","*!readme!*","*restore_files*","*HOW TO RECOVER*","*IMPORTANT*.txt","*help_decrypt*")
+# Collapse 11 patterns × N roots (was 55 full recursions) into ONE in-memory regex over the
+# shared phase-51 walk. Wildcards -> regex: escape, then \* -> .*  (case-insensitive -match).
+$noteRegex = ($ransomNotePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
 $noteFound = $false
-foreach ($root in $searchRoots) {
-    if (-not (Test-Path $root)) { continue }
-    foreach ($pattern in $ransomNotePatterns) {
-        $notes = Get-ChildItem -Path $root -Recurse -Filter $pattern -ErrorAction SilentlyContinue |
-            Where-Object { Test-InScope $_.LastWriteTime }
-        foreach ($note in $notes) {
-            Out-ThreatBanner "RANSOM NOTE DETECTED" $note.FullName
-            Add-Finding -ID "RANSOMNOTE_$($note.Name -replace '[^a-z0-9]','')" -Phase "PHASE 53" -ThreatType "Ransomware" `
-                -Severity $SEV_CRITICAL -Description "Ransom note file found: $($note.FullName)" `
-                -Target $note.FullName -FixAction "DeleteFile" -FixParam $note.FullName -Group "Ransom Notes"
-            $global:RansomwareRisk += 10; $noteFound = $true
-        }
-    }
+$noteFiles = $ransomScanFiles | Where-Object { $_.Name -match $noteRegex }
+foreach ($note in $noteFiles) {
+    Out-ThreatBanner "RANSOM NOTE DETECTED" $note.FullName
+    Add-Finding -ID "RANSOMNOTE_$($note.Name -replace '[^a-z0-9]','')" -Phase "PHASE 53" -ThreatType "Ransomware" `
+        -Severity $SEV_CRITICAL -Description "Ransom note file found: $($note.FullName)" `
+        -Target $note.FullName -FixAction "DeleteFile" -FixParam $note.FullName -Group "Ransom Notes"
+    $global:RansomwareRisk += 10; $noteFound = $true
 }
 if (-not $noteFound) { Out-Typewriter "  -> [OK] NO RANSOM NOTE FILES DETECTED." "GOOD" }
 
@@ -2357,8 +2618,8 @@ $shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object
 foreach ($share in $shares) {
     Out-Typewriter "  -> OPEN SHARE: $($share.Name) @ $($share.Path)" "WARN"
     if ($share.Path -and (Test-Path $share.Path)) {
-        $malInShare = Get-ChildItem -Path $share.Path -Recurse -Force -ErrorAction SilentlyContinue |
-            Where-Object { (Test-InScope $_.LastWriteTime) -and $_.Extension -match "\.(exe|bat|cmd|vbs|js|ps1)$" } |
+        $malInShare = Get-ScanFiles -Path $share.Path -TimeScoped |
+            Where-Object { $_.Extension -match "\.(exe|bat|cmd|vbs|js|ps1)$" } |
             Select-Object -First 500
         foreach ($mis in $malInShare) {
             $sig = Get-AuthenticodeSignature $mis.FullName -ErrorAction SilentlyContinue
@@ -2421,8 +2682,8 @@ foreach ($sp in $stealerProcs) {
         -Target "PID:$($sp.Id)" -FixAction "KillProcess" -FixParam $sp.Id -Group "Info-Stealer"
     $global:SpywareHits++
 }
-$stealerFiles = Get-ChildItem -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -Recurse -File -ErrorAction SilentlyContinue |
-    Where-Object { Test-InScope $_.LastWriteTime -and $_.Name -match "passwords|credentials|wallet|login|autofill|cookie" -and $_.Extension -match "\.(zip|txt|log|db)$" }
+$stealerFiles = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped |
+    Where-Object { $_.Name -match "passwords|credentials|wallet|login|autofill|cookie" -and $_.Extension -match "\.(zip|txt|log|db)$" }
 foreach ($sf in $stealerFiles) {
     if ($sf.FullName -notmatch "Chrome\\User Data|Firefox\\Profiles") {  # exclude legitimate browser storage
         Out-Typewriter "  -> SUSPECT CREDENTIAL FILE: $($sf.FullName)" "CRIT"
@@ -2561,6 +2822,196 @@ if (Test-Path $outlookPath) {
 }
 Out-Typewriter "  -> MACRO/OUTLOOK AUDIT COMPLETE." "VER"
 
+Show-PhaseHeader "PHASE 74.5" "EMAIL ATTACHMENT MALWARE SCAN (OUTLOOK CACHE)" "PHISHING"
+Out-Typewriter "SCANNING OUTLOOK ATTACHMENT CACHE & EMAIL TEMP FOLDERS..." "HUNT"
+if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
+# Targeted attachment/diagnostic caches only — NOT the multi-GB OST/PST store (scanned elsewhere).
+$emailAttachPaths = @($EMAIL_SCAN_PATHS) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue) } | Select-Object -Unique
+$emailHits = 0
+# Extensions worth content-scanning for HTML/JS smuggling & redirector payloads.
+$emailTextExt = @(".htm",".html",".js",".jse",".vbs",".vbe",".hta",".wsf",".svg",".log",".txt",".xml")
+foreach ($attachPath in $emailAttachPaths) {
+    $emailFiles = Get-ScanFiles -Path $attachPath -TimeScoped |
+        Where-Object { $_.Length -lt 50MB } | Select-Object -First 500
+    $inCache = ($attachPath -match 'Olk\\Attachments|Content\.Outlook|Temporary Internet Files')
+    foreach ($ef in $emailFiles) {
+        $sev = $null; $reasons = @(); $threat = "Phishing / Email Trojan"
+        $ext = $ef.Extension.ToLower()
+
+        # 1) Known-malware hash match (strongest signal) — only hash small/medium files.
+        if ($KNOWN_MALWARE_HASHES.Count -gt 0 -and $ef.Length -lt 25MB) {
+            $fh = (Get-FileHash -LiteralPath $ef.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+            if ($fh -and ($KNOWN_MALWARE_HASHES -contains $fh.ToLower())) {
+                $sev = $SEV_CRITICAL; $reasons += "SHA256 matches known malware ($($fh.Substring(0,16))...)"
+            }
+        }
+
+        # 2) Content signatures (HTML smuggling / JS redirector / obfuscated dropper).
+        if ($emailTextExt -contains $ext) {
+            $cr = Test-ContentRules -FilePath $ef.FullName -Rules $EMAIL_CONTENT_RULES
+            if ($cr.Hit) {
+                $reasons += "Malicious content signature: $($cr.Name)"
+                $threat = "Phishing / Email Trojan ($($cr.Name))"
+                if ($null -eq $sev -or $cr.Severity -eq $SEV_CRITICAL) { $sev = $cr.Severity }
+            }
+        }
+
+        # 3) Executable/script dropped into an email attachment-extraction cache.
+        if ($inCache -and ($EMAIL_ATTACH_EXTS -contains $ext)) {
+            $reasons += "Executable/script extension ($ext) in email attachment cache"
+            if ($null -eq $sev -or $sev -eq $SEV_POSSIBLE) { $sev = $SEV_HIGH }
+        }
+
+        # 4) Social-engineering lure filename (invoice/payment/setuppdf/voicemail/etc.).
+        foreach ($pat in $EMAIL_LURE_PATTERNS) {
+            if ($ef.Name -like $pat) {
+                $reasons += "Phishing lure filename pattern: $pat"
+                if ($null -eq $sev) { $sev = if ($EMAIL_ATTACH_EXTS -contains $ext) { $SEV_HIGH } else { $SEV_POSSIBLE } }
+                break
+            }
+        }
+
+        if ($sev) {
+            $idSafe = ($ef.Name -replace '[^a-zA-Z0-9]','')
+            $fixAct = if ($sev -eq $SEV_POSSIBLE) { "Info" } else { "Quarantine" }
+            $lvl = if ($sev -eq $SEV_POSSIBLE) { "WARN" } else { "CRIT" }
+            Out-Typewriter "  -> [$sev] EMAIL ARTIFACT: $($ef.Name)" $lvl
+            Add-Finding -ID "EMAIL_${idSafe}_$($ef.Length)" -Phase "PHASE 74.5" -ThreatType $threat `
+                -Severity $sev -Description "Email attachment threat: $($reasons -join '; ') [$($ef.FullName)]" `
+                -Target $ef.FullName -FixAction $fixAct -FixParam $ef.FullName `
+                -Group "Email / Phishing Threats"
+            $global:TrojanHits++; $emailHits++
+        }
+    }
+}
+if ($emailHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPICIOUS EMAIL ARTIFACTS." "GOOD" }
+Out-Typewriter "  -> EMAIL ATTACHMENT SCAN COMPLETE." "VER"
+
+Show-PhaseHeader "PHASE 74.6" "MICROSOFT DEFENDER THREAT HISTORY CORRELATION" "DEFENDER"
+Out-Typewriter "CORRELATING WITH WINDOWS DEFENDER DETECTION HISTORY..." "HUNT"
+if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
+try {
+    $threatNames = @{}
+    foreach ($t in (Get-MpThreat -ErrorAction SilentlyContinue)) { $threatNames[[string]$t.ThreatID] = $t.ThreatName }
+    $dets = @(Get-MpThreatDetection -ErrorAction Stop | Sort-Object InitialDetectionTime -Descending)
+    $defHits = 0
+    foreach ($d in $dets) {
+        if (-not (Test-InScope $d.InitialDetectionTime)) { continue }
+        $tname = if ($threatNames.ContainsKey([string]$d.ThreatID)) { $threatNames[[string]$d.ThreatID] } else { "ThreatID $($d.ThreatID)" }
+        $when  = try { ([datetime]$d.InitialDetectionTime).ToString('yyyy-MM-dd HH:mm') } catch { "unknown" }
+        $emitted = $false
+        foreach ($res in @($d.Resources)) {
+            $path = ([string]$res) -replace '^(file|webfile|containerfile|amsi|behavior|process|regkey|fixpath|runkey):_?',''
+            $onDisk = ($path -match '^[A-Za-z]:\\') -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)
+            if ($onDisk) {
+                Out-Typewriter "  -> RESIDUAL FILE STILL ON DISK: $path" "CRIT"
+                Add-Finding -ID "DEFRES_$([Math]::Abs($path.GetHashCode()))" -Phase "PHASE 74.6" `
+                    -ThreatType "Defender-Flagged Residual ($tname)" -Severity $SEV_CRITICAL `
+                    -Description "Defender flagged '$tname' on $when but the file is STILL PRESENT: $path" `
+                    -Target $path -FixAction "Quarantine" -FixParam $path -Group "Defender History / Residual Threats"
+                $global:TrojanHits++; $emitted = $true
+            } elseif ($path -match '^[A-Za-z]:\\') {
+                Add-Finding -ID "DEFHIST_$([Math]::Abs(("$tname|$path").GetHashCode()))" -Phase "PHASE 74.6" `
+                    -ThreatType "Defender Detection (handled)" -Severity $SEV_INFO `
+                    -Description "Defender detected '$tname' on $when at $path (no longer on disk — verify quarantine)." `
+                    -Target $path -FixAction "Info" -Group "Defender History / Residual Threats"
+                $emitted = $true
+            }
+        }
+        if ($emitted) { $defHits++ }
+    }
+    if ($defHits -eq 0) { Out-Typewriter "  -> [OK] NO DEFENDER DETECTIONS IN TIME WINDOW." "GOOD" }
+    else { Out-Typewriter "  -> CORRELATED $defHits DEFENDER DETECTION(S)." "DATA" }
+} catch {
+    Out-Typewriter "  -> Defender history unavailable (module/cmdlet absent): $($_.Exception.Message)" "WARN"
+}
+Out-Typewriter "  -> DEFENDER HISTORY CORRELATION COMPLETE." "VER"
+
+Show-PhaseHeader "PHASE 74.7" "PROACTIVE ANTI-REINFECTION HARDENING" "HARDEN"
+Out-Typewriter "AUDITING ATTACKER-TARGETED FOOTHOLDS FOR PROACTIVE HARDENING..." "HUNT"
+if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
+$hardenHits = 0
+# (a) Office / Outlook macro & attachment security — primary phishing execution vector.
+foreach ($ok in $PROACTIVE_OFFICE_KEYS) {
+    try {
+        if (-not (Test-Path -LiteralPath $ok.Path)) { continue }   # app not installed — skip
+        $cur = (Get-ItemProperty -LiteralPath $ok.Path -Name $ok.Name -ErrorAction SilentlyContinue).$($ok.Name)
+        if ($null -eq $cur -or [int]$cur -lt [int]$ok.SafeValue) {
+            Add-Finding -ID "HARDEN_OFFICE_$(($ok.Path + $ok.Name) -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 74.7" `
+                -ThreatType "Macro/Attachment Exposure" -Severity $SEV_POSSIBLE `
+                -Description "$($ok.Why). Current=$cur, hardened=$($ok.SafeValue)." `
+                -Target "$($ok.Path)|$($ok.Name)" -FixAction "RunCmd" `
+                -FixParam "New-Item -Path '$($ok.Path)' -Force | Out-Null; Set-ItemProperty -Path '$($ok.Path)' -Name '$($ok.Name)' -Value $($ok.SafeValue) -Type DWord -Force" `
+                -Group "Proactive Hardening"
+            $hardenHits++
+        }
+    } catch {}
+}
+# (b) Windows Script Host — disable .js/.vbs/.wsf double-click execution (commodity-malware delivery).
+try {
+    $wshPath = "HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings"
+    $wshEnabled = (Get-ItemProperty -LiteralPath $wshPath -Name "Enabled" -ErrorAction SilentlyContinue).Enabled
+    if ($null -eq $wshEnabled -or [int]$wshEnabled -ne 0) {
+        Add-Finding -ID "HARDEN_WSH_DISABLE" -Phase "PHASE 74.7" -ThreatType "Script Host Exposure" -Severity $SEV_INFO `
+            -Description "Windows Script Host is enabled — .js/.jse/.vbs/.wsf files execute on double-click (top phishing delivery). Disabling blocks that vector." `
+            -Target $wshPath -FixAction "RunCmd" `
+            -FixParam "New-Item -Path '$wshPath' -Force | Out-Null; Set-ItemProperty -Path '$wshPath' -Name 'Enabled' -Value 0 -Type DWord -Force" `
+            -Group "Proactive Hardening"
+        $hardenHits++
+    }
+} catch {}
+# (c) Defender posture + Attack Surface Reduction rules that kill the phishing-trojan kill chain.
+try {
+    $mp = Get-MpPreference -ErrorAction Stop
+    if ([int]$mp.PUAProtection -ne 1) {
+        Add-Finding -ID "HARDEN_PUA" -Phase "PHASE 74.7" -ThreatType "Defender Posture" -Severity $SEV_POSSIBLE `
+            -Description "Defender PUA/PUP protection is not enabled (the SetupPDF alert was a PUA). Enable to block fake-installer PUPs." `
+            -Target "Defender PUAProtection" -FixAction "RunCmd" -FixParam "Set-MpPreference -PUAProtection Enabled -ErrorAction SilentlyContinue" `
+            -Group "Proactive Hardening"
+        $hardenHits++
+    }
+    # ASR rules: id => description + deployment mode. The 3 low-FP rules deploy in BLOCK; the 3
+    # higher-FP rules (Office child procs / obfuscated scripts / Win32-from-macros) deploy in AUDIT
+    # first so they LOG impact on business machines without breaking legit add-ins, macros or
+    # minified scripts. Promote audit->block per-client once telemetry confirms no breakage.
+    $asrRules = @(
+        @{ Id="BE9BA2D9-53EA-4CDC-84E5-9B1EEEE46550"; Desc="Block executable content from email client and webmail"; Mode="Block" },
+        @{ Id="3B576869-A4EC-4529-8536-B80A7769E899"; Desc="Block Office apps from creating executable content"; Mode="Block" },
+        @{ Id="D3E037E1-3EB8-44C8-A917-57927947596D"; Desc="Block JS/VBScript from launching downloaded executable content"; Mode="Block" },
+        @{ Id="D4F940AB-401B-4EFC-AADC-AD5F3C50688A"; Desc="Block all Office apps from creating child processes"; Mode="Audit" },
+        @{ Id="5BEB7EFE-FD9A-4556-801D-275E5FFC04CC"; Desc="Block execution of potentially obfuscated scripts"; Mode="Audit" },
+        @{ Id="92E97FA1-2EDF-4476-BDD6-9DD0B4DDDC7B"; Desc="Block Win32 API calls from Office macros"; Mode="Audit" }
+    )
+    # Current rule actions: 0/absent=Not configured, 1=Block, 2=Audit, 6=Warn.
+    $asrActions = @{}
+    for ($i=0; $i -lt @($mp.AttackSurfaceReductionRules_Ids).Count; $i++) {
+        $asrActions[([string]@($mp.AttackSurfaceReductionRules_Ids)[$i]).ToUpper()] = [int]@($mp.AttackSurfaceReductionRules_Actions)[$i]
+    }
+    foreach ($rule in $asrRules) {
+        $key = $rule.Id.ToUpper()
+        $cur = if ($asrActions.ContainsKey($key)) { $asrActions[$key] } else { 0 }
+        if ($rule.Mode -eq "Block") {
+            if ($cur -eq 1) { continue }   # already enforcing — nothing to recommend
+            $action = "Enabled"; $modeWord = "BLOCK"
+        } else {
+            if ($cur -eq 1 -or $cur -eq 2) { continue }   # already auditing or blocking — leave it
+            $action = "AuditMode"; $modeWord = "AUDIT (log-only, breaks nothing)"
+        }
+        Add-Finding -ID "HARDEN_ASR_$($rule.Id -replace '[^A-Za-z0-9]','')" -Phase "PHASE 74.7" `
+            -ThreatType "ASR Rule Not Enabled" -Severity $SEV_INFO `
+            -Description "Attack Surface Reduction rule not set: $($rule.Desc). Recommended deployment: $modeWord. Breaks the phishing email->script->exe chain." `
+            -Target "ASR $($rule.Id)" -FixAction "RunCmd" `
+            -FixParam "Add-MpPreference -AttackSurfaceReductionRules_Ids '$($rule.Id)' -AttackSurfaceReductionRules_Actions $action -ErrorAction SilentlyContinue" `
+            -Group "Proactive Hardening"
+        $hardenHits++
+    }
+} catch {
+    Out-Typewriter "  -> Defender preferences unavailable: $($_.Exception.Message)" "WARN"
+}
+if ($hardenHits -eq 0) { Out-Typewriter "  -> [OK] PROACTIVE HARDENING ALREADY IN PLACE." "GOOD" }
+else { Out-Typewriter "  -> $hardenHits PROACTIVE HARDENING RECOMMENDATION(S) ADDED." "DATA" }
+Out-Typewriter "  -> PROACTIVE HARDENING AUDIT COMPLETE." "VER"
+
 Show-PhaseHeader "PHASE 75" "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT"
 Out-Typewriter "CHECKING DEFENDER EXCLUSION LIST FOR MALWARE HIDING SPOTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -2690,19 +3141,17 @@ if ($PhasePlan.Universal) {
     Show-PhaseHeader "PHASE 82" "NETCAT / SOCAT / CHISEL / PLINK BINARY SCAN" "UNIVERSAL"
     $tunnelNames = @("nc.exe","ncat.exe","socat.exe","chisel.exe","plink.exe","putty.exe","proxychains*","ligolo*","frpc.exe","frps.exe","bore.exe","rpivot*")
     $tunnelRoots = @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE,"$env:WINDIR\Temp")
+    # One bounded walk; anchored regex so "nc.exe" doesn't substring-match "sync.exe"
+    # (was 4 roots x 12 names = 48 recursions, one over the entire user profile).
+    $tunnelRegex = ($tunnelNames | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $tunnelFound = $false
-    foreach ($root in $tunnelRoots) {
-        if (-not (Test-Path $root)) { continue }
-        foreach ($name in $tunnelNames) {
-            $hits = Get-ChildItem -Path $root -Recurse -Filter $name -ErrorAction SilentlyContinue
-            foreach ($hit in $hits) {
-                $tunnelFound = $true
-                Out-Decrypt -Text $hit.FullName -Prefix "  [TUNNEL TOOL] "
-                Add-Finding -ID "TUNNEL_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 82" -ThreatType "Tunneling Tool" `
-                    -Severity $SEV_CRITICAL -Description "Tunneling/pivoting tool found: $($hit.FullName)" `
-                    -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Tunneling / Pivoting Tools"
-            }
-        }
+    $tunnelHits = Get-ScanFiles -Path $tunnelRoots | Where-Object { $_.Name -match $tunnelRegex }
+    foreach ($hit in $tunnelHits) {
+        $tunnelFound = $true
+        Out-Decrypt -Text $hit.FullName -Prefix "  [TUNNEL TOOL] "
+        Add-Finding -ID "TUNNEL_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 82" -ThreatType "Tunneling Tool" `
+            -Severity $SEV_CRITICAL -Description "Tunneling/pivoting tool found: $($hit.FullName)" `
+            -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Tunneling / Pivoting Tools"
     }
     if (-not $tunnelFound) { Out-Typewriter "  -> [OK] NO TUNNELING TOOLS FOUND." "GOOD" }
 
@@ -2749,8 +3198,8 @@ if ($PhasePlan.Universal) {
     }
 
     Show-PhaseHeader "PHASE 86" "RECYCLE BIN STAGING AREA SCAN" "UNIVERSAL"
-    $recycleBin = Get-ChildItem "C:\`$Recycle.Bin" -Recurse -Force -ErrorAction SilentlyContinue |
-        Where-Object { Test-InScope $_.LastWriteTime -and $_.Extension -match "\.(exe|dll|js|vbs|bat|cmd|ps1|hta|wsf)$" }
+    $recycleBin = Get-ScanFiles -Path "C:\`$Recycle.Bin" -TimeScoped |
+        Where-Object { $_.Extension -match "\.(exe|dll|js|vbs|bat|cmd|ps1|hta|wsf)$" }
     foreach ($rb in $recycleBin) {
         Out-Decrypt -Text $rb.FullName -Prefix "  [RECYCLE BIN PAYLOAD] "
         Add-Finding -ID "RECYCLE_$($rb.Name -replace '[^a-z0-9]','')" -Phase "PHASE 86" -ThreatType "Malware Staging" `
@@ -2809,16 +3258,14 @@ if ($PhasePlan.Universal) {
         }
     }
     $stegoTools = @("openstego*","steghide*","outguess*","jphide*","stegosuite*","stepic*","imagesteganography*")
-    foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE)) {
-        foreach ($st in $stegoTools) {
-            $hits = Get-ChildItem -Path $root -Recurse -Filter $st -ErrorAction SilentlyContinue
-            foreach ($hit in $hits) {
-                Out-Typewriter "  -> STEGO TOOL: $($hit.FullName)" "WARN"
-                Add-Finding -ID "STEGO_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 89" -ThreatType "Steganography/Exfil Tool" `
-                    -Severity $SEV_HIGH -Description "Steganography tool found: $($hit.FullName)" `
-                    -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Data Exfiltration"
-            }
-        }
+    # One bounded walk + anchored regex (was 3 roots x 7 names = 21 recursions incl. whole profile).
+    $stegoRegex = ($stegoTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
+    $stegoHits = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE) | Where-Object { $_.Name -match $stegoRegex }
+    foreach ($hit in $stegoHits) {
+        Out-Typewriter "  -> STEGO TOOL: $($hit.FullName)" "WARN"
+        Add-Finding -ID "STEGO_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 89" -ThreatType "Steganography/Exfil Tool" `
+            -Severity $SEV_HIGH -Description "Steganography tool found: $($hit.FullName)" `
+            -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Data Exfiltration"
     }
     Out-Typewriter "  -> PHASE 89 COMPLETE." "VER"
 }
@@ -2840,13 +3287,12 @@ if ($PhasePlan.Advanced) {
     Out-Typewriter "SCANNING USER-PATH BINARIES FOR MALWARE STRINGS..." "HUNT"
     Invoke-QuantumBar "BINARY STRING ANALYSIS" 18 90
     $yaraRoots = @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop")
-    $yaraExt   = @(".exe",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin")
+    $yaraExt   = @(".exe",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
     $yaraHits  = 0
-    foreach ($root in $yaraRoots) {
-        if (-not (Test-Path $root)) { continue }
-        $candidates = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { (Test-InScope $_.LastWriteTime) -and ($yaraExt -contains $_.Extension.ToLower()) -and $_.Length -lt 10MB } |
-            Select-Object -First 200
+    # Single bounded walk across all roots (was per-root recursion x5, -First 200 each).
+    $candidates = Get-ScanFiles -Path $yaraRoots -TimeScoped |
+        Where-Object { ($yaraExt -contains $_.Extension.ToLower()) -and $_.Length -lt 10MB } |
+        Select-Object -First 200
         foreach ($cand in $candidates) {
             try {
                 $bytes = [System.IO.File]::ReadAllBytes($cand.FullName)
@@ -2863,22 +3309,37 @@ if ($PhasePlan.Advanced) {
                         $yaraHits++; $global:TrojanHits++; break
                     }
                 }
-                if ($global:CustomIocs.Hashes.Count -gt 0) {
+                # Content-signature pass (HTML smuggling / JS redirector / obfuscated dropper).
+                if ($cand.Extension.ToLower() -in @(".htm",".html",".js",".jse",".vbs",".vbe",".hta",".wsf",".svg")) {
+                    $cr = Test-ContentRules -FilePath $cand.FullName -Rules $EMAIL_CONTENT_RULES
+                    if ($cr.Hit) {
+                        Out-Decrypt -Text "$($cr.Name) -> $($cand.FullName)" -Prefix "  [CONTENT HIT] "
+                        $fa = if ($cr.Severity -eq $SEV_POSSIBLE) { "Info" } else { "Quarantine" }
+                        Add-Finding -ID "CONTENT_$($cr.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                            -ThreatType "Phishing / Smuggling Content" -Severity $cr.Severity `
+                            -Description "Content rule '$($cr.Name)' matched: $($cand.FullName)" `
+                            -Target $cand.FullName -FixAction $fa -FixParam $cand.FullName `
+                            -Group "Phishing / Smuggling Content"
+                        $yaraHits++; $global:TrojanHits++
+                    }
+                }
+                # Built-in known-malware hash list + user-supplied custom IOC hashes.
+                if (($KNOWN_MALWARE_HASHES.Count -gt 0 -or $global:CustomIocs.Hashes.Count -gt 0) -and $cand.Length -lt 25MB) {
                     try {
                         $hash = (Get-FileHash -Path $cand.FullName -Algorithm SHA256 -ErrorAction Stop).Hash.ToLower()
-                        if ($global:CustomIocs.Hashes -contains $hash) {
+                        if (($KNOWN_MALWARE_HASHES -contains $hash) -or ($global:CustomIocs.Hashes -contains $hash)) {
                             Out-Decrypt -Text "IOC hash match: $($cand.FullName)" -Prefix "  [IOC HIT] "
                             Add-Finding -ID "IOC_HASH_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
-                                -ThreatType "Custom IOC Hash" -Severity $SEV_CRITICAL `
-                                -Description "File matches user-supplied IOC hash ($hash): $($cand.FullName)" `
-                                -Target $cand.FullName -FixAction "DeleteFile" -FixParam $cand.FullName `
-                                -Group "Custom IOC Matches"
+                                -ThreatType "Known-Malware Hash" -Severity $SEV_CRITICAL `
+                                -Description "File matches known-malware/IOC hash ($hash): $($cand.FullName)" `
+                                -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                                -Group "Known-Malware Hash Matches"
+                            $yaraHits++; $global:TrojanHits++
                         }
                     } catch {}
                 }
             } catch {}
         }
-    }
     if ($yaraHits -eq 0) { Out-Typewriter "  -> [OK] NO YARA-LITE MATCHES." "GOOD" }
 
     # ── PHASE 91: MARK-OF-THE-WEB ABUSE ───────────────────────────────────────
@@ -2887,8 +3348,8 @@ if ($PhasePlan.Advanced) {
     $motwHits = 0
     foreach ($root in @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop")) {
         if (-not (Test-Path $root)) { continue }
-        $exes = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { (Test-InScope $_.LastWriteTime) -and $_.Extension -match "\.(exe|msi|dll|scr|js|vbs|hta|ps1|bat|lnk|iso|img)$" }
+        $exes = Get-ScanFiles -Path $root -TimeScoped |
+            Where-Object { $_.Extension -match "\.(exe|msi|dll|scr|js|vbs|hta|ps1|bat|lnk|iso|img)$" }
         foreach ($exe in $exes) {
             $stream = Get-Item -Path $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue
             if (-not $stream -and $exe.Length -gt 8192) {
@@ -2964,8 +3425,8 @@ if ($PhasePlan.Advanced) {
     $sctHits = 0
     foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
         if (-not (Test-Path $root)) { continue }
-        $sctFiles = Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { (Test-InScope $_.LastWriteTime) -and $_.Extension -match "\.(sct|wsc|xsl)$" }
+        $sctFiles = Get-ScanFiles -Path $root -TimeScoped |
+            Where-Object { $_.Extension -match "\.(sct|wsc|xsl)$" }
         foreach ($s in $sctFiles) {
             Out-ThreatBanner "COM SCRIPTLET FILE" $s.FullName
             Add-Finding -ID "SCT_$($s.Name -replace '[^a-z0-9]','')" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
@@ -3054,8 +3515,8 @@ if ($PhasePlan.Advanced) {
     $coHits = 0
     foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,"$env:LOCALAPPDATA\Apps","$env:USERPROFILE\Downloads")) {
         if (-not (Test-Path $root)) { continue }
-        Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { (Test-InScope $_.LastWriteTime) -and $_.Extension -match "\.(application|manifest|deploy)$" } |
+        Get-ScanFiles -Path $root -TimeScoped |
+            Where-Object { $_.Extension -match "\.(application|manifest|deploy)$" } |
             Select-Object -First 50 | ForEach-Object {
             Add-Finding -ID "CLICKONCE_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 97" -ThreatType "ClickOnce Abuse" `
                 -Severity $SEV_POSSIBLE -Description "ClickOnce deployment artifact in user path: $($_.FullName)" `
@@ -3073,8 +3534,8 @@ if ($PhasePlan.Advanced) {
     $stolenHits = 0
     foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
         if (-not (Test-Path $root)) { continue }
-        Get-ChildItem -Path $root -Recurse -File -Include "*.exe","*.dll" -ErrorAction SilentlyContinue |
-            Where-Object { Test-InScope $_.LastWriteTime } | Select-Object -First 100 | ForEach-Object {
+        Get-ScanFiles -Path $root -TimeScoped |
+            Where-Object { $_.Extension -match "\.(exe|dll)$" } | Select-Object -First 100 | ForEach-Object {
             $sig = Get-AuthenticodeSignature $_.FullName -ErrorAction SilentlyContinue
             if ($sig.SignerCertificate) {
                 $subj = $sig.SignerCertificate.Subject
@@ -3099,13 +3560,18 @@ if ($PhasePlan.Advanced) {
     Out-Typewriter "SCANNING ALL LOLBAS-CLASS BINARIES FOR ABUSE PATTERNS..." "HUNT"
     Invoke-QuantumBar "LOLBAS CROSS-CORRELATION" 14 90
     $lolbasHits = 0
-    foreach ($lb in $LOLBAS_EXPANDED) {
-        Get-WmiObject Win32_Process -Filter "Name='$lb.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.CommandLine -match "http|https|ftp|AppData|Temp|Base64|EncodedCommand|IEX|DownloadString|/i:|scrobj|Net\.WebClient") {
-                $cmdShort = $_.CommandLine.Substring(0,[Math]::Min(140,$_.CommandLine.Length))
-                Add-Finding -ID "LOLBAS_$($_.ProcessId)_$lb" -Phase "PHASE 99" -ThreatType "LOLBAS Abuse" `
-                    -Severity $SEV_HIGH -Description "LOLBAS abuse: $($_.Name) PID:$($_.ProcessId) | $cmdShort" `
-                    -Target "PID:$($_.ProcessId)" -FixAction "KillProcess" -FixParam $_.ProcessId -Group "LOLBAS Expanded"
+    # One WMI enumeration + name lookup instead of one filtered Get-WmiObject per
+    # LOLBAS name. Map name -> original token so the finding ID keeps the $lb tag.
+    $lolbasSet = @{}; foreach ($lb in $LOLBAS_EXPANDED) { $lolbasSet["$lb.exe"] = $lb }
+    if ($lolbasSet.Count -gt 0) {
+        foreach ($p in (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)) {
+            $lb = $lolbasSet[$p.Name]
+            if (-not $lb) { continue }
+            if ($p.CommandLine -match "http|https|ftp|AppData|Temp|Base64|EncodedCommand|IEX|DownloadString|/i:|scrobj|Net\.WebClient") {
+                $cmdShort = $p.CommandLine.Substring(0,[Math]::Min(140,$p.CommandLine.Length))
+                Add-Finding -ID "LOLBAS_$($p.ProcessId)_$lb" -Phase "PHASE 99" -ThreatType "LOLBAS Abuse" `
+                    -Severity $SEV_HIGH -Description "LOLBAS abuse: $($p.Name) PID:$($p.ProcessId) | $cmdShort" `
+                    -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "LOLBAS Expanded"
                 $lolbasHits++
             }
         }
@@ -3188,8 +3654,8 @@ if ($PhasePlan.Advanced) {
     $arcHits = 0
     foreach ($root in @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop",$env:TEMP)) {
         if (-not (Test-Path $root)) { continue }
-        Get-ChildItem -Path $root -Recurse -File -ErrorAction SilentlyContinue |
-            Where-Object { (Test-InScope $_.LastWriteTime) -and ($_.Extension -match "\.(zip|7z|rar|iso|img)$") -and $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Length -gt 1024 } |
+        Get-ScanFiles -Path $root -TimeScoped |
+            Where-Object { ($_.Extension -match "\.(zip|7z|rar|iso|img)$") -and $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Length -gt 1024 } |
             Select-Object -First 40 | ForEach-Object {
             Add-Finding -ID "ARCHIVE_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 103" `
                 -ThreatType "Suspicious Archive" -Severity $SEV_POSSIBLE `
@@ -3313,18 +3779,15 @@ if ($PhasePlan.Advanced) {
     }
     # Check for PROCDUMP / dumper tool presence
     $dumpTools = @("procdump*.exe","dumpert*.exe","memdump*.exe","outflank-dumpert*","nanodump*","handlekatz*","lsassy*","pypykatz*")
-    foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE)) {
-        if (-not (Test-Path $root)) { continue }
-        foreach ($dt in $dumpTools) {
-            $hits = Get-ChildItem -Path $root -Recurse -Filter $dt -ErrorAction SilentlyContinue
-            foreach ($hit in $hits) {
-                Out-ThreatBanner "MEMORY DUMPER TOOL" $hit.FullName
-                Add-Finding -ID "DUMPTOOL_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 106" -ThreatType "Credential Dumping Tool" `
-                    -Severity $SEV_CRITICAL -Description "Memory/credential dumping tool found: $($hit.FullName)" `
-                    -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Memory Dump Artifacts"
-                $global:TrojanHits++; $dumpFound = $true
-            }
-        }
+    # One bounded walk + anchored regex (was 3 roots x 8 names = 24 recursions incl. whole profile).
+    $dumpRegex = ($dumpTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
+    $dumpHits = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE) | Where-Object { $_.Name -match $dumpRegex }
+    foreach ($hit in $dumpHits) {
+        Out-ThreatBanner "MEMORY DUMPER TOOL" $hit.FullName
+        Add-Finding -ID "DUMPTOOL_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 106" -ThreatType "Credential Dumping Tool" `
+            -Severity $SEV_CRITICAL -Description "Memory/credential dumping tool found: $($hit.FullName)" `
+            -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Memory Dump Artifacts"
+        $global:TrojanHits++; $dumpFound = $true
     }
     if (-not $dumpFound) { Out-Typewriter "  -> [OK] NO SUSPICIOUS DUMP FILES OR DUMPER TOOLS." "GOOD" }
     Out-Typewriter "  -> PHASE 106 COMPLETE." "VER"
@@ -3411,8 +3874,311 @@ if ($PhasePlan.Advanced) {
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
+#  FORENSIC PERMISSION & INTEGRITY AUDIT — PHASES 108-115 (DEEP/PARANOID/STEALTH)
+#  "What got changed that never should have." ACLs, ownership, code signatures,
+#  service & PATH privilege-escalation surface, and security-control tamper.
+# ══════════════════════════════════════════════════════════════════════════════
+if ($PhasePlan.Integrity) {
+    if (-not $global:STEALTH_MODE) {
+        Write-Host ""
+        Write-Host ("▓"*80) -ForegroundColor DarkGreen
+        Write-Host "    ◈  P E R M I S S I O N   &   I N T E G R I T Y   A U D I T  —  1 0 8 - 1 1 5" -ForegroundColor Green
+        Write-Host ("▓"*80) -ForegroundColor DarkGreen
+        Invoke-QuantumBar "ENGAGING FORENSIC INTEGRITY MODULE" 18 90
+    }
+
+    $WEAK_IDS       = Get-Perm 'weak_write_identities'
+    $TRUSTED_OWNERS = Get-Perm 'trusted_file_owners'
+
+    # ── PHASE 108: COMPREHENSIVE NTFS ACL & OWNERSHIP AUDIT ───────────────────
+    Show-PhaseHeader "PHASE 108" "NTFS ACL & OWNERSHIP INTEGRITY (CRITICAL PATHS)" "PERMISSIONS"
+    Out-Typewriter "AUDITING ACLs ON SYSTEM PATHS FOR WEAK / WORLD-WRITABLE ACES..." "HUNT"
+    $aclPaths = @(Get-Perm 'critical_acl_paths' | ForEach-Object { Expand-EnvPath $_ }) | Where-Object { $_ } | Select-Object -Unique
+    $aclFindings = 0
+    foreach ($cp in $aclPaths) {
+        if (-not (Test-Path -LiteralPath $cp)) { continue }
+        Out-Typewriter "  ACL: $cp" "INFO"
+        try {
+            $acl  = Get-Acl -LiteralPath $cp -ErrorAction SilentlyContinue
+            $weak = Get-WeakAces -Acl $acl -WeakIds $WEAK_IDS
+            foreach ($ace in $weak) {
+                $aclFindings++
+                $idr = "$($ace.IdentityReference)"
+                Out-Glitch "  [WEAK ACL] $cp <- $idr : $($ace.FileSystemRights)" Red
+                Add-Finding -ID "ACL108_$([Math]::Abs(("$cp$idr").GetHashCode()))" -Phase "PHASE 108" -ThreatType "Permission Abuse / Privesc" `
+                    -Severity $SEV_HIGH -Description "Weak ACE on protected path: '$idr' has '$($ace.FileSystemRights)' on $cp (privilege-escalation surface — a non-admin can replace SYSTEM-run files here)." `
+                    -Target $cp -FixAction "RunCmd" -FixParam "icacls `"$cp`" /reset /T /C /Q" -Group "NTFS Permission Abuse"
+            }
+        } catch { Out-Typewriter "  -> ACL READ FAILED: $cp" "WARN" }
+    }
+    # Ownership of protected binaries — anything not owned by TrustedInstaller/SYSTEM/Admins = tamper
+    foreach ($pf in @(Get-Perm 'protected_system_files' | ForEach-Object { Expand-EnvPath $_ })) {
+        if (-not (Test-Path -LiteralPath $pf)) { continue }
+        try {
+            $o = (Get-Acl -LiteralPath $pf -ErrorAction SilentlyContinue).Owner
+            if ($o -and (($TRUSTED_OWNERS | Where-Object { $o -like "*$_*" }).Count -eq 0)) {
+                $aclFindings++
+                Out-Glitch "  [OWNER TAMPER] $pf owned by $o" Red
+                Add-Finding -ID "OWN108_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 108" -ThreatType "Ownership Tamper / Privesc" `
+                    -Severity $SEV_CRITICAL -Description "Protected system file owned by untrusted principal '$o': $pf (ownership change is a common pre-replacement tamper step)." `
+                    -Target $pf -FixAction "RunCmd" -FixParam "takeown /F `"$pf`" /A | Out-Null; icacls `"$pf`" /setowner `"NT SERVICE\TrustedInstaller`" /C /Q" -Group "Ownership Tampering"
+            }
+        } catch {}
+    }
+    if ($aclFindings -eq 0) { Out-Typewriter "  -> [OK] NO WEAK ACLs OR OWNERSHIP TAMPER ON CRITICAL PATHS." "GOOD" }
+
+    # ── PHASE 109: SYSTEM BINARY INTEGRITY & CODE-SIGNATURE VERIFICATION ───────
+    Show-PhaseHeader "PHASE 109" "SYSTEM BINARY INTEGRITY & SIGNATURE VERIFICATION" "INTEGRITY"
+    Out-Typewriter "VERIFYING AUTHENTICODE / CATALOG SIGNATURES ON PROTECTED BINARIES..." "HUNT"
+    Invoke-QuantumBar "CRYPTOGRAPHIC SIGNATURE CHECK" 14 100
+    $sigBad = 0
+    foreach ($pf in @(Get-Perm 'protected_system_files' | ForEach-Object { Expand-EnvPath $_ })) {
+        if (-not (Test-Path -LiteralPath $pf)) { continue }
+        $v = Get-SignatureVerdict -FilePath $pf
+        # A core OS binary that is unsigned/invalid, OR a Microsoft-named file not signed by a trusted publisher = tamper.
+        if ($v.Status -ne 'Valid') {
+            $sigBad++
+            Out-Glitch "  [INTEGRITY FAIL] $pf — signature: $($v.Status)" Red
+            Add-Finding -ID "SIG109_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
+                -Severity $SEV_CRITICAL -Description "Protected system binary failed signature check (Status=$($v.Status), Signer='$($v.Signer)'): $pf — possible replacement/patch. Verify with: sfc /scannow" `
+                -Target $pf -FixAction "Info" -Group "System Binary Integrity"
+        } elseif (-not $v.Trusted) {
+            $sigBad++
+            Out-Typewriter "  -> UNTRUSTED SIGNER on $pf : $($v.Signer)" "WARN"
+            Add-Finding -ID "SIG109U_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
+                -Severity $SEV_HIGH -Description "System binary signed by a non-trusted publisher '$($v.Signer)': $pf (expected Microsoft). Possible substitution." `
+                -Target $pf -FixAction "Info" -Group "System Binary Integrity"
+        }
+    }
+    if ($sigBad -gt 0) {
+        Add-Finding -ID "SFC109" -Phase "PHASE 109" -ThreatType "Integrity Remediation" -Severity $SEV_HIGH `
+            -Description "$sigBad protected binaries failed integrity verification — run System File Checker to restore originals from the component store." `
+            -Target "System File Checker" -FixAction "RunCmd" -FixParam "sfc /scannow" -Group "System Binary Integrity"
+        Out-Typewriter "  -> $sigBad BINARY INTEGRITY FAILURES — SFC RECOMMENDED." "CRIT"
+    } else { Out-Typewriter "  -> [OK] ALL PROTECTED BINARIES VALIDLY SIGNED BY TRUSTED PUBLISHERS." "GOOD" }
+
+    # Accessibility-binary backdoor cross-check (sethc/utilman replaced or IFEO-debugged)
+    foreach ($ab in @(Get-Perm 'accessibility_binaries')) {
+        $abPath = Expand-EnvPath "%WINDIR%\System32\$ab"
+        if (Test-Path -LiteralPath $abPath) {
+            $v = Get-SignatureVerdict -FilePath $abPath
+            if ($v.Status -ne 'Valid' -or -not $v.IsMs) {
+                Out-ThreatBanner "ACCESSIBILITY BACKDOOR SUSPECT" "$ab signature=$($v.Status)"
+                Add-Finding -ID "ACCESS109_$ab" -Phase "PHASE 109" -ThreatType "Accessibility Backdoor" `
+                    -Severity $SEV_CRITICAL -Description "Accessibility binary $ab is not a valid Microsoft signed file (Status=$($v.Status)) — classic logon-screen SYSTEM backdoor. Restore with sfc /scannow." `
+                    -Target $abPath -FixAction "RunCmd" -FixParam "sfc /scannow" -Group "Accessibility Backdoors"
+            }
+        }
+        $ifeo = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$ab"
+        if (Test-Path -LiteralPath $ifeo) {
+            $dbg = (Get-ItemProperty -LiteralPath $ifeo -Name Debugger -ErrorAction SilentlyContinue).Debugger
+            if ($dbg) {
+                Out-ThreatBanner "ACCESSIBILITY IFEO HIJACK" "$ab -> $dbg"
+                Add-Finding -ID "IFEO109_$ab" -Phase "PHASE 109" -ThreatType "Accessibility Backdoor / IFEO" `
+                    -Severity $SEV_CRITICAL -Description "IFEO Debugger set on accessibility binary $ab -> '$dbg' (logon-screen backdoor)." `
+                    -Target $ifeo -FixAction "RunCmd" -FixParam "Remove-ItemProperty -LiteralPath '$ifeo' -Name Debugger -Force -ErrorAction SilentlyContinue" -Group "Accessibility Backdoors"
+            }
+        }
+    }
+
+    # ── PHASE 110: REGISTRY KEY ACL / WEAK-PERMISSION AUDIT ───────────────────
+    Show-PhaseHeader "PHASE 110" "REGISTRY KEY ACL / WEAK-PERMISSION AUDIT" "PERMISSIONS"
+    Out-Typewriter "AUDITING PERSISTENCE-KEY ACLs FOR NON-ADMIN WRITE ACCESS..." "HUNT"
+    $regAcl = 0
+    foreach ($rk in @(Get-Perm 'critical_reg_acl_keys')) {
+        if (-not (Test-Path -LiteralPath $rk)) { continue }
+        try {
+            $racl = Get-Acl -LiteralPath $rk -ErrorAction SilentlyContinue
+            $weak = Get-WeakAces -Acl $racl -WeakIds $WEAK_IDS
+            foreach ($ace in $weak) {
+                $idr = "$($ace.IdentityReference)"
+                $regAcl++
+                Out-Glitch "  [WEAK REG ACL] $rk <- $idr : $($ace.RegistryRights)" Red
+                Add-Finding -ID "REGACL110_$([Math]::Abs(("$rk$idr").GetHashCode()))" -Phase "PHASE 110" -ThreatType "Registry Permission Abuse" `
+                    -Severity $SEV_HIGH -Description "Persistence/privesc registry key writable by '$idr' ($($ace.RegistryRights)): $rk — non-admins can plant autostart entries." `
+                    -Target $rk -FixAction "Info" -Group "Registry Permission Abuse"
+            }
+        } catch {}
+    }
+    if ($regAcl -eq 0) { Out-Typewriter "  -> [OK] NO WEAK ACLs ON PERSISTENCE REGISTRY KEYS." "GOOD" }
+
+    # ── PHASE 111: SERVICE PRIVILEGE-ESCALATION AUDIT ─────────────────────────
+    Show-PhaseHeader "PHASE 111" "SERVICE PRIVESC — UNQUOTED PATHS & WRITABLE BINARIES" "PRIVESC"
+    Out-Typewriter "INSPECTING SERVICE IMAGE PATHS FOR PRIVILEGE-ESCALATION FLAWS..." "HUNT"
+    Invoke-QuantumBar "SERVICE BINARY ACL ANALYSIS" 12 110
+    $svcPriv = 0
+    $services = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue
+    foreach ($svc in $services) {
+        $ip = "$($svc.PathName)".Trim()
+        if (-not $ip) { continue }
+        # Extract the executable path (strip quotes + trailing args)
+        $exe = $null
+        if ($ip -match '^\s*"([^"]+)"') { $exe = $matches[1] }
+        elseif ($ip -match '^\s*([^\s]+\.exe)') { $exe = $matches[1] }
+        else { $exe = ($ip -split '\s+')[0] }
+        # Unquoted path with a space outside System32 = classic privesc
+        if ($ip -notmatch '^\s*"' -and $ip -match '\s' -and $ip -match '\\' -and $ip -notmatch '^[A-Za-z]:\\Windows\\(System32|SysWOW64)\\') {
+            $svcPriv++
+            Out-Typewriter "  -> UNQUOTED SERVICE PATH: $($svc.Name) = $ip" "WARN"
+            Add-Finding -ID "SVCUQ111_$($svc.Name)" -Phase "PHASE 111" -ThreatType "Unquoted Service Path / Privesc" `
+                -Severity $SEV_HIGH -Description "Service '$($svc.Name)' ($($svc.DisplayName)) has an unquoted ImagePath with spaces: $ip — exploitable for privilege escalation via planted binary." `
+                -Target "Service: $($svc.Name)" -FixAction "Info" -Group "Service Privilege Escalation"
+        }
+        # Writable service binary OR its directory = an unprivileged user can swap the SYSTEM binary
+        if ($exe -and (Test-Path -LiteralPath $exe)) {
+            try {
+                $sacl = Get-Acl -LiteralPath $exe -ErrorAction SilentlyContinue
+                $weak = Get-WeakAces -Acl $sacl -WeakIds $WEAK_IDS
+                if ($weak.Count -gt 0) {
+                    $svcPriv++
+                    $idr = "$($weak[0].IdentityReference)"
+                    Out-ThreatBanner "WRITABLE SERVICE BINARY (PRIVESC)" "$($svc.Name): $exe"
+                    Add-Finding -ID "SVCBIN111_$($svc.Name)" -Phase "PHASE 111" -ThreatType "Writable Service Binary / Privesc" `
+                        -Severity $SEV_CRITICAL -Description "Service '$($svc.Name)' runs '$exe' which is writable by '$idr' — a non-admin can replace it to gain $($svc.StartName) privileges." `
+                        -Target $exe -FixAction "RunCmd" -FixParam "icacls `"$exe`" /reset /C /Q" -Group "Service Privilege Escalation"
+                }
+            } catch {}
+        }
+    }
+    if ($svcPriv -eq 0) { Out-Typewriter "  -> [OK] NO SERVICE PRIVILEGE-ESCALATION FLAWS FOUND." "GOOD" }
+
+    # ── PHASE 112: PATH & DLL-HIJACK SURFACE (WRITABLE DIRECTORIES) ────────────
+    Show-PhaseHeader "PHASE 112" "PATH / DLL-HIJACK SURFACE — WRITABLE DIRECTORIES" "PRIVESC"
+    Out-Typewriter "CHECKING SYSTEM PATH DIRECTORIES FOR NON-ADMIN WRITE ACCESS..." "HUNT"
+    $pathDirs = @()
+    try { $pathDirs += ([Environment]::GetEnvironmentVariable('Path','Machine') -split ';') } catch {}
+    $pathDirs += @(Get-Perm 'system_path_extra_dirs' | ForEach-Object { Expand-EnvPath $_ })
+    $pathDirs = $pathDirs | Where-Object { $_ -and $_.Trim() } | ForEach-Object { $_.Trim().TrimEnd('\') } | Select-Object -Unique
+    $pathHits = 0
+    foreach ($pd in $pathDirs) {
+        if (-not (Test-Path -LiteralPath $pd)) { continue }
+        try {
+            $dacl = Get-Acl -LiteralPath $pd -ErrorAction SilentlyContinue
+            $weak = Get-WeakAces -Acl $dacl -WeakIds $WEAK_IDS
+            if ($weak.Count -gt 0) {
+                $pathHits++
+                $idr = "$($weak[0].IdentityReference)"
+                Out-Glitch "  [WRITABLE PATH DIR] $pd <- $idr" Red
+                Add-Finding -ID "PATH112_$([Math]::Abs($pd.GetHashCode()))" -Phase "PHASE 112" -ThreatType "DLL Hijack / PATH Privesc" `
+                    -Severity $SEV_HIGH -Description "Directory on the system PATH is writable by '$idr': $pd — enables DLL/binary planting that elevated processes will load." `
+                    -Target $pd -FixAction "RunCmd" -FixParam "icacls `"$pd`" /remove:g `"*S-1-1-0`" `"*S-1-5-11`" `"*S-1-5-32-545`" /C /Q" -Group "DLL Hijack Surface"
+            }
+        } catch {}
+    }
+    if ($pathHits -eq 0) { Out-Typewriter "  -> [OK] NO WRITABLE DIRECTORIES ON SYSTEM PATH." "GOOD" }
+
+    # ── PHASE 113: RECENTLY MODIFIED PROTECTED SYSTEM FILES ───────────────────
+    Show-PhaseHeader "PHASE 113" "RECENTLY MODIFIED / UNSIGNED FILES IN SYSTEM32 & DRIVERS" "INTEGRITY"
+    Out-Typewriter "HUNTING FOR FILES CHANGED IN-WINDOW OR UNSIGNED IN PROTECTED DIRS..." "HUNT"
+    Invoke-QuantumBar "SYSTEM DIRECTORY DELTA SCAN" 16 90
+    $recentSys = 0
+    $sysDirs = @((Expand-EnvPath "%WINDIR%\System32"), (Expand-EnvPath "%WINDIR%\System32\drivers"))
+    foreach ($sd in $sysDirs) {
+        if (-not (Test-Path -LiteralPath $sd)) { continue }
+        $cands = Get-ChildItem -LiteralPath $sd -File -ErrorAction SilentlyContinue |
+            Where-Object { ($_.Extension -match '\.(exe|dll|sys)$') -and (Test-InScope $_.LastWriteTime) } |
+            Select-Object -First 400
+        foreach ($f in $cands) {
+            $v = Get-SignatureVerdict -FilePath $f.FullName
+            if ($v.Status -ne 'Valid') {
+                $recentSys++
+                $sev = if ($f.Extension -match 'sys') { $SEV_CRITICAL } else { $SEV_HIGH }
+                Out-Typewriter "  -> CHANGED+UNVERIFIED: $($f.FullName) [$($v.Status)] $($f.LastWriteTime)" "CRIT"
+                Add-Finding -ID "RECSYS113_$([Math]::Abs($f.FullName.GetHashCode()))" -Phase "PHASE 113" -ThreatType "System File Tamper" `
+                    -Severity $sev -Description "Recently-modified protected-directory file with failed signature ($($v.Status)): $($f.FullName) (modified $($f.LastWriteTime)). Driver/binary drop indicator." `
+                    -Target $f.FullName -FixAction "Info" -Group "System File Tamper" }
+        }
+    }
+    if ($recentSys -eq 0) { Out-Typewriter "  -> [OK] NO CHANGED/UNSIGNED FILES IN PROTECTED DIRS (IN WINDOW)." "GOOD" }
+
+    # ── PHASE 114: SECURITY CONTROL HEALTH & TAMPER CONSOLIDATION ──────────────
+    Show-PhaseHeader "PHASE 114" "SECURITY CONTROL HEALTH & TAMPER CONSOLIDATION" "DEFENSE"
+    Out-Typewriter "VERIFYING AV / FIREWALL / LOGGING CONTROLS ARE INTACT..." "HUNT"
+    $ctrlBad = 0
+    foreach ($es in @(Get-Perm 'expected_running_services')) {
+        $s = Get-Service -Name $es.name -ErrorAction SilentlyContinue
+        if ($null -eq $s) { continue }   # not installed (e.g. Sysmon/Sense) — skip
+        if ($s.Status -ne 'Running') {
+            $ctrlBad++
+            $sev = switch ($es.severity) { "CRITICAL" { $SEV_CRITICAL } "HIGH" { $SEV_HIGH } "POSSIBLE" { $SEV_POSSIBLE } default { $SEV_INFO } }
+            Out-Typewriter "  -> SECURITY SERVICE NOT RUNNING: $($es.display) [$($s.Status)]" "WARN"
+            Add-Finding -ID "CTRL114_$($es.name)" -Phase "PHASE 114" -ThreatType "Security Control Tamper" `
+                -Severity $sev -Description "Security service '$($es.display)' ($($es.name)) is $($s.Status) — disabling AV/firewall/logging is a hallmark post-compromise action." `
+                -Target "Service: $($es.name)" -FixAction "RunCmd" -FixParam "Set-Service -Name '$($es.name)' -StartupType Automatic -ErrorAction SilentlyContinue; Start-Service -Name '$($es.name)' -ErrorAction SilentlyContinue" -Group "Security Control Tamper"
+        }
+    }
+    foreach ($dv in @(Get-Perm 'defender_tamper_values')) {
+        if (Test-Path -LiteralPath $dv.key) {
+            $cur = (Get-ItemProperty -LiteralPath $dv.key -Name $dv.name -ErrorAction SilentlyContinue).$($dv.name)
+            if ($null -ne $cur -and [int]$cur -eq [int]$dv.bad) {
+                $ctrlBad++
+                Out-ThreatBanner "DEFENDER TAMPER" $dv.desc
+                Add-Finding -ID "DEFTAMP114_$($dv.name)" -Phase "PHASE 114" -ThreatType "Defender Tamper" `
+                    -Severity $SEV_CRITICAL -Description "$($dv.desc): $($dv.key)\$($dv.name) = $cur." `
+                    -Target "$($dv.key)\$($dv.name)" -FixAction "RunCmd" -FixParam "Remove-ItemProperty -LiteralPath '$($dv.key)' -Name '$($dv.name)' -Force -ErrorAction SilentlyContinue" -Group "Security Control Tamper"
+            }
+        }
+    }
+    # Live Defender status (best-effort; cmdlet absent on some SKUs)
+    try {
+        $mp = Get-MpComputerStatus -ErrorAction SilentlyContinue
+        if ($mp) {
+            if (-not $mp.RealTimeProtectionEnabled) {
+                $ctrlBad++
+                Add-Finding -ID "MP114_RTP" -Phase "PHASE 114" -ThreatType "Defender Tamper" -Severity $SEV_CRITICAL `
+                    -Description "Defender real-time protection is OFF (Get-MpComputerStatus.RealTimeProtectionEnabled=False)." `
+                    -Target "Defender Real-Time Protection" -FixAction "RunCmd" -FixParam "Set-MpPreference -DisableRealtimeMonitoring `$false -ErrorAction SilentlyContinue" -Group "Security Control Tamper"
+            }
+            if ($mp.AntivirusSignatureAge -gt 7) {
+                Add-Finding -ID "MP114_SIGAGE" -Phase "PHASE 114" -ThreatType "Defender Health" -Severity $SEV_POSSIBLE `
+                    -Description "Defender signatures are $($mp.AntivirusSignatureAge) days old — update before trusting AV verdicts." `
+                    -Target "Defender Signatures" -FixAction "RunCmd" -FixParam "Update-MpSignature -ErrorAction SilentlyContinue" -Group "Security Control Tamper"
+            }
+        }
+    } catch {}
+    if ($ctrlBad -eq 0) { Out-Typewriter "  -> [OK] SECURITY CONTROLS INTACT AND RUNNING." "GOOD" }
+
+    # ── PHASE 115: AUTORUN TARGET WRITABLE-PATH AUDIT (HIJACKABLE PERSISTENCE) ──
+    Show-PhaseHeader "PHASE 115" "AUTORUN TARGET WRITABLE-PATH AUDIT (HIJACKABLE PERSISTENCE)" "PRIVESC"
+    Out-Typewriter "CHECKING WHETHER AUTORUN TARGETS CAN BE OVERWRITTEN BY NON-ADMINS..." "HUNT"
+    $autoHits = 0
+    $autoKeys = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce"
+    )
+    foreach ($ak in $autoKeys) {
+        if (-not (Test-Path -LiteralPath $ak)) { continue }
+        $vals = Get-ItemProperty -LiteralPath $ak -ErrorAction SilentlyContinue
+        foreach ($p in ($vals.psobject.properties | Where-Object { $_.Name -notmatch '^PS' })) {
+            $cmd = [string]$p.Value
+            $texe = $null
+            if ($cmd -match '"([^"]+\.exe)"') { $texe = $matches[1] }
+            elseif ($cmd -match '([A-Za-z]:\\[^,\s]+\.exe)') { $texe = $matches[1] }
+            if ($texe -and (Test-Path -LiteralPath $texe)) {
+                try {
+                    $tacl = Get-Acl -LiteralPath $texe -ErrorAction SilentlyContinue
+                    $weak = Get-WeakAces -Acl $tacl -WeakIds $WEAK_IDS
+                    if ($weak.Count -gt 0) {
+                        $autoHits++
+                        $idr = "$($weak[0].IdentityReference)"
+                        Out-ThreatBanner "HIJACKABLE AUTORUN TARGET" "$($p.Name): $texe"
+                        Add-Finding -ID "AUTO115_$([Math]::Abs(("$ak$($p.Name)").GetHashCode()))" -Phase "PHASE 115" -ThreatType "Hijackable Autorun / Privesc" `
+                            -Severity $SEV_HIGH -Description "HKLM autorun '$($p.Name)' runs '$texe' which is writable by '$idr' — a non-admin can replace it to run code at every boot/logon as the next user." `
+                            -Target $texe -FixAction "RunCmd" -FixParam "icacls `"$texe`" /reset /C /Q" -Group "Hijackable Autoruns"
+                    }
+                } catch {}
+            }
+        }
+    }
+    if ($autoHits -eq 0) { Out-Typewriter "  -> [OK] NO HIJACKABLE AUTORUN TARGETS." "GOOD" }
+    Out-Typewriter "  -> PERMISSION & INTEGRITY AUDIT COMPLETE (PHASES 108-115)." "VER"
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  AUDIT COMPLETE — COMPUTE RISK SCORE
 # ══════════════════════════════════════════════════════════════════════════════
+Stop-PhaseTiming   # close out the final phase's wall-clock
 $elapsed    = [Math]::Round(((Get-Date) - $global:START_TIME).TotalMinutes, 2)
 $phaseCount = $PhasePlan.Max
 $totalRisk  = $global:RansomwareRisk + ($global:RootkitHits * 3) + ($global:RATHits * 2) +
@@ -3465,6 +4231,31 @@ Write-Host "  COMPOSITE RISK    : " -NoNewline -ForegroundColor DarkGray
 Write-Host "$totalRisk — $riskLabel" -ForegroundColor $riskColor
 Write-Host ("▓"*80) -ForegroundColor DarkCyan
 
+# ── Per-phase profiling summary (slowest phases first) ────────────────────────
+if ($global:PHASE_TIMINGS.Count -gt 0) {
+    $slowest = $global:PHASE_TIMINGS | Sort-Object -Property Seconds -Descending | Select-Object -First 10
+    $sumSecs = [Math]::Round((($global:PHASE_TIMINGS | Measure-Object -Property Seconds -Sum).Sum), 1)
+    Write-Host ("─"*80) -ForegroundColor DarkCyan
+    Write-Host "  PHASE TIMING — 10 SLOWEST (of $($global:PHASE_TIMINGS.Count) phases, $sumSecs s total):" -ForegroundColor Yellow
+    foreach ($t in $slowest) {
+        $tc = if ($t.Seconds -gt 10) { "Red" } elseif ($t.Seconds -gt 3) { "Yellow" } else { "DarkGray" }
+        Write-Host ("  {0,6:N1}s  " -f $t.Seconds) -NoNewline -ForegroundColor $tc
+        Write-Host $t.Phase -ForegroundColor DarkGray
+    }
+    Write-Host ("▓"*80) -ForegroundColor DarkCyan
+}
+
+# ── Resilience summary — errors the scan recovered from and continued past ─────
+if ($global:RECOVERED_ERRORS.Count -gt 0) {
+    Write-Host ("─"*80) -ForegroundColor DarkYellow
+    Write-Host "  RESILIENCE — $($global:RECOVERED_ERRORS.Count) error(s) recovered (scan continued, see log):" -ForegroundColor DarkYellow
+    foreach ($re in ($global:RECOVERED_ERRORS | Select-Object -First 15)) {
+        Write-Host ("  [!] " + $re) -ForegroundColor DarkGray
+    }
+    if ($global:RECOVERED_ERRORS.Count -gt 15) { Write-Host "  ... and $($global:RECOVERED_ERRORS.Count - 15) more in the log." -ForegroundColor DarkGray }
+    Write-Host ("▓"*80) -ForegroundColor DarkCyan
+}
+
 # Save audit cache
 $auditCache = @{
     Timestamp     = (Get-Date).ToString("o")
@@ -3477,7 +4268,8 @@ $auditCache = @{
     Paranoid      = $global:PARANOID_MODE
     Stealth       = $global:STEALTH_MODE
     Findings      = @($global:AuditFindings)
-    PhaseTimings  = @($global:PhaseTimings)
+    PhaseTimings  = @($global:PHASE_TIMINGS)
+    RecoveredErrors = @($global:RECOVERED_ERRORS)
     BaselineDelta = @($global:BaselineDelta)
     ThreatTally   = @{
         RAT=       $global:RATHits;      Rootkit=   $global:RootkitHits
@@ -3668,6 +4460,14 @@ if ($SmtpTo -and $SmtpServer -and $SmtpFrom) {
     } catch {
         Out-Typewriter "  -> EMAIL FAILED: $_" "WARN"
     }
+}
+
+# Close the console transcript now — captures the full scan, summary, timing and
+# report paths, and flushes the file before any exit or interactive fix-mode prompt.
+if ($global:TRANSCRIPT_ON) {
+    Out-Typewriter "CONSOLE LOG   : $TRANSCRIPT_PATH" "GOOD"
+    try { Stop-Transcript | Out-Null } catch {}
+    $global:TRANSCRIPT_ON = $false
 }
 
 # Stealth exit — emit JSON to stdout
@@ -3966,11 +4766,51 @@ public class WinAPI { [DllImport("user32.dll")] public static extern IntPtr Send
     })
     $bottomPnl.Controls.Add($btnCritOnly)
 
+    # RECOMMENDED preset — high-confidence findings with a concrete fix (CRIT/HIGH, non-Info)
+    $btnRec = New-Object System.Windows.Forms.Button
+    $btnRec.Text = "★ RECOMMENDED"; $btnRec.Size = New-Object System.Drawing.Size(150, 36)
+    $btnRec.Location = New-Object System.Drawing.Point(452, 8)
+    $btnRec.BackColor = [System.Drawing.Color]::FromArgb(0,32,40); $btnRec.ForeColor = $acRgb
+    $btnRec.FlatStyle = "Flat"; $btnRec.Font = $monoBold
+    $btnRec.add_Click({
+        foreach ($gn in $tree.Nodes) {
+            foreach ($cn in $gn.Nodes) {
+                if ($cn.Tag -is [hashtable]) {
+                    $f = [hashtable]$cn.Tag
+                    $sel = ((Get-FixClass $f.Severity $f.FixAction) -match 'RECOMMENDED')
+                    $cn.Checked = $sel; $f.Selected = $sel
+                }
+            }
+            $gn.Checked = (($gn.Nodes | Where-Object { $_.Checked }).Count -gt 0)
+        }
+    })
+    $bottomPnl.Controls.Add($btnRec)
+
+    # SAFE preset — only non-destructive fixes (no file/registry deletion)
+    $btnSafe = New-Object System.Windows.Forms.Button
+    $btnSafe.Text = "🛡 SAFE ONLY"; $btnSafe.Size = New-Object System.Drawing.Size(140, 36)
+    $btnSafe.Location = New-Object System.Drawing.Point(606, 8)
+    $btnSafe.BackColor = [System.Drawing.Color]::FromArgb(20,32,20); $btnSafe.ForeColor = $green
+    $btnSafe.FlatStyle = "Flat"; $btnSafe.Font = $monoBold
+    $btnSafe.add_Click({
+        foreach ($gn in $tree.Nodes) {
+            foreach ($cn in $gn.Nodes) {
+                if ($cn.Tag -is [hashtable]) {
+                    $f = [hashtable]$cn.Tag
+                    $sel = ((Get-FixClass $f.Severity $f.FixAction) -match 'SAFE') -and ($f.Severity -ne 'INFO')
+                    $cn.Checked = $sel; $f.Selected = $sel
+                }
+            }
+            $gn.Checked = (($gn.Nodes | Where-Object { $_.Checked }).Count -gt 0)
+        }
+    })
+    $bottomPnl.Controls.Add($btnSafe)
+
     $scanningLbl = New-Object System.Windows.Forms.Label
     $scanningLbl.Text = "  ⟳  SCAN RUNNING..."
     $scanningLbl.Font = $monoBold; $scanningLbl.ForeColor = $yellow
-    $scanningLbl.AutoSize = $false; $scanningLbl.Width = 220; $scanningLbl.Height = 36
-    $scanningLbl.Location = New-Object System.Drawing.Point(460, 10)
+    $scanningLbl.AutoSize = $false; $scanningLbl.Width = 200; $scanningLbl.Height = 36
+    $scanningLbl.Location = New-Object System.Drawing.Point(756, 10)
     $bottomPnl.Controls.Add($scanningLbl)
 
     $btnFix = New-Object System.Windows.Forms.Button
@@ -4178,7 +5018,7 @@ function Show-ShellCheckboxMenu {
         Write-Host "  ◈  Z E R O B R E A C H  V 2 1  ·  R E M E D I A T I O N  M O D E" -ForegroundColor (Get-AccentColor)
         Write-Host ("▓"*80) -ForegroundColor DarkRed
         Write-Host "  Risk: $totalRisk  |  CRITICAL: $critCount  HIGH: $highCount  POSSIBLE: $possibleCount  INFO: $infoCount" -ForegroundColor Yellow
-        Write-Host "  [A] Select All  [C] Clear All  [ENTER] Execute  [Q] Quit  |  Toggle by number" -ForegroundColor DarkGray
+        Write-Host "  [A] All  [C] None  [R] Recommended  [S] Safe-only  [H] Crit+High  [ENTER] Execute  [Q] Quit  |  # toggles" -ForegroundColor DarkGray
         Write-Host ("─"*80) -ForegroundColor DarkCyan
         Write-Host ""
 
@@ -4213,6 +5053,9 @@ function Show-ShellCheckboxMenu {
         switch ($inp) {
             "A" { foreach ($f in $all) { $f.Selected = $true } }
             "C" { foreach ($f in $all) { $f.Selected = $false } }
+            "R" { foreach ($f in $all) { $f.Selected = ((Get-FixClass $f.Severity $f.FixAction) -match 'RECOMMENDED') } }
+            "S" { foreach ($f in $all) { $f.Selected = (((Get-FixClass $f.Severity $f.FixAction) -match 'SAFE') -and ($f.Severity -ne 'INFO')) } }
+            "H" { foreach ($f in $all) { $f.Selected = ($f.Severity -in @("CRITICAL","HIGH")) } }
             "Q" { $running = $false; return @() }
             ""  {
                 if ($selN -eq 0) { Write-Host "  NO ITEMS SELECTED." -ForegroundColor Yellow; Start-Sleep 2 }
@@ -4316,6 +5159,47 @@ function Invoke-FixMode {
                     $sb = [scriptblock]::Create($f.FixParam)
                     & $sb
                     Out-Typewriter "  -> COMMAND EXECUTED." "GOOD"; $global:KillCount++; $ok = $true
+                }
+                "Quarantine" {
+                    # Reversible isolation: move the file into a vault, neutralize it, and
+                    # record a JSON manifest (orig path + SHA256 + detection) so it can be restored.
+                    $src = $f.FixParam
+                    if (-not (Test-Path -LiteralPath $src)) { Out-Typewriter "  -> ALREADY ABSENT." "VER"; $ok = $true }
+                    else {
+                        $vault = Join-Path $OUT_ROOT "quarantine"
+                        if (-not (Test-Path $vault)) { New-Item -Path $vault -ItemType Directory -Force | Out-Null }
+                        $sha = (Get-FileHash -LiteralPath $src -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                        $stub = ([System.IO.Path]::GetFileName($src)) -replace '[^a-zA-Z0-9._-]','_'
+                        $tag  = "{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmssfff'), $stub
+                        # ".quar" extension neutralizes double-click execution while preserving bytes.
+                        $dest = Join-Path $vault "$tag.quar"
+                        $moved = $false
+                        try { Move-Item -LiteralPath $src -Destination $dest -Force -ErrorAction Stop; $moved = $true }
+                        catch {
+                            # Locked file: copy bytes to vault, then kernel-queue the original for reboot deletion.
+                            try { Copy-Item -LiteralPath $src -Destination $dest -Force -ErrorAction Stop } catch {}
+                            $rp  = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+                            $cur = Get-ItemPropertyValue $rp "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                            if ($null -eq $cur) { $cur = @() }
+                            Set-ItemProperty $rp "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$src", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
+                        }
+                        $manifest = @{
+                            OriginalPath = $src
+                            QuarantinedAs = $dest
+                            SHA256       = $sha
+                            ThreatType   = $f.ThreatType
+                            Severity     = $f.Severity
+                            Description  = $f.Description
+                            QuarantinedAt = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+                            Host         = $HOST_NAME
+                            RestoreNote  = "To restore: Move-Item '$dest' '$src' -Force"
+                            RebootQueuedForOriginal = (-not $moved)
+                        }
+                        $manifest | ConvertTo-Json | Set-Content -LiteralPath "$dest.json" -Encoding UTF8 -ErrorAction SilentlyContinue
+                        if ($moved) { Out-Typewriter "  -> QUARANTINED -> $dest" "GOOD" }
+                        else        { Out-Typewriter "  -> COPIED TO VAULT; ORIGINAL QUEUED FOR REBOOT DELETION." "WARN" }
+                        $global:KillCount++; $ok = $true
+                    }
                 }
                 "Info" {
                     Out-Typewriter "  -> INFORMATIONAL — REVIEW MANUALLY." "DATA"; $fixSkip++; $ok = $true

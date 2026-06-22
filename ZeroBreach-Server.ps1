@@ -294,7 +294,7 @@ $TKW = @{
 
 $PREX = [regex]'PHASE\s+(\d+)[^\d]'
 
-$MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=107; PARANOID=107; STEALTH=107 }
+$MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115 }
 
 function Classify {
     param([string]$L)
