@@ -60,6 +60,27 @@ param(
 Set-StrictMode -Off
 $ErrorActionPreference = 'SilentlyContinue'
 
+# ── Global resilience trap ────────────────────────────────────────────────────
+# A terminating error anywhere (unhandled .NET exception, throw, null .Substring,
+# out-of-range index, ConvertFrom-Json -Stop, a hung cmdlet that faults, etc.)
+# would otherwise kill the whole engine mid-scan and silently skip every remaining
+# phase — the tool would appear to "stop" in an error state. This trap LOGS the
+# failure and RESUMES at the next statement, so a scan always runs to completion.
+# Local try/catch still takes precedence; this only catches what nothing handled.
+# It is fully defensive — it must never throw out of itself.
+$global:RECOVERED_ERRORS = [System.Collections.Generic.List[string]]::new()
+trap {
+    try {
+        $em   = $_.Exception.Message
+        $pos  = (("" + $_.InvocationInfo.PositionMessage) -replace "`r?`n"," ").Trim()
+        $line = "RECOVERED ERROR: $em | $pos"
+        $global:RECOVERED_ERRORS.Add($line)
+        if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log $line }
+        if (-not $global:STEALTH_MODE) { Write-Host "  [!] $line" -ForegroundColor DarkYellow }
+    } catch {}
+    continue
+}
+
 # ── Elevation — pass all params ───────────────────────────────────────────────
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -158,6 +179,13 @@ $global:GUI_KILL_BTN     = $null    # Kill slow output button reference
 $global:TOTAL_PHASES     = 80       # Updated after PhasePlan is set
 $global:CURRENT_PHASE_NUM= 0
 $global:SCAN_COMPLETE    = $false
+# ── Per-phase wall-clock profiling ────────────────────────────────────────────
+# Stop-PhaseTiming closes out the phase currently in flight and emits one clean
+# stdout line ("PHASE N — <name> took X.Xs") so timings flow through SSE into the
+# console/report. Show-PhaseHeader closes the previous phase + starts the next.
+$global:PHASE_SW         = $null    # active [System.Diagnostics.Stopwatch]
+$global:PHASE_TIMING_LBL = ""       # label of the phase currently being timed
+$global:PHASE_TIMINGS    = [System.Collections.Generic.List[object]]::new()
 $global:SHELL_KILL_JOB   = $null    # Background job watching for K keypress
 $global:SHELL_KILL_FLAG  = $null    # Temp file path used as IPC flag for K keypress
 
@@ -355,8 +383,30 @@ function Show-SectionBanner {
     Invoke-GuiDoEvents
 }
 
+function Stop-PhaseTiming {
+    # Closes the phase currently in flight (if any) and emits one clean timing
+    # line. Safe to call repeatedly / when no phase is active. Parse-clean, no
+    # carriage-returns or scramble — flows straight through SSE.
+    if ($null -eq $global:PHASE_SW) { return }
+    $global:PHASE_SW.Stop()
+    $secs = [Math]::Round($global:PHASE_SW.Elapsed.TotalSeconds, 1)
+    $lbl  = $global:PHASE_TIMING_LBL
+    $global:PHASE_TIMINGS.Add([pscustomobject]@{ Phase = $lbl; Seconds = $secs })
+    # STEALTH mode keeps stdout JSON-only; record + log the timing but no console line.
+    if (-not $global:STEALTH_MODE) {
+        Write-Host ("  ⏱  {0} took {1}s" -f $lbl, $secs) -ForegroundColor DarkGray
+    }
+    Write-Log ("TIMING: {0} took {1}s" -f $lbl, $secs)
+    $global:PHASE_SW = $null
+    $global:PHASE_TIMING_LBL = ""
+}
+
 function Show-PhaseHeader {
     param([string]$Phase, [string]$Desc, [string]$Category = "")
+    # Close out the previous phase's wall-clock before announcing the next one.
+    Stop-PhaseTiming
+    $global:PHASE_TIMING_LBL = "$Phase — $Desc"
+    $global:PHASE_SW = [System.Diagnostics.Stopwatch]::StartNew()
     if ($global:STEALTH_MODE) { Write-Log "PHASE: $Phase | $Desc"; return }
     $catStr = if ($Category) { " · $Category" } else { "" }
     Write-Host ""; Write-Host "  ┌─[ " -NoNewline -ForegroundColor DarkRed
@@ -1052,6 +1102,19 @@ $PhasePlan = switch ($global:ScanMode) {
     default    { @{ Min=1; Max=80;  Universal=$false; Advanced=$false; Integrity=$false } }
 }
 
+# ── Full console transcript (interactive runs) ────────────────────────────────
+# Captures EVERYTHING printed to the console to reports/KrakenConsole_<stamp>.log so
+# the operator never has to copy from the window. Skipped in STEALTH (JSON stdout)
+# and harmlessly skipped where the host can't transcribe (e.g. the GUI runspace).
+$global:TRANSCRIPT_ON = $false
+$TRANSCRIPT_PATH = Join-Path $OUT_ROOT "KrakenConsole_$STAMP.log"
+if (-not $global:STEALTH_MODE) {
+    try {
+        Start-Transcript -Path $TRANSCRIPT_PATH -Force -ErrorAction Stop | Out-Null
+        $global:TRANSCRIPT_ON = $true
+    } catch { $global:TRANSCRIPT_ON = $false }
+}
+
 if (-not $global:STEALTH_MODE) {
     Clear-Host
     Write-Host ""
@@ -1067,6 +1130,7 @@ if (-not $global:STEALTH_MODE) {
     Write-Host "  IOC COUNT : " -NoNewline -ForegroundColor DarkGray; Write-Host "$cic2 custom indicators" -ForegroundColor $(if($cic2-gt 0){"Cyan"}else{"DarkGray"})
     Write-Host "  BASELINE  : " -NoNewline -ForegroundColor DarkGray; Write-Host $(if($Baseline){"DIFF — $Baseline"}else{"none"}) -ForegroundColor $(if($Baseline){"Cyan"}else{"DarkGray"})
     Write-Host "  REPORT    : " -NoNewline -ForegroundColor DarkGray; Write-Host $REPORT_PATH -ForegroundColor DarkGray
+    if ($global:TRANSCRIPT_ON) { Write-Host "  CONSOLE LOG: " -NoNewline -ForegroundColor DarkGray; Write-Host $TRANSCRIPT_PATH -ForegroundColor DarkGray }
     if ($global:HTML_REPORT) { Write-Host "  HTML      : " -NoNewline -ForegroundColor DarkGray; Write-Host $HTML_PATH -ForegroundColor DarkGray }
     Write-Host ("▓"*80) -ForegroundColor DarkRed
     Write-Host ""
@@ -1153,16 +1217,17 @@ Show-PhaseHeader "PHASE 4" "LOLBIN ABUSE AUDIT (Living-Off-The-Land Binaries)"
 Invoke-QuantumBar "SCANNING LOLBIN EXECUTION TRACES" 10 110
 $lolbins = @("mshta","wscript","cscript","regsvr32","rundll32","certutil","bitsadmin","msiexec","installutil","regasm","regsvcs","msbuild","cmstp","odbcconf","ieexec","pcalua","presentationhost","infdefaultinstall","diskshadow","esentutl","extrac32","findstr","forfiles","gpscript","hh","makecab","mavinject","msdeploy","msdt","pcwrun","replace","rpcping","syncappvpublishingserver","vbc","winrm","wmic","xwizard","msconfig","fodhelper","eventvwr","sdclt","wusa","csc")
 $lolHits = $false
-foreach ($lb in $lolbins) {
-    $procs = Get-WmiObject Win32_Process -Filter "Name='$lb.exe'" -ErrorAction SilentlyContinue
-    foreach ($p in $procs) {
-        if ($p.CommandLine -match "http|AppData|Temp|\.js|Base64|scrobj|unc|\\\\") {
-            $lolHits = $true
-            Out-Decrypt -Text "LOLBIN: $($p.Name) PID:$($p.ProcessId)" -Prefix "  [LOLBIN] "
-            Add-Finding -ID "LOLBIN_$($p.ProcessId)" -Phase "PHASE 4" -ThreatType "LoLBin Abuse" `
-                -Severity $SEV_HIGH -Description "LOLBin $($p.Name) used with suspicious args: $($p.CommandLine.Substring(0,[Math]::Min(100,$p.CommandLine.Length)))" `
-                -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "Live Malicious Processes"
-        }
+# One WMI enumeration + case-insensitive name lookup instead of one filtered
+# Get-WmiObject query per LOLBIN name (was ~46 WMI round-trips per scan).
+$lolSet = @{}; foreach ($lb in $lolbins) { $lolSet["$lb.exe"] = $true }
+foreach ($p in (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)) {
+    if (-not $lolSet.ContainsKey($p.Name)) { continue }
+    if ($p.CommandLine -match "http|AppData|Temp|\.js|Base64|scrobj|unc|\\\\") {
+        $lolHits = $true
+        Out-Decrypt -Text "LOLBIN: $($p.Name) PID:$($p.ProcessId)" -Prefix "  [LOLBIN] "
+        Add-Finding -ID "LOLBIN_$($p.ProcessId)" -Phase "PHASE 4" -ThreatType "LoLBin Abuse" `
+            -Severity $SEV_HIGH -Description "LOLBin $($p.Name) used with suspicious args: $($p.CommandLine.Substring(0,[Math]::Min(100,$p.CommandLine.Length)))" `
+            -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "Live Malicious Processes"
     }
 }
 if (-not $lolHits) { Out-Typewriter "  -> [OK] NO LOLBIN ABUSE DETECTED." "GOOD" }
@@ -1389,13 +1454,23 @@ if (Test-Path "$env:WINDIR\Prefetch") {
 Show-SectionBanner "SYSTEM FILE & KERNEL INTEGRITY"
 
 Show-PhaseHeader "PHASE 13" "CRYPTOGRAPHIC SYSTEM FILE VERIFICATION (SFC)"
-Out-Typewriter "EXECUTING SFC /SCANNOW..." "ACT"
-Invoke-QuantumBar "SFC KERNEL VALIDATION" 20 250
-cmd.exe /c "sfc /scannow >nul 2>&1"
-Out-Typewriter "  -> [OK] SFC VALIDATION COMPLETE." "VER"
-Add-Finding -ID "SFC_HARDENING" -Phase "PHASE 13" -ThreatType "System Integrity" -Severity $SEV_INFO `
-    -Description "SFC scan was run — review CBS.log if anomalies found." `
-    -Target "C:\Windows\Logs\CBS\CBS.log" -FixAction "Info" -Group "System Hardening"
+if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) {
+    # sfc /scannow runs 5-15 min with no streamable progress — in server/GUI/auto
+    # runs that reads as a hung phase (the exact failure the perf work targets).
+    # Skip the inline repair and surface it as a one-click manual action instead.
+    Out-Typewriter "  -> SFC SKIPPED IN AUTO/GUI MODE (5-15 min op; offered as a manual fix)." "INFO"
+    Add-Finding -ID "SFC_HARDENING" -Phase "PHASE 13" -ThreatType "System Integrity" -Severity $SEV_INFO `
+        -Description "SFC integrity scan skipped in automated/GUI mode (5-15 min). Run it on demand, then review CBS.log." `
+        -Target "C:\Windows\Logs\CBS\CBS.log" -FixAction "RunCmd" -FixParam "sfc /scannow" -Group "System Hardening"
+} else {
+    Out-Typewriter "EXECUTING SFC /SCANNOW..." "ACT"
+    Invoke-QuantumBar "SFC KERNEL VALIDATION" 20 250
+    cmd.exe /c "sfc /scannow >nul 2>&1"
+    Out-Typewriter "  -> [OK] SFC VALIDATION COMPLETE." "VER"
+    Add-Finding -ID "SFC_HARDENING" -Phase "PHASE 13" -ThreatType "System Integrity" -Severity $SEV_INFO `
+        -Description "SFC scan was run — review CBS.log if anomalies found." `
+        -Target "C:\Windows\Logs\CBS\CBS.log" -FixAction "Info" -Group "System Hardening"
+}
 
 Show-PhaseHeader "PHASE 14" "DISM COMPONENT STORE RESTORATION"
 Out-Typewriter "FLUSHING WUAUSERV CACHE..." "ACT"
@@ -1406,10 +1481,19 @@ if (Test-Path "$env:WINDIR\SoftwareDistribution\Download") {
         -Target "$env:WINDIR\SoftwareDistribution\Download" -FixAction "DeleteFile" -FixParam "$env:WINDIR\SoftwareDistribution\Download" -Group "System Hardening"
 }
 Start-Service -Name wuauserv -ErrorAction SilentlyContinue
-$dismProc = Start-Process -FilePath "dism.exe" -ArgumentList "/Online /Cleanup-Image /RestoreHealth /Quiet" -PassThru -WindowStyle Hidden
-Invoke-QuantumBar "DISM IMAGE REPAIR IN PROGRESS" 30 550
-try { $dismProc | Wait-Process -Timeout 1200 -ErrorAction Stop; Out-Typewriter "  -> [OK] DISM REPAIR COMPLETE." "VER" }
-catch { $dismProc | Stop-Process -Force -ErrorAction SilentlyContinue; Out-Typewriter "  -> DISM TIMEOUT — CONTINUING." "WARN" }
+if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) {
+    # DISM /RestoreHealth can run 10-20 min and may reach out to Windows Update —
+    # same hung-phase problem in server/GUI/auto runs. Offer it as a manual fix.
+    Out-Typewriter "  -> DISM /RESTOREHEALTH SKIPPED IN AUTO/GUI MODE (10-20 min op; offered as a manual fix)." "INFO"
+    Add-Finding -ID "DISM_RESTOREHEALTH" -Phase "PHASE 14" -ThreatType "System Integrity" -Severity $SEV_INFO `
+        -Description "DISM component-store repair skipped in automated/GUI mode (10-20 min, may contact Windows Update). Run on demand." `
+        -Target "Component Store (WinSxS)" -FixAction "RunCmd" -FixParam "DISM /Online /Cleanup-Image /RestoreHealth" -Group "System Hardening"
+} else {
+    $dismProc = Start-Process -FilePath "dism.exe" -ArgumentList "/Online /Cleanup-Image /RestoreHealth /Quiet" -PassThru -WindowStyle Hidden
+    Invoke-QuantumBar "DISM IMAGE REPAIR IN PROGRESS" 30 550
+    try { $dismProc | Wait-Process -Timeout 1200 -ErrorAction Stop; Out-Typewriter "  -> [OK] DISM REPAIR COMPLETE." "VER" }
+    catch { $dismProc | Stop-Process -Force -ErrorAction SilentlyContinue; Out-Typewriter "  -> DISM TIMEOUT — CONTINUING." "WARN" }
+}
 
 Show-PhaseHeader "PHASE 15" "SYSTEM32 UNSIGNED BINARY AUDIT"
 Out-Typewriter "SCANNING SYSTEM32 FOR FORGED/UNSIGNED BINARIES..." "ACT"
@@ -3476,13 +3560,18 @@ if ($PhasePlan.Advanced) {
     Out-Typewriter "SCANNING ALL LOLBAS-CLASS BINARIES FOR ABUSE PATTERNS..." "HUNT"
     Invoke-QuantumBar "LOLBAS CROSS-CORRELATION" 14 90
     $lolbasHits = 0
-    foreach ($lb in $LOLBAS_EXPANDED) {
-        Get-WmiObject Win32_Process -Filter "Name='$lb.exe'" -ErrorAction SilentlyContinue | ForEach-Object {
-            if ($_.CommandLine -match "http|https|ftp|AppData|Temp|Base64|EncodedCommand|IEX|DownloadString|/i:|scrobj|Net\.WebClient") {
-                $cmdShort = $_.CommandLine.Substring(0,[Math]::Min(140,$_.CommandLine.Length))
-                Add-Finding -ID "LOLBAS_$($_.ProcessId)_$lb" -Phase "PHASE 99" -ThreatType "LOLBAS Abuse" `
-                    -Severity $SEV_HIGH -Description "LOLBAS abuse: $($_.Name) PID:$($_.ProcessId) | $cmdShort" `
-                    -Target "PID:$($_.ProcessId)" -FixAction "KillProcess" -FixParam $_.ProcessId -Group "LOLBAS Expanded"
+    # One WMI enumeration + name lookup instead of one filtered Get-WmiObject per
+    # LOLBAS name. Map name -> original token so the finding ID keeps the $lb tag.
+    $lolbasSet = @{}; foreach ($lb in $LOLBAS_EXPANDED) { $lolbasSet["$lb.exe"] = $lb }
+    if ($lolbasSet.Count -gt 0) {
+        foreach ($p in (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)) {
+            $lb = $lolbasSet[$p.Name]
+            if (-not $lb) { continue }
+            if ($p.CommandLine -match "http|https|ftp|AppData|Temp|Base64|EncodedCommand|IEX|DownloadString|/i:|scrobj|Net\.WebClient") {
+                $cmdShort = $p.CommandLine.Substring(0,[Math]::Min(140,$p.CommandLine.Length))
+                Add-Finding -ID "LOLBAS_$($p.ProcessId)_$lb" -Phase "PHASE 99" -ThreatType "LOLBAS Abuse" `
+                    -Severity $SEV_HIGH -Description "LOLBAS abuse: $($p.Name) PID:$($p.ProcessId) | $cmdShort" `
+                    -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "LOLBAS Expanded"
                 $lolbasHits++
             }
         }
@@ -4089,6 +4178,7 @@ if ($PhasePlan.Integrity) {
 # ══════════════════════════════════════════════════════════════════════════════
 #  AUDIT COMPLETE — COMPUTE RISK SCORE
 # ══════════════════════════════════════════════════════════════════════════════
+Stop-PhaseTiming   # close out the final phase's wall-clock
 $elapsed    = [Math]::Round(((Get-Date) - $global:START_TIME).TotalMinutes, 2)
 $phaseCount = $PhasePlan.Max
 $totalRisk  = $global:RansomwareRisk + ($global:RootkitHits * 3) + ($global:RATHits * 2) +
@@ -4141,6 +4231,31 @@ Write-Host "  COMPOSITE RISK    : " -NoNewline -ForegroundColor DarkGray
 Write-Host "$totalRisk — $riskLabel" -ForegroundColor $riskColor
 Write-Host ("▓"*80) -ForegroundColor DarkCyan
 
+# ── Per-phase profiling summary (slowest phases first) ────────────────────────
+if ($global:PHASE_TIMINGS.Count -gt 0) {
+    $slowest = $global:PHASE_TIMINGS | Sort-Object -Property Seconds -Descending | Select-Object -First 10
+    $sumSecs = [Math]::Round((($global:PHASE_TIMINGS | Measure-Object -Property Seconds -Sum).Sum), 1)
+    Write-Host ("─"*80) -ForegroundColor DarkCyan
+    Write-Host "  PHASE TIMING — 10 SLOWEST (of $($global:PHASE_TIMINGS.Count) phases, $sumSecs s total):" -ForegroundColor Yellow
+    foreach ($t in $slowest) {
+        $tc = if ($t.Seconds -gt 10) { "Red" } elseif ($t.Seconds -gt 3) { "Yellow" } else { "DarkGray" }
+        Write-Host ("  {0,6:N1}s  " -f $t.Seconds) -NoNewline -ForegroundColor $tc
+        Write-Host $t.Phase -ForegroundColor DarkGray
+    }
+    Write-Host ("▓"*80) -ForegroundColor DarkCyan
+}
+
+# ── Resilience summary — errors the scan recovered from and continued past ─────
+if ($global:RECOVERED_ERRORS.Count -gt 0) {
+    Write-Host ("─"*80) -ForegroundColor DarkYellow
+    Write-Host "  RESILIENCE — $($global:RECOVERED_ERRORS.Count) error(s) recovered (scan continued, see log):" -ForegroundColor DarkYellow
+    foreach ($re in ($global:RECOVERED_ERRORS | Select-Object -First 15)) {
+        Write-Host ("  [!] " + $re) -ForegroundColor DarkGray
+    }
+    if ($global:RECOVERED_ERRORS.Count -gt 15) { Write-Host "  ... and $($global:RECOVERED_ERRORS.Count - 15) more in the log." -ForegroundColor DarkGray }
+    Write-Host ("▓"*80) -ForegroundColor DarkCyan
+}
+
 # Save audit cache
 $auditCache = @{
     Timestamp     = (Get-Date).ToString("o")
@@ -4153,7 +4268,8 @@ $auditCache = @{
     Paranoid      = $global:PARANOID_MODE
     Stealth       = $global:STEALTH_MODE
     Findings      = @($global:AuditFindings)
-    PhaseTimings  = @($global:PhaseTimings)
+    PhaseTimings  = @($global:PHASE_TIMINGS)
+    RecoveredErrors = @($global:RECOVERED_ERRORS)
     BaselineDelta = @($global:BaselineDelta)
     ThreatTally   = @{
         RAT=       $global:RATHits;      Rootkit=   $global:RootkitHits
@@ -4344,6 +4460,14 @@ if ($SmtpTo -and $SmtpServer -and $SmtpFrom) {
     } catch {
         Out-Typewriter "  -> EMAIL FAILED: $_" "WARN"
     }
+}
+
+# Close the console transcript now — captures the full scan, summary, timing and
+# report paths, and flushes the file before any exit or interactive fix-mode prompt.
+if ($global:TRANSCRIPT_ON) {
+    Out-Typewriter "CONSOLE LOG   : $TRANSCRIPT_PATH" "GOOD"
+    try { Stop-Transcript | Out-Null } catch {}
+    $global:TRANSCRIPT_ON = $false
 }
 
 # Stealth exit — emit JSON to stdout

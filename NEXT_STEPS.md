@@ -1,13 +1,17 @@
 # ZeroBreach — Next Steps (post-/clear handoff)
 
-> ### ▶ START HERE — next session (set 2026-06-22)
+> ### ▶ START HERE — next session (updated 2026-06-22)
 > **Goal: validate the performance fix on a real machine, with logging, then profile what's left.**
 > The user will run the tool; they want **all activity logged**. Recommended order:
-> 1. **Add lightweight per-phase wall-clock timing to `ZeroBreach-V23.ps1`** (log `PHASE N — <name>
->    took X.Xs` per phase to stdout so it flows through SSE into the report/console). Do this FIRST so
->    the live run actually produces profiling data. Keep it `-Auto`/GUI-safe and parse-clean.
-> 2. Have the user run `Launch-GUI.bat` **as admin**, full scan → Phase 107, then send back: the
->    console output + the newest `reports/audit_*.json`. (They've offered to run it.)
+> 1. ~~**Add lightweight per-phase wall-clock timing to `ZeroBreach-V23.ps1`**~~ ✅ DONE 2026-06-22.
+>    `Stop-PhaseTiming` (~`V23:358`) + `Show-PhaseHeader` now emit one clean `⏱ PHASE N — <name>
+>    took X.Xs` line per phase (flows through SSE into console/report; STEALTH-suppressed; parse-clean,
+>    BOM intact). The AUDIT COMPLETE block flushes the final phase and prints a **10-slowest** summary;
+>    timings are also serialized to `audit_*.json` as `PhaseTimings` (`[{Phase,Seconds}]`). Globals:
+>    `$global:PHASE_SW / PHASE_TIMING_LBL / PHASE_TIMINGS` (~`V23:160`).
+> 2. **NEXT — have the user run `Launch-GUI.bat` as admin**, full scan → Phase 107, then send back: the
+>    console output + the newest `reports/audit_*.json`. (They've offered to run it.) The `PhaseTimings`
+>    array + the "10 SLOWEST" console block are the profiling data to read.
 > 3. From those timings, fix any phase still slow and profile the two unprofiled suspects:
 >    **server-side per-line SSE flush** (`ZeroBreach-Server.ps1`) and **Defender cmdlet latency**
 >    (`Get-Mp*` calls in Phases 74.6/74.7/75).
