@@ -675,6 +675,8 @@ $YARA_LITE_RULES        = Get-Sig 'yara_lite_rules'
 $AUTO_ELEVATE_BINS      = Get-Sig 'auto_elevate_bins'
 $LOLBAS_EXPANDED        = Get-Sig 'lolbas_expanded'
 $SCRIPT_OWN_STRINGS     = Get-Sig 'script_own_strings'
+$KNOWN_MALWARE_HASHES   = Get-Sig 'known_malware_hashes'
+$EMAIL_PHISHING_TROJANS = Get-Sig 'email_phishing_trojans'
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
@@ -2638,6 +2640,60 @@ if (Test-Path $outlookPath) {
         -Target $outlookPath -FixAction "Info" -Group "Office / Macro Security"
 }
 Out-Typewriter "  -> MACRO/OUTLOOK AUDIT COMPLETE." "VER"
+
+Show-PhaseHeader "PHASE 74.5" "EMAIL ATTACHMENT MALWARE SCAN (OUTLOOK CACHE)" "PHISHING"
+Out-Typewriter "SCANNING OUTLOOK ATTACHMENT CACHE & EMAIL TEMP FOLDERS..." "HUNT"
+if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
+$emailAttachPaths = @(
+    "$env:LOCALAPPDATA\Microsoft\Outlook",
+    "$env:LOCALAPPDATA\Microsoft\Olk\Attachments",
+    "$env:APPDATA\Microsoft\Outlook",
+    "$env:TEMP\Outlook*",
+    "$env:TEMP\Diagnostics",
+    "$env:LOCALAPPDATA\Temp\Outlook*"
+) | Where-Object { Test-Path $_ }
+
+foreach ($attachPath in $emailAttachPaths) {
+    $emailFiles = Get-ChildItem -Path $attachPath -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -ge (Get-Date).AddHours(-$global:HourWindow) }
+    foreach ($ef in $emailFiles) {
+        $isSuspicious = $false
+        $suspicionReason = @()
+
+        # Check against trojan file patterns
+        foreach ($pattern in @("*SetupPDF*","*Invoice*","*Payment*","*Additional*.log","*redirect*","*.htm*","*.exe")) {
+            if ($ef.FullName -like $pattern) {
+                $isSuspicious = $true
+                $suspicionReason += "Matches trojan filename pattern: $pattern"
+                break
+            }
+        }
+
+        # Check file extension + path context (Outlook attachment cache = suspicious)
+        if ($attachPath -like "*Olk\Attachments*" -and ($ef.Extension -in @(".exe",".htm",".html",".js",".vbs"))) {
+            $isSuspicious = $true
+            $suspicionReason += "Executable/script in Outlook attachment cache"
+        }
+
+        # Check for common trojan hashes (if any are known)
+        if ($KNOWN_MALWARE_HASHES -and $KNOWN_MALWARE_HASHES.Count -gt 0) {
+            $fileHash = (Get-FileHash -Path $ef.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+            if ($fileHash -in $KNOWN_MALWARE_HASHES) {
+                $isSuspicious = $true
+                $suspicionReason += "File hash matches known malware: $fileHash"
+            }
+        }
+
+        if ($isSuspicious) {
+            Out-Typewriter "  -> SUSPICIOUS EMAIL ATTACHMENT: $($ef.Name)" "CRIT"
+            Add-Finding -ID "EMAIL_$($ef.Name -replace '[^a-z0-9]','')_$($ef.LastWriteTime.Ticks)" -Phase "PHASE 74.5" -ThreatType "Phishing / Email Trojan" `
+                -Severity $SEV_HIGH -Description "Suspicious email attachment detected in Outlook cache: $($suspicionReason -join '; ')" `
+                -Target "$($ef.FullName)|$([System.IO.File]::GetAttributes($ef.FullName))" -FixAction "Info" `
+                -Group "Email / Phishing Threats"
+            $global:TrojanHits++
+        }
+    }
+}
+Out-Typewriter "  -> EMAIL ATTACHMENT SCAN COMPLETE." "VER"
 
 Show-PhaseHeader "PHASE 75" "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT"
 Out-Typewriter "CHECKING DEFENDER EXCLUSION LIST FOR MALWARE HIDING SPOTS..." "HUNT"
