@@ -1,5 +1,20 @@
 # ZeroBreach — Next Steps (post-/clear handoff)
 
+> ### ▶ START HERE — next session (set 2026-06-22)
+> **Goal: validate the performance fix on a real machine, with logging, then profile what's left.**
+> The user will run the tool; they want **all activity logged**. Recommended order:
+> 1. **Add lightweight per-phase wall-clock timing to `ZeroBreach-V23.ps1`** (log `PHASE N — <name>
+>    took X.Xs` per phase to stdout so it flows through SSE into the report/console). Do this FIRST so
+>    the live run actually produces profiling data. Keep it `-Auto`/GUI-safe and parse-clean.
+> 2. Have the user run `Launch-GUI.bat` **as admin**, full scan → Phase 107, then send back: the
+>    console output + the newest `reports/audit_*.json`. (They've offered to run it.)
+> 3. From those timings, fix any phase still slow and profile the two unprofiled suspects:
+>    **server-side per-line SSE flush** (`ZeroBreach-Server.ps1`) and **Defender cmdlet latency**
+>    (`Get-Mp*` calls in Phases 74.6/74.7/75).
+> Context: the file-walk hang fix (Get-ScanFiles) + proactive-hardening deployment decisions are DONE
+> this session — see the 2026-06-22 session log below and `CLAUDE.md`. All changes parse-clean +
+> unit-tested; committed to git.
+
 > **Read this first after a context clear.** It is the work plan for the PowerShell
 > build of ZeroBreach. Written 2026-06-06. Companion to `CLAUDE.md`.
 >
@@ -7,6 +22,59 @@
 > made scans "do nothing" is FIXED (signatures moved to `data/detection_signatures.json`; engine
 > verified running past AMSI). The big detection/quality expansion the user requested lives in
 > **`UPGRADE_PLAN.md`** (use it after /clear). Last unvalidated item: a live Phase-107 GUI run.
+
+---
+
+## Session log 2026-06-22 — email/phishing detection rebuild + proactive hardening
+
+**DONE this session** (engine PARSE OK, JSON validates):
+- **Phase 74.5 rebuilt** — was effectively dead (filtered on undefined `$global:HourWindow` →
+  matched ~nothing) and over-broad (`*.exe`/`*.htm*` + recursed the multi-GB OST). Now: scoped to
+  attachment/diagnostic caches (`email_scan_paths_raw`), `Test-InScope` time gating, capped at
+  500 files/path, skips >50MB. Confidence-scored: hash → content rule → cache+ext → lure filename.
+  Actionable hits wired to reversible **Quarantine** (POSSIBLE → Info).
+- **Phase 74.6 (NEW)** — Microsoft Defender threat-history correlation (`Get-MpThreatDetection`
+  + `Get-MpThreat`). Surfaces what Defender/Datto already caught; if a flagged resource is STILL
+  on disk → CRITICAL + Quarantine; otherwise INFO ("verify quarantine").
+- **Phase 74.7 (NEW)** — proactive anti-reinfection hardening (adversary-informed): Office/Outlook
+  macro+attachment security, Windows Script Host disable, Defender PUA protection, and 6 ASR rules
+  that break the email→script→exe chain. All `RunCmd` opt-in fixes (Group "Proactive Hardening").
+- **Quarantine FixAction (NEW)** in the fix switch (~`V23:4794`) — moves file to
+  `reports/quarantine/`, renames `.quar`, writes a `.json` manifest with original path + SHA256 +
+  restore command. Reversible. Locked files: copy + reboot-queue original.
+- **Signatures** — replaced 4 weak name-matching YARA rules with 10 real content rules
+  (`email_content_rules`: HTML smuggling, base64 MZ, obfuscated eval, meta-refresh, etc.). Phase 90
+  now also content-scans `.htm/.html/.js/.svg/...` and quarantines built-in hash matches. Expanded
+  `email_phishing_trojans`, added `email_scan_paths_raw`, `email_attach_extensions`,
+  `email_lure_filename_patterns`, `proactive_*` keys.
+- **Skill (NEW)** — `.claude/skills/ingest-malware-alert/SKILL.md`: paste an alert → extract +
+  sanitize IOCs → add AMSI-safe signatures → extend engine → wire quarantine → validate.
+
+### ✅ DONE 2026-06-22 — PERFORMANCE DEEP-DIVE (engine file-walk hang fix)
+Root cause of phases "taking forever" / hanging the web UI: unbounded `Get-ChildItem -Recurse`
+over `$env:USERPROFILE`/`LOCALAPPDATA`/`APPDATA` (browser caches, Teams, OneDrive, node_modules →
+100k+ files), plus per-pattern×per-root loops walking the same tree 20–48× per phase.
+
+**Fix (all in `ZeroBreach-V23.ps1`, parse-clean + unit-tested):**
+- New **`Get-ScanFiles`** helper (~`V23:660`): manual prunable walk with a hard file cap
+  (`$global:SCAN_MAX_FILES`=20000) + wall-clock deadline (`$global:SCAN_DEADLINE_S`=20s) so no phase
+  runs away; prunes cache dirs (`$global:SCAN_PRUNE_DIRS`); skips reparse points + OneDrive cloud
+  placeholders (avoids download storms); time-windows during the walk; returns `FileInfo[]`.
+  Verified bounded: a whole-USERPROFILE walk returned in 2.6s at the cap vs. previously unbounded.
+- Converted ~17 hot walks. Ransomware Phases 51/52/53 now share **one** bounded walk over
+  user-document folders (was 3 phases × USERPROFILE + redundant subfolders). Phase 53's 55-recursion
+  note search → one walk + anchored regex. Keylogger/tunnel/stego/dump per-pattern×root loops →
+  one walk + anchored regex (`^…$`, `\*`→`.*`; stops `nc.exe` matching `sync.exe`).
+- `Get-FileEntropy` reads a **1 MB sample**, not the whole file.
+- Remaining `-Recurse` = small/system roots (System32\Tasks, spool, gpo) + registry (CLSID/Installer).
+
+**Still untested live:** a real admin `Launch-GUI.bat` run to confirm per-phase wall-clock on a
+busy machine. Server-side SSE per-line flush + Defender-cmdlet latency NOT yet profiled (lower
+priority — the file-walk hangs were the reported blocker).
+
+### ⏭ Proactive-hardening deployment (user-approved 2026-06-22)
+ASR rules split Block (3 low-FP) vs Audit (3 higher-FP); Office macros VBAWarnings=2 (not 4);
+WSH stays opt-in. All Phase 74.7 fixes remain opt-in `RunCmd`. See CLAUDE.md "Proactive hardening".
 
 ---
 

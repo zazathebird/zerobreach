@@ -226,6 +226,83 @@ current defs but should be externalized for cross-machine robustness — see `UP
 A Defender exclusion is NOT required. To AMSI-test, run the engine with a **path-only** command
 line (signature words on a cmdline make Defender block the *spawn* with EPERM).
 
+## Email / Phishing Detection + Remediation (rebuilt 2026-06-22)
+
+Driven by real Datto/Defender MSP alerts (`client_alerts/datto_alerts_*.md`). Three phases plus a
+reversible quarantine action; all signatures externalized to `data/detection_signatures.json`.
+
+- **Phase 74.5 — Email Attachment Malware Scan.** Scopes to attachment/diagnostic caches
+  (`email_scan_paths_raw`, e.g. `…\Olk\Attachments`, `…\Content.Outlook`, `Temp\Diagnostics\OUTLOOK`)
+  — deliberately NOT the multi-GB OST/PST. Time-gated via `Test-InScope`, capped at 500 files/path,
+  skips >50 MB. Confidence-scored: known-malware SHA256 → content rule → exec/script ext in cache →
+  lure filename. Actionable hits → `Quarantine`; `POSSIBLE` → `Info`.
+  > Historical bug (fixed): old 74.5 filtered on `$global:HourWindow` (undefined → matched ~nothing)
+  > and used blanket `*.exe`/`*.htm*` patterns over the whole OST. Never reintroduce either.
+- **Phase 74.6 — Defender Threat-History Correlation.** `Get-MpThreatDetection` + `Get-MpThreat`.
+  Reports what Defender already caught; resource **still on disk** → CRITICAL + `Quarantine`, else
+  INFO. Answers "what did Defender see, and is anything left behind?"
+- **Phase 74.7 — Proactive Anti-Reinfection Hardening** (adversary-informed). Office/Outlook macro
+  + attachment security (`proactive_office_keys`), Windows Script Host disable, Defender PUA
+  protection, and 6 ASR rules that break the email→script→exe chain. All `RunCmd` opt-in fixes,
+  Group "Proactive Hardening". Severity INFO/POSSIBLE so they're shown but not auto-applied.
+
+**`Quarantine` FixAction** (fix switch ~`V23:4794`): moves the file to `reports/quarantine/`,
+renames it `.quar` (neutralizes double-click), and writes a `<file>.quar.json` manifest (original
+path, SHA256, detection, restore command). Reversible. Locked files → copy to vault + reboot-queue
+the original. Prefer this over `DeleteFile` for anything not hash-confirmed malware.
+
+**Content rules** (`email_content_rules`, also run in Phase 90): match malicious *constructs*
+(HTML smuggling `msSaveOrOpenBlob`+`.exe`, base64 `MZ` via `atob`, obfuscated `eval`, meta-refresh,
+ActiveX droppers) — NOT antivirus signature names. `Test-ContentRules` helper (~`V23:611`) returns
+the highest-severity match. Phase 90's binary scan now also covers `.htm/.html/.js/.svg/...`.
+
+**Skill:** `.claude/skills/ingest-malware-alert/` — paste a new AV/EDR alert → extract + sanitize
+IOCs → add AMSI-safe signatures → extend the engine → wire quarantine → validate. Use it for every
+future alert so coverage grows consistently.
+
+### Proactive hardening — deployment decisions (2026-06-22, user-approved)
+
+Phase 74.7 fixes are **opt-in only** (`RunCmd`, never auto-applied — a tech must click remediate).
+For business machines the user signed off on these defaults:
+- **ASR rules split by false-positive risk.** 3 low-FP rules deploy in **Block** (email exec content,
+  JS/VBS launching downloads, Office creating executables); 3 higher-FP rules deploy in **Audit**
+  (Office child processes, obfuscated scripts, Win32-from-macros) so they log impact without breaking
+  add-ins/macros/minified scripts. Promote Audit→Block per-client after telemetry. Logic keyed on the
+  rule's `Mode` field in the `$asrRules` array (~`V23:2880`); already-Block or already-Audit is left alone.
+- **Office macros: VBAWarnings=2** (block internet/email-sourced macros, prompt for local trusted) —
+  NOT `4` (disable-all), which would break legit business macros silently. Set in `proactive_office_keys`.
+- **WSH disable** kept as an opt-in flag (legacy logon scripts may depend on it).
+- Low-risk items kept as-is: Defender PUA on, Outlook attachment level, the 3 Block ASR rules.
+
+## Performance — bounded file enumeration (2026-06-22)
+
+The #1 cause of phases "taking forever" / hanging the web UI was unbounded `Get-ChildItem -Recurse`
+over `$env:USERPROFILE` / `LOCALAPPDATA` / `APPDATA` (drags in browser caches, Teams, OneDrive,
+node_modules — hundreds of thousands of files), plus per-pattern×per-root loops that walked the same
+tree 20–48× per phase.
+
+**Fix: `Get-ScanFiles` helper (~`V23:660`)** — a manual, prunable recursive walk that:
+- caps total files (`$global:SCAN_MAX_FILES`, default 20000) and enforces a wall-clock deadline
+  (`$global:SCAN_DEADLINE_S`, default 20s) so **no single phase can run away**;
+- prunes giant low-signal cache dirs (`$global:SCAN_PRUNE_DIRS`: node_modules, WinSxS, *cache*,
+  INetCache, indexeddb, crashpad, …);
+- skips reparse-point dirs (junction loops) and **OneDrive cloud-only placeholder files** (reading
+  those would trigger a download storm — both a hang and a data-cost bug);
+- applies the time window (`Test-InScope`) *during* the walk via `-TimeScoped` (no full materialize);
+- returns `FileInfo[]`, so callers keep using `.FullName/.Name/.Extension/.Length/.LastWriteTime`.
+
+Converted ~17 hot walks to it. Key structural wins: the **ransomware cluster (Phases 51/52/53)** now
+shares **one** bounded walk over user-document folders (`$ransomScanFiles`) instead of 3 phases ×
+(USERPROFILE + redundant subfolders); Phase 53's 11-pattern×5-root note search (55 recursions)
+collapsed to one walk + an **anchored** in-memory regex. Per-pattern×root loops (keylogger/tunnel/
+stego/dump) likewise became one walk + anchored regex — anchoring (`^…$`, `\*`→`.*`) prevents
+`nc.exe` substring-matching `sync.exe`. `Get-FileEntropy` now reads a **1 MB sample**, not the whole
+file. Remaining `-Recurse` calls are over small/system roots (System32\Tasks, spool, gpo) or the
+**registry** (CLSID/Installer) — left as-is.
+
+> When adding a new file-scanning phase, **use `Get-ScanFiles`**, never raw `Get-ChildItem -Recurse`
+> over a user/AppData root. Scope ransomware/document scans to doc folders, not bare `$env:USERPROFILE`.
+
 ## Known Gotchas
 
 - **STEALTH mode** outputs JSON, not formatted text — current parser ignores it (see above).
