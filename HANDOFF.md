@@ -1,11 +1,15 @@
 # RESUME HANDOFF — updated 2026-06-23
 
-Everything is committed to **`main`** (local only — not pushed). Latest commit: `127a765`.
+Everything is committed to **`main`** (local only — not pushed). Latest commit: `b8a13de`.
 
 ## Where we are
 
 Today's work (all committed): MITRE tagging, IOC Manager, HTML/CSV export, STEALTH parsing,
-**real GUI remediation**, benign test tripwires, and a **system-damage safety guard (complete)**.
+**real GUI remediation**, benign test tripwires, a **system-damage safety guard (complete)**,
+the trusted-vendor allowlist (Datto/CentraStage/Kaseya), and most recently **Cinematic FX
+toggles + boot self-heal** (`b8a13de` — opt-in per-effect switches over the theme system; blank
+/grey-screen-on-launch auto-reload; FX audit back to PASS 13/13). See CLAUDE.md → "Cinematic FX
+toggles + boot self-heal".
 The scan engine `ZeroBreach-V23.ps1` is deliberately untouched. See CLAUDE.md → "Feature wiring
 completed 2026-06-23", "Remediation safety guard", and "Remediation test tripwires".
 
