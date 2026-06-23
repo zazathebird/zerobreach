@@ -201,6 +201,60 @@ runspace scripts are checked with a dedicated extractor). **Live admin end-to-en
 > changes). Logic is unit-tested (report mapping, IOC text emit, id-filter, HTML/CSV render) but the
 > end-to-end browser+admin path is unconfirmed.
 
+### Remediation test tripwires (safe, benign — for validating scan→findings→remediation live)
+
+To validate the remediation pipeline **without real malware**, drop benign artifacts that trip a
+detection phase and get a known fix action. All are named `ZeroBreach_TEST_DELETEME`, are inert, and
+exercise the safe/reversible (and previously-untested) fix paths. These are **machine-local test
+artifacts — never commit them to the repo.** Recreate with the commands below, then run
+`Launch-GUI.bat` as admin → **FULL/DEEP** scan, **all time** → FINDINGS → REMEDIATION → `PURGE`.
+
+| Artifact | Detection | Severity | FixAction |
+|---|---|---|---|
+| `%TEMP%\ZeroBreach_TEST_DELETEME.bat` | Phase 10 — exe-ext file in Temp (unsigned) | HIGH | `DeleteFile` |
+| `Downloads\ZeroBreach_TEST_DELETEME.cmd` | Phase 10 — exe-ext file in Downloads | POSSIBLE | `DeleteFile` |
+| `HKCU:\…\CurrentVersion\Run\ZeroBreach_TEST_DELETEME` | Phase 20 — Run-key data matches `Temp\|powershell\|cmd…` | CRITICAL | `DeleteReg` |
+| `…\INetCache\Content.Outlook\ZBTEST\invoice_…DELETEME.bat` | Phase 74.5 — attach-ext file in Outlook cache | HIGH | `Quarantine` (→ `reports\quarantine\`) |
+| Scheduled task `\ZeroBreach_TEST_DELETEME` (disabled, no trigger) | Phase 29 — action string matches `cmd` | CRITICAL | `RunCmd` (`Unregister-ScheduledTask …`) |
+
+Why these specific choices (detection logic is exact, verified against the engine source):
+- **Phase 10** (`~V23:1464-1479`) flags any file whose extension is in `$malExt` (`.bat/.cmd/.js/.exe/…`)
+  inside Temp/INetCache/Downloads within the time window → `DeleteFile`. `.bat`/`.cmd` are plain text
+  (zero AV risk). Temp ⇒ HIGH, Downloads ⇒ POSSIBLE.
+- **Phase 20** (`~V23:1697-1703`) flags HKCU/HKLM Run values whose **data** matches
+  `AppData|Temp|cmd\.exe|powershell|…`. The test value points at a non-existent `%TEMP%\…_noexec.exe`
+  so nothing runs at logon — it only matches the regex (`Temp`).
+- **Phase 74.5** (`~V23:2973-2994`) flags an `EMAIL_ATTACH_EXTS` file in an Outlook cache path
+  (`Content.Outlook` etc.) ⇒ HIGH ⇒ `Quarantine` (reversible: moved to `reports\quarantine\` with a
+  `.quar.json` restore manifest). The cache dir must be created for the path's `Test-Path` to pass.
+- **Phase 29** (`~V23:1850-1858`) flags non-`\Microsoft\` scheduled tasks whose `Exe+Args` match
+  `cmd|powershell.*-enc|AppData|Temp|…` ⇒ `RunCmd` = `Unregister-ScheduledTask`. This is the one path
+  that runs `[scriptblock]::Create($FixParam)` server-side, so it validates the RunCmd fix end-to-end.
+  The task is registered disabled + trigger-less (`cmd.exe /c rem …`) so it can never execute.
+
+Create:
+```powershell
+$b = "@echo off`r`nREM ZEROBREACH TEST TRIPWIRE - SAFE TO DELETE"
+Set-Content "$env:TEMP\ZeroBreach_TEST_DELETEME.bat" $b -Encoding ASCII
+Set-Content "$env:USERPROFILE\Downloads\ZeroBreach_TEST_DELETEME.cmd" $b -Encoding ASCII
+New-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name ZeroBreach_TEST_DELETEME `
+  -Value '"%TEMP%\ZeroBreach_TEST_DELETEME_noexec.exe" --zerobreach-test' -PropertyType String -Force
+$c = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\INetCache\Content.Outlook\ZBTEST'
+New-Item -ItemType Directory $c -Force | Out-Null
+Set-Content (Join-Path $c 'invoice_ZeroBreach_TEST_DELETEME.bat') $b -Encoding ASCII
+$s = New-ScheduledTaskSettingsSet; $s.Enabled = $false
+Register-ScheduledTask ZeroBreach_TEST_DELETEME -Force -Settings $s `
+  -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument '/c rem ZeroBreach_TEST_DELETEME benign no-op')
+```
+
+Manual cleanup (if you skip the GUI test, or to reset between runs):
+```powershell
+del "$env:TEMP\ZeroBreach_TEST_DELETEME.bat","$env:USERPROFILE\Downloads\ZeroBreach_TEST_DELETEME.cmd" 2>$null
+reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v ZeroBreach_TEST_DELETEME /f 2>$null
+Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\INetCache\Content.Outlook\ZBTEST" -Recurse -Force 2>$null
+Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
+```
+
 ## GUI Feature Layer (added 2026-06-09, harvested from the deleted "gui from other project" folder)
 
 The PirateLife React GUI was mined for its best ideas, ported to **vanilla JS** (no React), then
