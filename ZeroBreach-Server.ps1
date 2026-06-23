@@ -64,6 +64,7 @@ $script:State = [hashtable]::Synchronized(@{
     LineCount    = 0
     ResultsPath  = ''
     Listening    = $true
+    ScanEpoch    = 0      # bumped each time EventLog is cleared for a new scan; SSE clients rewind on change
     Process      = $null
     EventLog     = [System.Collections.ArrayList]::Synchronized(
                        [System.Collections.ArrayList]::new())
@@ -241,13 +242,20 @@ $syncObj = [ordered]@{
 }
 Push ($syncObj | ConvertTo-Json -Compress -Depth 3)
 
-$idx  = 0
-$last = [datetime]::Now
+$idx   = 0
+$epoch = $SseState.ScanEpoch
+$last  = [datetime]::Now
 
 try {
     while ($SseState.Listening) {
+        # A new scan clears EventLog and bumps ScanEpoch. Rewinding on the epoch
+        # change (rather than on count comparison) is robust regardless of how fast
+        # the new scan refills the log — the old count-compare guard could miss the
+        # boundary where the refilled count momentarily equalled the stale cursor and
+        # silently drop the new scan's first events for an already-open tab.
+        if ($SseState.ScanEpoch -ne $epoch) { $idx = 0; $epoch = $SseState.ScanEpoch }
         $count = $SseState.EventLog.Count
-        if ($idx -gt $count) { $idx = 0 }   # EventLog was cleared for a new scan — rewind
+        if ($idx -gt $count) { $idx = 0 }   # extra safety: cursor past end (shouldn't happen)
         while ($idx -lt $count) {
             Push $SseState.EventLog[$idx]
             $idx++
@@ -336,6 +344,7 @@ $ScanState.ScanComplete = $false
 $ScanState.StartTime    = [datetime]::Now
 $ScanState.Findings.Clear()
 $ScanState.EventLog.Clear()
+$ScanState.ScanEpoch++   # signal already-open SSE tabs to rewind to event 0 for this new scan
 foreach ($k in @($ScanState.ThreatCounts.Keys)) { $ScanState.ThreatCounts[$k] = 0 }
 
 # ── Build PowerShell command ────────────────────────────────────────────────────

@@ -82,6 +82,12 @@ function finishBoot() {
 function initApp() {
   ZBFX.init();
   ZBThemes.restore();
+  // Initialize the per-view FX layer for the default (launchpad) view so the very
+  // first paint already has its signature decoration. switchView() only runs on
+  // navigation, and the launchpad is shown statically via class="view active".
+  ensureViewFxLayer();
+  document.body.dataset.view = 'launchpad';
+  document.body.classList.toggle('fx-off', ZBFX.getIntensity() === 'off');
   initSSE();
   initClock();
   initNav();
@@ -292,6 +298,11 @@ function switchView(viewId) {
   $$('.nav-item').forEach(n => n.classList.toggle('active', n.dataset.view === viewId));
   $$('.view').forEach(v => v.classList.toggle('active', v.id === `view-${viewId}`));
   STATE.currentView = viewId;
+  // Per-view signature overlay: a single pointer-events-none layer whose look is
+  // driven entirely by CSS keyed on body[data-view] (see fx.css "PER-VIEW TREATMENTS").
+  ensureViewFxLayer();
+  document.body.classList.toggle('fx-off', ZBFX.getIntensity() === 'off');
+  document.body.dataset.view = viewId;
   ZBSound.play('tab');
 
   // scramble-decrypt the view title on entry
@@ -304,6 +315,17 @@ function switchView(viewId) {
   if (viewId === 'report')      buildReport();
   if (viewId === 'findings')    renderFindingsTree();
   if (viewId === 'remediation') renderRemediationView();
+}
+
+// Build the per-view FX layer once. Two spans give CSS up to four decorative
+// pseudo-elements (::before/::after on each) for richer per-view signatures.
+function ensureViewFxLayer() {
+  if (document.getElementById('view-fx')) return;
+  const wrap = document.createElement('div');
+  wrap.id = 'view-fx';
+  wrap.setAttribute('aria-hidden', 'true');
+  wrap.innerHTML = '<span class="vfx-a"></span><span class="vfx-b"></span>';
+  document.body.appendChild(wrap);
 }
 
 // ── Launch Pad ────────────────────────────────────────────────────────────────
@@ -380,6 +402,7 @@ function buildFxTiers() {
     el.title = tier.desc;
     el.addEventListener('click', () => {
       ZBFX.setIntensity(id);
+      document.body.classList.toggle('fx-off', id === 'off');
       ZBSound.play('click');
       $$('#fx-tier-row .fx-tier').forEach(t => t.classList.remove('active'));
       el.classList.add('active');

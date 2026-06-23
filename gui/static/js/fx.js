@@ -148,6 +148,288 @@ const ZBFX = (() => {
     };
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  //  BESPOKE PER-THEME RENDERERS (added 2026-06-23)
+  //  One signature visual per theme so no two backgrounds look alike. Each is a
+  //  self-contained factory returning { resize, draw(ctx,t), opaque? }. The older
+  //  shared renderers above (rain/particles/gridfloor/radar/embers/starfield) are
+  //  left untouched — these only ADD new looks.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // KRAKEN-BLUE — "classic console" oscilloscope: a cyan signal sweeps L→R with a
+  // bright phosphor head, a persistent fading trace, and a faint reticle grid.
+  // (WarGames / Hackers terminal-scope vibe.)
+  function makeWaveform(accent, accent2) {
+    let w = 0, h = 0, ph = 0;
+    return {
+      opaque: true,
+      resize(W, H) { w = W; h = H; },
+      draw(ctx, t) {
+        ctx.fillStyle = 'rgba(0,0,0,0.10)'; ctx.fillRect(0, 0, w, h);
+        // faint scope grid
+        ctx.strokeStyle = accent; ctx.globalAlpha = 0.05; ctx.lineWidth = 1;
+        for (let y = 0; y < h; y += 46) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+        for (let x = 0; x < w; x += 46) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+        ctx.globalAlpha = 1;
+        ph = (t * 0.0016);
+        const mid = h * 0.5, amp = h * 0.22;
+        const wave = (x) => mid
+          + Math.sin(x * 0.012 + ph) * amp * 0.55
+          + Math.sin(x * 0.043 - ph * 1.7) * amp * 0.28
+          + Math.sin(x * 0.0021 + ph * 0.4) * amp * 0.5;
+        ctx.lineWidth = 2; ctx.strokeStyle = accent; ctx.shadowColor = accent; ctx.shadowBlur = 12;
+        ctx.globalAlpha = 0.85; ctx.beginPath();
+        for (let x = 0; x <= w; x += 6) { const y = wave(x); x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y); }
+        ctx.stroke(); ctx.shadowBlur = 0;
+        // bright sweeping head
+        const hx = (t * 0.18) % w, hy = wave(hx);
+        ctx.fillStyle = accent2 || '#ffffff'; ctx.shadowColor = accent2 || accent; ctx.shadowBlur = 18;
+        ctx.beginPath(); ctx.arc(hx, hy, 3.2, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+        ctx.globalAlpha = 1;
+      },
+    };
+  }
+
+  // GANNON-ORANGE — molten PCB: glowing data pulses race along orthogonal circuit
+  // traces, occasionally branching, leaving a warm fade. (Tron / Watch_Dogs ops board.)
+  function makeCircuit(accent, accent2) {
+    let w = 0, h = 0, traces = [], pulses = [];
+    function build() {
+      traces = []; pulses = [];
+      const step = 64, cols = Math.max(2, Math.floor(w / step)), rows = Math.max(2, Math.floor(h / step));
+      for (let i = 0; i <= cols; i++) traces.push({ vert: true, p: i * step });
+      for (let j = 0; j <= rows; j++) traces.push({ vert: false, p: j * step });
+      const n = Math.min(70, Math.floor((cols + rows) * 0.9));
+      for (let k = 0; k < n; k++) pulses.push(spawn());
+    }
+    function spawn() {
+      const vert = Math.random() < 0.5;
+      const span = vert ? h : w;
+      return { vert, lane: (Math.floor(Math.random() * (vert ? (w / 64) : (h / 64))) + 1) * 64,
+               pos: Math.random() * span, sp: (0.6 + Math.random() * 1.6) * (Math.random() < .5 ? 1 : -1),
+               len: 40 + Math.random() * 90, a: 0.4 + Math.random() * 0.6 };
+    }
+    return {
+      resize(W, H) { w = W; h = H; build(); },
+      draw(ctx) {
+        ctx.strokeStyle = accent; ctx.globalAlpha = 0.06; ctx.lineWidth = 1;
+        for (const tr of traces) {
+          ctx.beginPath();
+          if (tr.vert) { ctx.moveTo(tr.p, 0); ctx.lineTo(tr.p, h); } else { ctx.moveTo(0, tr.p); ctx.lineTo(w, tr.p); }
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1; ctx.lineWidth = 2; ctx.lineCap = 'round';
+        for (const p of pulses) {
+          p.pos += p.sp;
+          const span = p.vert ? h : w;
+          if (p.pos < -p.len || p.pos > span + p.len) { Object.assign(p, spawn()); continue; }
+          const x1 = p.vert ? p.lane : p.pos, y1 = p.vert ? p.pos : p.lane;
+          const x2 = p.vert ? p.lane : p.pos - Math.sign(p.sp) * p.len, y2 = p.vert ? p.pos - Math.sign(p.sp) * p.len : p.lane;
+          const grad = ctx.createLinearGradient(x1, y1, x2, y2);
+          grad.addColorStop(0, accent2 || accent); grad.addColorStop(1, 'transparent');
+          ctx.strokeStyle = grad; ctx.shadowColor = accent2 || accent; ctx.shadowBlur = 10; ctx.globalAlpha = p.a;
+          ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+          ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(x1, y1, 1.8, 0, 7); ctx.fill();
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.lineCap = 'butt';
+      },
+    };
+  }
+
+  // THREAT-RED — DEFCON board: arcing missile trajectories streak between random
+  // launch/impact points across a faint hostile world-grid, blooming on impact.
+  // (WarGames "Global Thermonuclear War" map.)
+  function makeMissileMap(accent, accent2) {
+    let w = 0, h = 0, arcs = [], blooms = [];
+    function spawn() {
+      const x1 = Math.random() * w, y1 = h * (0.5 + Math.random() * 0.5);
+      const x2 = Math.random() * w, y2 = h * (0.3 + Math.random() * 0.5);
+      return { x1, y1, x2, y2, cx: (x1 + x2) / 2 + (Math.random() - .5) * w * 0.2, cy: Math.min(y1, y2) - (120 + Math.random() * 180), t: 0, sp: 0.004 + Math.random() * 0.006 };
+    }
+    function qpt(a, p) { const u = 1 - p; return { x: u * u * a.x1 + 2 * u * p * a.cx + p * p * a.x2, y: u * u * a.y1 + 2 * u * p * a.cy + p * p * a.y2 }; }
+    return {
+      resize(W, H) { w = W; h = H; arcs = Array.from({ length: 7 }, spawn); blooms = []; },
+      draw(ctx) {
+        // hostile grid
+        ctx.strokeStyle = accent; ctx.globalAlpha = 0.04; ctx.lineWidth = 1;
+        for (let y = h * 0.2; y < h; y += 54) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+        for (let x = 0; x < w; x += 70) { ctx.beginPath(); ctx.moveTo(x, h * 0.2); ctx.lineTo(x, h); ctx.stroke(); }
+        ctx.globalAlpha = 1;
+        for (let i = 0; i < arcs.length; i++) {
+          const a = arcs[i]; a.t += a.sp;
+          // drawn trail up to current t
+          ctx.strokeStyle = accent; ctx.lineWidth = 1.5; ctx.globalAlpha = 0.5; ctx.beginPath();
+          const segs = 24, upto = Math.min(1, a.t);
+          for (let s = 0; s <= segs; s++) { const p = (s / segs) * upto; const pt = qpt(a, p); s === 0 ? ctx.moveTo(pt.x, pt.y) : ctx.lineTo(pt.x, pt.y); }
+          ctx.stroke();
+          // warhead head
+          if (a.t < 1) {
+            const hd = qpt(a, a.t); ctx.fillStyle = accent2 || '#fff'; ctx.shadowColor = accent2 || accent; ctx.shadowBlur = 14;
+            ctx.globalAlpha = 1; ctx.beginPath(); ctx.arc(hd.x, hd.y, 2.6, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+          } else { blooms.push({ x: a.x2, y: a.y2, r: 0 }); arcs[i] = spawn(); }
+        }
+        ctx.globalAlpha = 1;
+        for (let i = blooms.length - 1; i >= 0; i--) {
+          const b = blooms[i]; b.r += 1.6;
+          ctx.strokeStyle = accent2 || accent; ctx.lineWidth = 2; ctx.globalAlpha = Math.max(0, 1 - b.r / 48);
+          ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.stroke();
+          if (b.r > 48) blooms.splice(i, 1);
+        }
+        ctx.globalAlpha = 1;
+      },
+    };
+  }
+
+  // GHOST-GREEN — recon topography: slow-breathing contour lines drift like a
+  // night-vision terrain map, with sparse sensor blips. Low emission, no hard edges.
+  function makeContour(accent, accent2) {
+    let w = 0, h = 0, blips = [];
+    return {
+      resize(W, H) { w = W; h = H; blips = Array.from({ length: 5 }, () => ({ x: Math.random() * W, y: Math.random() * H, t: Math.random() })); },
+      draw(ctx, t) {
+        const ph = t * 0.0004;
+        ctx.lineWidth = 1;
+        for (let k = 0; k < 7; k++) {
+          const base = (h / 7) * k + (h / 14);
+          ctx.strokeStyle = k % 3 === 0 ? (accent2 || accent) : accent;
+          ctx.globalAlpha = 0.12; ctx.beginPath();
+          for (let x = 0; x <= w; x += 10) {
+            const y = base
+              + Math.sin(x * 0.006 + ph * 6 + k) * 22
+              + Math.sin(x * 0.018 - ph * 9 + k * 1.7) * 9;
+            x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 1;
+        for (const b of blips) {
+          b.t += 0.01; const pulse = (Math.sin(b.t) + 1) / 2;
+          ctx.fillStyle = accent2 || accent; ctx.shadowColor = accent2 || accent; ctx.shadowBlur = 10;
+          ctx.globalAlpha = 0.15 + pulse * 0.45;
+          ctx.beginPath(); ctx.arc(b.x, b.y, 1.6 + pulse * 1.4, 0, 7); ctx.fill();
+        }
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+      },
+    };
+  }
+
+  // OVERWATCH — AR hacking HUD: bracketed target tags lock onto roaming points,
+  // a vertical scan-line sweeps and re-tags contacts. (Cyberpunk 2077 / Watch_Dogs.)
+  function makeDataTags(accent, accent2) {
+    let w = 0, h = 0, tags = [], scan = 0;
+    const codes = ['0x4F','SYS','ICE','NET','PWN','ROOT','0xA3','DAEMON','PROC','SOCK','0xFF','NODE'];
+    function spawn() { return { x: Math.random() * w, y: Math.random() * h, vx: (Math.random() - .5) * .3, vy: (Math.random() - .5) * .3, code: codes[(Math.random() * codes.length) | 0], lock: 0 }; }
+    return {
+      resize(W, H) { w = W; h = H; tags = Array.from({ length: Math.min(14, Math.floor(W / 110)) }, spawn); },
+      draw(ctx) {
+        scan = (scan + 2.2) % w;
+        // sweeping scan line
+        ctx.strokeStyle = accent2 || accent; ctx.globalAlpha = 0.25; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(scan, 0); ctx.lineTo(scan, h); ctx.stroke();
+        ctx.globalAlpha = 1; ctx.font = '10px "JetBrains Mono",monospace';
+        for (const tg of tags) {
+          tg.x += tg.vx; tg.y += tg.vy;
+          if (tg.x < 20 || tg.x > w - 20) tg.vx *= -1; if (tg.y < 20 || tg.y > h - 20) tg.vy *= -1;
+          if (Math.abs(tg.x - scan) < 6) tg.lock = 1;       // re-lock as the scan passes
+          tg.lock = Math.max(0, tg.lock - 0.012);
+          const s = 9 + tg.lock * 4;
+          ctx.strokeStyle = accent; ctx.globalAlpha = 0.3 + tg.lock * 0.6; ctx.lineWidth = 1;
+          // corner brackets
+          const cb = (ox, oy, sx, sy) => { ctx.beginPath(); ctx.moveTo(tg.x + ox, tg.y + oy + sy * 4); ctx.lineTo(tg.x + ox, tg.y + oy); ctx.lineTo(tg.x + ox + sx * 4, tg.y + oy); ctx.stroke(); };
+          cb(-s, -s, 1, 1); cb(s, -s, -1, 1); cb(-s, s, 1, -1); cb(s, s, -1, -1);
+          ctx.fillStyle = accent2 || accent; ctx.beginPath(); ctx.arc(tg.x, tg.y, 1.5, 0, 7); ctx.fill();
+          if (tg.lock > 0.15) { ctx.fillStyle = accent; ctx.globalAlpha = tg.lock; ctx.fillText(tg.code, tg.x + s + 4, tg.y + 3); }
+        }
+        ctx.globalAlpha = 1;
+      },
+    };
+  }
+
+  // WOPR — NORAD wireframe globe: an amber lat/long sphere rotates with sweeping
+  // longitude lines. (WarGames defense-mainframe console.)
+  function makeGlobe(accent, accent2) {
+    let w = 0, h = 0;
+    return {
+      resize(W, H) { w = W; h = H; },
+      draw(ctx, t) {
+        const cx = w * 0.5, cy = h * 0.5, R = Math.min(w, h) * 0.34, rot = t * 0.00035;
+        ctx.strokeStyle = accent; ctx.lineWidth = 1;
+        // latitude rings (flattened ellipses)
+        for (let i = 1; i < 7; i++) {
+          const lat = (i / 7) * Math.PI - Math.PI / 2, ry = Math.cos(lat) * R, yy = cy + Math.sin(lat) * R;
+          ctx.globalAlpha = 0.12; ctx.beginPath(); ctx.ellipse(cx, yy, ry, ry * 0.32, 0, 0, 7); ctx.stroke();
+        }
+        // rotating longitude lines
+        for (let j = 0; j < 10; j++) {
+          const ang = rot + (j / 10) * Math.PI * 2, sx = Math.cos(ang);
+          ctx.globalAlpha = 0.08 + Math.abs(sx) * 0.14;
+          ctx.beginPath(); ctx.ellipse(cx, cy, Math.abs(sx) * R, R, 0, 0, 7); ctx.stroke();
+        }
+        // outline + a brighter sweeping meridian
+        ctx.globalAlpha = 0.3; ctx.lineWidth = 1.4; ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.stroke();
+        const sweep = Math.cos(rot * 3);
+        ctx.strokeStyle = accent2 || accent; ctx.globalAlpha = 0.5; ctx.shadowColor = accent2 || accent; ctx.shadowBlur = 10;
+        ctx.beginPath(); ctx.ellipse(cx, cy, Math.abs(sweep) * R, R, 0, 0, 7); ctx.stroke();
+        ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+      },
+    };
+  }
+
+  // BLACKSITE — redacted void: slow mono grain, a single classified scan bar, and
+  // occasional sliding redaction blocks. Deliberately minimal & cold.
+  function makeRedact(accent, accent2) {
+    let w = 0, h = 0, bars = [], scan = 0;
+    function spawn() { const y = Math.random() * h; return { x: -Math.random() * 300, y, ww: 60 + Math.random() * 220, sp: 0.3 + Math.random() * 0.8 }; }
+    return {
+      resize(W, H) { w = W; h = H; bars = Array.from({ length: 8 }, spawn); },
+      draw(ctx) {
+        // sparse grain
+        ctx.globalAlpha = 0.04; ctx.fillStyle = accent;
+        for (let i = 0; i < 40; i++) ctx.fillRect((Math.random() * w) | 0, (Math.random() * h) | 0, 1, 1);
+        // redaction blocks
+        ctx.globalAlpha = 0.06; ctx.fillStyle = accent;
+        for (const b of bars) {
+          b.x += b.sp; if (b.x > w + 40) Object.assign(b, spawn(), { x: -b.ww });
+          ctx.fillRect(b.x, b.y, b.ww, 7);
+        }
+        // single classified scan bar
+        scan = (scan + 0.6) % h;
+        ctx.globalAlpha = 0.10; ctx.fillStyle = accent2 || accent; ctx.fillRect(0, scan, w, 2);
+        ctx.globalAlpha = 1;
+      },
+    };
+  }
+
+  // OUTRUN — synthwave sun: a banded neon sun hangs over a glowing horizon haze.
+  // Pairs with the existing grid-floor but stands on its own. (80s Outrun/Hotline Miami.)
+  function makeSynthSun(accent, accent2) {
+    let w = 0, h = 0;
+    return {
+      resize(W, H) { w = W; h = H; },
+      draw(ctx, t) {
+        const cx = w * 0.5, horizon = h * 0.52, R = Math.min(w, h) * 0.26, cyc = horizon - R * 0.35;
+        // sun disc with horizontal cutout bands
+        const g = ctx.createLinearGradient(cx, cyc - R, cx, cyc + R);
+        g.addColorStop(0, accent2 || accent); g.addColorStop(1, accent);
+        ctx.save();
+        ctx.beginPath(); ctx.arc(cx, cyc, R, 0, 7); ctx.clip();
+        ctx.fillStyle = g; ctx.globalAlpha = 0.55; ctx.fillRect(cx - R, cyc - R, R * 2, R * 2);
+        // bands (more frequent toward the bottom)
+        ctx.globalAlpha = 1; ctx.fillStyle = '#000';
+        for (let i = 0; i < 9; i++) { const by = cyc + (i / 9) * R * 0.9; const bh = 2 + i * 0.9; ctx.fillRect(cx - R, by, R * 2, bh); }
+        ctx.restore();
+        // soft glow halo
+        ctx.globalAlpha = 0.12; ctx.fillStyle = accent2 || accent; ctx.shadowColor = accent2 || accent; ctx.shadowBlur = 40;
+        ctx.beginPath(); ctx.arc(cx, cyc, R * 0.9, 0, 7); ctx.fill(); ctx.shadowBlur = 0;
+        // horizon haze line with a slow shimmer
+        const shimmer = 0.18 + Math.sin(t * 0.001) * 0.06;
+        ctx.globalAlpha = shimmer; ctx.strokeStyle = accent2 || accent; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(0, horizon); ctx.lineTo(w, horizon); ctx.stroke();
+        ctx.globalAlpha = 1;
+      },
+    };
+  }
+
   // ── intensity tiers ───────────────────────────────────────────────────────
   const INTENSITY = {
     off:  { label: 'OFF',     cap: 0,    desc: 'No background FX · max performance' },
@@ -210,6 +492,15 @@ const ZBFX = (() => {
     if (on('embers'))    renderers.push(makeEmbers(accent2));
     if (on('starfield')) renderers.push(makeStarfield(accent, accent2));
     if (on('particles')) renderers.push(makeParticles(accent, vfx.particles));
+    // bespoke per-theme signatures (added 2026-06-23)
+    if (on('waveform'))  renderers.push(makeWaveform(accent, accent2));
+    if (on('circuit'))   renderers.push(makeCircuit(accent, accent2));
+    if (on('missilemap'))renderers.push(makeMissileMap(accent, accent2));
+    if (on('contour'))   renderers.push(makeContour(accent, accent2));
+    if (on('datatags'))  renderers.push(makeDataTags(accent, accent2));
+    if (on('globe'))     renderers.push(makeGlobe(accent, accent2));
+    if (on('redact'))    renderers.push(makeRedact(accent, accent2));
+    if (on('synthsun'))  renderers.push(makeSynthSun(accent, accent2));
 
     OVERLAY_KEYS.forEach(k => { if (overlays[k]) overlays[k].style.display = on(k) ? 'block' : 'none'; });
 

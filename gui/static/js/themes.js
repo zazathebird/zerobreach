@@ -41,25 +41,25 @@ const ZBThemes = (() => {
     {
       id: 'kraken-blue', name: 'KRAKEN BLUE', tagline: 'Tactical cyan · the classic console',
       sound: { base: 300, wave: 'triangle' },
-      vfx: { particles: 0.6, grid: 0.5, scanlines: 0.4, vignette: 0.5 },
+      vfx: { waveform: 0.6, scanlines: 0.4, vignette: 0.5 },
       vars: vars({ accent: '#00D4FF', accent2: '#FF2D55', bg0: '#050A0F', bg1: '#070E17', bg2: '#0A1520', bgHover: '#0D1E30', text: '#C8E8F8', textMid: '#6A8A9A', textDim: '#3A5A70' }),
     },
     {
       id: 'gannon-orange', name: 'GANNON ORANGE', tagline: 'MSP protocol · molten ops',
       sound: { base: 280, wave: 'sawtooth' },
-      vfx: { embers: 0.8, particles: 0.5, scanlines: 0.5, vignette: 0.5 },
+      vfx: { circuit: 0.6, scanlines: 0.5, vignette: 0.5 },
       vars: vars({ accent: '#FF6B00', accent2: '#FFD23D', bg0: '#0C0703', bg1: '#140B04', bg2: '#1D1106', bgHover: '#2A1808', text: '#FFE0C2', textMid: '#B08868', textDim: '#6E4F35' }),
     },
     {
       id: 'threat-red', name: 'THREAT RED', tagline: 'DEFCON 1 · maximum threat posture',
       sound: { base: 200, wave: 'sawtooth' },
-      vfx: { embers: 0.8, grid: 0.7, scanlines: 0.5, vignette: 0.5, alarm: 1.1 },
+      vfx: { missilemap: 0.7, scanlines: 0.5, vignette: 0.5, alarm: 1.1 },
       vars: vars({ accent: '#FF0033', accent2: '#FF9A3B', bg0: '#0A0202', bg1: '#130404', bg2: '#1E0707', bgHover: '#2A0A0A', text: '#FFD2D2', textMid: '#A86868', textDim: '#6B3434' }),
     },
     {
       id: 'ghost-green', name: 'GHOST GREEN', tagline: 'Stealth recon · low emission',
       sound: { base: 260, wave: 'sine' },
-      vfx: { particles: 0.4, grid: 0.4, scanlines: 0.2, vignette: 0.5 },
+      vfx: { contour: 0.5, scanlines: 0.2, vignette: 0.5 },
       vars: vars({ accent: '#00FF88', accent2: '#8AB4FF', bg0: '#040906', bg1: '#06110B', bg2: '#091A10', bgHover: '#0D2618', text: '#C8F8DE', textMid: '#6A9A82', textDim: '#3A7055' }),
     },
     {
@@ -71,7 +71,7 @@ const ZBThemes = (() => {
     {
       id: 'wopr', name: 'WOPR', tagline: '80s mainframe · amber phosphor',
       sound: { base: 240, wave: 'square' },
-      vfx: { scanlines: 0.5, vignette: 0.5, crt: 0.6, flicker: 0.8 },
+      vfx: { globe: 0.6, scanlines: 0.5, vignette: 0.5, crt: 0.6, flicker: 0.8 },
       vars: vars({ accent: '#FFB340', accent2: '#FF7A1A', bg0: '#0A0600', bg1: '#140D02', bg2: '#1D1404', bgHover: '#221806', text: '#FFCF8A', textMid: '#D99A45', textDim: '#9C6E2E' }),
     },
     {
@@ -83,13 +83,13 @@ const ZBThemes = (() => {
     {
       id: 'outrun', name: 'OUTRUN', tagline: 'Neon sunset · magenta + cyan',
       sound: { base: 300, wave: 'sawtooth' },
-      vfx: { gridfloor: 0.8, aurora: 0.4, particles: 0.6, scanlines: 0.4, vignette: 0.5 },
+      vfx: { gridfloor: 0.8, synthsun: 0.5, aurora: 0.4, scanlines: 0.4, vignette: 0.5 },
       vars: vars({ accent: '#FF4DCB', accent2: '#46E0FF', bg0: '#0A0218', bg1: '#150828', bg2: '#1F0F3A', bgHover: '#241046', text: '#FFD9F4', textMid: '#C98FD6', textDim: '#8A5AA0' }),
     },
     {
       id: 'overwatch', name: 'OVERWATCH', tagline: 'Cyberpunk tactical HUD · cyan + red',
       sound: { base: 300, wave: 'triangle' },
-      vfx: { grid: 0.6, scanlines: 0.5, noise: 0.8, vignette: 0.5, particles: 0.4, flicker: 0.8 },
+      vfx: { datatags: 0.6, scanlines: 0.5, noise: 0.8, vignette: 0.5, flicker: 0.8 },
       vars: vars({ accent: '#00D4FF', accent2: '#FF2D55', bg0: '#020610', bg1: '#0A1520', bg2: '#0F1E2E', bgHover: '#102438', text: '#C8E8FF', textMid: '#7EA9C9', textDim: '#4A7A9B' }),
     },
     {
@@ -107,7 +107,7 @@ const ZBThemes = (() => {
     {
       id: 'blacksite', name: 'BLACKSITE', tagline: 'Stealth minimal · mono on void',
       sound: { base: 260, wave: 'sine' },
-      vfx: { vignette: 0.5, grid: 0.4, scanlines: 0.2 },
+      vfx: { redact: 0.5, vignette: 0.5, scanlines: 0.2 },
       vars: vars({ accent: '#E8EDF2', accent2: '#8AB4FF', bg0: '#08090B', bg1: '#0F1113', bg2: '#16191C', bgHover: '#1B1F23', text: '#E8EDF2', textMid: '#9AA3AC', textDim: '#626B73' }),
     },
     {

@@ -106,3 +106,83 @@
 .modal-box.danger .modal-title { color: var(--threat-critical); }
 #danger-word { font-family: var(--font-display); font-size: 20px; letter-spacing: 8px; color: var(--threat-critical); text-align: center; margin: 14px 0; text-shadow: 0 0 14px rgba(255,0,51,.5); }
 #danger-input { width: 100%; background: var(--bg-panel); border: 1px solid var(--threat-critical); border-radius: var(--radius); color: var(--text); font-family: var(--font-display); font-size: 16px; letter-spacing: 6px; text-align: center; padding: 10px; outline: none; margin-bottom: 16px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PER-VIEW TREATMENTS (added 2026-06-23)
+   Each app screen gets its own signature decorative motion via #view-fx (a
+   pointer-events:none layer with two spans → up to 4 pseudo-elements). Switched
+   by body[data-view]. Edge/corner-confined + low-opacity so UI stays readable;
+   transform/opacity only so it stays cheap. All tint from the active theme vars.
+   ═══════════════════════════════════════════════════════════════════════════ */
+#view-fx { position: fixed; inset: 0; pointer-events: none; z-index: 2; overflow: hidden; }
+#view-fx .vfx-a, #view-fx .vfx-b { position: absolute; inset: 0; opacity: 1; }
+#view-fx .vfx-a::before, #view-fx .vfx-a::after,
+#view-fx .vfx-b::before, #view-fx .vfx-b::after { content: ""; position: absolute; opacity: 0; transition: opacity .5s ease; }
+/* nothing active unless a known view sets it */
+
+/* ── LAUNCH PAD — "ready": breathing acquisition ring + corner power-brackets ── */
+body[data-view="launchpad"] #view-fx .vfx-a::before { opacity: 1; top: -40vh; left: 50%; width: 80vh; height: 80vh; transform: translateX(-50%); border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-dim) 0%, transparent 62%); animation: vfx-breathe 5.5s ease-in-out infinite; }
+body[data-view="launchpad"] #view-fx .vfx-b::before,
+body[data-view="launchpad"] #view-fx .vfx-b::after { opacity: .5; width: 52px; height: 52px; border: 2px solid var(--accent); }
+body[data-view="launchpad"] #view-fx .vfx-b::before { top: 70px; left: 18px; border-right: none; border-bottom: none; animation: vfx-bracket 4s ease-in-out infinite; }
+body[data-view="launchpad"] #view-fx .vfx-b::after  { top: 70px; right: 18px; border-left: none; border-bottom: none; animation: vfx-bracket 4s ease-in-out infinite .4s; }
+
+/* ── SCAN MONITOR — "active": a bright band sweeps top→bottom continuously ── */
+body[data-view="scanmonitor"] #view-fx .vfx-a::before { opacity: .9; left: 0; right: 0; height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent), transparent); box-shadow: 0 0 16px var(--accent-glow); animation: vfx-sweep-y 3.2s linear infinite; }
+body[data-view="scanmonitor"] #view-fx .vfx-a::after { opacity: .5; left: 0; right: 0; height: 120px;
+  background: linear-gradient(180deg, var(--accent-dim), transparent); animation: vfx-sweep-y 3.2s linear infinite; }
+body[data-view="scanmonitor"] #view-fx .vfx-b::before { opacity: .35; top: 0; bottom: 0; left: 0; width: 3px;
+  background: repeating-linear-gradient(180deg, var(--accent) 0 6px, transparent 6px 16px); animation: vfx-tick 1.1s steps(8) infinite; }
+
+/* ── FINDINGS — "threat ladder": pulsing red ticks descend the left edge ── */
+body[data-view="findings"] #view-fx .vfx-a::before { opacity: .5; top: 0; bottom: 0; left: 0; width: 6px;
+  background: repeating-linear-gradient(180deg, var(--threat-critical, #ff0033) 0 4px, transparent 4px 22px); animation: vfx-ladder 2.4s linear infinite; }
+body[data-view="findings"] #view-fx .vfx-a::after { opacity: .12; inset: 0; left: auto; width: 160px;
+  background: linear-gradient(270deg, rgba(255,0,51,.18), transparent); animation: vfx-pulse 3s ease-in-out infinite; }
+
+/* ── REMEDIATION — "caution": moving hazard stripes top & bottom ── */
+body[data-view="remediation"] #view-fx .vfx-a::before { opacity: .16; left: 0; right: 0; top: 0; height: 14px;
+  background: repeating-linear-gradient(45deg, var(--threat-high, #ffae42) 0 14px, transparent 14px 28px); animation: vfx-stripe 1.4s linear infinite; }
+body[data-view="remediation"] #view-fx .vfx-a::after { opacity: .16; left: 0; right: 0; bottom: 0; height: 14px;
+  background: repeating-linear-gradient(-45deg, var(--threat-high, #ffae42) 0 14px, transparent 14px 28px); animation: vfx-stripe-rev 1.4s linear infinite; }
+
+/* ── REPORT — "readout": faint baseline grid confined to a bottom band (so it
+      never overlays the report's numbers/charts) + a caret tracking the bottom ── */
+body[data-view="report"] #view-fx .vfx-a::before { opacity: .5; left: 0; right: 0; bottom: 0; top: auto; height: 190px;
+  background-image: linear-gradient(var(--accent-dim) 1px, transparent 1px); background-size: 100% 38px;
+  -webkit-mask-image: linear-gradient(180deg, transparent, #000 85%); mask-image: linear-gradient(180deg, transparent, #000 85%); }
+body[data-view="report"] #view-fx .vfx-b::before { opacity: .8; bottom: 26px; left: 0; width: 14px; height: 14px;
+  border: 1px solid var(--accent); background: var(--accent-dim); box-shadow: 0 0 12px var(--accent-glow); animation: vfx-caret 6s linear infinite; }
+
+/* ── IOC MANAGER — "acquisition": breathing corner targeting brackets + crosshair ── */
+body[data-view="ioc"] #view-fx .vfx-b::before,
+body[data-view="ioc"] #view-fx .vfx-b::after,
+body[data-view="ioc"] #view-fx .vfx-a::before,
+body[data-view="ioc"] #view-fx .vfx-a::after { opacity: .45; width: 46px; height: 46px; border: 2px solid var(--accent); animation: vfx-breathe-c 3.4s ease-in-out infinite; }
+body[data-view="ioc"] #view-fx .vfx-a::before { top: 64px; left: 16px; border-right: none; border-bottom: none; }
+body[data-view="ioc"] #view-fx .vfx-a::after  { top: 64px; right: 16px; border-left: none; border-bottom: none; }
+body[data-view="ioc"] #view-fx .vfx-b::before { bottom: 16px; left: 16px; border-right: none; border-top: none; }
+body[data-view="ioc"] #view-fx .vfx-b::after  { bottom: 16px; right: 16px; border-left: none; border-top: none; }
+
+/* ── SETTINGS — "calm": a slow, gentle EDGE vignette breath; deliberately minimal.
+      Spread kept small so the glow hugs the viewport edges and the centre (where the
+      settings controls live) stays clear and readable. ── */
+body[data-view="settings"] #view-fx .vfx-a::before { opacity: 1; inset: 0;
+  box-shadow: inset 0 0 80px var(--accent-dim); animation: vfx-pulse 7s ease-in-out infinite; }
+
+@keyframes vfx-breathe { 0%,100% { transform: translateX(-50%) scale(1); opacity: .7; } 50% { transform: translateX(-50%) scale(1.06); opacity: 1; } }
+@keyframes vfx-breathe-c { 0%,100% { transform: scale(1); opacity: .35; } 50% { transform: scale(1.12); opacity: .7; } }
+@keyframes vfx-bracket { 0%,100% { transform: translate(0,0); opacity: .35; } 50% { transform: translate(-4px,-4px); opacity: .7; } }
+@keyframes vfx-sweep-y { from { transform: translateY(-130px); } to { transform: translateY(100vh); } }
+@keyframes vfx-tick    { from { background-position-y: 0; } to { background-position-y: 22px; } }
+@keyframes vfx-ladder  { from { transform: translateY(0); } to { transform: translateY(22px); } }
+@keyframes vfx-pulse   { 0%,100% { opacity: .08; } 50% { opacity: .22; } }
+@keyframes vfx-stripe     { from { background-position-x: 0; } to { background-position-x: 40px; } }
+@keyframes vfx-stripe-rev { from { background-position-x: 0; } to { background-position-x: -40px; } }
+@keyframes vfx-caret   { from { left: -2%; } to { left: 100%; } }
+
+/* Honor reduced-motion + the OFF intensity tier (body gets fx-off when chosen). */
+@media (prefers-reduced-motion: reduce) { #view-fx * { animation: none !important; } }
+body.fx-off #view-fx { display: none; }
