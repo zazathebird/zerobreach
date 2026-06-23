@@ -268,8 +268,52 @@ function Resolve-MitreMain {
     return @{ id = $id; name = $t.name; tactic = $tactic; url = $t.url }
 }
 
+# ── SAFETY: protected-resource guard ────────────────────────────────────────────
+# Priority #1 — the tool must NEVER remediate (or even auto-select) anything that would
+# damage the system. Returns a human reason if the fix would touch a protected resource,
+# else ''. Deliberately conservative: a real threat in one of these locations is *audited*
+# but never auto-acted-on (the operator handles it manually). Mirrored verbatim in the
+# REMEDIATE_SCRIPT runspace below — keep both copies in sync.
+function Test-ProtectedTarget {
+    param([string]$Action, [string]$Param, [string]$Target, [string]$Desc)
+    $p = "$Param"; $t = "$Target"; $d = "$Desc"
+    $hay = "$p`n$t`n$d"
+
+    # Certificate trust store — deleting root/CA certs breaks TLS / Windows Update / code-signing.
+    if ($p -match '(?i)Cert:\\' -or $hay -match '(?i)(root\s+ca|trusted\s+root|certificate\s+(store|authority))') {
+        return 'certificate trust store (deleting breaks HTTPS / code-signing)'
+    }
+    # Windows / system directories and shell/system files.
+    if ($p -match '(?i)^[a-z]:\\windows\\' -or $p -match '(?i)\\(System32|SysWOW64|WinSxS)\\') {
+        return 'Windows system directory'
+    }
+    if ($p -match '(?i)\\(desktop\.ini|iconcache\.db|thumbs\.db|ntuser\.dat|usrclass\.dat)' -or $p -match '(?i)\.library-ms$') {
+        return 'Windows shell/system file'
+    }
+    # User shell / git / ssh / cloud config (dotfiles in the profile, or known config dirs).
+    if ($p -match '(?i)\\Users\\[^\\]+\\\.[^\\]+$' -or
+        $p -match '(?i)\\\.(ssh|gnupg|aws|azure|kube|docker|config)\\' -or
+        $p -match '(?i)\\\.(bashrc|bash_profile|bash_history|profile|zshrc|gitconfig|npmrc|claude\.json)($|[^a-z])' -or
+        $p -match '(?i)\\\.claude\\') {
+        return 'user shell/git/ssh/cloud config (dotfile)'
+    }
+    # SafeBoot registry — deleting it breaks Safe Mode boot.
+    if ($p -match '(?i)\\SafeBoot') { return 'SafeBoot registry (deleting breaks Safe Mode)' }
+    # Core OS registry hives.
+    if ($Action -match '(?i)DeleteReg' -and $p -match '(?i)\\(SYSTEM\\CurrentControlSet\\(Services|Control)|Microsoft\\Windows NT\\CurrentVersion\\(Winlogon|Image File Execution Options|SystemRestore)|Cryptography)') {
+        return 'core OS registry'
+    }
+    # Critical processes / the IR tool itself (KillProcess). FixParam is a PID, so match the name in the description.
+    if ($Action -eq 'KillProcess' -and $d -match '(?i)(\b(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)\b|claude|zerobreach)') {
+        return 'critical system process or the IR tool itself'
+    }
+    return ''
+}
+
 # Load the engine's rich report and normalize its findings to the frontend shape,
 # enriching each with a MITRE tag. Carries FixAction/FixParam so the GUI can remediate.
+# Findings touching a protected resource are tagged so the UI won't auto-select them and
+# the remediation runspace will hard-block them.
 function Get-EngineReportFindings {
     param([string]$ReportPath)
     $out = [System.Collections.ArrayList]::new()
@@ -283,18 +327,21 @@ function Get-EngineReportFindings {
         $phNum = 0; $pm = [regex]::Match("$($f.Phase)", '\d+'); if ($pm.Success) { $phNum = [int]$pm.Value }
         $line = if ($f.Target) { "$($f.Description) -> $($f.Target)" } else { "$($f.Description)" }
         $mit  = Resolve-MitreMain $line $tt $phNum
+        $prot = Test-ProtectedTarget "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
         [void]$out.Add([ordered]@{
-            id          = "$($f.ID)"
-            line        = $line
-            severity    = $sev
-            threat_type = $tt
-            phase       = $phNum
-            group       = "$($f.Group)"
-            fix_action  = "$($f.FixAction)"
-            fix_param   = "$($f.FixParam)"
-            mitre       = $mit
-            mitre_id    = if ($mit) { $mit.id } else { $null }
-            timestamp   = "$($f.Timestamp)"
+            id               = "$($f.ID)"
+            line             = $line
+            severity         = $sev
+            threat_type      = $tt
+            phase            = $phNum
+            group            = "$($f.Group)"
+            fix_action       = "$($f.FixAction)"
+            fix_param        = "$($f.FixParam)"
+            protected        = [bool]$prot
+            protected_reason = $prot
+            mitre            = $mit
+            mitre_id         = if ($mit) { $mit.id } else { $null }
+            timestamp        = "$($f.Timestamp)"
         })
         $i++
     }
@@ -772,8 +819,24 @@ $script:REMEDIATE_SCRIPT = @'
 function REnqueue { param([hashtable]$Ev) [void]$RemState.EventLog.Add(($Ev | ConvertTo-Json -Compress -Depth 4)) }
 function RLog { param([string]$Text, [string]$Sev = 'INFO') REnqueue @{ type='log_line'; text=$Text; severity=$Sev; phase=0; elapsed=0 } }
 
+# SAFETY: hard backstop — mirror of Test-ProtectedTarget (main thread). The tool must NEVER
+# damage the system, so even a manually-selected finding is refused if it touches a protected
+# resource. Keep in sync with the main-thread copy in Get-EngineReportFindings's vicinity.
+function Test-RProtected {
+    param([string]$Action, [string]$Param, [string]$Target, [string]$Desc)
+    $p = "$Param"; $t = "$Target"; $d = "$Desc"; $hay = "$p`n$t`n$d"
+    if ($p -match '(?i)Cert:\\' -or $hay -match '(?i)(root\s+ca|trusted\s+root|certificate\s+(store|authority))') { return 'certificate trust store' }
+    if ($p -match '(?i)^[a-z]:\\windows\\' -or $p -match '(?i)\\(System32|SysWOW64|WinSxS)\\') { return 'Windows system directory' }
+    if ($p -match '(?i)\\(desktop\.ini|iconcache\.db|thumbs\.db|ntuser\.dat|usrclass\.dat)' -or $p -match '(?i)\.library-ms$') { return 'Windows shell/system file' }
+    if ($p -match '(?i)\\Users\\[^\\]+\\\.[^\\]+$' -or $p -match '(?i)\\\.(ssh|gnupg|aws|azure|kube|docker|config)\\' -or $p -match '(?i)\\\.(bashrc|bash_profile|bash_history|profile|zshrc|gitconfig|npmrc|claude\.json)($|[^a-z])' -or $p -match '(?i)\\\.claude\\') { return 'user shell/git/ssh/cloud config (dotfile)' }
+    if ($p -match '(?i)\\SafeBoot') { return 'SafeBoot registry (breaks Safe Mode)' }
+    if ($Action -match '(?i)DeleteReg' -and $p -match '(?i)\\(SYSTEM\\CurrentControlSet\\(Services|Control)|Microsoft\\Windows NT\\CurrentVersion\\(Winlogon|Image File Execution Options|SystemRestore)|Cryptography)') { return 'core OS registry' }
+    if ($Action -eq 'KillProcess' -and $d -match '(?i)(\b(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)\b|claude|zerobreach)') { return 'critical system process or the IR tool itself' }
+    return ''
+}
+
 $RemState.Remediating = $true
-$applied = 0; $failed = 0; $skipped = 0
+$applied = 0; $failed = 0; $skipped = 0; $blocked = 0
 try {
     if (-not (Test-Path -LiteralPath $ReportPath)) { RLog "[REMEDIATE] Report not found: $ReportPath" 'CRITICAL'; return }
     $report = (Get-Content -LiteralPath $ReportPath -Raw) | ConvertFrom-Json
@@ -783,6 +846,15 @@ try {
 
     foreach ($f in $sel) {
         $desc = "$($f.Description)"; if ($desc.Length -gt 70) { $desc = $desc.Substring(0,67) + '...' }
+
+        # HARD BLOCK: never touch a protected resource, no matter what was selected.
+        $why = Test-RProtected "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
+        if ($why) {
+            RLog "[BLOCKED] protected ($why) — refusing $($f.FixAction): $desc" 'POSSIBLE'
+            $blocked++
+            continue
+        }
+
         RLog "[FIX] $desc" 'HUNT'
         $ok = $false
         try {
@@ -873,8 +945,8 @@ try {
     RLog "[REMEDIATE] FATAL: $($_.Exception.Message)" 'CRITICAL'
 } finally {
     $RemState.Remediating = $false
-    REnqueue @{ type='remediation_complete'; applied=$applied; failed=$failed; skipped=$skipped }
-    RLog "[REMEDIATE] Complete — applied:$applied  failed:$failed  skipped:$skipped" 'OK'
+    REnqueue @{ type='remediation_complete'; applied=$applied; failed=$failed; skipped=$skipped; blocked=$blocked }
+    RLog "[REMEDIATE] Complete — applied:$applied  failed:$failed  skipped:$skipped  blocked(protected):$blocked" 'OK'
 }
 '@
 
