@@ -255,6 +255,40 @@ Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\INetCache\Content.Outlook\ZBTES
 Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
 ```
 
+## Remediation safety guard + trusted-vendor allowlist (2026-06-23)
+
+A live DEEP scan produced 1305 findings, ~772 auto-selected destructive, **overwhelmingly false
+positives** (the detection engine is not yet FP-tuned — `UPGRADE_PLAN.md` WS3). With the default
+selection, EXECUTE would have deleted 100 root CAs, the user's `.bashrc`/`.gitconfig`/`.claude.json`,
+IconCache, and **killed the running `claude` process**. So remediation is gated by two layers, both
+in `ZeroBreach-Server.ps1` (engine untouched).
+
+> **User rule #1 (hard):** the tool must NEVER select or apply anything that damages the system.
+> **User rule #2:** Datto / CentraStage / Kaseya are legitimate RMM partner tooling — not malware —
+> but still flag them if something is genuinely off (use judgment).
+
+- **`Test-ProtectedTarget` (HARD block).** Defense-in-depth across all three layers: server enrichment
+  tags findings `protected`/`protected_reason`; the frontend disables their checkbox + excludes them
+  from auto-select/Select-All/the POSTed ids; and the `$script:REMEDIATE_SCRIPT` runspace **refuses**
+  to apply them no matter what (mirror `Test-RProtected`), reporting a `blocked` count. Covers: cert
+  trust store (root CAs), `C:\Windows`/System32/SysWOW64/WinSxS, shell-system files (desktop.ini,
+  IconCache.db, *.library-ms, ntuser.dat), user dotfiles (.bashrc/.gitconfig/.ssh/.claude.json/…),
+  SafeBoot + core OS registry, and KillProcess of critical processes or the IR tool itself. A real
+  threat in these spots is **audited but never auto-acted-on** — operator handles it manually.
+- **`Test-VendorTrusted` (SOFT signal).** Tags `vendor_trusted`/`vendor_reason` for
+  centrastage/datto/kaseya/aemagent/cagservice/agentmon/kworking. **Judgment built in:** a vendor name
+  in a suspicious location (Temp/Downloads/INetCache/Outlook cache) OR with an independent malicious
+  signal (known-malware/hash match/hollowing/lsass/ransom/keylog/…) is **NOT** trusted and stays
+  flagged. Trusted findings are not auto-selected and skipped by Select-All, shown with a green
+  `✔ TRUSTED` badge, but **remain individually selectable** (operator override) — the server does NOT
+  hard-block them. Verified: 14 vendor findings trusted on the live report; `agentmon` in TEMP and a
+  Datto file with a hash-match correctly stayed flagged.
+
+> **Rule:** keep `Test-ProtectedTarget`/`Test-VendorTrusted` (main thread) in sync with their mirrors
+> inside `$script:REMEDIATE_SCRIPT`. Protected = hard block (never, even on manual override);
+> vendor-trusted = soft (no auto-select, but operator can act). Add new partner vendors to the
+> `Test-VendorTrusted` marker regex.
+
 ## GUI Feature Layer (added 2026-06-09, harvested from the deleted "gui from other project" folder)
 
 The PirateLife React GUI was mined for its best ideas, ported to **vanilla JS** (no React), then
