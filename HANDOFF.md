@@ -37,17 +37,20 @@ Validation: server parses clean PS 5.1 + 7 (all here-strings); `node --check` cl
 
 ## REMAINING TODO
 
-### Detection false-positive tuning (the root cause) — `ZeroBreach-V23.ps1`, `UPGRADE_PLAN.md` WS3
-The safety guard makes the FP flood non-catastrophic, but the noise is the real usability problem.
-The round-100 capped groups mean "matched everything in a location". Concrete over-matches seen on the
-live report (engine work — higher risk, coordinate before editing):
-- **Info-Stealer** matched `.node`/`.ses`/`.tmp` as "credential-named file".
-- **COM Scriptlet Abuse** matched `.json`/`.db` (IconCache.db, WPA prefs) as "Squiblydoo".
-- **Cloaked/Hidden Files** matched every hidden+system file (desktop.ini, IconCache, *.library-ms).
-- **Network Share Worms** matched user dotfiles (.bashrc/.gitconfig/.claude.json) as "unsigned exe in open share".
-- **Rogue Certificates** flagged every root CA as new/rogue (needs an allowlist of well-known roots + age/baseline logic).
-Approach: tighten each phase's match criteria and/or downgrade to INFO; baseline-diff certs against a
-known-good root set; don't treat dotfiles/JSON/DB as executables.
+### Detection false-positive tuning — round 1 DONE 2026-06-23 (engine)
+The three highest-volume capped-at-100 over-matchers are now tuned (see CLAUDE.md → "Detection
+false-positive tuning — engine, round 1"). Allowlists added to `data/detection_signatures.json`
+`fp_allowlists` block (AMSI-safe), loaded via `Join-AllowRegex`. Simulated vs.
+`KrakenBaseline_20260623_135347.json`:
+- **Rogue Certificates** 101 CRITICAL → 98 INFO + ~2 POSSIBLE (well-known-root allowlist).
+- **Cloaked/Hidden Files** 101 → ~3 (benign-name allowlist + payload-extension gate; skip data files).
+- **Info-Stealer files** benign browser/app dictionaries suppressed; loose creds files → POSSIBLE.
+- Already-fixed (no action): Phase 94 COM Scriptlet (`.sct/.wsc`-only), Phase 66 Share Worm (ext-filtered).
+Engine parse-clean PS 5.1 + 7, BOM intact. **Not yet validated on a live admin run** (estimates simulated).
+
+**Still open (round 2):** the remaining capped-100 groups not yet examined — *Execution Artifacts,
+Event Log — New Services, SafeBoot Persistence, MoTW / Web-Origin Abuse, Named Pipe Backdoors* (97).
+Same approach: allowlist/tighten, downgrade ambiguous to POSSIBLE, never auto-select-destructive.
 
 ### Live end-to-end validation (still pending from before)
 A real admin `Launch-GUI.bat` run exercising: scan → MITRE badges → HTML/CSV download → IOC save→scan

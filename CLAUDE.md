@@ -289,6 +289,43 @@ in `ZeroBreach-Server.ps1` (engine untouched).
 > vendor-trusted = soft (no auto-select, but operator can act). Add new partner vendors to the
 > `Test-VendorTrusted` marker regex.
 
+## Detection false-positive tuning — engine, round 1 (2026-06-23)
+
+The safety guard made the FP flood non-catastrophic; this pass attacks the **noise at the source** —
+the three highest-volume, capped-at-100 over-matchers from the live report (`UPGRADE_PLAN.md` WS3).
+**FP allowlists are NOT signatures** — they go in `data/detection_signatures.json` under the
+`fp_allowlists` block (AMSI-safe + the data rule) and are loaded next to the other `Get-Sig` calls
+into joined case-insensitive regexes (`$TRUSTED_ROOT_CA_RE` / `$CLOAKED_BENIGN_RE` /
+`$INFOSTEALER_BENIGN_RE`, built by `Join-AllowRegex` — empty key → `(?!)` so an absent key suppresses
+nothing). Engine `.ps1` carries **no** new literal lists. Severity downgrades exploit the existing
+auto-select rule: only CRITICAL/HIGH are auto-selected for destructive remediation, so POSSIBLE
+findings are **shown but never auto-acted-on**. Measured against `KrakenBaseline_20260623_135347.json`:
+
+- **Phase 39 ROGUE ROOT CERTS** (`~V23:2098`): flagged all ~100 legit roots CRITICAL ("delete the
+  whole trust store"). Now: subject/issuer matched against `trusted_root_ca_issuers` (CA + driver-vendor
+  org tokens) → **known = INFO**, unrecognized = POSSIBLE (review, not auto-act). **101 CRITICAL → 98
+  INFO + ~2 POSSIBLE** (e.g. Blizzard Battle.net local cert — a genuine non-program user root, correct
+  to surface). The trust store is also a `Test-ProtectedTarget` hard-block, so this is purely noise.
+- **Phase 18 CLOAKED (HIDDEN+SYSTEM)** (`~V23:1653`): Hidden+System is the *normal* attr set for
+  desktop.ini / IconCache.db / *.library-ms / thumbs.db / ntuser.* and for extension-less browser
+  profile files (History, Login Data…). Now drops `cloaked_benign_names`, **and only flags payload
+  extensions** (exe/dll/sys/scr/script/archive…) — HIGH if executable/script, POSSIBLE if archive;
+  benign *data* files (.json/.db/.profile/cache, no-ext browser files) are skipped entirely.
+  **101 → ~3.**
+- **Phase 68 INFO-STEALER FILES** (`~V23:2796`): a file merely *named* like a cred store. Now excludes
+  `infostealer_benign_paths` (ZxcvbnData password dictionaries, *.LICENSE.txt, Edge Wallet bundles,
+  Cef/EBWebView caches) and **downgrades loose .txt/.log/.db to POSSIBLE** — only a creds *archive*
+  (.zip) staged in a user path stays HIGH. (8/9 live benign hits suppressed; the 1 survivor is POSSIBLE.)
+
+Already-fixed (verified, no action needed): **Phase 94 COM Scriptlet** is `.sct/.wsc`-only; **Phase 66
+Share Worm** already filters `exe|bat|cmd|vbs|js|ps1` (the report's `.bashrc`/`.json` hits are from a
+pre-`cbe96c4` build). Engine parse-clean PS 5.1 + 7 (0 errors), BOM intact.
+
+> **Rule:** new FP allowlists go in `data/detection_signatures.json` `fp_allowlists` block (never inline
+> literals in the `.ps1`); load via `Join-AllowRegex`. Prefer **downgrade to POSSIBLE** over deleting a
+> detection — POSSIBLE is shown but never auto-selected for destructive remediation. **Not yet validated
+> on a live admin run** (estimates are simulated against the saved report).
+
 ## GUI Feature Layer (added 2026-06-09, harvested from the deleted "gui from other project" folder)
 
 The PirateLife React GUI was mined for its best ideas, ported to **vanilla JS** (no React), then

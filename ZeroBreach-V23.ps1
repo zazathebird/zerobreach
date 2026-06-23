@@ -884,6 +884,13 @@ $EMAIL_LURE_PATTERNS    = Get-Sig 'email_lure_filename_patterns'
 $PROACTIVE_PERSIST_REGS = Get-Sig 'proactive_persistence_regs'
 $PROACTIVE_OFFICE_KEYS  = Get-Sig 'proactive_office_keys'
 $PROACTIVE_LURE_EXTS    = @((Get-Sig 'proactive_lure_extensions') | ForEach-Object { "$_".ToLower() })
+# FP-suppression allowlists (benign-but-noisy patterns, not malware signatures). Joined into a
+# single case-insensitive alternation regex each; empty -> "(?!)" (matches nothing) so an absent
+# key never suppresses anything. See "fp_allowlists" in data/detection_signatures.json.
+function Join-AllowRegex([string]$Name) { $a = @(Get-Sig $Name); if ($a.Count) { ($a -join '|') } else { '(?!)' } }
+$TRUSTED_ROOT_CA_RE     = Join-AllowRegex 'trusted_root_ca_issuers'
+$CLOAKED_BENIGN_RE      = Join-AllowRegex 'cloaked_benign_names'
+$INFOSTEALER_BENIGN_RE  = Join-AllowRegex 'infostealer_benign_paths'
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
@@ -1650,12 +1657,26 @@ foreach ($ht in @($env:PUBLIC,$env:LOCALAPPDATA,$env:TEMP,"$env:USERPROFILE\AppD
     Out-Typewriter "SWEEPING HIDDEN/SYSTEM ATTRS: $ht" "HUNT"
     if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 900 }
     if (Test-Path $ht) {
+        # Hidden+System is the NORMAL attribute set for many OS/shell housekeeping files
+        # (desktop.ini, IconCache.db, *.library-ms, thumbs.db, ntuser.*, *.lnk). Drop those via the
+        # benign-name allowlist so the phase stops flagging every shell file.
+        # Real cloaked malware is an executable / script / archive payload. A Hidden+System *data*
+        # file (.json/.db/.log/.dat/.profile/cache, or extension-less browser-profile files like
+        # "History"/"Login Data") is normal OS/app housekeeping, so only payload-type extensions are
+        # flagged here — everything else is skipped (the benign-name allowlist drops shell files first).
         $cloaked = Get-ScanFiles -Path $ht -TimeScoped |
-            Where-Object { $_.Attributes -match "Hidden" -and $_.Attributes -match "System" }
+            Where-Object {
+                $_.Attributes -match "Hidden" -and $_.Attributes -match "System" -and
+                $_.Name -notmatch $CLOAKED_BENIGN_RE -and
+                $_.Extension -match "\.(exe|dll|sys|scr|com|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|pif|cpl|ocx|jar|zip|rar|7z|cab|iso|img)$"
+            }
         foreach ($c in $cloaked) {
+            # A cloaked *executable/script* is a real rootkit/dropper signal (HIGH); a cloaked archive
+            # or extension-less file is suspicious-but-weaker -> POSSIBLE (shown, not auto-selected).
+            $cloakSev = if ($c.Extension -match "\.(exe|dll|sys|scr|com|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|pif|cpl|ocx|jar)$") { $SEV_HIGH } else { $SEV_POSSIBLE }
             Out-ThreatBanner "CLOAKED FILE (HIDDEN+SYSTEM)" $c.FullName
             Add-Finding -ID "CLOAKED_$($c.Name -replace '[^a-z0-9]','')" -Phase "PHASE 18" -ThreatType "Rootkit/Trojan" `
-                -Severity $SEV_HIGH -Description "Hidden+System attributed file: $($c.FullName)" `
+                -Severity $cloakSev -Description "Hidden+System attributed file: $($c.FullName)" `
                 -Target $c.FullName -FixAction "DeleteFile" -FixParam $c.FullName -Group "Cloaked/Hidden Files"
         }
         if ($cloaked.Count -eq 0) { Out-Typewriter "  -> [OK] NO CLOAKED FILES." "GOOD" }
@@ -2092,19 +2113,31 @@ Show-SectionBanner "CERTIFICATE & CRYPTO TRUST CHAIN"
 
 Show-PhaseHeader "PHASE 39" "ROGUE ROOT CERTIFICATE AUDIT (LM + USER)"
 Invoke-QuantumBar "AUDITING CERTIFICATE STORES" 10 130
+# Every Windows box ships ~100 legitimate trusted roots (Microsoft Trusted Root Program) + vendor
+# driver roots. Flagging them all as "rogue/CRITICAL" buries the one that actually matters and would
+# (absent the safety guard) offer to nuke the entire trust store. Allowlist well-known CA/vendor
+# issuers -> INFO; only an *unrecognized* root is surfaced for review (POSSIBLE, not CRITICAL).
 $lmCerts = Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.NotBefore }
 foreach ($cert in $lmCerts) {
-    Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROGUE LM CERT] "
+    $certKnown = ("$($cert.Subject) $($cert.Issuer)" -match $TRUSTED_ROOT_CA_RE)
+    $certSev   = if ($certKnown) { $SEV_INFO } else { $SEV_POSSIBLE }
+    $certDesc  = if ($certKnown) { "Trusted root CA in LocalMachine store: $($cert.Subject)" } else { "UNRECOGNIZED root CA in LocalMachine store (verify before removing): $($cert.Subject)" }
+    Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROOT CERT] "
     Add-Finding -ID "CERT_LM_$($cert.Thumbprint.Substring(0,8))" -Phase "PHASE 39" -ThreatType "Rogue Certificate" `
-        -Severity $SEV_CRITICAL -Description "New root CA in LocalMachine store: $($cert.Subject)" `
+        -Severity $certSev -Description $certDesc `
         -Target "Cert:\LocalMachine\Root\$($cert.Thumbprint)" -FixAction "RunCmd" `
         -FixParam "Remove-Item 'Cert:\LocalMachine\Root\$($cert.Thumbprint)' -Force" -Group "Rogue Certificates"
 }
 $userCerts = Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.NotBefore }
 foreach ($cert in $userCerts) {
-    Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROGUE USER CERT] "
+    $certKnown = ("$($cert.Subject) $($cert.Issuer)" -match $TRUSTED_ROOT_CA_RE)
+    # A user-store root added outside the OS program is the classic adversary trick, so an
+    # unrecognized one here is slightly more notable than in LM, but still POSSIBLE (not auto-acted).
+    $certSev   = if ($certKnown) { $SEV_INFO } else { $SEV_POSSIBLE }
+    $certDesc  = if ($certKnown) { "Trusted root CA in CurrentUser store: $($cert.Subject)" } else { "UNRECOGNIZED root CA in CurrentUser store (verify before removing): $($cert.Subject)" }
+    Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROOT CERT] "
     Add-Finding -ID "CERT_USER_$($cert.Thumbprint.Substring(0,8))" -Phase "PHASE 39" -ThreatType "Rogue Certificate" `
-        -Severity $SEV_HIGH -Description "New root CA in CurrentUser store: $($cert.Subject)" `
+        -Severity $certSev -Description $certDesc `
         -Target "Cert:\CurrentUser\Root\$($cert.Thumbprint)" -FixAction "RunCmd" `
         -FixParam "Remove-Item 'Cert:\CurrentUser\Root\$($cert.Thumbprint)' -Force" -Group "Rogue Certificates"
 }
@@ -2796,13 +2829,18 @@ foreach ($sp in $stealerProcs) {
 $stealerFiles = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped |
     Where-Object { $_.Name -match "passwords|credentials|wallet|login|autofill|cookie" -and $_.Extension -match "\.(zip|txt|log|db)$" }
 foreach ($sf in $stealerFiles) {
-    if ($sf.FullName -notmatch "Chrome\\User Data|Firefox\\Profiles") {  # exclude legitimate browser storage
-        Out-Typewriter "  -> SUSPECT CREDENTIAL FILE: $($sf.FullName)" "CRIT"
-        Add-Finding -ID "STEALFILE_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
-            -Severity $SEV_HIGH -Description "Suspicious credential-named file in user path: $($sf.FullName)" `
-            -Target $sf.FullName -FixAction "DeleteFile" -FixParam $sf.FullName -Group "Info-Stealer"
-        $global:SpywareHits++
-    }
+    # Exclude legitimate browser storage + known-benign dictionaries/caches (ZxcvbnData password
+    # lists, *.LICENSE.txt, Edge Wallet bundles, Cef/EBWebView caches) — these are NOT creds dumps.
+    if ($sf.FullName -match "Chrome\\User Data|Firefox\\Profiles" -or $sf.FullName -match $INFOSTEALER_BENIGN_RE) { continue }
+    # A loose .txt/.log/.db merely *named* like a credential store is weak evidence and FP-prone;
+    # treat it as POSSIBLE (shown, not auto-selected for destructive remediation). A creds *archive*
+    # (.zip) staged in a user path is a stronger stealer signal -> keep HIGH.
+    $stealSev = if ($sf.Extension -match "\.zip$") { $SEV_HIGH } else { $SEV_POSSIBLE }
+    Out-Typewriter "  -> SUSPECT CREDENTIAL FILE: $($sf.FullName)" "CRIT"
+    Add-Finding -ID "STEALFILE_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
+        -Severity $stealSev -Description "Credential-named file in user path: $($sf.FullName)" `
+        -Target $sf.FullName -FixAction "DeleteFile" -FixParam $sf.FullName -Group "Info-Stealer"
+    $global:SpywareHits++
 }
 if ($stealerProcs.Count -eq 0 -and $stealerFiles.Count -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
 
