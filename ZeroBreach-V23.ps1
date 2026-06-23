@@ -69,17 +69,22 @@ $ErrorActionPreference = 'SilentlyContinue'
 # Local try/catch still takes precedence; this only catches what nothing handled.
 # It is fully defensive — it must never throw out of itself.
 $global:RECOVERED_ERRORS = [System.Collections.Generic.List[string]]::new()
-trap {
+# Record a trapped (recovered) terminating error. Shared by the script-scope trap
+# below AND by the per-phase-group inner traps (Universal/Advanced/Integrity), so a
+# single phase's terminating fault resumes at the NEXT phase instead of skipping the
+# rest of its PhasePlan block. (Defined before the trap so the trap body can call it.)
+function Write-RecoveredError {
+    param($ErrorRecord)
     try {
-        $em   = $_.Exception.Message
-        $pos  = (("" + $_.InvocationInfo.PositionMessage) -replace "`r?`n"," ").Trim()
+        $em   = $ErrorRecord.Exception.Message
+        $pos  = (("" + $ErrorRecord.InvocationInfo.PositionMessage) -replace "`r?`n"," ").Trim()
         $line = "RECOVERED ERROR: $em | $pos"
         $global:RECOVERED_ERRORS.Add($line)
         if (Get-Command Write-Log -ErrorAction SilentlyContinue) { Write-Log $line }
         if (-not $global:STEALTH_MODE) { Write-Host "  [!] $line" -ForegroundColor DarkYellow }
     } catch {}
-    continue
 }
+trap { Write-RecoveredError $_; continue }
 
 # ── Elevation — pass all params ───────────────────────────────────────────────
 $me = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
@@ -169,6 +174,18 @@ $global:SKIP_SLOW_OUTPUT = $false   # [K] toggles this — kills typewriter/quan
 $redir = $false; try { $redir = [Console]::IsOutputRedirected } catch {}
 $global:NONINTERACTIVE = ($Auto -or $redir)
 if ($global:NONINTERACTIVE) { $global:SKIP_SLOW_OUTPUT = $true }
+
+# ── Output flood guard ───────────────────────────────────────────────────────
+# A single over-broad detection can match tens of thousands of benign files
+# (e.g. Phase 18 hidden+system, Phase 94 .xsl). Without a cap, each one emits a
+# 12-line threat banner + a finding event — drowning the console, ballooning the
+# transcript to 25 MB+, and flooding the web UI's SSE stream until the browser
+# main thread saturates and the page freezes. Cap per-category banners and
+# per-group findings; roll the remainder into a single summary line.
+$global:BANNER_COUNTS       = @{}
+$global:BANNER_CATEGORY_CAP = 25     # full threat banners per category, then summarize
+$global:GROUP_COUNTS        = @{}
+$global:FINDING_GROUP_CAP   = 100    # individual findings per group, then roll up
 $global:GUI_LIVE_FORM    = $null    # WinForms form reference for live scan dashboard
 $global:GUI_LIVE_TREE    = $null    # TreeView ref for live finding updates
 $global:GUI_LIVE_LOG     = $null    # RichTextBox ref for live log stream
@@ -328,6 +345,18 @@ function Out-Glitch {
 function Out-ThreatBanner {
     param([string]$Category, [string]$Detail)
     if ($global:STEALTH_MODE) { $script:LOG_LINES.Add("THREAT: $Category | $Detail"); return }
+    # ── Flood guard: cap full banners per category so one noisy detection can't
+    #    drown the console / transcript / web-UI stream. ──────────────────────
+    if ($null -eq $global:BANNER_COUNTS) { $global:BANNER_COUNTS = @{} }
+    $bcap = if ($global:BANNER_CATEGORY_CAP) { $global:BANNER_CATEGORY_CAP } else { 25 }
+    $bn = [int]$global:BANNER_COUNTS[$Category]; $global:BANNER_COUNTS[$Category] = $bn + 1
+    if ($bn -ge $bcap) {
+        if ($bn -eq $bcap) {
+            Write-Host "  ☣  $Category — banner output capped at $bcap; further hits are counted, not drawn." -ForegroundColor DarkYellow
+            Write-Log "THREAT: $Category | (banner output capped at $bcap; further occurrences suppressed)"
+        }
+        return
+    }
     $ac = Get-AccentColor
     Write-Host ""
     Write-Host "  ╔══════════════════════════════════════════════════════════════════════════╗" -ForegroundColor Red
@@ -459,6 +488,23 @@ function Add-Finding {
     )
     if ($global:PARANOID_MODE -and $Severity -eq "POSSIBLE") { $Severity = "HIGH" }
     foreach ($existing in $global:AuditFindings) { if ($existing.ID -eq $ID) { return } }
+    # ── Flood guard: cap individual findings per group; roll the rest into one
+    #    summary so a noisy phase can't push 20k+ finding events to the web UI. ─
+    $grpKey = if ($Group) { $Group } else { $Phase }
+    if ($ID -notmatch '^GROUPCAP_') {
+        if ($null -eq $global:GROUP_COUNTS) { $global:GROUP_COUNTS = @{} }
+        $gcap = if ($global:FINDING_GROUP_CAP) { $global:FINDING_GROUP_CAP } else { 100 }
+        $gn = [int]$global:GROUP_COUNTS[$grpKey]; $global:GROUP_COUNTS[$grpKey] = $gn + 1
+        if ($gn -ge $gcap) {
+            if ($gn -eq $gcap) {
+                Add-Finding -ID "GROUPCAP_$($grpKey -replace '[^a-zA-Z0-9]','')" -Phase $Phase `
+                    -ThreatType $ThreatType -Severity "INFO" `
+                    -Description "${grpKey}: capped at $gcap items to keep the scan responsive; additional matches suppressed. Narrow the time window or review this location manually." `
+                    -Target $grpKey -FixAction "None" -FixParam "" -Group $grpKey
+            }
+            return
+        }
+    }
     $global:AuditFindings.Add(@{
         ID          = $ID
         Phase       = $Phase
@@ -700,6 +746,13 @@ function Test-ContentRules {
 # keep using .FullName/.Name/.Extension/.Length/.LastWriteTime/.DirectoryName.
 $global:SCAN_MAX_FILES   = 20000   # hard cap on files examined per call
 $global:SCAN_DEADLINE_S  = 20      # wall-clock budget (seconds) per call
+# Authenticode signature audits (Get-AuthSig) build the full cert chain, which by
+# default does ONLINE revocation checks (CRL/OCSP). On a box where those servers are
+# slow/unreachable each call blocks for the network timeout, and the blocking native
+# call also makes Ctrl+C unresponsive. Loops over hundreds of signed binaries can run
+# for an hour. Bound any such loop with this shared budget + file cap. (See Phase 98.)
+$global:SIG_AUDIT_DEADLINE_S = 25  # wall-clock budget (seconds) for a per-file sig loop
+$global:SIG_AUDIT_MAX_FILES  = 150 # hard cap on signed binaries verified per such loop
 $global:SCAN_PRUNE_DIRS  = @(
     'node_modules','winsxs','$recycle.bin','system volume information','windows.old',
     'servicing','driverstore','assembly',
@@ -874,6 +927,13 @@ function Get-WeakAces { param($Acl, [string[]]$WeakIds, [string]$RightsRegex = '
 # Authenticode verdict for a file: returns a hashtable {Status, Signer, Trusted, IsMs}.
 # Cached per-path to avoid re-verifying the same binary across phases.
 $global:SIG_CACHE = @{}
+function Get-AuthSig([string]$Path) {
+    # Safe wrapper. Get-AuthenticodeSignature throws a *terminating* error on a
+    # locked / in-use file, which -ErrorAction SilentlyContinue does NOT suppress;
+    # left unhandled it unwinds to a trap and skips phases. Catch it here so callers
+    # just get $null. -LiteralPath also avoids wildcard expansion on bracketed paths.
+    try { Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop } catch { $null }
+}
 function Get-SignatureVerdict { param([string]$FilePath)
     if ($global:SIG_CACHE.ContainsKey($FilePath)) { return $global:SIG_CACHE[$FilePath] }
     $result = @{ Status='Unknown'; Signer=''; Trusted=$false; IsMs=$false; Exists=$false }
@@ -1386,7 +1446,15 @@ $targetDirs = @(
     @{P="$env:USERPROFILE\AppData\Local\Microsoft\Windows\INetCache"; L="INetCache"}
 )
 $malExt = @(".exe",".bat",".cmd",".ps1",".vbs",".js",".hta",".wsf",".dll",".sys",".scr",".pif",".cpl",".jar")
+# Bounded sig loop — Get-AuthSig can block on online cert-revocation (CRL/OCSP), and with
+# -Hours 0 the temp/download/INetCache dirs can hold thousands of cached executables. Cap
+# total checks + wall-clock across ALL target dirs so a slow/offline revocation responder
+# can't hang the phase for hours (this was the real DEEP-mode hang; see Phase 98).
+$sigSeen = 0
+$sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
+$sigBudgetHit = $false
 foreach ($td in $targetDirs) {
+    if ($sigBudgetHit) { break }
     Out-Typewriter "SCANNING: $($td.L)" "INFO"
     if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
     if (-not (Test-Path $td.P)) { Out-Typewriter "  -> [OK] ABSENT." "GOOD"; continue }
@@ -1398,7 +1466,12 @@ foreach ($td in $targetDirs) {
     if ($exeFiles.Count -gt 0) {
         $exeGroup = "$($td.L) — Executables ($($exeFiles.Count) files)"
         foreach ($f in $exeFiles) {
-            $sig = Get-AuthenticodeSignature $f.FullName -ErrorAction SilentlyContinue
+            if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+                $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+                $sigBudgetHit = $true; break
+            }
+            $sigSeen++
+            $sig = Get-AuthSig $f.FullName
             $isMalicious = ($sig.Status -ne "Valid") -and ($td.P -match "Temp|INetCache")
             $sev = if ($isMalicious) { $SEV_HIGH } else { $SEV_POSSIBLE }
             Add-Finding -ID "TEMPEXE_$($f.Name -replace '[^a-z0-9]','')" -Phase "PHASE 10" -ThreatType "Suspicious File" `
@@ -1410,6 +1483,10 @@ foreach ($td in $targetDirs) {
     if ($otherFiles.Count -gt 0) {
         Out-Typewriter "  -> $($otherFiles.Count) NON-EXECUTABLE FILES IN $($td.L) — WITHIN TIME SCOPE." "DATA"
     }
+}
+$sigSw.Stop()
+if ($sigBudgetHit) {
+    Out-Typewriter ("  -> [INFO] TEMP-EXE SIG BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
 }
 
 Show-PhaseHeader "PHASE 11" "RECENT DOCUMENTS & JUMP LIST SCRUB"
@@ -1501,8 +1578,19 @@ Invoke-QuantumBar "VERIFYING AUTHENTICODE SIGNATURES" 15 180
 $recentSysFiles = Get-ChildItem -Path "$env:WINDIR\System32" -File -ErrorAction SilentlyContinue |
     Where-Object { Test-InScope $_.LastWriteTime -and $_.Extension -match "\.(exe|dll|sys)$" }
 $foundSys = $false
+# Bounded sig loop — with -Hours 0, top-level System32 yields thousands of .exe/.dll/.sys.
+# MS-cert revocation is normally locally cached, but on an offline/proxied box Get-AuthSig
+# can still block on CRL/OCSP; cap count + wall-clock so this can't hang (see Phase 98).
+$sigSeen = 0
+$sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
+$sigBudgetHit = $false
 foreach ($sf in $recentSysFiles) {
-    $sig = Get-AuthenticodeSignature $sf.FullName -ErrorAction SilentlyContinue
+    if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+        $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+        $sigBudgetHit = $true; break
+    }
+    $sigSeen++
+    $sig = Get-AuthSig $sf.FullName
     if ($sig.Status -ne "Valid" -and $sig.Status -ne "NotSigned") {
         $foundSys = $true
         Out-Decrypt -Text $sf.FullName -Prefix "  [UNSIGNED SYS32 BINARY] "
@@ -1512,6 +1600,10 @@ foreach ($sf in $recentSysFiles) {
                 -Target $sf.FullName -FixAction "RunCmd" -FixParam "Rename-Item -LiteralPath '$($sf.FullName)' -NewName '$newName' -Force -ErrorAction SilentlyContinue" -Group "Unsigned System32 Binaries"
         $global:RootkitHits++
     }
+}
+$sigSw.Stop()
+if ($sigBudgetHit) {
+    Out-Typewriter ("  -> [INFO] SYSTEM32 SIG BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
 }
 if (-not $foundSys) { Out-Typewriter "  -> [OK] ALL RECENT SYSTEM32 BINARIES VERIFIED." "GOOD" }
 
@@ -1835,7 +1927,7 @@ foreach ($sp in @("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup","
     if (Test-Path $sp) {
         $startItems = Get-ChildItem -Path $sp -File -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
         foreach ($si in $startItems) {
-            $sig = Get-AuthenticodeSignature $si.FullName -ErrorAction SilentlyContinue
+            $sig = Get-AuthSig $si.FullName
             $sev = if ($sig.Status -ne "Valid") { $SEV_HIGH } else { $SEV_POSSIBLE }
             Add-Finding -ID "STARTUP_$($si.Name -replace '[^a-z0-9]','')" -Phase "PHASE 31" -ThreatType "Startup Persistence" `
                 -Severity $sev -Description "Startup folder item: $($si.Name) ($(if ($sig.Status -ne 'Valid') {'UNSIGNED'} else {'signed'}))" `
@@ -1857,7 +1949,7 @@ foreach ($pd in $pathDirs) {
         Out-Typewriter "  -> WRITABLE PATH ENTRY: $pd" "WARN"
         $recentDlls = Get-ChildItem -Path $pd -Filter "*.dll" -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
         foreach ($dll in $recentDlls) {
-            $sig = Get-AuthenticodeSignature $dll.FullName -ErrorAction SilentlyContinue
+            $sig = Get-AuthSig $dll.FullName
             if ($sig.Status -ne "Valid") {
                 Out-Decrypt -Text $dll.FullName -Prefix "  [UNSIGNED DLL IN PATH] "
                 Add-Finding -ID "DLLHIJACK_$($dll.Name -replace '[^a-z0-9]','')" -Phase "PHASE 32" -ThreatType "DLL Hijack" `
@@ -2145,7 +2237,7 @@ $accessFiles = @(
 )
 foreach ($af in $accessFiles) {
     if (Test-Path $af) {
-        $sig = Get-AuthenticodeSignature $af -ErrorAction SilentlyContinue
+        $sig = Get-AuthSig $af
         if ($sig.Status -ne "Valid") {
             Out-Typewriter "  -> UNSIGNED ACCESSIBILITY BINARY: $af" "CRIT"
             Add-Finding -ID "STICKY_$([IO.Path]::GetFileNameWithoutExtension($af))" -Phase "PHASE 45" `
@@ -2615,14 +2707,26 @@ Show-PhaseHeader "PHASE 66" "NETWORK SHARE WORM PROPAGATION SCAN" "WORM"
 Out-Typewriter "ENUMERATING OPEN NETWORK SHARES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
 $shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "^(ADMIN|IPC|print)\$" }
+# Bounded sig loop — up to 500 share binaries × Get-AuthSig, which can block on online
+# cert-revocation (CRL/OCSP). Cap total checks + wall-clock across ALL shares so a slow
+# responder (or a UNC share over a slow link) can't hang the phase (see Phase 98).
+$sigSeen = 0
+$sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
+$sigBudgetHit = $false
 foreach ($share in $shares) {
+    if ($sigBudgetHit) { break }
     Out-Typewriter "  -> OPEN SHARE: $($share.Name) @ $($share.Path)" "WARN"
     if ($share.Path -and (Test-Path $share.Path)) {
         $malInShare = Get-ScanFiles -Path $share.Path -TimeScoped |
             Where-Object { $_.Extension -match "\.(exe|bat|cmd|vbs|js|ps1)$" } |
             Select-Object -First 500
         foreach ($mis in $malInShare) {
-            $sig = Get-AuthenticodeSignature $mis.FullName -ErrorAction SilentlyContinue
+            if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+                $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+                $sigBudgetHit = $true; break
+            }
+            $sigSeen++
+            $sig = Get-AuthSig $mis.FullName
             if ($sig.Status -ne "Valid") {
                 Out-ThreatBanner "UNSIGNED EXE IN OPEN SHARE" $mis.FullName
                 Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
@@ -2632,6 +2736,10 @@ foreach ($share in $shares) {
             }
         }
     }
+}
+$sigSw.Stop()
+if ($sigBudgetHit) {
+    Out-Typewriter ("  -> [INFO] SHARE-WORM SIG BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
 }
 if ($shares.Count -eq 0) { Out-Typewriter "  -> [OK] NO NON-STANDARD SHARES FOUND." "GOOD" }
 
@@ -2705,7 +2813,7 @@ $hollowCandidates = Get-Process -ErrorAction SilentlyContinue | Where-Object {
     (try { $_.Modules.Count -lt 3 } catch { $false })
 }
 foreach ($proc in $hollowCandidates) {
-    $sig = Get-AuthenticodeSignature $proc.Path -ErrorAction SilentlyContinue
+    $sig = Get-AuthSig $proc.Path
     if ($sig.Status -ne "Valid" -and $proc.Path -match "AppData|Temp") {
         Out-Typewriter "  -> POSSIBLE HOLLOW PROCESS: $($proc.Name) PID:$($proc.Id) @ $($proc.Path) (only $($proc.Modules.Count) modules)" "WARN"
         Add-Finding -ID "HOLLOW_$($proc.Id)" -Phase "PHASE 69" -ThreatType "Process Hollowing" `
@@ -3113,6 +3221,7 @@ Out-Typewriter "  -> PHASE 80 COMPLETE — SECURE BOOT/TPM AUDIT DONE." "VER"
 #  UNIVERSAL BACKDOOR PHASES 81-89 (mode 2 only)
 # ══════════════════════════════════════════════════════════════════════════════
 if ($PhasePlan.Universal) {
+    trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
     if (-not $global:STEALTH_MODE) {
         Write-Host ""
         Write-Host ("▓"*80) -ForegroundColor DarkMagenta
@@ -3163,7 +3272,7 @@ if ($PhasePlan.Universal) {
         $_.Name -notmatch "^(svchost|System|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|audiodg|conhost|taskhostw|RuntimeBroker|sihost|SearchHost)$"
     }
     foreach ($proc in $extended) {
-        $sig = Get-AuthenticodeSignature $proc.Path -ErrorAction SilentlyContinue
+        $sig = Get-AuthSig $proc.Path
         if ($sig.Status -eq "NotSigned" -and $proc.Path -match "AppData|Temp") {
             Out-Typewriter "  -> LOW-MODULE UNSIGNED PROC: $($proc.Name) PID:$($proc.Id) @ $($proc.Path) [$($proc.Modules.Count) modules]" "WARN"
             Add-Finding -ID "HOLLOW_EXT_$($proc.Id)" -Phase "PHASE 83" -ThreatType "Process Hollowing" `
@@ -3274,6 +3383,7 @@ if ($PhasePlan.Universal) {
 #  ADVANCED PHASES 90-105 (DEEP / PARANOID / STEALTH — V21)
 # ══════════════════════════════════════════════════════════════════════════════
 if ($PhasePlan.Advanced) {
+    trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
     if (-not $global:STEALTH_MODE) {
         Write-Host ""
         Write-Host ("▓"*80) -ForegroundColor DarkMagenta
@@ -3400,22 +3510,41 @@ if ($PhasePlan.Advanced) {
         $_.Path -and (Test-Path $_.Path) -and
         $_.Name -notmatch "^(svchost|System|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|conhost|MsMpEng|SearchIndexer|RuntimeBroker|sihost|taskhostw)$"
     } | Select-Object -First 60
+    # Bounded sig loop: Get-AuthSig can block on online cert-revocation (CRL/OCSP), and
+    # 60 procs × many user-path DLLs is potentially hundreds of calls. Cap total checks +
+    # enforce a wall-clock budget so a slow/offline revocation responder can't hang the
+    # phase (see Phase 98). The cheap user-path regex filter runs first; only survivors
+    # cost a signature check.
+    $sigSeen = 0
+    $sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
+    $sigBudgetHit = $false
     foreach ($p in $deepProcs) {
+        if ($sigBudgetHit) { break }
         try {
-            $unsignedDlls = $p.Modules | Where-Object {
-                $_.FileName -and ($_.FileName -match "AppData|Temp|Downloads|ProgramData") -and
-                ((Get-AuthenticodeSignature $_.FileName -ErrorAction SilentlyContinue).Status -ne "Valid")
+            $candDlls = $p.Modules | Where-Object {
+                $_.FileName -and ($_.FileName -match "AppData|Temp|Downloads|ProgramData")
             }
-            foreach ($udll in $unsignedDlls) {
-                Out-Typewriter "  -> $($p.Name) PID:$($p.Id) loaded UNSIGNED user-path DLL: $($udll.FileName)" "CRIT"
-                Add-Finding -ID "INJDLL_$($p.Id)_$([IO.Path]::GetFileName($udll.FileName) -replace '[^a-z0-9]','')" `
-                    -Phase "PHASE 93" -ThreatType "DLL Injection" -Severity $SEV_HIGH `
-                    -Description "$($p.Name) PID:$($p.Id) loaded unsigned DLL from user path: $($udll.FileName)" `
-                    -Target "PID:$($p.Id)" -FixAction "KillProcess" -FixParam $p.Id `
-                    -Group "Module Injection"
-                $injFound++
+            foreach ($udll in $candDlls) {
+                if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+                    $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+                    $sigBudgetHit = $true; break
+                }
+                $sigSeen++
+                if ((Get-AuthSig $udll.FileName).Status -ne "Valid") {
+                    Out-Typewriter "  -> $($p.Name) PID:$($p.Id) loaded UNSIGNED user-path DLL: $($udll.FileName)" "CRIT"
+                    Add-Finding -ID "INJDLL_$($p.Id)_$([IO.Path]::GetFileName($udll.FileName) -replace '[^a-z0-9]','')" `
+                        -Phase "PHASE 93" -ThreatType "DLL Injection" -Severity $SEV_HIGH `
+                        -Description "$($p.Name) PID:$($p.Id) loaded unsigned DLL from user path: $($udll.FileName)" `
+                        -Target "PID:$($p.Id)" -FixAction "KillProcess" -FixParam $p.Id `
+                        -Group "Module Injection"
+                    $injFound++
+                }
             }
         } catch {}
+    }
+    $sigSw.Stop()
+    if ($sigBudgetHit) {
+        Out-Typewriter ("  -> [INFO] MODULE SIG BUDGET REACHED ({0} DLLs / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
     }
     if ($injFound -eq 0) { Out-Typewriter "  -> [OK] NO UNSIGNED INJECTED MODULES." "GOOD" }
 
@@ -3425,8 +3554,11 @@ if ($PhasePlan.Advanced) {
     $sctHits = 0
     foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
         if (-not (Test-Path $root)) { continue }
+        # NB: .sct/.wsc are scriptlet-specific. .xsl is overwhelmingly benign (every
+        # lxml/Python/Office install ships thousands) so it is NOT matched by extension
+        # alone — Squiblytwo (.xsl via wmic) is caught by the run-key/content checks below.
         $sctFiles = Get-ScanFiles -Path $root -TimeScoped |
-            Where-Object { $_.Extension -match "\.(sct|wsc|xsl)$" }
+            Where-Object { $_.Extension -match "\.(sct|wsc)$" }
         foreach ($s in $sctFiles) {
             Out-ThreatBanner "COM SCRIPTLET FILE" $s.FullName
             Add-Finding -ID "SCT_$($s.Name -replace '[^a-z0-9]','')" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
@@ -3494,14 +3626,29 @@ if ($PhasePlan.Advanced) {
     }
     $spoolDir = "$env:WINDIR\System32\spool\drivers"
     if (Test-Path $spoolDir) {
-        Get-ChildItem -Path $spoolDir -Recurse -Filter "*.dll" -ErrorAction SilentlyContinue |
-            Where-Object { Test-InScope $_.LastWriteTime } | Select-Object -First 30 | ForEach-Object {
-            if ((Get-AuthenticodeSignature $_.FullName -ErrorAction SilentlyContinue).Status -ne "Valid") {
-                Add-Finding -ID "SPOOLDRV_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 96" -ThreatType "Print Spooler Hijack" `
-                    -Severity $SEV_HIGH -Description "Unsigned DLL in spooler driver dir: $($_.FullName)" `
-                    -Target $_.FullName -FixAction "DeleteFile" -FixParam $_.FullName -Group "PrintNightmare"
+        # Bounded sig loop — Get-AuthSig can block on online cert-revocation (CRL/OCSP);
+        # cap count + wall-clock so a slow responder can't stack up minutes (see Phase 98).
+        $spoolDlls = Get-ChildItem -Path $spoolDir -Recurse -Filter "*.dll" -ErrorAction SilentlyContinue |
+            Where-Object { Test-InScope $_.LastWriteTime } | Select-Object -First 30
+        $sigSeen = 0
+        $sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
+        $sigBudgetHit = $false
+        foreach ($sd in $spoolDlls) {
+            if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+                $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+                $sigBudgetHit = $true; break
+            }
+            $sigSeen++
+            if ((Get-AuthSig $sd.FullName).Status -ne "Valid") {
+                Add-Finding -ID "SPOOLDRV_$($sd.Name -replace '[^a-z0-9]','')" -Phase "PHASE 96" -ThreatType "Print Spooler Hijack" `
+                    -Severity $SEV_HIGH -Description "Unsigned DLL in spooler driver dir: $($sd.FullName)" `
+                    -Target $sd.FullName -FixAction "DeleteFile" -FixParam $sd.FullName -Group "PrintNightmare"
                 $pnHits++
             }
+        }
+        $sigSw.Stop()
+        if ($sigBudgetHit) {
+            Out-Typewriter ("  -> [INFO] SPOOLER SIG BUDGET REACHED ({0} DLLs / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
         }
     }
     Add-Finding -ID "SPOOLER_DISABLE_OPT" -Phase "PHASE 96" -ThreatType "Hardening" -Severity $SEV_INFO `
@@ -3532,26 +3679,44 @@ if ($PhasePlan.Advanced) {
     Invoke-QuantumBar "AUTHENTICODE CHAIN AUDIT" 12 100
     $leakedCerts = @("Founder Software","Founder Group","CN=NVIDIA","CN=Realtek Semiconductor","D-Link Corporation","Realtek Semiconductor","Foxit Software")
     $stolenHits = 0
+    # Bounded loop: Get-AuthSig can block on online cert-revocation checks (CRL/OCSP),
+    # so cap total binaries verified AND enforce a wall-clock budget across ALL roots —
+    # otherwise hundreds of slow signature checks could hang the phase for an hour and
+    # leave Ctrl+C unresponsive (the revocation call is a blocking native call).
+    $sigSeen = 0
+    $sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
+    $sigBudgetHit = $false
     foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
+        if ($sigBudgetHit) { break }
         if (-not (Test-Path $root)) { continue }
-        Get-ScanFiles -Path $root -TimeScoped |
-            Where-Object { $_.Extension -match "\.(exe|dll)$" } | Select-Object -First 100 | ForEach-Object {
-            $sig = Get-AuthenticodeSignature $_.FullName -ErrorAction SilentlyContinue
+        $sigCandidates = Get-ScanFiles -Path $root -TimeScoped |
+            Where-Object { $_.Extension -match "\.(exe|dll)$" }
+        foreach ($f in $sigCandidates) {
+            if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+                $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+                $sigBudgetHit = $true; break
+            }
+            $sigSeen++
+            $sig = Get-AuthSig $f.FullName
             if ($sig.SignerCertificate) {
                 $subj = $sig.SignerCertificate.Subject
                 foreach ($lc in $leakedCerts) {
                     if ($subj -match [regex]::Escape($lc)) {
-                        Out-Decrypt -Text "Stolen cert: $($_.FullName) -> $subj" -Prefix "  [STOLEN CERT] "
-                        Add-Finding -ID "STOLENCERT_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 98" `
+                        Out-Decrypt -Text "Stolen cert: $($f.FullName) -> $subj" -Prefix "  [STOLEN CERT] "
+                        Add-Finding -ID "STOLENCERT_$($f.Name -replace '[^a-z0-9]','')" -Phase "PHASE 98" `
                             -ThreatType "Stolen Code-Sign Cert" -Severity $SEV_CRITICAL `
-                            -Description "Binary signed by known-leaked cert ($lc): $($_.FullName)" `
-                            -Target $_.FullName -FixAction "DeleteFile" -FixParam $_.FullName `
+                            -Description "Binary signed by known-leaked cert ($lc): $($f.FullName)" `
+                            -Target $f.FullName -FixAction "DeleteFile" -FixParam $f.FullName `
                             -Group "Stolen Code-Signing Certs"
                         $stolenHits++; break
                     }
                 }
             }
         }
+    }
+    $sigSw.Stop()
+    if ($sigBudgetHit) {
+        Out-Typewriter ("  -> [INFO] CERT AUDIT BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
     }
     if ($stolenHits -eq 0) { Out-Typewriter "  -> [OK] NO STOLEN-CERT-SIGNED BINARIES." "GOOD" }
 
@@ -3879,6 +4044,7 @@ if ($PhasePlan.Advanced) {
 #  service & PATH privilege-escalation surface, and security-control tamper.
 # ══════════════════════════════════════════════════════════════════════════════
 if ($PhasePlan.Integrity) {
+    trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
     if (-not $global:STEALTH_MODE) {
         Write-Host ""
         Write-Host ("▓"*80) -ForegroundColor DarkGreen

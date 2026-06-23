@@ -12,20 +12,33 @@ const ZBFX = (() => {
   // ── canvas renderer factories (ported from PirateLife fx layer) ──────────
   function makeRain(accent) {
     let cols = [], w = 0, h = 0, fontSize = 16;
-    const glyphs = 'アカサタナハマヤラワ0123456789ABCDEFｱｲｳｴｵｶｷｸ<>=*+-/';
+    // Half-width katakana + digits + symbols — the iconic Matrix digital-rain glyph set.
+    const glyphs = 'ｦｧｨｩｪｫｬｭｮｯｰｱｲｳｴｵｶｷｸｹｺｻｼｽｾｿﾀﾁﾂﾃﾄﾅﾆﾇﾈﾉﾊﾋﾌﾍﾎﾏﾐﾑﾒﾓﾔﾕﾖﾗﾘﾙﾚﾛﾜﾝ0123456789:=*+<>¦"╌';
+    const g = () => glyphs[(Math.random() * glyphs.length) | 0];
     return {
-      resize(W, H) { w = W; h = H; fontSize = Math.max(13, Math.round(W / 90)); const n = Math.floor(W / fontSize); cols = Array.from({ length: n }, () => Math.random() * -H); },
+      resize(W, H) {
+        w = W; h = H;
+        fontSize = Math.max(13, Math.round(W / 90));
+        const n = Math.floor(W / fontSize);
+        cols = Array.from({ length: n }, () => ({ y: Math.random() * -H, sp: 0.55 + Math.random() * 0.8 }));
+      },
       draw(ctx) {
-        ctx.fillStyle = 'rgba(0,0,0,0.09)'; ctx.fillRect(0, 0, w, h);
+        // Low-alpha wash instead of a hard clear: leaves a fading tail behind each head.
+        ctx.fillStyle = 'rgba(0,0,0,0.055)'; ctx.fillRect(0, 0, w, h);
         ctx.font = fontSize + 'px "JetBrains Mono",monospace';
         for (let i = 0; i < cols.length; i++) {
-          const x = i * fontSize, y = cols[i];
-          ctx.fillStyle = accent; ctx.shadowColor = accent; ctx.shadowBlur = 8;
-          ctx.fillText(glyphs[(Math.random() * glyphs.length) | 0], x, y);
+          const c = cols[i], x = i * fontSize;
+          // Bright near-white leading glyph with accent glow — the falling "head".
+          ctx.fillStyle = '#e6fff0'; ctx.shadowColor = accent; ctx.shadowBlur = 10;
+          ctx.fillText(g(), x, c.y);
           ctx.shadowBlur = 0;
-          ctx.fillStyle = 'rgba(120,255,160,.25)';
-          ctx.fillText(glyphs[(Math.random() * glyphs.length) | 0], x, y - fontSize);
-          cols[i] = y > h + Math.random() * 400 ? 0 : y + fontSize * (0.6 + Math.random() * 0.5);
+          // Two accent-green glyphs trailing just behind it.
+          ctx.fillStyle = accent;
+          ctx.fillText(g(), x, c.y - fontSize);
+          ctx.fillStyle = 'rgba(130,255,170,.4)';
+          ctx.fillText(g(), x, c.y - fontSize * 2);
+          c.y += fontSize * c.sp;
+          if (c.y > h + Math.random() * 280) { c.y = -fontSize * ((Math.random() * 14) | 0); c.sp = 0.55 + Math.random() * 0.8; }
         }
       },
       opaque: true,

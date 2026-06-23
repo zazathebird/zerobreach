@@ -25,6 +25,8 @@ const STATE = {
   elapsedSec: 0,
   currentPhase: 0,
   totalPhases: 107,
+  scanStartMs: 0,   // local clock origin (re-synced from server elapsed)
+  lastEventMs: 0,   // last time any SSE event arrived (drives the "still working" heartbeat)
 };
 
 // ── DOM Helpers ───────────────────────────────────────────────────────────────
@@ -125,15 +127,37 @@ function initSSE() {
 
   STATE.sse.onmessage = (e) => {
     try {
-      const data = JSON.parse(e.data);
-      dispatchEvent(data);
+      enqueueEvent(JSON.parse(e.data));
     } catch (err) {
       // ignore parse errors on keepalive comments
     }
   };
 }
 
+// ── Event pump ─────────────────────────────────────────────────────────────────
+// SSE can deliver tens of thousands of events in a burst (a noisy phase). Dispatching
+// each one synchronously inside onmessage saturates the main thread, which starves the
+// requestAnimationFrame loop that drives the matrix rain / FX — the canvas freezes and
+// the page eventually goes unresponsive. Instead we buffer events and drain a bounded
+// number per animation frame, so the browser always gets to paint and run the FX.
+const EV_QUEUE = [];
+let evPumpScheduled = false;
+const EV_MAX_PER_FRAME = 300;
+
+function enqueueEvent(data) {
+  EV_QUEUE.push(data);
+  if (!evPumpScheduled) { evPumpScheduled = true; requestAnimationFrame(pumpEvents); }
+}
+
+function pumpEvents() {
+  evPumpScheduled = false;
+  const n = Math.min(EV_QUEUE.length, EV_MAX_PER_FRAME);
+  for (let i = 0; i < n; i++) dispatchEvent(EV_QUEUE.shift());
+  if (EV_QUEUE.length) { evPumpScheduled = true; requestAnimationFrame(pumpEvents); }
+}
+
 function dispatchEvent(data) {
+  STATE.lastEventMs = Date.now();   // heartbeat: engine is producing output
   switch (data.type) {
     case 'sync':
       handleSync(data);
@@ -176,6 +200,8 @@ function handleSync(data) {
   STATE.threatCounts = data.threat_counts || {};
   if (data.running) {
     STATE.scanning = true;
+    STATE.scanStartMs = Date.now() - (data.elapsed || 0) * 1000;
+    STATE.lastEventMs = Date.now();
     $('btn-abort').disabled = false;
     $('sb-status').textContent = '● SCANNING';
     $('sb-status').style.color = 'var(--threat-high)';
@@ -215,9 +241,40 @@ function initClock() {
   function tick() {
     const now = new Date();
     el.textContent = now.toLocaleTimeString('en-US', { hour12: false });
+    updateHeartbeat();
   }
   tick();
   setInterval(tick, 1000);
+}
+
+// Advances the elapsed clock locally every second and shows whether the engine is
+// actively emitting or just busy on a long phase — so the UI never *looks* frozen even
+// when the engine goes silent for minutes (e.g. a heavy WMI/registry sweep).
+function updateHeartbeat() {
+  const dot = $('hb-dot'), txt = $('hb-text');
+  if (!dot || !txt) return;
+
+  if (!STATE.scanning) {
+    dot.className = '';
+    txt.textContent = STATE.scanComplete ? 'SCAN COMPLETE' : 'IDLE';
+    return;
+  }
+
+  // Local elapsed keeps moving regardless of server traffic.
+  const localElapsed = Math.max(0, Math.round((Date.now() - STATE.scanStartMs) / 1000));
+  $('elapsed-display').textContent = formatTime(localElapsed);
+  $('sb-elapsed').textContent      = formatTime(localElapsed);
+
+  const silent = Math.round((Date.now() - STATE.lastEventMs) / 1000);
+  if (silent < 4) {
+    dot.className = 'hb-active';
+    txt.style.color = '';
+    txt.textContent = 'ENGINE ACTIVE';
+  } else {
+    dot.className = 'hb-busy';
+    txt.style.color = 'var(--threat-high, #ffae42)';
+    txt.textContent = `WORKING — ${silent}s since last update (heavy phase, not frozen)`;
+  }
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────────
@@ -425,6 +482,8 @@ function startScan() {
   STATE.totalThreats = 0;
   STATE.logLines     = [];
   STATE.currentPhase = 0;
+  STATE.scanStartMs  = Date.now();
+  STATE.lastEventMs  = Date.now();
 
   $('log-output').innerHTML = '';
   Object.keys(STATE.threatCounts).forEach(k => {
@@ -495,8 +554,12 @@ function initScanMonitor() {
   });
 }
 
+const LOG_BUFFER_CAP = 2000;   // retained log records (caps memory + rerenderLog cost)
+const LOG_DOM_CAP    = 800;    // live <div> nodes in #log-output (caps layout/paint cost)
+
 function appendLogLine(data) {
   STATE.logLines.push(data);
+  if (STATE.logLines.length > LOG_BUFFER_CAP) STATE.logLines.shift();
 
   const visible = STATE.logFilter === 'ALL' || data.severity === STATE.logFilter;
   if (!visible) return;
@@ -509,6 +572,8 @@ function appendLogLine(data) {
   const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false });
   line.innerHTML = `<span class="log-ts">${timeStr}</span><span class="log-text">${escapeHtml(data.text)}</span>`;
   el.appendChild(line);
+  // Trim oldest nodes so a long/noisy scan can't grow the DOM without bound.
+  while (el.childElementCount > LOG_DOM_CAP) el.removeChild(el.firstChild);
 
   if (STATE.autoScroll) el.scrollTop = el.scrollHeight;
 }
@@ -541,6 +606,8 @@ function updateMonitorUI(data) {
   $('prog-overall').style.width  = phasePct + '%';
   $('prog-overall-pct').textContent = phasePct + '%';
 
+  // Re-anchor the local clock to the server's authoritative elapsed (prevents drift).
+  if (typeof data.elapsed === 'number') STATE.scanStartMs = Date.now() - data.elapsed * 1000;
   $('elapsed-display').textContent = formatTime(data.elapsed);
   $('sb-elapsed').textContent      = formatTime(data.elapsed);
 

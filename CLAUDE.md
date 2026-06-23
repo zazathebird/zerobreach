@@ -183,6 +183,48 @@ in CSS but are cleared by the engine on every `apply()`.
 
 **MSP Mode** activates by typing "msp", "gannon", or "staples" in the UI before scanning — applies the `gannon-orange` theme via ZBThemes, adds MSP badge.
 
+## Bugs Fixed (2026-06-22) — ~1hr hang at "phase 97" (Authenticode revocation)
+
+| File | Bug | Fix |
+|---|---|---|
+| `ZeroBreach-V23.ps1` | **Scan hung ~1 hour at "phase 97"; Ctrl+C wouldn't kill the shell.** Actually stalled in **Phase 98** (STOLEN CERT) — it ran `Get-AuthSig` (→ `Get-AuthenticodeSignature`) on up to 100 exe/dll **per root × 4 roots ≈ 400 binaries** with NO time/count cap. Authenticode builds the cert chain, which by default does **online revocation checks (CRL/OCSP)**; when those servers are slow/unreachable each call blocks for the network timeout (~15s) → ~400×15s ≈ 1hr. The blocking native call also makes **Ctrl+C unresponsive** until it returns (both symptoms, one cause). `Get-ScanFiles`'s 20s deadline only bounds enumeration, NOT the downstream sig loop. GUI showed "97" because Phase 98's header/QuantumBar scrolled past while the silent loop ground on. | Added budget globals `$global:SIG_AUDIT_DEADLINE_S=25` / `$global:SIG_AUDIT_MAX_FILES=150` (next to the `SCAN_*` caps ~`:748`). Bounded the 3 multi-file Authenticode loops with a shared stopwatch+counter that breaks when either budget is hit and prints "… SIG BUDGET REACHED — partial scan": **Phase 98** (budget shared across all 4 roots), **Phase 93** (DEEP DLL/MODULE INJECTION — cheap user-path regex filter now runs *before* the sig check), **Phase 96** (PRINTNIGHTMARE spooler-dir DLLs). |
+
+> **Rule:** any loop calling `Get-AuthSig`/`Get-AuthenticodeSignature` over many files MUST carry a
+> wall-clock + count budget (`$global:SIG_AUDIT_*`) — `Get-ScanFiles` caps don't cover the sig loop.
+> Single-file / per-process sig call sites are fine as-is. **Worst case a guarded phase now caps at
+> ~25–40s** (one in-flight blocking call can overshoot the 25s budget by ~one network timeout).
+> NOT yet validated on a live admin run.
+
+## Bugs Fixed (2026-06-23) — same Authenticode hang, 3 more phases (the real DEEP-mode hang)
+
+The 2026-06-22 fix only budgeted Phases 93/96/98. A live `-Mode DEEP -Hours 0` run hung *again*
+(0-byte transcript, ~127 CPU-sec over hours = **blocked, not spinning** = network revocation; the
+self-elevated child also orphaned when the window closed — Ctrl+C never reached it). Cause: three
+*other* multi-file `Get-AuthSig` loops still had no budget, and `-Hours 0` makes `Test-InScope`
+pass everything, so they balloon.
+
+| File | Bug | Fix |
+|---|---|---|
+| `ZeroBreach-V23.ps1` | **Phase 10** (TEMP/INetCache/Downloads executables, ~`:1449`) — *the actual culprit.* Early phase (matches the 0-byte transcript), thousands of cached 3rd-party exe's whose revocation URLs aren't locally cached → each `Get-AuthSig` network-blocks ~15s → hours. | Bounded with the shared `$global:SIG_AUDIT_*` stopwatch+counter across all 6 target dirs + "TEMP-EXE SIG BUDGET REACHED" note. |
+| `ZeroBreach-V23.ps1` | **Phase 15** (System32 top-level `.exe/.dll/.sys`, ~`:1578`) — thousands of files under `-Hours 0`; MS revocation is usually locally cached but not guaranteed on an offline/proxied box. | Same budget guard + "SYSTEM32 SIG BUDGET REACHED" note. |
+| `ZeroBreach-V23.ps1` | **Phase 66** (network-share worm scan, ~`:2678`) — up to 500 share binaries × `Get-AuthSig` (worse over a slow UNC link). | Same budget guard (shared across all shares) + "SHARE-WORM SIG BUDGET REACHED" note. |
+
+> Parse-verified 0 errors. STILL not validated on a live admin run. Remaining `Get-AuthSig` sites are
+> per-process (proc-count bounded) or fixed/small lists — left as-is per the rule above.
+
+## Bugs Fixed (2026-06-22) — silent phase-skip via trap+continue
+
+| File | Bug | Fix |
+|---|---|---|
+| `ZeroBreach-V23.ps1` | **Phases 99–107 silently skipped** mid-scan (log jumped 98→108). A locked `Temp\*.tmp` made `Get-AuthenticodeSignature` throw a *terminating* error that `-EA SilentlyContinue` does NOT suppress; it unwound to the **script-scope `trap { … continue }` (`:72`)**, whose `continue` resumes after the whole `if ($PhasePlan.Advanced){…}` block. One locked file → 9 detection phases dropped. Intermittent. | Added `Get-AuthSig` wrapper (`try/catch`, `-LiteralPath`); routed all 11 raw `Get-AuthenticodeSignature` calls through it (the call inside the wrapper + the one in `Get-SignatureVerdict`'s own try/catch are the only raw ones left). |
+| `ZeroBreach-V23.ps1` | Same trap design meant *any* terminating error inside a grouped `if ($PhasePlan.*)` block would skip the rest of that phase group. | Added a per-group inner `trap { Write-RecoveredError $_; continue }` to the Universal/Advanced/Integrity blocks — an inner-scope trap+continue resumes at the **next phase**, not end-of-group (empirically verified). Outer trap refactored to share the new `Write-RecoveredError` helper. |
+
+> **Rule:** never call raw `Get-AuthenticodeSignature` — use `Get-AuthSig`. When bundling multiple
+> phases under one `if ($PhasePlan.*)`, give the block its own inner trap.
+> **Still latent (NOT fixed):** `(try {…} catch {…})` used as an *expression* (e.g. `:2758`, plus
+> the `Where-Object` filters that logged "The term 'try' is not recognized") is invalid in PS 5.1 —
+> those filters silently match nothing. Valid only in PS 7+.
+
 ## Bugs Fixed (2026-06-06) — NEXT_STEPS Phase 0
 
 | File | Bug | Fix |
