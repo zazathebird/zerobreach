@@ -891,6 +891,8 @@ function Join-AllowRegex([string]$Name) { $a = @(Get-Sig $Name); if ($a.Count) {
 $TRUSTED_ROOT_CA_RE     = Join-AllowRegex 'trusted_root_ca_issuers'
 $CLOAKED_BENIGN_RE      = Join-AllowRegex 'cloaked_benign_names'
 $INFOSTEALER_BENIGN_RE  = Join-AllowRegex 'infostealer_benign_paths'
+$SAFEBOOT_DEFAULTS      = @((Get-Sig 'safeboot_default_entries') | ForEach-Object { "$_".ToLower() })
+$C2_NAMED_PIPE_RE       = if (@(Get-Sig 'c2_named_pipe_regex').Count) { (Get-Sig 'c2_named_pipe_regex')[0] } else { '(?!)' }
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
@@ -1524,8 +1526,10 @@ if (Test-Path "$env:WINDIR\Prefetch") {
     if ($malPf.Count -gt 0) {
         foreach ($pf in $malPf) {
             Out-Decrypt -Text $pf.Name -Prefix "  [PREFETCH HIT] "
+            # LOLBIN prefetch only proves the binary ran at some point — legit on most machines — so
+            # this is corroborating evidence, not a standalone HIGH. POSSIBLE (shown, not auto-selected).
             Add-Finding -ID "PREFETCH_$($pf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 12" -ThreatType "Execution Trace" `
-                -Severity $SEV_HIGH -Description "Suspicious prefetch: $($pf.Name) (evidence of malicious execution)" `
+                -Severity $SEV_POSSIBLE -Description "LOLBIN execution trace in prefetch: $($pf.Name) (corroborating evidence — verify context)" `
                 -Target $pf.FullName -FixAction "Info" -Group "Execution Artifacts"
         }
         Out-Typewriter "  -> PREFETCH ARTIFACTS LOGGED. PRESERVING AS EVIDENCE." "WARN"
@@ -1832,12 +1836,17 @@ Show-PhaseHeader "PHASE 27" "SAFE MODE HIJACK (SAFEBOOT KEY AUDIT)"
 foreach ($sm in @("Minimal","Network")) {
     $safePath = "HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\$sm"
     if (Test-Path $safePath) {
+        # Windows ships ~60-120 legitimate default SafeBoot\Minimal|Network entries (services,
+        # service-groups, and *.sys drivers that must load in Safe Mode). Flagging them all CRITICAL +
+        # DeleteRegKey would (absent the safety guard) offer to break Safe Mode boot. Skip the known
+        # defaults; surface only *unrecognized* entries as POSSIBLE for manual review (the SafeBoot
+        # registry is also a Test-ProtectedTarget hard-block, so this is purely noise reduction).
         $safeKeys = Get-ChildItem -Path $safePath -ErrorAction SilentlyContinue |
-            Where-Object { $_.PSChildName -notmatch "^{" -and (Test-InScope $_.LastWriteTime) }
+            Where-Object { $_.PSChildName -notmatch "^{" -and (Test-InScope $_.LastWriteTime) -and ($_.PSChildName.ToLower() -notin $SAFEBOOT_DEFAULTS) }
         foreach ($k in $safeKeys) {
             Out-Decrypt -Text $k.PSPath -Prefix "  [SAFEMODE PERSIST] "
             Add-Finding -ID "SAFEBOOT_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 27" -ThreatType "SafeBoot Hijack" `
-                -Severity $SEV_CRITICAL -Description "Unknown entry in SafeBoot\${sm}: $($k.PSChildName) — malware SafeBoot persistence" `
+                -Severity $SEV_POSSIBLE -Description "Unrecognized entry in SafeBoot\${sm}: $($k.PSChildName) — verify (possible SafeBoot persistence)" `
                 -Target $k.PSPath -FixAction "DeleteRegKey" -FixParam $k.PSPath -Group "SafeBoot Persistence"
         }
     }
@@ -2633,7 +2642,11 @@ Show-PhaseHeader "PHASE 62" "NAMED PIPE BACKDOOR AUDIT" "RAT/C2"
 Out-Typewriter "ENUMERATING NAMED PIPE ENDPOINTS..." "HUNT"
 try {
     $pipes = [System.IO.Directory]::GetFiles("\\.\pipe\")
-    $suspectPipes = $pipes | Where-Object { $_ -match "meterpreter|msf|cobaltstrike|beacon|njrat|asyncrat|quasar|remcos|dlltest|netbus|poisonivy|havoc|sliver|[a-f0-9]{8,}" }
+    # Match only specific C2/RAT framework pipe names (externalized to data — AMSI-safe + tunable).
+    # The old inline pattern ended in "[a-f0-9]{8,}", which matched virtually every legitimate
+    # Windows RPC/COM/GUID-named pipe -> ~100 CRITICAL false positives. Do NOT reintroduce a broad
+    # hex/GUID catch-all here (see c2_named_pipe_regex note in detection_signatures.json).
+    $suspectPipes = $pipes | Where-Object { $_ -match $C2_NAMED_PIPE_RE }
     foreach ($pipe in $suspectPipes) {
         Out-ThreatBanner "SUSPECT NAMED PIPE" $pipe
         Add-Finding -ID "PIPE_$($pipe -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "RAT/Backdoor Pipe" `

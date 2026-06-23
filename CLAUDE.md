@@ -321,6 +321,28 @@ Already-fixed (verified, no action needed): **Phase 94 COM Scriptlet** is `.sct/
 Share Worm** already filters `exe|bat|cmd|vbs|js|ps1` (the report's `.bashrc`/`.json` hits are from a
 pre-`cbe96c4` build). Engine parse-clean PS 5.1 + 7 (0 errors), BOM intact.
 
+**Round 2 (2026-06-23) — the two remaining CRITICAL floods + prefetch:**
+- **Phase 27 SAFEBOOT HIJACK** (`~V23:1835`): flagged every non-GUID `SafeBoot\Minimal|Network` subkey
+  CRITICAL + **DeleteRegKey** — i.e. offered to delete ~100 *default* Windows Safe-Mode entries
+  (AppInfo, AudioEndpointBuilder, CryptSvc, *.sys drivers…), which would break Safe Boot. Now skips the
+  `safeboot_default_entries` allowlist (122 verified Win10/11 defaults + common driver/service extras)
+  and downgrades unrecognized entries to **POSSIBLE** (review, not auto-act; SafeBoot reg is also a
+  hard-block target). **101 CRITICAL → 0** on the test box (genuinely-rogue entries still surface as
+  POSSIBLE). Missing-a-default on another OS build just yields a POSSIBLE review item, never a delete.
+- **Phase 62 NAMED PIPE BACKDOOR** (`~V23:2636`): the inline pattern ended in `[a-f0-9]{8,}`, matching
+  virtually every legit Windows RPC/COM/GUID-named pipe → ~100 CRITICAL FPs. Replaced with the
+  externalized `c2_named_pipe_regex` (specific C2 framework pipe names — Cobalt Strike `msagent_`/
+  `postex_`/`MSSE-…-server`, meterpreter, sliver/havoc/mythic, etc.) — **no broad hex/GUID catch-all**.
+  This also **removed inline malware-name literals** from the `.ps1` (WS1/AMSI win). 98 → 0 on a clean box.
+- **Phase 12 PREFETCH** (`~V23:1527`): already pattern-restricted to LOLBIN prefetch, but a LOLBIN
+  *having run* is corroborating evidence, not a standalone HIGH → downgraded HIGH → **POSSIBLE**
+  (FixAction was already `Info`).
+
+Round-2 already-fine (verified, no change): **Phase 91 MoTW** already scopes to real executable
+extensions (the report's `.docx` hits are a pre-`cbe96c4` build); **Event Log — New Services** and the
+**MoTW** group are already POSSIBLE/`Info` (non-destructive). Engine parse-clean **PS 5.1 (v5.1.26100)**
++ 7 (0 errors), BOM intact.
+
 > **Rule:** new FP allowlists go in `data/detection_signatures.json` `fp_allowlists` block (never inline
 > literals in the `.ps1`); load via `Join-AllowRegex`. Prefer **downgrade to POSSIBLE** over deleting a
 > detection — POSSIBLE is shown but never auto-selected for destructive remediation. **Not yet validated
