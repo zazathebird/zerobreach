@@ -2,6 +2,9 @@
 reports/
 zerobreach_launch_error.log
 
+# FX visual-audit gallery output (regenerable via tools/check-visuals.mjs)
+fx-audit/
+
 # Python (parked Flask server)
 __pycache__/
 *.pyc

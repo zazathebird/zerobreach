@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZeroBreach — VFX Checker</title>
+<!-- the REAL stylesheets, so we test the shipping CSS not a copy -->
+<link rel="stylesheet" href="css/main.css">
+<link rel="stylesheet" href="css/fx.css">
+<style>
+  /* harness chrome only — kept out of the way, above the FX layers */
+  html,body{height:100%;margin:0;background:var(--bg-base,#050a0f);color:var(--text,#cde);
+    font-family:"JetBrains Mono",ui-monospace,monospace;overflow:hidden;}
+  #app{height:100%;}
+  #zb-bar{position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;flex-wrap:wrap;gap:6px;
+    align-items:center;padding:8px 10px;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
+    border-bottom:1px solid var(--border-bright,#2af);font-size:12px;pointer-events:auto;}
+  #zb-bar b{color:var(--accent,#0df);letter-spacing:2px;margin-right:6px;}
+  #zb-bar select,#zb-bar button{background:#111;color:var(--text,#cde);border:1px solid var(--accent,#0df);
+    border-radius:4px;padding:4px 8px;font:inherit;cursor:pointer;}
+  #zb-bar .grp{display:flex;gap:4px;align-items:center;border-left:1px solid #333;padding-left:8px;}
+  #zb-bar button.on{background:var(--accent,#0df);color:#000;font-weight:700;}
+  #zb-hint{position:fixed;left:12px;bottom:10px;z-index:9999;font-size:30px;font-weight:800;
+    letter-spacing:4px;color:var(--accent,#0df);text-shadow:0 0 18px var(--accent-glow,#0df8);pointer-events:none;}
+  #zb-sub{position:fixed;left:12px;bottom:46px;z-index:9999;font-size:12px;color:var(--text-mid,#8ab);pointer-events:none;}
+  /* audit report overlay */
+  #zb-audit{position:fixed;inset:0;z-index:99999;background:#05080c;overflow:auto;padding:24px;display:none;}
+  #zb-audit h1{font-size:20px;letter-spacing:3px;margin:0 0 4px;}
+  #zb-audit .sum{font-size:15px;margin-bottom:16px;}
+  #zb-audit .pass{color:#39ff9a;} #zb-audit .fail{color:#ff3b5c;}
+  #zb-audit table{border-collapse:collapse;width:100%;font-size:12px;}
+  #zb-audit td,#zb-audit th{border:1px solid #1d2733;padding:6px 8px;text-align:left;vertical-align:top;}
+  #zb-audit img{width:160px;height:90px;object-fit:cover;border:1px solid #1d2733;display:block;background:#000;}
+  #zb-audit .badge{font-weight:700;padding:2px 8px;border-radius:4px;}
+  #zb-audit .badge.ok{background:#0c3;color:#021;} #zb-audit .badge.no{background:#c03;color:#fee;}
+  pre#zb-json{white-space:pre-wrap;color:#5a7;font-size:11px;margin-top:18px;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="zb-bar">
+  <b>VFX CHECK</b>
+  <div class="grp">THEME
+    <select id="zb-theme"></select>
+  </div>
+  <div class="grp">VIEW
+    <select id="zb-view"></select>
+  </div>
+  <div class="grp" id="zb-fx-grp">FX</div>
+  <div class="grp"><button id="zb-run-audit">▶ RUN AUDIT</button></div>
+</div>
+
+<div id="zb-sub">title scrambles + per-view treatment shown for the selected view</div>
+<div id="zb-hint">ZEROBREACH</div>
+
+<div id="zb-audit"></div>
+<pre id="zb-json" hidden></pre>
+
+<!-- stub ZBSound so themes.apply() never touches AudioContext in a headless/no-gesture context -->
+<script>window.ZBSound = { setTheme(){}, play(){}, setMuted(){}, setVolume(){} };</script>
+<!-- the REAL modules under test -->
+<script src="js/themes.js"></script>
+<script src="js/fx.js"></script>
+
+<script>
+'use strict';
+(function () {
+  const VIEWS = ['launchpad','scanmonitor','findings','remediation','report','ioc','settings'];
+  // canvas-renderer vfx keys (CSS overlays excluded) — mirrors fx.js rebuild()
+  const CANVAS_KEYS = ['rain','gridfloor','radar','embers','starfield','particles',
+                       'waveform','circuit','missilemap','contour','datatags','globe','redact','synthsun'];
+  const CAP = { off:0, lite:0.55, full:1.0, max:1.5 };
+  const qs = new URLSearchParams(location.search);
+
+  // ── faithful copy of app.js ensureViewFxLayer() ──
+  function ensureViewFxLayer() {
+    if (document.getElementById('view-fx')) return;
+    const wrap = document.createElement('div');
+    wrap.id = 'view-fx'; wrap.setAttribute('aria-hidden','true');
+    wrap.innerHTML = '<span class="vfx-a"></span><span class="vfx-b"></span>';
+    document.body.appendChild(wrap);
+  }
+
+  function applyView(v) {
+    ensureViewFxLayer();
+    document.body.classList.toggle('fx-off', ZBFX.getIntensity() === 'off');
+    document.body.dataset.view = v;
+    const titleEl = document.getElementById('zb-hint');
+    ZBFX.decrypt(titleEl, v.toUpperCase(), 700);
+  }
+
+  function setFx(tier) {
+    ZBFX.setIntensity(tier);
+    document.body.classList.toggle('fx-off', tier === 'off');
+    [...document.querySelectorAll('#zb-fx-grp button')].forEach(b =>
+      b.classList.toggle('on', b.dataset.fx === tier));
+  }
+
+  // ── boot ──
+  ZBFX.init();
+  ensureViewFxLayer();
+
+  // build theme dropdown (include secret kraken via force)
+  const themeSel = document.getElementById('zb-theme');
+  ZBThemes.THEMES.forEach(t => {
+    const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; themeSel.appendChild(o);
+  });
+  themeSel.addEventListener('change', () => ZBThemes.apply(themeSel.value, { force:true }));
+
+  const viewSel = document.getElementById('zb-view');
+  VIEWS.forEach(v => { const o=document.createElement('option'); o.value=v; o.textContent=v; viewSel.appendChild(o); });
+  viewSel.addEventListener('change', () => applyView(viewSel.value));
+
+  const fxGrp = document.getElementById('zb-fx-grp');
+  ['off','lite','full','max'].forEach(t => {
+    const b=document.createElement('button'); b.dataset.fx=t; b.textContent=t.toUpperCase();
+    b.addEventListener('click',()=>setFx(t)); fxGrp.appendChild(b);
+  });
+
+  // initial state (URL-overridable for headless runs)
+  const startTheme = qs.get('theme') || 'kraken-blue';
+  const startView  = qs.get('view')  || 'launchpad';
+  const startFx    = qs.get('fx')    || 'full';
+  setFx(startFx);
+  ZBThemes.apply(startTheme, { force:true }); themeSel.value = ZBThemes.current().id;
+  applyView(startView); viewSel.value = startView;
+
+  // ── self-test (audit) ──
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+  // sample #fx-canvas: returns {nonBlank, snapshot:Uint8 strided}
+  function sampleCanvas() {
+    const c = document.getElementById('fx-canvas');
+    if (!c || !c.width) return { nonBlank:0, snap:null, w:0 };
+    const g = c.getContext('2d');
+    let data;
+    try { data = g.getImageData(0,0,c.width,c.height).data; }
+    catch (e) { return { nonBlank:0, snap:null, w:0, err:String(e) }; }
+    const stride = 41; // prime-ish stride over pixels to keep it cheap
+    let nb = 0, n = 0; const snap = [];
+    for (let i = 0; i < data.length; i += 4*stride) {
+      const lum = data[i] + data[i+1] + data[i+2];
+      if (lum > 14) nb++;
+      snap.push(lum); n++;
+    }
+    return { nonBlank: n ? nb/n : 0, snap, w:c.width };
+  }
+
+  function frameDiff(a, b) {
+    if (!a || !b || a.length !== b.length) return 0;
+    let d = 0; for (let i=0;i<a.length;i++) if (Math.abs(a[i]-b[i]) > 20) d++;
+    return d / a.length;
+  }
+
+  function expectedCanvas(theme, tier) {
+    const cap = CAP[tier]; const vfx = theme.vfx || {};
+    return CANVAS_KEYS.some(k => vfx[k] !== undefined && cap > 0 && vfx[k] <= cap);
+  }
+
+  // is any #view-fx pseudo-element active for the current view?
+  function viewFxActive() {
+    const spans = [...document.querySelectorAll('#view-fx .vfx-a, #view-fx .vfx-b')];
+    let total = 0;
+    for (const s of spans) for (const pe of ['::before','::after']) {
+      const cs = getComputedStyle(s, pe);
+      const op = parseFloat(cs.opacity) || 0;
+      const hasContent = cs.content && cs.content !== 'none';
+      if (hasContent && op > 0.001) total += op;
+    }
+    return total;
+  }
+
+  let errors = [];
+  window.addEventListener('error', e => errors.push(e.message));
+
+  async function runAudit() {
+    const tier = 'full';
+    setFx(tier);
+    const themeRows = [], viewRows = [];
+
+    // THEME canvas checks
+    for (const t of ZBThemes.THEMES) {
+      errors = [];
+      ZBThemes.apply(t.id, { force:true });
+      applyView('launchpad');
+      await sleep(260);                 // let renderers build + paint
+      const s1 = sampleCanvas();
+      await sleep(220);                 // second frame for animation diff
+      const s2 = sampleCanvas();
+      const exp = expectedCanvas(t, tier);
+      const diff = frameDiff(s1.snap, s2.snap);
+      const painting = s2.nonBlank > 0.002;       // >0.2% lit pixels
+      const animating = diff > 0.0008;            // some pixels changed
+      let pass = errors.length === 0;
+      let why = [];
+      if (errors.length) why.push('JS error: ' + errors[0]);
+      if (exp) {
+        if (!painting) { pass = false; why.push('canvas blank ('+(s2.nonBlank*100).toFixed(2)+'%)'); }
+        else if (!animating) { why.push('static (Δ '+(diff*100).toFixed(3)+'%) — ok for sparse FX'); }
+      } else {
+        why.push('no canvas renderer for this theme (overlay-only) — skipped pixel check');
+      }
+      const thumb = document.getElementById('fx-canvas').toDataURL('image/jpeg', 0.5);
+      themeRows.push({ id:t.id, name:t.name, pass, exp, paint:+(s2.nonBlank*100).toFixed(2),
+                       anim:+(diff*100).toFixed(3), why:why.join('; '), thumb });
+    }
+
+    // VIEW per-view CSS checks
+    ZBThemes.apply('kraken-blue', { force:true });
+    setFx('full');
+    for (const v of VIEWS) {
+      applyView(v);
+      await sleep(60);
+      const active = viewFxActive();
+      viewRows.push({ view:v, active:+active.toFixed(3), pass: active > 0.001,
+                      why: active > 0.001 ? '' : 'no #view-fx pseudo-element active' });
+    }
+    // OFF must hide the per-view layer
+    setFx('off');
+    const offHidden = getComputedStyle(document.getElementById('view-fx')).display === 'none';
+    setFx('full');
+
+    return render(themeRows, viewRows, offHidden);
+  }
+
+  function render(themeRows, viewRows, offHidden) {
+    const tPass = themeRows.filter(r=>r.pass).length, tAll = themeRows.length;
+    const vPass = viewRows.filter(r=>r.pass).length, vAll = viewRows.length;
+    const allOk = tPass===tAll && vPass===vAll && offHidden;
+    const el = document.getElementById('zb-audit');
+    el.style.display = 'block';
+    el.innerHTML =
+      '<h1>ZEROBREACH VFX AUDIT</h1>' +
+      '<div class="sum">Themes <b class="'+(tPass===tAll?'pass':'fail')+'">'+tPass+'/'+tAll+'</b> · ' +
+        'Views <b class="'+(vPass===vAll?'pass':'fail')+'">'+vPass+'/'+vAll+'</b> · ' +
+        'OFF hides layer <b class="'+(offHidden?'pass':'fail')+'">'+(offHidden?'YES':'NO')+'</b> · ' +
+        'VERDICT <b class="'+(allOk?'pass':'fail')+'">'+(allOk?'PASS':'FAIL')+'</b></div>' +
+      '<table><tr><th>theme</th><th>preview</th><th>renderer</th><th>lit%</th><th>Δ%</th><th>status</th><th>notes</th></tr>' +
+      themeRows.map(r =>
+        '<tr><td>'+r.name+'</td><td><img src="'+r.thumb+'"></td><td>'+(r.exp?'canvas':'overlay')+'</td>' +
+        '<td>'+r.paint+'</td><td>'+r.anim+'</td>' +
+        '<td><span class="badge '+(r.pass?'ok':'no')+'">'+(r.pass?'PASS':'FAIL')+'</span></td>' +
+        '<td>'+r.why+'</td></tr>').join('') +
+      '</table>' +
+      '<h1 style="margin-top:22px">PER-VIEW TREATMENTS</h1>' +
+      '<table><tr><th>view</th><th>active opacity</th><th>status</th><th>notes</th></tr>' +
+      viewRows.map(r =>
+        '<tr><td>'+r.view+'</td><td>'+r.active+'</td>' +
+        '<td><span class="badge '+(r.pass?'ok':'no')+'">'+(r.pass?'PASS':'FAIL')+'</span></td>' +
+        '<td>'+r.why+'</td></tr>').join('') +
+      '</table>';
+
+    const summary = { verdict: allOk?'PASS':'FAIL', themes:{pass:tPass,total:tAll},
+                      views:{pass:vPass,total:vAll}, offHidesLayer:offHidden,
+                      themeRows: themeRows.map(({thumb,...r})=>r), viewRows };
+    window.__ZB_AUDIT = summary;
+    const pre = document.getElementById('zb-json'); pre.hidden = false;
+    pre.textContent = 'ZB_AUDIT_JSON ' + JSON.stringify(summary) + ' ZB_AUDIT_END';
+    document.title = 'VFX AUDIT: ' + summary.verdict + ' (themes '+tPass+'/'+tAll+', views '+vPass+'/'+vAll+')';
+    return summary;
+  }
+
+  // expose for headless drivers (CDP) and the toolbar button
+  window.__zbAudit = runAudit;
+  document.getElementById('zb-run-audit').addEventListener('click', () => { window.__auditPromise = runAudit(); });
+  if (qs.get('audit') === '1') window.__auditPromise = runAudit();
+})();
+</script>
+</body>
+</html>
