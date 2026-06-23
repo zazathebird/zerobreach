@@ -221,9 +221,25 @@ pass everything, so they balloon.
 
 > **Rule:** never call raw `Get-AuthenticodeSignature` — use `Get-AuthSig`. When bundling multiple
 > phases under one `if ($PhasePlan.*)`, give the block its own inner trap.
-> **Still latent (NOT fixed):** `(try {…} catch {…})` used as an *expression* (e.g. `:2758`, plus
-> the `Where-Object` filters that logged "The term 'try' is not recognized") is invalid in PS 5.1 —
-> those filters silently match nothing. Valid only in PS 7+.
+
+## Bugs Fixed (2026-06-23) — `(try{}catch{})`-as-expression silently disabled 2 phases
+
+`(try {…} catch {…})` used as a *sub-expression* (not a statement) parses fine under PS 7 but is a
+**runtime error in Windows PowerShell 5.1** — the engine's actual runtime — where `try` isn't a
+valid expression keyword (`The term 'try' is not recognized`). Inside the two `Where-Object` filters
+that used it, the error was swallowed by the global `-EA SilentlyContinue` and the **whole filter
+matched nothing**, silently disabling those phases on 5.1.
+
+| File | Bug | Fix |
+|---|---|---|
+| `ZeroBreach-V23.ps1` | **Phase 44** (TOKEN/PRIVILEGE ABUSE, `:2216`) — `Where-Object { … -and (try { $_.GetOwnerSid().ReturnValue -eq 0 } catch { $false }) }` matched **zero** processes on PS 5.1, so SYSTEM-level procs running from user paths were never flagged. | Restructured the filter so try/catch is the trailing **statement** (valid in 5.1); the path pre-filter became an early `return $false`. |
+| `ZeroBreach-V23.ps1` | **Phase 69** (PROCESS HOLLOWING, `:2814`) — same `(try{}catch{})` sub-expression on `$_.Modules.Count`; hollow-process detection matched nothing on 5.1. | Same restructure — early `return $false` guards + trailing `try {…} catch { $false }` statement. |
+
+> **Verified on the real runtime:** confirmed the old form throws `term 'try' is not recognized` and
+> matches nothing under `powershell.exe` v5.1, and the new statement form filters correctly. Engine
+> parse-clean under **both** PS 5.1 and PS 7 (0 errors). No remaining `(try{` expression sites.
+> **Rule:** `try/catch` is statement-only in PS 5.1 — never use it as a sub-expression; restructure
+> with early `return`s + a trailing try/catch statement instead.
 
 ## Bugs Fixed (2026-06-06) — NEXT_STEPS Phase 0
 

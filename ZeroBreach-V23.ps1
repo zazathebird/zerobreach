@@ -2213,7 +2213,10 @@ Show-PhaseHeader "PHASE 44" "TOKEN / PRIVILEGE ABUSE — ELEVATED PROCS IN USER 
 Out-Typewriter "CHECKING FOR SYSTEM-LEVEL PROCESSES IN USER PATHS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
 $elevatedInUS = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.Path -match "AppData|Temp|Downloads|Desktop" -and (try { $_.GetOwnerSid().ReturnValue -eq 0 } catch { $false })
+    # NB: try/catch is only valid as a *statement* in PS 5.1 — `(try{}catch{})` as a
+    # sub-expression silently fails to parse and matches nothing. Keep it a statement.
+    if ($_.Path -notmatch "AppData|Temp|Downloads|Desktop") { return $false }
+    try { $_.GetOwnerSid().ReturnValue -eq 0 } catch { $false }
 }
 foreach ($proc in $elevatedInUS) {
     $sid = $proc.GetOwnerSid().Sid
@@ -2808,9 +2811,11 @@ Out-Typewriter "CHECKING FOR PROCESSES WITH ANOMALOUS MODULE COUNTS..." "HUNT"
 Invoke-QuantumBar "PROCESS MEMORY MAP ANALYSIS" 12 120
 $hollowFound = $false
 $hollowCandidates = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.Path -and (Test-Path $_.Path) -and
-    $_.Name -notmatch "^(svchost|System|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|conhost|MsMpEng|NisSrv|SecurityHealth)$" -and
-    (try { $_.Modules.Count -lt 3 } catch { $false })
+    # try/catch must be a statement in PS 5.1 (see Phase 44) — `(try{}catch{})` as a
+    # sub-expression parse-fails and the whole filter silently matches nothing.
+    if (-not ($_.Path -and (Test-Path $_.Path))) { return $false }
+    if ($_.Name -match "^(svchost|System|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|conhost|MsMpEng|NisSrv|SecurityHealth)$") { return $false }
+    try { $_.Modules.Count -lt 3 } catch { $false }
 }
 foreach ($proc in $hollowCandidates) {
     $sig = Get-AuthSig $proc.Path
