@@ -786,9 +786,12 @@ function onRemediationComplete(data) {
 // ── Findings Tree ─────────────────────────────────────────────────────────────
 function initFindingsView() {
   $('btn-select-all').addEventListener('click', () => {
-    // SAFETY: "select all" must never select protected (disabled) findings.
-    $$('#findings-tree input[type=checkbox]').forEach(cb => { if (!cb.disabled) cb.checked = true; });
-    STATE.findings.forEach(f => { if (!f.protected) STATE.selectedFindings.add(f.id); });
+    // SAFETY: "select all" never selects protected (disabled) or trusted-vendor findings.
+    // (Trusted RMM tooling stays individually tickable, but bulk-select skips it.)
+    const allowed = STATE.findings.filter(f => !f.protected && !f.vendor_trusted);
+    STATE.selectedFindings = new Set(allowed.map(f => f.id));          // native id type (str|num)
+    const allowedStr = new Set(allowed.map(f => String(f.id)));         // dataset.id is always a string
+    $$('#findings-tree input[type=checkbox]').forEach(cb => { cb.checked = allowedStr.has(cb.dataset.id); });
     updateRemediationBtn();
   });
 
@@ -874,14 +877,17 @@ function renderFindingsTree() {
       const item      = document.createElement('div');
       item.className  = 'tree-item';
       const shortText = (finding.line || '').substring(0, 120);
-      // SAFETY: protected (system-critical) findings can NEVER be selected or auto-selected.
-      const autoCheck = (finding.severity === 'CRITICAL' || finding.severity === 'HIGH') && !finding.protected;
+      // SAFETY: protected (system-critical) findings can NEVER be selected/auto-selected.
+      // Vendor-trusted (RMM partner tooling) is NOT auto-selected, but stays manually selectable.
+      const autoCheck = (finding.severity === 'CRITICAL' || finding.severity === 'HIGH') && !finding.protected && !finding.vendor_trusted;
       if (finding.protected) item.classList.add('protected');
+      if (finding.vendor_trusted) item.classList.add('vendor-trusted');
       item.innerHTML = `
         <input type="checkbox" data-id="${finding.id}" ${autoCheck ? 'checked' : ''} ${finding.protected ? 'disabled' : ''}>
         <span class="item-sev ${finding.severity}"></span>
         <span class="item-text">${escapeHtml(shortText)}</span>
         ${protectedBadge(finding)}
+        ${vendorBadge(finding)}
         ${mitreBadge(finding)}
         <span class="item-phase">PH${finding.phase}</span>
       `;
@@ -1016,6 +1022,14 @@ function protectedBadge(finding) {
   if (!finding.protected) return '';
   const title = escapeHtml(`PROTECTED — will not be remediated: ${finding.protected_reason || 'system-critical resource'}`);
   return `<span class="item-protected" title="${title}">🛡 PROTECTED</span>`;
+}
+
+// Trusted-vendor badge — legit RMM partner tooling (Datto/CentraStage/Kaseya). Not auto-selected,
+// but still manually selectable so the operator can act if they judge it suspicious.
+function vendorBadge(finding) {
+  if (!finding.vendor_trusted) return '';
+  const title = escapeHtml(`TRUSTED VENDOR — not auto-selected: ${finding.vendor_reason || 'RMM partner tooling'}`);
+  return `<span class="item-vendor" title="${title}">✔ TRUSTED</span>`;
 }
 
 const FIX_ACTION_LABELS = {

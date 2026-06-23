@@ -268,6 +268,23 @@ function Resolve-MitreMain {
     return @{ id = $id; name = $t.name; tactic = $tactic; url = $t.url }
 }
 
+# ── Trusted vendor (RMM partner) allowlist ──────────────────────────────────────
+# Datto / CentraStage / Kaseya are legitimate managed-services partner tooling, NOT malware.
+# Returns a reason if a finding is just this tooling doing its normal job, else ''. This is a
+# *soft* signal (suppresses auto-selection + labels it; the operator can still act manually) —
+# unlike Test-ProtectedTarget which is a hard block. Uses judgment: a vendor-named artifact in a
+# suspicious location, or with an independent malicious signal, is NOT trusted (stays flagged).
+function Test-VendorTrusted {
+    param([string]$Action, [string]$Param, [string]$Target, [string]$Desc)
+    $p = "$Param"; $hay = "$p`n$Target`n$Desc"
+    if ($hay -notmatch '(?i)(centrastage|datto|kaseya|aemagent|cagservice|agentmon|kworking)') { return '' }
+    # Vendor name in a user temp/download/cache location is suspicious for RMM — let it flag.
+    if ($p -match '(?i)\\(Temp|Downloads|INetCache|Temporary Internet Files|Content\.Outlook)\\') { return '' }
+    # Independent strong malicious signal overrides the trust (use judgment — flag if off).
+    if ($hay -match '(?i)(known\s*malware|sha256 matches|matches known|masquerad|hollow|injected|mimikatz|cobalt\s*strike|reverse\s*shell|ransom|\blsass\b|keylog)') { return '' }
+    return 'Datto/CentraStage/Kaseya RMM — trusted partner tooling'
+}
+
 # ── SAFETY: protected-resource guard ────────────────────────────────────────────
 # Priority #1 — the tool must NEVER remediate (or even auto-select) anything that would
 # damage the system. Returns a human reason if the fix would touch a protected resource,
@@ -328,6 +345,7 @@ function Get-EngineReportFindings {
         $line = if ($f.Target) { "$($f.Description) -> $($f.Target)" } else { "$($f.Description)" }
         $mit  = Resolve-MitreMain $line $tt $phNum
         $prot = Test-ProtectedTarget "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
+        $vend = Test-VendorTrusted   "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
         [void]$out.Add([ordered]@{
             id               = "$($f.ID)"
             line             = $line
@@ -339,6 +357,8 @@ function Get-EngineReportFindings {
             fix_param        = "$($f.FixParam)"
             protected        = [bool]$prot
             protected_reason = $prot
+            vendor_trusted   = [bool]$vend
+            vendor_reason    = $vend
             mitre            = $mit
             mitre_id         = if ($mit) { $mit.id } else { $null }
             timestamp        = "$($f.Timestamp)"

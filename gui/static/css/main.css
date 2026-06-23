@@ -719,6 +719,21 @@ body::after {
 .tree-item.protected .item-text { font-style: italic; }
 .tree-item.protected input[type=checkbox] { cursor: not-allowed; }
 
+/* Trusted vendor (RMM partner: Datto/CentraStage/Kaseya) — not auto-selected, still selectable */
+.item-vendor {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  color: #5ad19a;
+  border: 1px solid #5ad19a88;
+  background: rgba(90, 209, 154, 0.12);
+}
+.tree-item.vendor-trusted .item-text { opacity: 0.85; }
+
 /* IOC Manager */
 .ioc-status { margin-top: 10px; font-size: 11px; color: var(--text-dim); word-break: break-all; }
 #ioc-table .ioc-val { color: var(--text); font-family: "JetBrains Mono", ui-monospace, monospace; word-break: break-all; }
