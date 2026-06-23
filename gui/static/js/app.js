@@ -749,6 +749,9 @@ function loadEngineFindings(name) {
       STATE.findings = notable;
       STATE.selectedFindings.clear();
       updateBadge();
+      // Correct the completion modal: the live SSE count is ~0 in GUI mode (engine emits clean
+      // output); the engine report is the real total. notable = actionable, list = all severities.
+      updateCompleteModalCounts(list.length, notable.length);
       if (STATE.currentView === 'findings')   renderFindingsTree();
       if (STATE.currentView === 'report')     buildReport();
       if (STATE.currentView === 'remediation') renderRemediationView();
@@ -756,23 +759,36 @@ function loadEngineFindings(name) {
     .catch(() => {});
 }
 
+// Update the "scan complete" modal headline numbers once the engine report has loaded.
+function updateCompleteModalCounts(total, notable) {
+  const modal = $('modal-complete');
+  if (!modal || modal.classList.contains('hidden')) return;
+  const nums = $('modal-summary').querySelectorAll('.complete-stat-num');
+  if (nums[0]) ZBFX.countUp(nums[0], total, 700);
+  if (nums[1]) ZBFX.countUp(nums[1], notable, 700);
+}
+
 function onRemediationComplete(data) {
   STATE.remediating = false;
   $$('#action-queue .queue-item .queue-status').forEach(s => { s.textContent = '✓'; });
   $$('#action-queue .queue-item').forEach(it => it.style.opacity = '0.6');
+  const blocked = data.blocked || 0;
   const btn = $('btn-execute');
-  if (btn) { btn.disabled = true; btn.textContent = `✓ APPLIED ${data.applied} · FAILED ${data.failed} · SKIPPED ${data.skipped}`; }
+  if (btn) { btn.disabled = true; btn.textContent = `✓ APPLIED ${data.applied} · FAILED ${data.failed} · SKIPPED ${data.skipped}${blocked ? ' · 🛡 ' + blocked : ''}`; }
   $('sb-status').textContent = '● REMEDIATED';
   $('sb-status').style.color = 'var(--threat-clean)';
-  showToast(`Remediation complete — ${data.applied} applied, ${data.failed} failed, ${data.skipped} skipped`);
+  let msg = `Remediation complete — ${data.applied} applied, ${data.failed} failed, ${data.skipped} skipped`;
+  if (blocked) msg += `; 🛡 ${blocked} BLOCKED (protected system resources)`;
+  showToast(msg);
   ZBSound.play('complete');
 }
 
 // ── Findings Tree ─────────────────────────────────────────────────────────────
 function initFindingsView() {
   $('btn-select-all').addEventListener('click', () => {
-    $$('#findings-tree input[type=checkbox]').forEach(cb => cb.checked = true);
-    STATE.findings.forEach(f => STATE.selectedFindings.add(f.id));
+    // SAFETY: "select all" must never select protected (disabled) findings.
+    $$('#findings-tree input[type=checkbox]').forEach(cb => { if (!cb.disabled) cb.checked = true; });
+    STATE.findings.forEach(f => { if (!f.protected) STATE.selectedFindings.add(f.id); });
     updateRemediationBtn();
   });
 
@@ -858,11 +874,14 @@ function renderFindingsTree() {
       const item      = document.createElement('div');
       item.className  = 'tree-item';
       const shortText = (finding.line || '').substring(0, 120);
-      const autoCheck = finding.severity === 'CRITICAL' || finding.severity === 'HIGH';
+      // SAFETY: protected (system-critical) findings can NEVER be selected or auto-selected.
+      const autoCheck = (finding.severity === 'CRITICAL' || finding.severity === 'HIGH') && !finding.protected;
+      if (finding.protected) item.classList.add('protected');
       item.innerHTML = `
-        <input type="checkbox" data-id="${finding.id}" ${autoCheck ? 'checked' : ''}>
+        <input type="checkbox" data-id="${finding.id}" ${autoCheck ? 'checked' : ''} ${finding.protected ? 'disabled' : ''}>
         <span class="item-sev ${finding.severity}"></span>
         <span class="item-text">${escapeHtml(shortText)}</span>
+        ${protectedBadge(finding)}
         ${mitreBadge(finding)}
         <span class="item-phase">PH${finding.phase}</span>
       `;
@@ -874,6 +893,12 @@ function renderFindingsTree() {
       if (mb) mb.addEventListener('click', e => e.stopPropagation());
 
       const cb = item.querySelector('input');
+      if (finding.protected) {
+        // Hard stop in the UI: cannot be ticked at all (the server also refuses it).
+        STATE.selectedFindings.delete(finding.id);
+        itemsEl.appendChild(item);
+        return;
+      }
       cb.addEventListener('change', () => {
         if (!cb.checked && finding.severity === 'CRITICAL') {
           showWarnModal(
@@ -985,6 +1010,14 @@ function mitreBadge(finding) {
   return `<a class="item-mitre" href="${href}" target="_blank" rel="noopener" title="${title}">${escapeHtml(m.id)}</a>`;
 }
 
+// SAFETY badge — system-critical resource the tool will never remediate (cert store,
+// Windows/system files, user dotfiles, SafeBoot/core registry, critical processes).
+function protectedBadge(finding) {
+  if (!finding.protected) return '';
+  const title = escapeHtml(`PROTECTED — will not be remediated: ${finding.protected_reason || 'system-critical resource'}`);
+  return `<span class="item-protected" title="${title}">🛡 PROTECTED</span>`;
+}
+
 const FIX_ACTION_LABELS = {
   KillProcess:  'KILL PROCESS',
   DeleteFile:   'DELETE FILE',
@@ -1018,7 +1051,13 @@ function executeRemediation(findings) {
     ZBSound.play('alert');
     return;
   }
-  const ids = findings.map(f => f.id);
+  // SAFETY (belt-and-suspenders): never send protected findings — the server also refuses them.
+  const ids = findings.filter(f => !f.protected).map(f => f.id);
+  if (ids.length === 0) {
+    showToast('Nothing to remediate — all selected items are protected system resources.');
+    ZBSound.play('alert');
+    return;
+  }
   const btn = $('btn-execute');
   btn.disabled = true;
   btn.textContent = '⏳ REMEDIATING...';

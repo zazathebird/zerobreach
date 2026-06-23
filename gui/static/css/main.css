@@ -702,6 +702,23 @@ body::after {
 .item-mitre:hover { background: color-mix(in srgb, var(--accent) 28%, transparent); box-shadow: 0 0 6px var(--accent-glow, var(--accent)); }
 .report-card .item-mitre { margin-left: 6px; }
 
+/* SAFETY: protected (system-critical) findings — never remediated */
+.item-protected {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  white-space: nowrap;
+  color: #ffd166;
+  border: 1px solid #ffd16688;
+  background: rgba(255, 209, 102, 0.12);
+}
+.tree-item.protected { opacity: 0.72; }
+.tree-item.protected .item-text { font-style: italic; }
+.tree-item.protected input[type=checkbox] { cursor: not-allowed; }
+
 /* IOC Manager */
 .ioc-status { margin-top: 10px; font-size: 11px; color: var(--text-dim); word-break: break-all; }
 #ioc-table .ioc-val { color: var(--text); font-family: "JetBrains Mono", ui-monospace, monospace; word-break: break-all; }
