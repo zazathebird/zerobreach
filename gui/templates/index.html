@@ -348,10 +348,13 @@
           </table>
         </div>
         <div class="file-input-row">
-          <input type="text" id="ioc-add-val" class="path-input" placeholder="Add IOC value...">
+          <input type="text" id="ioc-add-val" class="path-input" placeholder="Add IOC value to active tab...">
           <button class="cyber-btn-sm" id="btn-ioc-add">+ ADD</button>
           <button class="cyber-btn-sm" id="btn-ioc-import">📁 IMPORT FILE</button>
+          <button class="cyber-btn-sm" id="btn-ioc-save">💾 SAVE &amp; USE</button>
+          <input type="file" id="ioc-file-input" accept=".json,.ioc,.txt" style="display:none">
         </div>
+        <div id="ioc-status" class="ioc-status"></div>
       </div>
 
       <!-- ── VIEW: SETTINGS ──────────────────────────────────────── -->

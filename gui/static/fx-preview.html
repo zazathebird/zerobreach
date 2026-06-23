@@ -190,19 +190,22 @@
       const s2 = sampleCanvas();
       const exp = expectedCanvas(t, tier);
       const diff = frameDiff(s1.snap, s2.snap);
-      const painting = s2.nonBlank > 0.002;       // >0.2% lit pixels
+      // Pool both sampled frames: sparse twinkling themes (e.g. NEBULA starfield) light up
+      // different pixels each frame, so a single-frame sample dips below threshold at random.
+      const litPct = Math.max(s1.nonBlank, s2.nonBlank);
+      const painting = litPct > 0.0012;           // >0.12% lit — sparse FX is faint but NOT blank (~0%)
       const animating = diff > 0.0008;            // some pixels changed
       let pass = errors.length === 0;
       let why = [];
       if (errors.length) why.push('JS error: ' + errors[0]);
       if (exp) {
-        if (!painting) { pass = false; why.push('canvas blank ('+(s2.nonBlank*100).toFixed(2)+'%)'); }
+        if (!painting) { pass = false; why.push('canvas blank ('+(litPct*100).toFixed(2)+'%)'); }
         else if (!animating) { why.push('static (Δ '+(diff*100).toFixed(3)+'%) — ok for sparse FX'); }
       } else {
         why.push('no canvas renderer for this theme (overlay-only) — skipped pixel check');
       }
       const thumb = document.getElementById('fx-canvas').toDataURL('image/jpeg', 0.5);
-      themeRows.push({ id:t.id, name:t.name, pass, exp, paint:+(s2.nonBlank*100).toFixed(2),
+      themeRows.push({ id:t.id, name:t.name, pass, exp, paint:+(litPct*100).toFixed(2),
                        anim:+(diff*100).toFixed(3), why:why.join('; '), thumb });
     }
 

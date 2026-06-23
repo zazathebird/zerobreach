@@ -16,6 +16,11 @@ const STATE = {
   findings: [],
   threatCounts: {},
   selectedFindings: new Set(),
+  ioc: null,            // { hashes, ips, domains, regex, files, _path }
+  iocTab: 'hashes',
+  iocLoaded: false,
+  engineReport: '',     // filename of the engine's rich report (drives real remediation)
+  remediating: false,
   mspBuffer: '',
   mspMode: false,
   logFilter: 'ALL',
@@ -94,6 +99,7 @@ function initApp() {
   initLaunchPad();
   initScanMonitor();
   initFindingsView();
+  initIocView();
   initMspListener();
   loadSysInfo();
   startVitalsPoller();
@@ -194,6 +200,9 @@ function dispatchEvent(data) {
       STATE.scanComplete = true;
       if (data.threat_counts) STATE.threatCounts = data.threat_counts;
       onScanComplete(data);
+      break;
+    case 'remediation_complete':
+      onRemediationComplete(data);
       break;
   }
 }
@@ -315,6 +324,7 @@ function switchView(viewId) {
   if (viewId === 'report')      buildReport();
   if (viewId === 'findings')    renderFindingsTree();
   if (viewId === 'remediation') renderRemediationView();
+  if (viewId === 'ioc')         renderIocTable();
 }
 
 // Build the per-view FX layer once. Two spans give CSS up to four decorative
@@ -719,6 +729,43 @@ function onScanComplete(data) {
   $('modal-btn-findings').onclick = () => { $('modal-complete').classList.add('hidden'); switchView('findings'); };
   $('modal-btn-report').onclick   = () => { $('modal-complete').classList.add('hidden'); switchView('report'); };
   $('modal-btn-close').onclick    = () => $('modal-complete').classList.add('hidden');
+
+  // Swap in the engine's rich findings (carry real FixAction + MITRE) so remediation
+  // can actually act. Falls back silently to the live SSE findings if unavailable.
+  if (data.engine_report) loadEngineFindings(data.engine_report);
+}
+
+// Replace the live SSE findings with the engine's authoritative report findings.
+function loadEngineFindings(name) {
+  fetch('/api/report?name=' + encodeURIComponent(name))
+    .then(r => r.json())
+    .then(list => {
+      if (!Array.isArray(list)) return;
+      // Keep the findings view focused on notable severities (matches the live view),
+      // but each now carries fix_action/fix_param for real remediation.
+      const notable = list.filter(f => ['CRITICAL', 'HIGH', 'POSSIBLE'].includes(f.severity));
+      if (notable.length === 0) return;          // nothing actionable — keep SSE findings
+      STATE.engineReport = name;
+      STATE.findings = notable;
+      STATE.selectedFindings.clear();
+      updateBadge();
+      if (STATE.currentView === 'findings')   renderFindingsTree();
+      if (STATE.currentView === 'report')     buildReport();
+      if (STATE.currentView === 'remediation') renderRemediationView();
+    })
+    .catch(() => {});
+}
+
+function onRemediationComplete(data) {
+  STATE.remediating = false;
+  $$('#action-queue .queue-item .queue-status').forEach(s => { s.textContent = '✓'; });
+  $$('#action-queue .queue-item').forEach(it => it.style.opacity = '0.6');
+  const btn = $('btn-execute');
+  if (btn) { btn.disabled = true; btn.textContent = `✓ APPLIED ${data.applied} · FAILED ${data.failed} · SKIPPED ${data.skipped}`; }
+  $('sb-status').textContent = '● REMEDIATED';
+  $('sb-status').style.color = 'var(--threat-clean)';
+  showToast(`Remediation complete — ${data.applied} applied, ${data.failed} failed, ${data.skipped} skipped`);
+  ZBSound.play('complete');
 }
 
 // ── Findings Tree ─────────────────────────────────────────────────────────────
@@ -816,10 +863,15 @@ function renderFindingsTree() {
         <input type="checkbox" data-id="${finding.id}" ${autoCheck ? 'checked' : ''}>
         <span class="item-sev ${finding.severity}"></span>
         <span class="item-text">${escapeHtml(shortText)}</span>
+        ${mitreBadge(finding)}
         <span class="item-phase">PH${finding.phase}</span>
       `;
 
       if (autoCheck) STATE.selectedFindings.add(finding.id);
+
+      // MITRE badge opens the technique page without toggling the checkbox row.
+      const mb = item.querySelector('.item-mitre');
+      if (mb) mb.addEventListener('click', e => e.stopPropagation());
 
       const cb = item.querySelector('input');
       cb.addEventListener('change', () => {
@@ -870,7 +922,10 @@ function renderRemediationView() {
   });
 
   $('queue-count').textContent = `${selected.length} actions pending`;
-  $('btn-execute').disabled    = selected.length === 0;
+  if (!STATE.remediating) {
+    $('btn-execute').innerHTML = '<span class="initiate-icon">⚡</span><span class="initiate-text">EXECUTE REMEDIATION</span>';
+  }
+  $('btn-execute').disabled    = selected.length === 0 || STATE.remediating;
   $('btn-execute').onclick     = () => showDangerConfirm(
     'PURGE',
     `You are about to execute ${selected.length} remediation action(s) — kills, quarantines, and registry deletions are irreversible without the rollback snapshot.`,
@@ -921,7 +976,32 @@ function renderFindingsTreeMini(findings) {
   });
 }
 
+// MITRE ATT&CK badge — links to the technique page; tagged server-side per finding.
+function mitreBadge(finding) {
+  const m = finding.mitre;
+  if (!m || !m.id) return '';
+  const title = escapeHtml(`${m.id} — ${m.name || ''}${m.tactic ? ' · ' + m.tactic : ''}`);
+  const href  = m.url ? escapeHtml(m.url) : `https://attack.mitre.org/techniques/${m.id.replace('.', '/')}/`;
+  return `<a class="item-mitre" href="${href}" target="_blank" rel="noopener" title="${title}">${escapeHtml(m.id)}</a>`;
+}
+
+const FIX_ACTION_LABELS = {
+  KillProcess:  'KILL PROCESS',
+  DeleteFile:   'DELETE FILE',
+  DeleteReg:    'DELETE REG VALUE',
+  DeleteRegKey: 'DELETE REG KEY',
+  Quarantine:   'QUARANTINE FILE',
+  RunCmd:       'RUN FIX COMMAND',
+  Info:         'FLAG / REVIEW',
+  None:         'FLAG / REVIEW',
+};
+
 function inferAction(finding) {
+  // Prefer the engine's authoritative FixAction when present (rich report findings).
+  if (finding.fix_action) {
+    return { label: FIX_ACTION_LABELS[finding.fix_action] || finding.fix_action.toUpperCase(), type: finding.fix_action };
+  }
+  // Heuristic fallback for live SSE findings (no engine report loaded).
   const text = (finding.line || '').toLowerCase();
   if (text.includes('process') || text.includes('pid'))                          return { label: 'KILL PROCESS',    type: 'kill' };
   if (text.includes('registry') || text.includes('hkcu') || text.includes('hklm')) return { label: 'DELETE REG KEY', type: 'reg' };
@@ -932,28 +1012,174 @@ function inferAction(finding) {
 }
 
 function executeRemediation(findings) {
-  const items = $$('#action-queue .queue-item');
-  let idx = 0;
-
-  function processNext() {
-    if (idx >= items.length) {
-      $('btn-execute').textContent = '✓ REMEDIATION COMPLETE';
-      $('sb-status').textContent   = '● REMEDIATED';
-      $('sb-status').style.color   = 'var(--threat-clean)';
-      return;
-    }
-    const item   = items[idx];
-    const status = item.querySelector('.queue-status');
-    status.textContent = '⏳';
-    setTimeout(() => {
-      status.textContent = '✓';
-      item.style.opacity = '0.5';
-      idx++;
-      processNext();
-    }, 300 + Math.random() * 400);
+  // Real remediation requires the engine's rich report (carries FixAction/FixParam).
+  if (!STATE.engineReport) {
+    showToast('No engine report available — cannot remediate. Re-run the scan.');
+    ZBSound.play('alert');
+    return;
   }
+  const ids = findings.map(f => f.id);
+  const btn = $('btn-execute');
+  btn.disabled = true;
+  btn.textContent = '⏳ REMEDIATING...';
+  STATE.remediating = true;
+  $$('#action-queue .queue-item .queue-status').forEach(s => { s.textContent = '⏳'; });
 
-  processNext();
+  fetch('/api/remediate', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ report: STATE.engineReport, ids }),
+  })
+    .then(r => r.json().then(j => { if (!r.ok || j.error) throw new Error(j.error || r.status); return j; }))
+    .then(() => {
+      // Live [FIX] lines stream into the scan-monitor log; completion arrives via SSE.
+      showToast('Remediation started — watch the live log');
+      $('sb-status').textContent = '● REMEDIATING';
+      $('sb-status').style.color = 'var(--threat-high)';
+    })
+    .catch(e => {
+      STATE.remediating = false;
+      btn.disabled = false;
+      btn.textContent = '⚠ EXECUTE REMEDIATION';
+      showToast('Remediation failed to start: ' + e.message);
+      ZBSound.play('alert');
+    });
+}
+
+// ── IOC Manager ───────────────────────────────────────────────────────────────
+const IOC_CATS = ['hashes', 'ips', 'domains', 'regex', 'files'];
+const IOC_TAB_TO_CAT = { hashes: 'hashes', ips: 'ips', domains: 'domains', regex: 'regex', files: 'files' };
+
+function emptyIoc() { return { hashes: [], ips: [], domains: [], regex: [], files: [], _path: '' }; }
+
+function initIocView() {
+  // Tabs
+  $$('#view-ioc .ioc-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      $$('#view-ioc .ioc-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      STATE.iocTab = tab.dataset.tab;
+      renderIocTable();
+      ZBSound.play('tab');
+    });
+  });
+
+  $('btn-ioc-add').addEventListener('click', addIocValue);
+  $('ioc-add-val').addEventListener('keydown', e => { if (e.key === 'Enter') { addIocValue(); e.stopPropagation(); } });
+  $('btn-ioc-import').addEventListener('click', () => $('ioc-file-input').click());
+  $('ioc-file-input').addEventListener('change', importIocFile);
+  $('btn-ioc-save').addEventListener('click', saveIoc);
+}
+
+function loadIoc() {
+  return fetch('/api/ioc')
+    .then(r => r.json())
+    .then(data => {
+      STATE.ioc = Object.assign(emptyIoc(), data);
+      IOC_CATS.forEach(c => { if (!Array.isArray(STATE.ioc[c])) STATE.ioc[c] = STATE.ioc[c] ? [STATE.ioc[c]] : []; });
+      STATE.iocLoaded = true;
+    })
+    .catch(() => { STATE.ioc = emptyIoc(); STATE.iocLoaded = true; });
+}
+
+function renderIocTable() {
+  if (!STATE.iocLoaded) { loadIoc().then(renderIocTable); return; }
+  const tbody = $('ioc-tbody');
+  if (!tbody) return;
+  const cat = IOC_TAB_TO_CAT[STATE.iocTab] || 'hashes';
+  const list = STATE.ioc[cat] || [];
+  tbody.innerHTML = '';
+  if (list.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--text-dim);padding:14px">NO ${cat.toUpperCase()} — ADD ONE BELOW OR IMPORT A FILE</td></tr>`;
+  } else {
+    list.forEach((val, i) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${cat.slice(0, -1).toUpperCase()}</td><td class="ioc-val">${escapeHtml(String(val))}</td><td>${STATE.ioc._custom ? 'CUSTOM' : 'DEFAULT'}</td><td><button class="cyber-btn-sm ioc-del" data-i="${i}">✕</button></td>`;
+      tr.querySelector('.ioc-del').addEventListener('click', () => { STATE.ioc[cat].splice(i, 1); renderIocTable(); ZBSound.play('click'); });
+      tbody.appendChild(tr);
+    });
+  }
+  const total = IOC_CATS.reduce((n, c) => n + (STATE.ioc[c] ? STATE.ioc[c].length : 0), 0);
+  const st = $('ioc-status');
+  if (st) st.textContent = `${total} indicators across ${IOC_CATS.length} categories` + (STATE.ioc._path ? ` · active file: ${STATE.ioc._path}` : ' · not yet saved');
+}
+
+function addIocValue() {
+  const input = $('ioc-add-val');
+  const val = input.value.trim();
+  if (!val) return;
+  const cat = IOC_TAB_TO_CAT[STATE.iocTab] || 'hashes';
+  if (!STATE.ioc) STATE.ioc = emptyIoc();
+  if (!STATE.ioc[cat].includes(val)) STATE.ioc[cat].push(val);
+  input.value = '';
+  renderIocTable();
+  ZBSound.play('confirm');
+}
+
+// Accepts either our JSON shape or the engine's prefixed/bare text format.
+function importIocFile(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const text = String(reader.result || '');
+    if (!STATE.ioc) STATE.ioc = emptyIoc();
+    let added = 0;
+    const tryJson = () => { try { return JSON.parse(text); } catch { return null; } };
+    const j = tryJson();
+    if (j && typeof j === 'object') {
+      IOC_CATS.forEach(c => {
+        (Array.isArray(j[c]) ? j[c] : []).forEach(v => { v = String(v).trim(); if (v && !STATE.ioc[c].includes(v)) { STATE.ioc[c].push(v); added++; } });
+      });
+    } else {
+      text.split(/\r?\n/).forEach(raw => {
+        const line = raw.trim();
+        if (!line || line.startsWith('#')) return;
+        const m = line.match(/^(hash|md5|sha1|sha256|domain|host|ip|cidr|regex|pattern|file)\s*:\s*(.+)$/i);
+        let cat, val;
+        if (m) {
+          val = m[2].trim();
+          const k = m[1].toLowerCase();
+          cat = (k === 'hash' || k === 'md5' || k === 'sha1' || k === 'sha256') ? 'hashes'
+              : (k === 'domain' || k === 'host') ? 'domains'
+              : (k === 'ip' || k === 'cidr') ? 'ips'
+              : (k === 'regex' || k === 'pattern') ? 'regex' : 'files';
+        } else {
+          val = line;
+          if (/^[a-f0-9]{32}$|^[a-f0-9]{40}$|^[a-f0-9]{64}$/i.test(line)) cat = 'hashes';
+          else if (/^\d{1,3}(\.\d{1,3}){3}(\/\d{1,2})?$/.test(line)) cat = 'ips';
+          else if (/^[a-z0-9.\-]+\.[a-z]{2,}$/i.test(line)) cat = 'domains';
+          else cat = 'regex';
+        }
+        if (val && !STATE.ioc[cat].includes(val)) { STATE.ioc[cat].push(val); added++; }
+      });
+    }
+    renderIocTable();
+    showToast(`Imported ${added} indicator(s) from ${file.name}`);
+    ZBSound.play('deploy');
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+}
+
+function saveIoc() {
+  if (!STATE.ioc) STATE.ioc = emptyIoc();
+  const payload = {};
+  IOC_CATS.forEach(c => payload[c] = STATE.ioc[c] || []);
+  $('btn-ioc-save').disabled = true;
+  fetch('/api/ioc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+    .then(r => r.json())
+    .then(res => {
+      if (res.error) throw new Error(res.error);
+      STATE.ioc._path = res.path;
+      STATE.ioc._custom = true;
+      if ($('ioc-path')) $('ioc-path').value = res.path;   // scans now pass this via -IocFile
+      renderIocTable();
+      showToast(`Saved ${res.count} IOCs → scans will use this file`);
+      ZBSound.play('complete');
+    })
+    .catch(e => { showToast(`IOC save failed: ${e.message}`); ZBSound.play('alert'); })
+    .finally(() => { $('btn-ioc-save').disabled = false; });
 }
 
 // ── Report View ───────────────────────────────────────────────────────────────
@@ -971,7 +1197,7 @@ function buildReport() {
   STATE.findings.filter(f => f.severity === 'CRITICAL').slice(0, 6).forEach(f => {
     const card = document.createElement('div');
     card.className = 'report-card critical';
-    card.innerHTML = `<div class="card-sev" style="color:var(--threat-critical)">🔴 CRITICAL — ${f.threat_type || 'Unknown'}</div><div class="card-text">${escapeHtml((f.line || '').substring(0, 100))}</div>`;
+    card.innerHTML = `<div class="card-sev" style="color:var(--threat-critical)">🔴 CRITICAL — ${f.threat_type || 'Unknown'} ${mitreBadge(f)}</div><div class="card-text">${escapeHtml((f.line || '').substring(0, 100))}</div>`;
     cardsEl.appendChild(card);
   });
   if (!STATE.findings.some(f => f.severity === 'CRITICAL')) {
@@ -1121,6 +1347,22 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+// Transient bottom-right notification.
+function showToast(msg) {
+  let host = $('zb-toast-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'zb-toast-host';
+    document.body.appendChild(host);
+  }
+  const t = document.createElement('div');
+  t.className = 'zb-toast';
+  t.textContent = msg;
+  host.appendChild(t);
+  requestAnimationFrame(() => t.classList.add('show'));
+  setTimeout(() => { t.classList.remove('show'); setTimeout(() => t.remove(), 350); }, 3200);
+}
+
 function formatTime(seconds) {
   const m = Math.floor(seconds / 60);
   const s = seconds % 60;
@@ -1138,6 +1380,15 @@ function exportReport(format) {
     a.href = URL.createObjectURL(blob);
     a.download = `zerobreach_report_${Date.now()}.json`;
     a.click();
+  } else if (format === 'html' || format === 'csv') {
+    // Server renders from current scan state (includes MITRE tags) and streams a download.
+    ZBSound.play('click');
+    const a = document.createElement('a');
+    a.href = `/api/export/${format}`;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 }
 

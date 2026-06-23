@@ -141,12 +141,65 @@ but the Python build is parked — see `NEXT_STEPS.md`.)
 | Event (server→client) | Key payload fields |
 |---|---|
 | `log_line` | `text, severity, phase, elapsed` |
-| `finding` | `id, line, severity, threat_type, phase, timestamp` |
+| `finding` | `id, line, severity, threat_type, phase, mitre {id,name,tactic,url}, mitre_id, timestamp` |
 | `scan_state` | `phase, phase_total, phase_name, section, elapsed, threat_counts, running` |
-| `scan_complete` | `findings_count, threat_counts, elapsed, results_path` |
+| `scan_complete` | `findings_count, threat_counts, elapsed, results_path, engine_report` |
+| `remediation_complete` | `applied, failed, skipped` |
 | `sync` (SSE/PS server only) | Full state snapshot on connect/reconnect |
 
 Client→server: `ping_state` (SocketIO) requests an immediate `scan_state` emit.
+
+## Feature wiring completed 2026-06-23 (MITRE, IOC Manager, HTML/CSV export, STEALTH, real remediation)
+
+All in `ZeroBreach-Server.ps1` + `gui/`. **Engine (`ZeroBreach-V23.ps1`) was NOT touched** — zero
+scan-regression risk. All PS edits parse-clean on 5.1 **and** 7 (file-level + every embedded
+here-string validated separately — `[Parser]::ParseFile` does NOT check here-string bodies, so the
+runspace scripts are checked with a dedicated extractor). **Live admin end-to-end run still pending.**
+
+- **MITRE ATT&CK tagging.** Server loads `data/mitre_mapping.json` once and injects it into the scan
+  runspace; `Resolve-Mitre` (runspace) / `Resolve-MitreMain` (main thread) resolve each finding via
+  keyword_map → threat_type_map → phase_map and attach `mitre {id,name,tactic,url}`. Frontend renders
+  a clickable `.item-mitre` badge (findings tree + report cards) via `mitreBadge()`. ~1366/1371
+  findings tag on a real report.
+- **New HTTP routes** (`ZeroBreach-Server.ps1`):
+  - `GET /api/export/html`, `GET /api/export/csv` — server-rendered downloadable report from current
+    findings (`Get-HtmlReport`/`Get-CsvReport`, `Write-DownloadResponse`). Frontend `exportReport()`
+    wires the existing HTML/CSV buttons to these; JSON stays client-side.
+  - `GET /api/ioc` / `POST /api/ioc` — IOC Manager. GET returns saved set (`reports/custom_iocs.json`)
+    else `data/ioc_defaults.json`. POST writes BOTH the JSON sidecar **and** `reports/custom_iocs.ioc`
+    in the engine's **prefixed text format** (`hash:`/`ip:`/`domain:`/`regex:`/`file:`) — the engine's
+    `Import-CustomIocs` parses TEXT, not JSON, and bare `nc.exe` would misdetect as a domain, so
+    prefixes are mandatory. POST returns the `.ioc` path; the frontend drops it into the config
+    `ioc-path` field so the next scan passes it via `-IocFile`.
+  - `GET /api/report?name=<file>` — returns the engine's **rich** report findings (capital-`Findings`
+    with `FixAction`/`FixParam`) normalized + MITRE-enriched (`Get-EngineReportFindings`). Name is
+    basename-validated against `^(KrakenBaseline_|audit_).*\.json$`.
+  - `POST /api/remediate {report, ids[]}` — spawns the self-contained `$script:REMEDIATE_SCRIPT`
+    runspace which loads the report, filters to the selected engine `ID`s, and applies the
+    FixAction (DeleteFile/DeleteReg/DeleteRegKey/KillProcess/RunCmd/Quarantine) — a faithful mirror of
+    the engine's `Invoke-FixMode` switch. Streams `[FIX]` lines via the same SSE event log, then a
+    `remediation_complete` event. Report path is basename-locked to `reports/`. **The server is the
+    remediation driver** (engine stays audit-only in `-Auto`); chosen over an engine apply-mode because
+    `Invoke-FixMode` is defined after the scan body, so a fix-only engine path would mean wrapping the
+    whole 5k-line scan in a conditional — too invasive. Duplication of the ~7-case switch is the lesser evil.
+- **STEALTH JSON parsing.** The scan runspace now buffers stdout when `stealth` is set and, after the
+  child exits, parses the engine's single compressed-JSON audit blob into `finding`/`log_line` events
+  (the engine writes the blob *and* `KrakenBaseline_*.json` before its stealth exit, so remediation
+  works for stealth scans too).
+- **Real remediation (frontend).** On `scan_complete` the server reports `engine_report` (the newest
+  `KrakenBaseline_*.json` from this run); `loadEngineFindings()` swaps `STATE.findings` to the rich
+  engine findings (notable severities) so the findings/remediation views carry real FixActions + MITRE.
+  `executeRemediation()` POSTs selected IDs to `/api/remediate` (behind the existing PURGE confirm);
+  `inferAction()` now uses the real `fix_action`. Falls back to the live SSE findings (no real
+  remediation) if the engine report is unavailable.
+- **FX audit threshold fix** (`gui/static/fx-preview.html`): the NEBULA starfield is so sparse it
+  flaked the 0.2%-lit "blank canvas" check; now pools both sampled frames and uses a 0.12% threshold
+  (still well above a truly blank ~0% canvas). Audit back to PASS 13/13.
+
+> **Not yet validated live:** a real admin `Launch-GUI.bat` run exercising export downloads, IOC
+> save→scan, STEALTH parsing, and especially **destructive remediation** (file/registry/process
+> changes). Logic is unit-tested (report mapping, IOC text emit, id-filter, HTML/CSV render) but the
+> end-to-end browser+admin path is unconfirmed.
 
 ## GUI Feature Layer (added 2026-06-09, harvested from the deleted "gui from other project" folder)
 
@@ -377,11 +430,10 @@ file. Remaining `-Recurse` calls are over small/system roots (System32\Tasks, sp
 > using multiple sub-agents). Start there after a /clear. Phases 0 & 1 of `NEXT_STEPS.md` and the
 > AMSI block are DONE (2026-06-06); the live Phase-107 GUI run is the last unvalidated item.
 
-**Core (see `NEXT_STEPS.md` for the prioritized, PowerShell-only plan):** ~~scan-blocking `Read-Host` prompts~~ and ~~scan-state reset / re-run handling~~ are DONE (Phase 0, 2026-06-06 — pending a live admin run to validate). Remaining: **USB portability (Phase 1 — next)**, STEALTH mode JSON parsing, MITRE tagging via `data/mitre_mapping.json`, surface rollback snapshot path, wire `btn-execute` to actual remediation.
+**Core (see `NEXT_STEPS.md` for the prioritized, PowerShell-only plan):** ~~scan-blocking `Read-Host` prompts~~ and ~~scan-state reset / re-run handling~~ are DONE (Phase 0, 2026-06-06). ~~STEALTH mode JSON parsing~~, ~~MITRE tagging via `data/mitre_mapping.json`~~, ~~wire `btn-execute` to actual remediation~~ are DONE (2026-06-23 — see "Feature wiring completed 2026-06-23"). Remaining: **USB portability (Phase 1)**, surface rollback snapshot path, per-phase progress parsing. (All 2026-06-23 work is unit-tested but **pending a live admin run**.)
 
 **UI:** ~~Cinematic VFX / themes / sound / command palette~~ DONE 2026-06-09 (see "GUI Feature
-Layer" above). Remaining: per-phase progress parsing, MITRE ATT&CK tagging
-(`data/mitre_mapping.json`), scan profile save/load, IOC Manager wired to `-IocFile` param,
-`/api/export/html` HTML report endpoint.
+Layer" above). ~~MITRE ATT&CK tagging~~, ~~IOC Manager wired to `-IocFile`~~, ~~`/api/export/html`
+HTML report endpoint~~ DONE 2026-06-23. Remaining: per-phase progress parsing, scan profile save/load.
 
 **Build:** Test PyInstaller spec (`_python/zerobreach.spec`), add `assets/icon.ico`, create `version_info.txt` for .exe metadata.

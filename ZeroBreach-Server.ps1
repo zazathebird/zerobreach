@@ -50,6 +50,15 @@ if (-not (Test-Path $script:REPORTS)) {
     }
 }
 
+# ── MITRE ATT&CK map (loaded once; injected into the scan runspace for tagging) ─
+# data/*.json is NOT AMSI-scanned, so this is safe to load at runtime.
+$script:MITRE_MAP = $null
+$mitrePath = Join-Path $ROOT 'data\mitre_mapping.json'
+if (Test-Path $mitrePath) {
+    try { $script:MITRE_MAP = Get-Content -LiteralPath $mitrePath -Raw -ErrorAction Stop | ConvertFrom-Json }
+    catch { $script:MITRE_MAP = $null }
+}
+
 # ── Shared State (synchronized — accessed by multiple runspaces) ───────────────
 $script:State = [hashtable]::Synchronized(@{
     Running      = $false
@@ -66,6 +75,8 @@ $script:State = [hashtable]::Synchronized(@{
     Listening    = $true
     ScanEpoch    = 0      # bumped each time EventLog is cleared for a new scan; SSE clients rewind on change
     Process      = $null
+    EngineReport = ''     # filename of the engine's rich KrakenBaseline_*.json from the last scan
+    Remediating  = $false
     EventLog     = [System.Collections.ArrayList]::Synchronized(
                        [System.Collections.ArrayList]::new())
     Findings     = [System.Collections.ArrayList]::Synchronized(
@@ -145,6 +156,149 @@ function Send-StaticFile {
         $r.OutputStream.Write($bytes, 0, $bytes.Length)
         $r.OutputStream.Close()
     } catch {}
+}
+
+function Write-DownloadResponse {
+    param($Ctx, [string]$Body, [string]$ContentType, [string]$FileName)
+    try {
+        $r = $Ctx.Response
+        $r.StatusCode  = 200
+        $r.ContentType = $ContentType
+        $r.Headers['Access-Control-Allow-Origin'] = '*'
+        $r.Headers['Content-Disposition'] = "attachment; filename=`"$FileName`""
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+        $r.ContentLength64 = $bytes.Length
+        $r.OutputStream.Write($bytes, 0, $bytes.Length)
+        $r.OutputStream.Close()
+    } catch {}
+}
+
+# Build a self-contained HTML report from the current scan findings.
+function Get-HtmlReport {
+    $findings = @($script:State.Findings)
+    $sevColor = @{ CRITICAL='#ff3838'; HIGH='#ff9500'; POSSIBLE='#ffd60a'; INFO='#6b7280'; CLEAN='#39ff9a' }
+    $counts   = $script:State.ThreatCounts
+    $total    = $findings.Count
+    $sevRank  = @{ CRITICAL=0; HIGH=1; POSSIBLE=2; INFO=3; CLEAN=4 }
+    $sorted   = $findings | Sort-Object @{ Expression = { $r = $sevRank["$($_.severity)"]; if ($null -ne $r) { $r } else { 9 } } }
+
+    $rows = foreach ($f in $sorted) {
+        $sev  = "$($f.severity)"
+        $col  = $sevColor[$sev]; if (-not $col) { $col = '#6b7280' }
+        $desc = [System.Net.WebUtility]::HtmlEncode("$($f.line)")
+        $type = [System.Net.WebUtility]::HtmlEncode("$($f.threat_type)")
+        $mitreCell = ''
+        if ($f.mitre -and $f.mitre.id) {
+            $mid = [System.Net.WebUtility]::HtmlEncode("$($f.mitre.id)")
+            $mnm = [System.Net.WebUtility]::HtmlEncode("$($f.mitre.name)")
+            $url = "$($f.mitre.url)"; if (-not $url) { $url = "https://attack.mitre.org/techniques/$($f.mitre.id -replace '\.','/')/" }
+            $mitreCell = "<a href='$([System.Net.WebUtility]::HtmlEncode($url))' target='_blank' title='$mnm'>$mid</a>"
+        }
+        "<tr><td><span class='badge' style='background:$col'>$sev</span></td><td>PH$($f.phase)</td><td>$type</td><td>$mitreCell</td><td>$desc</td></tr>"
+    }
+
+    $tally = foreach ($k in @('RAT','Rootkit','Ransomware','Keylogger','Worm','Miner','Trojan','Spyware','Fileless','Other')) {
+        $v = [int]$counts[$k]
+        if ($v -gt 0) { "<span class='chip'>$k <b>$v</b></span>" }
+    }
+
+    $genAt = [datetime]::Now.ToString('yyyy-MM-dd HH:mm:ss')
+    @"
+<!doctype html><html><head><meta charset="utf-8"><title>ZeroBreach Report — $($env:COMPUTERNAME)</title>
+<style>
+body{background:#05080c;color:#cde3f0;font-family:"Segoe UI",system-ui,monospace;margin:0;padding:28px}
+h1{color:#00d9ff;letter-spacing:3px;font-size:22px;margin:0 0 4px}
+.meta{color:#7d97a8;font-size:12px;margin-bottom:18px}
+.chips{margin:14px 0 22px}
+.chip{display:inline-block;background:#0d1620;border:1px solid #1b2b3a;border-radius:14px;padding:4px 11px;margin:3px;font-size:12px;color:#9fc1d6}
+.chip b{color:#00d9ff;margin-left:4px}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{border:1px solid #16222e;padding:7px 9px;text-align:left;vertical-align:top}
+th{background:#0c1622;color:#6fb6d8;text-transform:uppercase;letter-spacing:1px;font-size:11px}
+tr:nth-child(even){background:#080f16}
+.badge{color:#03121a;font-weight:700;padding:2px 8px;border-radius:4px;font-size:11px}
+a{color:#00d9ff;text-decoration:none}a:hover{text-decoration:underline}
+.empty{color:#39ff9a;padding:30px;text-align:center}
+</style></head><body>
+<h1>◈ ZEROBREACH V23 — INCIDENT REPORT</h1>
+<div class="meta">Host: $([System.Net.WebUtility]::HtmlEncode($env:COMPUTERNAME)) &nbsp;·&nbsp; Mode: $($script:State.Mode) &nbsp;·&nbsp; Findings: $total &nbsp;·&nbsp; Generated: $genAt</div>
+<div class="chips">$($tally -join '')</div>
+$(if ($total -gt 0) { "<table><tr><th>Severity</th><th>Phase</th><th>Threat</th><th>ATT&CK</th><th>Detail</th></tr>$($rows -join '')</table>" } else { "<div class='empty'>✓ NO FINDINGS — SYSTEM APPEARS CLEAN</div>" })
+</body></html>
+"@
+}
+
+function Get-CsvReport {
+    $findings = @($script:State.Findings)
+    $sb = [System.Text.StringBuilder]::new()
+    [void]$sb.AppendLine('"Severity","Phase","ThreatType","ATTACK_ID","ATTACK_Name","Detail","Timestamp"')
+    foreach ($f in $findings) {
+        $mid = if ($f.mitre -and $f.mitre.id) { "$($f.mitre.id)" } else { '' }
+        $mnm = if ($f.mitre -and $f.mitre.name) { "$($f.mitre.name)" } else { '' }
+        $cells = @("$($f.severity)", "PH$($f.phase)", "$($f.threat_type)", $mid, $mnm, "$($f.line)", "$($f.timestamp)")
+        $line = ($cells | ForEach-Object { '"' + ($_ -replace '"','""') + '"' }) -join ','
+        [void]$sb.AppendLine($line)
+    }
+    return $sb.ToString()
+}
+
+# Main-thread MITRE resolver (mirrors the runspace copy; uses $script:MITRE_MAP).
+function Resolve-MitreMain {
+    param([string]$Line, [string]$ThreatType, [int]$Phase)
+    $map = $script:MITRE_MAP
+    if (-not $map) { return $null }
+    $ll = "$Line".ToLower()
+    $id = $null
+    foreach ($p in $map.keyword_map.PSObject.Properties) {
+        if ($p.Name -eq '_comment') { continue }
+        if ($ll.Contains($p.Name)) { $id = [string]$p.Value; break }
+    }
+    if (-not $id -and $ThreatType) {
+        $arr = $map.threat_type_map.$ThreatType
+        if ($arr) { $id = [string]$arr[0] }
+    }
+    if (-not $id -and $Phase -gt 0) {
+        $pe = $map.phase_map."PHASE $Phase"
+        if ($pe -and $pe.techniques) { $id = [string]$pe.techniques[0] }
+    }
+    if (-not $id) { return $null }
+    $t = $map.techniques.$id
+    if (-not $t) { return @{ id = $id; name = $id; tactic = ''; url = '' } }
+    $tactic = if ($t.tactics) { [string]$t.tactics[0] } else { '' }
+    return @{ id = $id; name = $t.name; tactic = $tactic; url = $t.url }
+}
+
+# Load the engine's rich report and normalize its findings to the frontend shape,
+# enriching each with a MITRE tag. Carries FixAction/FixParam so the GUI can remediate.
+function Get-EngineReportFindings {
+    param([string]$ReportPath)
+    $out = [System.Collections.ArrayList]::new()
+    try {
+        $report = (Get-Content -LiteralPath $ReportPath -Raw) | ConvertFrom-Json
+    } catch { return @() }
+    $i = 0
+    foreach ($f in @($report.Findings)) {
+        $sev = "$($f.Severity)".ToUpper()
+        $tt  = "$($f.ThreatType)"; if (-not $tt) { $tt = $null }
+        $phNum = 0; $pm = [regex]::Match("$($f.Phase)", '\d+'); if ($pm.Success) { $phNum = [int]$pm.Value }
+        $line = if ($f.Target) { "$($f.Description) -> $($f.Target)" } else { "$($f.Description)" }
+        $mit  = Resolve-MitreMain $line $tt $phNum
+        [void]$out.Add([ordered]@{
+            id          = "$($f.ID)"
+            line        = $line
+            severity    = $sev
+            threat_type = $tt
+            phase       = $phNum
+            group       = "$($f.Group)"
+            fix_action  = "$($f.FixAction)"
+            fix_param   = "$($f.FixParam)"
+            mitre       = $mit
+            mitre_id    = if ($mit) { $mit.id } else { $null }
+            timestamp   = "$($f.Timestamp)"
+        })
+        $i++
+    }
+    return @($out)
 }
 
 function Read-RequestBody {
@@ -322,6 +476,33 @@ function Enqueue {
     [void]$ScanState.EventLog.Add(($Ev | ConvertTo-Json -Compress -Depth 4))
 }
 
+# ── MITRE ATT&CK resolution ($MitreMap injected from the main thread; may be $null) ─
+# Fallback chain mirrors data/mitre_mapping.json's intent: most-specific keyword first,
+# then the threat-type category, then the phase's dominant technique.
+function Resolve-Mitre {
+    param([string]$Line, [string]$ThreatType, [int]$Phase)
+    if (-not $MitreMap) { return $null }
+    $ll = $Line.ToLower()
+    $id = $null
+    foreach ($p in $MitreMap.keyword_map.PSObject.Properties) {
+        if ($p.Name -eq '_comment') { continue }
+        if ($ll.Contains($p.Name)) { $id = [string]$p.Value; break }
+    }
+    if (-not $id -and $ThreatType) {
+        $arr = $MitreMap.threat_type_map.$ThreatType
+        if ($arr) { $id = [string]$arr[0] }
+    }
+    if (-not $id -and $Phase -gt 0) {
+        $pe = $MitreMap.phase_map."PHASE $Phase"
+        if ($pe -and $pe.techniques) { $id = [string]$pe.techniques[0] }
+    }
+    if (-not $id) { return $null }
+    $t = $MitreMap.techniques.$id
+    if (-not $t) { return @{ id = $id; name = $id; tactic = ''; url = '' } }
+    $tactic = if ($t.tactics) { [string]$t.tactics[0] } else { '' }
+    return @{ id = $id; name = $t.name; tactic = $tactic; url = $t.url }
+}
+
 # ── Extract config ──────────────────────────────────────────────────────────────
 $mode     = if ($ScanConfig.mode)    { "$($ScanConfig.mode)" }   else { 'FULL' }
 $hours    = if ($null -ne $ScanConfig.hours) { [int]$ScanConfig.hours } else { 0 }
@@ -372,6 +553,14 @@ try {
     # Drain stderr asynchronously so its buffer never fills and deadlocks the child
     $proc.BeginErrorReadLine()
 
+    # STEALTH mode: the engine suppresses all formatted output and emits a single
+    # compressed-JSON audit blob to stdout at the very end. We buffer raw lines and
+    # parse that blob after exit (see post-loop block) instead of classifying text.
+    $stealthLines = [System.Collections.Generic.List[string]]::new()
+    if ($stealth) {
+        Enqueue @{ type='log_line'; text='[STEALTH] Silent scan running — output is suppressed; results arrive at completion.'; severity='INFO'; phase=0; elapsed=0 }
+    }
+
     while (-not $proc.StandardOutput.EndOfStream) {
         if (-not $ScanState.Running) {
             try { $proc.Kill() } catch {}
@@ -380,6 +569,8 @@ try {
 
         $raw = $proc.StandardOutput.ReadLine()
         if ([string]::IsNullOrWhiteSpace($raw)) { continue }
+
+        if ($stealth) { $stealthLines.Add($raw); continue }
 
         $elapsed = [int]([datetime]::Now - $ScanState.StartTime).TotalSeconds
         $ScanState.Elapsed = $elapsed
@@ -410,6 +601,7 @@ try {
 
         # Finding event for notable severity
         if ($cl.sev -in @('CRITICAL','HIGH','POSSIBLE')) {
+            $mit = Resolve-Mitre $raw $cl.tt $ScanState.Phase
             $f = [ordered]@{
                 type        = 'finding'
                 id          = $ScanState.Findings.Count
@@ -417,6 +609,8 @@ try {
                 severity    = $cl.sev
                 threat_type = $cl.tt
                 phase       = $ScanState.Phase
+                mitre       = $mit
+                mitre_id    = if ($mit) { $mit.id } else { $null }
                 timestamp   = [datetime]::Now.ToString('HH:mm:ss')
             }
             [void]$ScanState.Findings.Add($f)
@@ -446,6 +640,63 @@ try {
     }
 
     $proc.WaitForExit()
+
+    # ── STEALTH post-processing: parse the engine's JSON audit blob into findings ──
+    if ($stealth -and $ScanState.Running) {
+        $ScanState.Elapsed = [int]([datetime]::Now - $ScanState.StartTime).TotalSeconds
+        $jsonLine = $null
+        for ($i = $stealthLines.Count - 1; $i -ge 0; $i--) {
+            $cand = $stealthLines[$i].Trim()
+            if ($cand.StartsWith('{') -and $cand.EndsWith('}')) { $jsonLine = $cand; break }
+        }
+        if (-not $jsonLine -and $stealthLines.Count -gt 0) {
+            # Fallback: blob may be split across lines — join and try.
+            $joined = ($stealthLines -join '').Trim()
+            if ($joined.StartsWith('{') -and $joined.EndsWith('}')) { $jsonLine = $joined }
+        }
+        if ($jsonLine) {
+            try {
+                $audit = $jsonLine | ConvertFrom-Json
+                foreach ($ef in @($audit.Findings)) {
+                    $sev = "$($ef.Severity)".ToUpper()
+                    $tt  = "$($ef.ThreatType)"
+                    if (-not $tt) { $tt = $null }
+                    $phNum = 0
+                    $pm2 = [regex]::Match("$($ef.Phase)", '\d+')
+                    if ($pm2.Success) { $phNum = [int]$pm2.Value }
+                    $line = if ($ef.Target) { "[$sev] $($ef.Description) -> $($ef.Target)" } else { "[$sev] $($ef.Description)" }
+
+                    Enqueue @{ type='log_line'; text=$line; severity=$sev; phase=$phNum; elapsed=$ScanState.Elapsed }
+
+                    if ($sev -in @('CRITICAL','HIGH','POSSIBLE')) {
+                        $mit = Resolve-Mitre $line $tt $phNum
+                        $f = [ordered]@{
+                            type        = 'finding'
+                            id          = $ScanState.Findings.Count
+                            line        = $line
+                            severity    = $sev
+                            threat_type = $tt
+                            phase       = $phNum
+                            mitre       = $mit
+                            mitre_id    = if ($mit) { $mit.id } else { $null }
+                            timestamp   = [datetime]::Now.ToString('HH:mm:ss')
+                        }
+                        [void]$ScanState.Findings.Add($f)
+                        if ($tt) {
+                            if ($ScanState.ThreatCounts.ContainsKey($tt)) { $ScanState.ThreatCounts[$tt]++ }
+                            else { $ScanState.ThreatCounts['Other']++ }
+                        }
+                        Enqueue $f
+                    }
+                }
+                $ScanState.Phase = $ScanState.PhaseTotal
+            } catch {
+                Enqueue @{ type='log_line'; text="[SCAN ERROR] STEALTH JSON parse failed: $($_.Exception.Message)"; severity='CRITICAL'; phase=0; elapsed=$ScanState.Elapsed }
+            }
+        } else {
+            Enqueue @{ type='log_line'; text='[SCAN ERROR] STEALTH mode produced no parseable JSON output.'; severity='CRITICAL'; phase=0; elapsed=$ScanState.Elapsed }
+        }
+    }
 
 } catch {
     Enqueue @{
@@ -477,6 +728,17 @@ try {
         $ScanState.ResultsPath = $rp
     } catch {}
 
+    # Locate the engine's *rich* report (KrakenBaseline_*.json holds FixAction/FixParam
+    # per finding) written by this run — used by GUI remediation.
+    $engineReport = ''
+    try {
+        $kb = Get-ChildItem -LiteralPath $ScanReports -Filter 'KrakenBaseline_*.json' -ErrorAction SilentlyContinue |
+              Where-Object { $_.LastWriteTime -ge $ScanState.StartTime.AddSeconds(-5) } |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($kb) { $engineReport = $kb.Name }
+    } catch {}
+    $ScanState.EngineReport = $engineReport
+
     # Final state broadcast
     Enqueue @{
         type          = 'scan_state'
@@ -496,7 +758,123 @@ try {
         threat_counts  = $ScanState.ThreatCounts
         elapsed        = $ScanState.Elapsed
         results_path   = $ScanState.ResultsPath
+        engine_report  = $engineReport
     }
+}
+'@
+
+# ── Remediation Script (self-contained runspace) ───────────────────────────────
+# Applies the engine's FixAction/FixParam for selected findings from a rich report.
+# This mirrors ZeroBreach-V23.ps1's Invoke-FixMode switch; the server is admin and is
+# the documented remediation driver. Variables injected: $RemState, $RemReports,
+# $ReportPath (validated inside reports/), $FixIds (string[]).
+$script:REMEDIATE_SCRIPT = @'
+function REnqueue { param([hashtable]$Ev) [void]$RemState.EventLog.Add(($Ev | ConvertTo-Json -Compress -Depth 4)) }
+function RLog { param([string]$Text, [string]$Sev = 'INFO') REnqueue @{ type='log_line'; text=$Text; severity=$Sev; phase=0; elapsed=0 } }
+
+$RemState.Remediating = $true
+$applied = 0; $failed = 0; $skipped = 0
+try {
+    if (-not (Test-Path -LiteralPath $ReportPath)) { RLog "[REMEDIATE] Report not found: $ReportPath" 'CRITICAL'; return }
+    $report = (Get-Content -LiteralPath $ReportPath -Raw) | ConvertFrom-Json
+    $idset = @{}; foreach ($id in @($FixIds)) { $idset["$id"] = $true }
+    $sel = @($report.Findings) | Where-Object { $idset.ContainsKey("$($_.ID)") }
+    RLog ("[REMEDIATE] {0} action(s) selected from {1}." -f $sel.Count, [System.IO.Path]::GetFileName($ReportPath)) 'INFO'
+
+    foreach ($f in $sel) {
+        $desc = "$($f.Description)"; if ($desc.Length -gt 70) { $desc = $desc.Substring(0,67) + '...' }
+        RLog "[FIX] $desc" 'HUNT'
+        $ok = $false
+        try {
+            switch ("$($f.FixAction)") {
+                'DeleteFile' {
+                    if (Test-Path -LiteralPath $f.FixParam) {
+                        Remove-Item -LiteralPath $f.FixParam -Recurse -Force -ErrorAction Stop
+                        if (Test-Path -LiteralPath $f.FixParam) {
+                            $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+                            $cur = Get-ItemPropertyValue $rpk "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                            if ($null -eq $cur) { $cur = @() }
+                            Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$($f.FixParam)", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
+                            RLog "  -> locked; queued for reboot deletion." 'POSSIBLE'
+                        } else { RLog "  -> deleted: $($f.FixParam)" 'OK' }
+                        $ok = $true
+                    } else { RLog "  -> already absent." 'OK'; $ok = $true }
+                }
+                'DeleteReg' {
+                    $pts = "$($f.FixParam)" -split "\|", 2
+                    if ($pts.Count -eq 2) {
+                        Remove-ItemProperty -Path $pts[0] -Name $pts[1] -Force -ErrorAction SilentlyContinue
+                        RLog "  -> reg value removed: $($pts[1])" 'OK'; $ok = $true
+                    } else { RLog "  -> malformed reg target." 'POSSIBLE'; $failed++ }
+                }
+                'DeleteRegKey' {
+                    if (Test-Path -LiteralPath $f.FixParam) {
+                        Remove-Item -LiteralPath $f.FixParam -Recurse -Force -ErrorAction SilentlyContinue
+                        if (-not (Test-Path -LiteralPath $f.FixParam)) { RLog "  -> reg key deleted." 'OK'; $ok = $true }
+                        else { RLog "  -> reg key delete failed." 'POSSIBLE'; $failed++ }
+                    } else { RLog "  -> key already absent." 'OK'; $ok = $true }
+                }
+                'KillProcess' {
+                    $procId = [int]"$($f.FixParam)"
+                    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+                    if ($p) {
+                        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+                        Start-Sleep -Milliseconds 300
+                        if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { RLog "  -> terminated PID $procId ($($p.Name))" 'OK'; $ok = $true }
+                        else { RLog "  -> kill failed PID $procId" 'POSSIBLE'; $failed++ }
+                    } else { RLog "  -> process already gone." 'OK'; $ok = $true }
+                }
+                'RunCmd' {
+                    # FixParam is generated by our own engine into the trusted report file.
+                    $sb = [scriptblock]::Create("$($f.FixParam)")
+                    & $sb | Out-Null
+                    RLog "  -> command executed." 'OK'; $ok = $true
+                }
+                'Quarantine' {
+                    $src = "$($f.FixParam)"
+                    if (-not (Test-Path -LiteralPath $src)) { RLog "  -> already absent." 'OK'; $ok = $true }
+                    else {
+                        $vault = Join-Path $RemReports 'quarantine'
+                        if (-not (Test-Path $vault)) { New-Item -Path $vault -ItemType Directory -Force | Out-Null }
+                        $sha  = (Get-FileHash -LiteralPath $src -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                        $stub = ([System.IO.Path]::GetFileName($src)) -replace '[^a-zA-Z0-9._-]','_'
+                        $tag  = "{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmssfff'), $stub
+                        $dest = Join-Path $vault "$tag.quar"
+                        $moved = $false
+                        try { Move-Item -LiteralPath $src -Destination $dest -Force -ErrorAction Stop; $moved = $true }
+                        catch {
+                            try { Copy-Item -LiteralPath $src -Destination $dest -Force -ErrorAction Stop } catch {}
+                            $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+                            $cur = Get-ItemPropertyValue $rpk "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                            if ($null -eq $cur) { $cur = @() }
+                            Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$src", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
+                        }
+                        $manifest = @{
+                            OriginalPath = $src; QuarantinedAs = $dest; SHA256 = $sha
+                            ThreatType = "$($f.ThreatType)"; Severity = "$($f.Severity)"; Description = "$($f.Description)"
+                            QuarantinedAt = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
+                            RebootQueuedForOriginal = (-not $moved)
+                            RestoreNote = "Move-Item '$dest' '$src' -Force"
+                        }
+                        $manifest | ConvertTo-Json | Set-Content -LiteralPath "$dest.json" -Encoding UTF8 -ErrorAction SilentlyContinue
+                        if ($moved) { RLog "  -> quarantined -> $dest" 'OK' } else { RLog "  -> copied to vault; original queued for reboot deletion." 'POSSIBLE' }
+                        $ok = $true
+                    }
+                }
+                'Info'  { RLog "  -> informational; review manually." 'INFO'; $skipped++; $ok = $true }
+                default { RLog "  -> no automated action for this finding." 'INFO'; $skipped++; $ok = $true }
+            }
+        } catch {
+            RLog "  -> ERROR: $($_.Exception.Message)" 'CRITICAL'; $failed++
+        }
+        if ($ok -and ("$($f.FixAction)" -notin @('Info','None',''))) { $applied++ }
+    }
+} catch {
+    RLog "[REMEDIATE] FATAL: $($_.Exception.Message)" 'CRITICAL'
+} finally {
+    $RemState.Remediating = $false
+    REnqueue @{ type='remediation_complete'; applied=$applied; failed=$failed; skipped=$skipped }
+    RLog "[REMEDIATE] Complete — applied:$applied  failed:$failed  skipped:$skipped" 'OK'
 }
 '@
 
@@ -551,6 +929,113 @@ function Handle-Request {
             Write-JsonResponse $Ctx (@($script:State.Findings) | ConvertTo-Json -Depth 5)
         }
 
+        '^/api/report$' {
+            # Rich engine findings (with FixAction + MITRE) for the GUI; ?name=<file> or latest.
+            $name = "$($req.QueryString['name'])"
+            if (-not $name) { $name = $script:State.EngineReport }
+            $name = [System.IO.Path]::GetFileName("$name")
+            if ($name -notmatch '^(KrakenBaseline_|audit_).*\.json$') { Write-JsonResponse $Ctx '{"error":"invalid report name"}' 400; return }
+            $p = Join-Path $script:REPORTS $name
+            if (-not (Test-Path -LiteralPath $p)) { Write-JsonResponse $Ctx '{"error":"report not found"}' 404; return }
+            Write-JsonResponse $Ctx (@(Get-EngineReportFindings $p) | ConvertTo-Json -Depth 5)
+        }
+
+        '^/api/remediate$' {
+            if ($method -ne 'POST') { Write-JsonResponse $Ctx '{"error":"POST required"}' 405; return }
+            if ($script:State.Running)     { Write-JsonResponse $Ctx '{"error":"scan in progress"}' 400; return }
+            if ($script:State.Remediating) { Write-JsonResponse $Ctx '{"error":"remediation already running"}' 400; return }
+
+            $parsed = (Read-RequestBody $Ctx) | ConvertFrom-Json -ErrorAction SilentlyContinue
+            if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
+
+            # Security: report must be a recognized file inside reports/ (basename only).
+            $reportName = [System.IO.Path]::GetFileName("$($parsed.report)")
+            if ($reportName -notmatch '^(KrakenBaseline_|audit_).*\.json$') { Write-JsonResponse $Ctx '{"error":"invalid report"}' 400; return }
+            $reportPath = Join-Path $script:REPORTS $reportName
+            if (-not (Test-Path -LiteralPath $reportPath)) { Write-JsonResponse $Ctx '{"error":"report not found"}' 404; return }
+
+            $ids = @($parsed.ids) | Where-Object { $_ }
+            if (-not $ids -or @($ids).Count -eq 0) { Write-JsonResponse $Ctx '{"error":"no findings selected"}' 400; return }
+
+            Start-Runspace -Script $script:REMEDIATE_SCRIPT -Vars @{
+                RemState   = $script:State
+                RemReports = $script:REPORTS
+                ReportPath = $reportPath
+                FixIds     = @($ids)
+            } | Out-Null
+            Write-JsonResponse $Ctx '{"status":"started"}'
+        }
+
+        '^/api/export/html$' {
+            $stamp = [datetime]::Now.ToString('yyyyMMdd_HHmmss')
+            Write-DownloadResponse $Ctx (Get-HtmlReport) 'text/html; charset=utf-8' "zerobreach_report_$stamp.html"
+        }
+
+        '^/api/export/csv$' {
+            $stamp = [datetime]::Now.ToString('yyyyMMdd_HHmmss')
+            Write-DownloadResponse $Ctx (Get-CsvReport) 'text/csv; charset=utf-8' "zerobreach_findings_$stamp.csv"
+        }
+
+        '^/api/ioc$' {
+            $iocJson = Join-Path $script:REPORTS 'custom_iocs.json'   # canonical, for the manager UI
+            $iocText = Join-Path $script:REPORTS 'custom_iocs.ioc'    # engine -IocFile format (prefixed lines)
+            $iocDefault = Join-Path $script:ROOT 'data\ioc_defaults.json'
+
+            if ($method -eq 'POST') {
+                $parsed = (Read-RequestBody $Ctx) | ConvertFrom-Json -ErrorAction SilentlyContinue
+                if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
+                $cats = @{
+                    hashes  = @($parsed.hashes)  | Where-Object { $_ }
+                    ips     = @($parsed.ips)     | Where-Object { $_ }
+                    domains = @($parsed.domains) | Where-Object { $_ }
+                    regex   = @($parsed.regex)   | Where-Object { $_ }
+                    files   = @($parsed.files)   | Where-Object { $_ }
+                }
+                try {
+                    # JSON sidecar (UI reload)
+                    $out = [ordered]@{
+                        hashes  = @($cats.hashes);  ips    = @($cats.ips); domains = @($cats.domains)
+                        regex   = @($cats.regex);   files  = @($cats.files)
+                        version = 'V23'; updated = [datetime]::Now.ToString('yyyy-MM-dd')
+                    }
+                    $u8 = New-Object System.Text.UTF8Encoding($false)
+                    [System.IO.File]::WriteAllText($iocJson, ($out | ConvertTo-Json -Depth 4), $u8)
+
+                    # Engine text format: prefixed so files/domains never collide on auto-detect.
+                    $lines = [System.Collections.Generic.List[string]]::new()
+                    $lines.Add('# ZeroBreach custom IOCs — generated by IOC Manager')
+                    foreach ($h in $cats.hashes)  { $lines.Add("hash:$h") }
+                    foreach ($i in $cats.ips)     { $lines.Add("ip:$i") }
+                    foreach ($d in $cats.domains) { $lines.Add("domain:$d") }
+                    foreach ($r in $cats.regex)   { $lines.Add("regex:$r") }
+                    foreach ($f in $cats.files)   { $lines.Add("file:$f") }
+                    [System.IO.File]::WriteAllText($iocText, ($lines -join "`r`n"), $u8)
+
+                    $count = $cats.hashes.Count + $cats.ips.Count + $cats.domains.Count + $cats.regex.Count + $cats.files.Count
+                    Write-JsonResponse $Ctx (@{ status='saved'; path=$iocText; json_path=$iocJson; count=$count } | ConvertTo-Json -Compress)
+                } catch {
+                    Write-JsonResponse $Ctx (@{ error="$($_.Exception.Message)" } | ConvertTo-Json -Compress) 500
+                }
+                return
+            }
+
+            # GET — return the saved set if present, else the shipped defaults.
+            $src = if (Test-Path $iocJson) { $iocJson } else { $iocDefault }
+            $activeText = if (Test-Path $iocText) { $iocText } else { '' }
+            if (Test-Path $src) {
+                try {
+                    $obj = (Get-Content -LiteralPath $src -Raw) | ConvertFrom-Json
+                    $obj | Add-Member -NotePropertyName '_path'   -NotePropertyValue $activeText -Force
+                    $obj | Add-Member -NotePropertyName '_custom' -NotePropertyValue ([bool](Test-Path $iocJson)) -Force
+                    Write-JsonResponse $Ctx ($obj | ConvertTo-Json -Depth 4)
+                } catch {
+                    Write-JsonResponse $Ctx (Get-Content -LiteralPath $src -Raw)
+                }
+            } else {
+                Write-JsonResponse $Ctx '{"hashes":[],"ips":[],"domains":[],"regex":[],"files":[],"_path":"","_custom":false}'
+            }
+        }
+
         '^/api/scan/start$' {
             if ($method -ne 'POST') { Write-JsonResponse $Ctx '{"error":"POST required"}' 405; return }
             if ($script:State.Running) { Write-JsonResponse $Ctx '{"error":"scan already running"}' 400; return }
@@ -567,6 +1052,7 @@ function Handle-Request {
                 ScanConfig  = $cfg
                 ScanPsPath  = $script:SCAN_PS
                 ScanReports = $script:REPORTS
+                MitreMap    = $script:MITRE_MAP
             } | Out-Null
 
             Write-JsonResponse $Ctx '{"status":"started"}'
