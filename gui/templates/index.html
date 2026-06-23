@@ -4,6 +4,31 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ZeroBreach V23 — Kraken Console</title>
+<script>
+  /* ── BOOT WATCHDOG (inline, dependency-free) ──────────────────────────────
+     Guards the blank/grey-screen-on-launch race: right after the UAC elevation
+     the auto-opened browser sometimes loses a startup race (a script or the very
+     first server response arrives partial), clearing the boot overlay to an empty
+     grey #app. A manual reload always fixed it — this automates that reload.
+     Runs BEFORE every external script so it works even if the bundle itself fails
+     to load. app.js sets window.__ZB_BOOTED = true on a successful init; if that
+     never happens within the timeout we reload once (sessionStorage-capped so it
+     can never loop). */
+  (function () {
+    window.__ZB_BOOTED = false;
+    window.addEventListener('load', function () {
+      setTimeout(function () {
+        if (window.__ZB_BOOTED) return;
+        try {
+          var n = parseInt(sessionStorage.getItem('zb_boot_retry') || '0', 10);
+          if (n >= 2) { return; } // give up after 2 tries — never loop forever
+          sessionStorage.setItem('zb_boot_retry', String(n + 1));
+        } catch (e) { /* sessionStorage blocked — fall through to a single reload */ }
+        location.reload();
+      }, 9000);
+    });
+  })();
+</script>
 <link rel="stylesheet" href="/static/css/main.css">
 <link rel="stylesheet" href="/static/css/fx.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
@@ -380,6 +405,10 @@
         <div class="settings-group">
           <div class="settings-label">VISUAL FX INTENSITY</div>
           <div class="fx-tier-row" id="fx-tier-row"></div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-label">CINEMATIC FX <span style="color:var(--text-dim);font-size:9px;letter-spacing:1px">· independent · works on every theme · all off by default</span></div>
+          <div class="cfx-grid" id="cine-fx-list"></div>
         </div>
         <div class="settings-group">
           <div class="settings-label">AUDIO</div>

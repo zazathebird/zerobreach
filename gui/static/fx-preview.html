@@ -214,8 +214,13 @@
     setFx('full');
     for (const v of VIEWS) {
       applyView(v);
+      // The Scan Monitor sweep bar is now an opt-in Cinematic FX toggle
+      // (body.zbfx-scansweep, off by default). Enable it just for this check so
+      // the audit still verifies the sweep CSS renders, then restore.
+      if (v === 'scanmonitor') document.body.classList.add('zbfx-scansweep');
       await sleep(60);
       const active = viewFxActive();
+      if (v === 'scanmonitor') document.body.classList.remove('zbfx-scansweep');
       viewRows.push({ view:v, active:+active.toFixed(3), pass: active > 0.001,
                       why: active > 0.001 ? '' : 'no #view-fx pseudo-element active' });
     }

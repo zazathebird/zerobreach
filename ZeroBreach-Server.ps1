@@ -1213,7 +1213,21 @@ Write-Host ('[ZeroBreach] Scan engine: ' + $script:SCAN_PS) -ForegroundColor Dar
 
 if (-not $NoBrowser) {
     $urlCapture = $Url
-    $null = Start-Job { Start-Sleep 1; Start-Process $using:urlCapture }
+    # Don't open the browser on a fixed timer — poll until the server actually answers
+    # a request, THEN launch. This both (a) guarantees the first browser paint never
+    # races the listener and (b) pre-warms the static-file path, fixing the occasional
+    # blank/grey screen seen right after the UAC launch. The accept loop (below, on the
+    # main thread) serves these probe requests.
+    $null = Start-Job -ArgumentList $urlCapture {
+        param($u)
+        for ($i = 0; $i -lt 50; $i++) {
+            try {
+                $r = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 2
+                if ($r.StatusCode -eq 200) { break }
+            } catch { Start-Sleep -Milliseconds 150 }
+        }
+        Start-Process $u
+    }
 }
 
 # ── Accept loop ────────────────────────────────────────────────────────────────

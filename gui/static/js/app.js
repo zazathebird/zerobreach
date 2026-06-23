@@ -79,7 +79,22 @@ function finishBoot() {
     overlay.remove();
     $('app').classList.remove('hidden');
     if (window.gsap) gsap.from('#app', { opacity: 0, duration: 0.4 });
-    initApp();
+    try {
+      initApp();
+      window.__ZB_BOOTED = true;                       // tell the inline watchdog we made it
+      try { sessionStorage.removeItem('zb_boot_retry'); } catch (e) {}
+    } catch (err) {
+      // initApp blew up (a sibling script lost the launch race, etc.). Rather than
+      // leave a blank/grey console, self-heal with one immediate reload — capped via
+      // the same sessionStorage key the inline watchdog uses so we never loop.
+      console.error('[ZeroBreach] init failed:', err);
+      let n = 0;
+      try { n = parseInt(sessionStorage.getItem('zb_boot_retry') || '0', 10); } catch (e) {}
+      if (n < 2) {
+        try { sessionStorage.setItem('zb_boot_retry', String(n + 1)); } catch (e) {}
+        location.reload();
+      }
+    }
   }, 600);
 }
 
@@ -91,6 +106,8 @@ function initApp() {
   // first paint already has its signature decoration. switchView() only runs on
   // navigation, and the launchpad is shown statically via class="view active".
   ensureViewFxLayer();
+  ensureCineFxLayers();
+  applyCineFx();
   document.body.dataset.view = 'launchpad';
   document.body.classList.toggle('fx-off', ZBFX.getIntensity() === 'off');
   initSSE();
@@ -376,6 +393,7 @@ function initLaunchPad() {
 function initSettingsUI() {
   buildThemeGrid();
   buildFxTiers();
+  buildCineFxToggles();
   initAudioControls();
   document.addEventListener('zb-god-unlocked', buildThemeGrid);
 }
@@ -418,6 +436,75 @@ function buildFxTiers() {
       el.classList.add('active');
     });
     row.appendChild(el);
+  });
+}
+
+// ── Cinematic FX toggles (independent, opt-in, theme-aware) ───────────────────
+// Each effect layers OVER the theme system via a body.zbfx-<id> class; persisted
+// as localStorage zb_cfx_<id>. Overlay-type effects (layer: 'bg'|'fg') render
+// into #cine-fx-bg / #cine-fx-fg (built once by ensureCineFxLayers). Transform /
+// filter effects (no layer) are driven straight off the body class in CSS. See
+// fx.css "CINEMATIC FX TOGGLES". All default OFF — a clean console out of the box.
+const CINE_FX = [
+  { id: 'aurora',      label: 'Aurora Nebula',        layer: 'bg', el: 'ce-aurora',    desc: 'Drifting nebula glow behind the console' },
+  { id: 'hologrid',    label: 'Holo Grid Floor',      layer: 'bg', el: 'ce-hologrid',  desc: 'Animated neon perspective grid along the bottom' },
+  { id: 'scangrid',    label: 'Tactical Grid',        layer: 'bg', el: 'ce-scangrid',  desc: 'Full-screen pulsing tactical grid' },
+  { id: 'spotlight',   label: 'Cursor Spotlight',     layer: 'fg', el: 'ce-spotlight', desc: 'Accent glow that tracks your cursor' },
+  { id: 'vignette',    label: 'Cinematic Vignette',   layer: 'fg', el: 'ce-vignette',  desc: 'Dark cinematic edge falloff' },
+  { id: 'grain',       label: 'Film Grain',           layer: 'fg', el: 'ce-grain',     desc: 'Animated 35mm film-grain noise' },
+  { id: 'crt',         label: 'CRT Tube',             layer: 'fg', el: 'ce-crt',       desc: 'Heavy scanlines + tube curvature + flicker' },
+  { id: 'scansweep',   label: 'Scan Sweep Bar',       desc: 'The sweeping bar on the Scan Monitor (off by default)' },
+  { id: 'neonpulse',   label: 'Neon Border Pulse',    desc: 'Breathing accent glow on the panel borders' },
+  { id: 'aberration',  label: 'Chromatic Aberration', desc: 'Constant RGB colour-split across the UI' },
+  { id: 'glitch',      label: 'Glitch Bursts',        desc: 'Brief data-corruption slices every few seconds (GPU)' },
+];
+
+function cfxKey(id) { return 'zb_cfx_' + id; }
+function cfxEnabled(id) { return localStorage.getItem(cfxKey(id)) === '1'; }
+
+// Build the two persistent overlay containers (behind + above #app) once.
+function ensureCineFxLayers() {
+  if (document.getElementById('cine-fx-bg')) return;
+  const bg = document.createElement('div'); bg.id = 'cine-fx-bg'; bg.setAttribute('aria-hidden', 'true');
+  const fg = document.createElement('div'); fg.id = 'cine-fx-fg'; fg.setAttribute('aria-hidden', 'true');
+  CINE_FX.forEach(fx => {
+    if (!fx.layer) return;
+    const d = document.createElement('div');
+    d.className = fx.el;
+    (fx.layer === 'bg' ? bg : fg).appendChild(d);
+  });
+  document.body.insertBefore(bg, document.body.firstChild); // behind #app (z-index:0)
+  document.body.appendChild(fg);                            // above #app (z-index:9990)
+  // Cursor spotlight: feed mouse position into CSS vars (cheap — no layout).
+  window.addEventListener('pointermove', (e) => {
+    if (!cfxEnabled('spotlight')) return;
+    document.body.style.setProperty('--mx', e.clientX + 'px');
+    document.body.style.setProperty('--my', e.clientY + 'px');
+  }, { passive: true });
+}
+
+// Apply all saved toggles to <body> (called on boot).
+function applyCineFx() {
+  CINE_FX.forEach(fx => document.body.classList.toggle('zbfx-' + fx.id, cfxEnabled(fx.id)));
+}
+
+// Render the Settings → CINEMATIC FX checkbox grid.
+function buildCineFxToggles() {
+  const wrap = $('cine-fx-list');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  CINE_FX.forEach(fx => {
+    const label = document.createElement('label');
+    label.className = 'opt-toggle cfx-toggle';
+    label.title = fx.desc;
+    label.innerHTML = `<input type="checkbox" data-cfx="${fx.id}"${cfxEnabled(fx.id) ? ' checked' : ''}> <span class="toggle-box"></span> ${fx.label}`;
+    const cb = label.querySelector('input');
+    cb.addEventListener('change', () => {
+      localStorage.setItem(cfxKey(fx.id), cb.checked ? '1' : '0');
+      document.body.classList.toggle('zbfx-' + fx.id, cb.checked);
+      ZBSound.play(cb.checked ? 'confirm' : 'click');
+    });
+    wrap.appendChild(label);
   });
 }
 

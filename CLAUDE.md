@@ -316,6 +316,45 @@ the folder was deleted. Four new JS modules load before `app.js` (order matters:
   modal (EXECUTE REMEDIATION requires typing `PURGE`), sound wiring throttled on scan events.
   The legacy `initParticles` background was removed (ZBFX replaces it).
 
+## Cinematic FX toggles + boot self-heal (2026-06-23)
+
+**Cinematic FX toggles** — an *independent*, opt-in effect layer that sits OVER the theme system
+(separate from the OFF/LITE/FULL/MAX **intensity tier**, which governs the theme's canvas
+renderers). The user disliked the always-on Scan Monitor sweep bar, so it (plus a pile of new
+"Hollywood" effects) is now a checkbox grid in **Settings → CINEMATIC FX**. All default **OFF**
+(clean console out of the box) and **work on every theme** (they tint from the active theme's
+`--accent`/`--accent-2`/`--accent-glow` vars).
+
+- Registry: `CINE_FX` array in `app.js` (`{id,label,layer?,el?,desc}`). Each toggle sets a
+  `body.zbfx-<id>` class, persisted as `localStorage.zb_cfx_<id>`. `applyCineFx()` restores them on
+  boot; `buildCineFxToggles()` renders the Settings grid (`#cine-fx-list`).
+- Overlay-type effects (`layer:'bg'|'fg'`) render into two injected containers —
+  `#cine-fx-bg` (z-index 0, behind `#app`) and `#cine-fx-fg` (z-index 9990, above `#app`) — built
+  once by `ensureCineFxLayers()`. Transform/filter effects (no `layer`) drive straight off the body
+  class in CSS. All CSS lives in the **"CINEMATIC FX TOGGLES"** block at the bottom of `fx.css`.
+- Effects: `aurora` (drifting nebula), `hologrid` (perspective grid-floor), `scangrid` (pulsing
+  tactical grid), `spotlight` (accent glow tracks cursor via `--mx/--my` body vars, fed by a
+  `pointermove` listener — early-returns unless enabled), `vignette`, `grain` (animated film noise),
+  `crt` (scanlines+curvature+flicker), `scansweep` (**the old Scan Monitor sweep bar — now opt-in**;
+  the `fx.css` rules are gated `body.zbfx-scansweep[data-view="scanmonitor"]`), `neonpulse`
+  (breathing border glow on panels), `aberration` (constant RGB split — static filter, cheap),
+  `glitch` (periodic corruption slice on `#app`). Honors `prefers-reduced-motion`.
+- > **Rule:** adding a new cinematic effect = add one `CINE_FX` entry + the matching
+  > `body.zbfx-<id>` CSS rule. Keep it theme-var-tinted and OFF by default. The cinematic layer is
+  > deliberately **independent** of the intensity tier — don't re-gate it on `body.fx-off`.
+
+**Boot self-heal (blank/grey-screen-on-launch fix).** Right after the UAC elevation the auto-opened
+browser occasionally rendered a blank grey screen (a sibling script or the very first server
+response lost a startup race), and a manual reload always fixed it. Two coordinated layers now
+automate that reload (capped at 2 via `sessionStorage.zb_boot_retry`, so it can never loop):
+- **Frontend:** an inline, dependency-free **boot watchdog** in `index.html` `<head>` (runs before
+  any external script) reloads once if `window.__ZB_BOOTED` isn't set within 9s. `finishBoot()` in
+  `app.js` wraps `initApp()` in try/catch: on success it sets `__ZB_BOOTED` + clears the retry key;
+  on throw it self-heals with an immediate reload.
+- **Server:** `ZeroBreach-Server.ps1` no longer opens the browser on a fixed 1s timer — a
+  `Start-Job` now **polls `Invoke-WebRequest` until the server answers 200**, then launches. This
+  guarantees the first browser paint can't race the listener and pre-warms the static-file path.
+
 ## CSS Theme System
 
 Base vars live in `:root` in `main.css`; **ZBThemes** (above) now drives theming by setting the
