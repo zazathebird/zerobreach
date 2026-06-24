@@ -1,6 +1,8 @@
 # RESUME HANDOFF — updated 2026-06-23
 
-Everything is committed to **`main`** (local only — not pushed). Latest commit: `b8a13de`.
+Everything is committed to **`main`** (local only — not pushed). Latest commit: `b1b7252`
+(FP-tune round 3). Engine `ZeroBreach-V23.ps1` was touched ONLY for FP severity/allowlist tuning
+(rounds 1–3) — no scan-logic/coverage regression.
 
 ## Where we are
 
@@ -48,9 +50,20 @@ false-positive tuning — engine, round 1"). Allowlists added to `data/detection
 - Already-fixed (no action): Phase 94 COM Scriptlet (`.sct/.wsc`-only), Phase 66 Share Worm (ext-filtered).
 Engine parse-clean PS 5.1 + 7, BOM intact. **Not yet validated on a live admin run** (estimates simulated).
 
-**Still open (round 2):** the remaining capped-100 groups not yet examined — *Execution Artifacts,
-Event Log — New Services, SafeBoot Persistence, MoTW / Web-Origin Abuse, Named Pipe Backdoors* (97).
-Same approach: allowlist/tighten, downgrade ambiguous to POSSIBLE, never auto-select-destructive.
+**Round 2 DONE** (`082106f`): SafeBoot Hijack (101→0), Named Pipe Backdoor (98→0), Prefetch (HIGH→
+POSSIBLE). Event Log/MoTW verified already non-destructive.
+
+**Round 3 DONE** (`b1b7252`): the last two destructive floods. *Hidden Scheduled Tasks* (Phase 104,
+57 HIGH DeleteFile of legit Win/Google/MSI/.NET maintenance tasks → INFO/POSSIBLE + Info) and *BITS
+jobs* (Phase 31, 49 HIGH RunCmd on normal OS/app-updater transfers → POSSIBLE + Info, escalate to
+HIGH only on raw-IP remote or exec-to-userpath). See CLAUDE.md → "Round 3". Allowlists/regexes in
+`data/detection_signatures.json`. **Verified stale-report claims hold in current source:** COM
+Scriptlet (Phase 94) IS `.sct/.wsc`-only and Share Worm (Phase 66) IS ext-filtered — the report's
+100/77 hits on IconCache/`.bashrc`/NTUSER.DAT are from a pre-fix build, not current code.
+
+**FP tuning is now complete for every capped-100 + mid-volume (49–77) destructive flood in the saved
+report.** Remaining destructive groups are small (≤27, e.g. User TEMP Executables — legit, that's
+where the tripwires live). The big remaining item is the LIVE admin run below.
 
 ### Live end-to-end validation (still pending from before)
 A real admin `Launch-GUI.bat` run exercising: scan → MITRE badges → HTML/CSV download → IOC save→scan
