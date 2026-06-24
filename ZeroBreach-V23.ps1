@@ -893,6 +893,9 @@ $CLOAKED_BENIGN_RE      = Join-AllowRegex 'cloaked_benign_names'
 $INFOSTEALER_BENIGN_RE  = Join-AllowRegex 'infostealer_benign_paths'
 $SAFEBOOT_DEFAULTS      = @((Get-Sig 'safeboot_default_entries') | ForEach-Object { "$_".ToLower() })
 $C2_NAMED_PIPE_RE       = if (@(Get-Sig 'c2_named_pipe_regex').Count) { (Get-Sig 'c2_named_pipe_regex')[0] } else { '(?!)' }
+$HIDDEN_TASK_BENIGN_RE  = Join-AllowRegex 'hidden_task_benign_paths'
+$BITS_SUSP_REMOTE_RE    = if (@(Get-Sig 'bits_suspicious_remote_regex').Count) { (Get-Sig 'bits_suspicious_remote_regex')[0] } else { '(?!)' }
+$BITS_SUSP_LOCAL_RE     = if (@(Get-Sig 'bits_suspicious_local_regex').Count) { (Get-Sig 'bits_suspicious_local_regex')[0] } else { '(?!)' }
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
@@ -1936,10 +1939,26 @@ Show-PhaseHeader "PHASE 31" "BITS / POWERSHELL PROFILE / STARTUP PERSISTENCE"
 $bitsJobs = Get-BitsTransfer -AllUsers -ErrorAction SilentlyContinue | Where-Object { $_.JobState -notmatch "Idle" }
 foreach ($job in $bitsJobs) {
     Out-Decrypt -Text $job.DisplayName -Prefix "  [BITS JOB] "
-    Add-Finding -ID "BITS_$($job.JobId)" -Phase "PHASE 31" -ThreatType "BITS Persistence" -Severity $SEV_HIGH `
-        -Description "Active BITS transfer: $($job.DisplayName) | State: $($job.JobState)" `
-        -Target "BITS Job: $($job.JobId)" -FixAction "RunCmd" -FixParam "Remove-BitsTransfer -BitsJob (Get-BitsTransfer -AllUsers | Where-Object JobId -eq '$($job.JobId)')" `
-        -Group "BITS / Profile Persistence"
+    # A BITS job is corroborating evidence, not a standalone HIGH — every Windows/Edge/Office/
+    # Google updater uses BITS, so flagging all non-idle jobs floods CRITICAL FPs. Escalate to
+    # HIGH + auto-removable only when a transfer's remote URL is a raw IP, or it stages an
+    # executable/script into a user-writable path; otherwise POSSIBLE + Info (shown, not auto-acted).
+    $bitsSusp = $false; $bitsWhy = ""
+    foreach ($bf in @($job.FileList)) {
+        if ("$($bf.RemoteName)" -match $BITS_SUSP_REMOTE_RE) { $bitsSusp = $true; $bitsWhy = "raw-IP remote: $($bf.RemoteName)"; break }
+        if ("$($bf.LocalName)"  -match $BITS_SUSP_LOCAL_RE)  { $bitsSusp = $true; $bitsWhy = "stages executable to user path: $($bf.LocalName)"; break }
+    }
+    if ($bitsSusp) {
+        Add-Finding -ID "BITS_$($job.JobId)" -Phase "PHASE 31" -ThreatType "BITS Persistence" -Severity $SEV_HIGH `
+            -Description "Suspicious BITS transfer ($bitsWhy): $($job.DisplayName) | State: $($job.JobState)" `
+            -Target "BITS Job: $($job.JobId)" -FixAction "RunCmd" -FixParam "Remove-BitsTransfer -BitsJob (Get-BitsTransfer -AllUsers | Where-Object JobId -eq '$($job.JobId)')" `
+            -Group "BITS / Profile Persistence"
+    } else {
+        Add-Finding -ID "BITS_$($job.JobId)" -Phase "PHASE 31" -ThreatType "BITS Persistence" -Severity $SEV_POSSIBLE `
+            -Description "Active BITS transfer (likely an app/OS updater — review): $($job.DisplayName) | State: $($job.JobState)" `
+            -Target "BITS Job: $($job.JobId)" -FixAction "Info" `
+            -Group "BITS / Profile Persistence"
+    }
 }
 if ($bitsJobs.Count -eq 0) { Out-Typewriter "  -> [OK] NO ROGUE BITS JOBS." "GOOD" }
 foreach ($prof in @($PROFILE.AllUsersAllHosts,$PROFILE.AllUsersCurrentHost,$PROFILE.CurrentUserAllHosts,$PROFILE.CurrentUserCurrentHost)) {
@@ -3897,10 +3916,15 @@ if ($PhasePlan.Advanced) {
             try {
                 $c = Get-Content $_.FullName -Raw -ErrorAction Stop
                 if ($c -match "<Hidden>true</Hidden>" -and (Test-InScope $_.LastWriteTime)) {
+                    # Hidden=true is the NORMAL maintenance-task attr for first-party Windows,
+                    # Google/MSI/.NET-NGEN and most app updaters. On its own it is weak signal,
+                    # and the XML lives in the protected System32\Tasks store, so never auto-delete:
+                    # known vendor path -> INFO, unrecognized -> POSSIBLE (surfaced for review).
+                    $taskKnown = ($_.FullName -match $HIDDEN_TASK_BENIGN_RE)
                     Add-Finding -ID "HIDDENTASK_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 104" `
-                        -ThreatType "Hidden Scheduled Task" -Severity $SEV_HIGH `
-                        -Description "Task with Hidden=true: $($_.FullName)" `
-                        -Target $_.FullName -FixAction "DeleteFile" -FixParam $_.FullName `
+                        -ThreatType "Hidden Scheduled Task" -Severity ($(if ($taskKnown) { $SEV_INFO } else { $SEV_POSSIBLE })) `
+                        -Description "$(if ($taskKnown) { 'Hidden=true on a recognized vendor maintenance task' } else { 'Hidden=true on an unrecognized task (review)' }): $($_.FullName)" `
+                        -Target $_.FullName -FixAction "Info" `
                         -Group "Hidden Scheduled Tasks"
                     $taskDeepHits++
                 }

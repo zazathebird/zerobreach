@@ -343,6 +343,27 @@ extensions (the report's `.docx` hits are a pre-`cbe96c4` build); **Event Log �
 **MoTW** group are already POSSIBLE/`Info` (non-destructive). Engine parse-clean **PS 5.1 (v5.1.26100)**
 + 7 (0 errors), BOM intact.
 
+**Round 3 (2026-06-23) — the two remaining destructive floods (scheduled tasks + BITS):**
+- **Phase 104 HIDDEN SCHEDULED TASKS** (`~V23:3899`): flagged every task XML with
+  `<Hidden>true</Hidden>` HIGH + **DeleteFile** — but Hidden=true is the *normal* maintenance-task attr
+  for first-party Windows (`\Microsoft\…`), Google Updater, MSI Task Host, `.NET Framework NGEN`,
+  AppxDeploymentClient, and most app updaters → ~57 HIGH FPs offering to delete legit system tasks.
+  Now matches the task FullName against the `hidden_task_benign_paths` allowlist → **known vendor =
+  INFO, unrecognized = POSSIBLE**, and FixAction is now **`Info`** (never auto-delete — the XML also
+  lives in the protected `System32\Tasks` store). **57 HIGH DeleteFile → 0** (all 57 recognized → INFO;
+  any unknown would be POSSIBLE-for-review, never auto-acted). Hidden=true alone is weak signal.
+- **Phase 31 BITS JOBS** (`~V23:1937`): flagged *every* non-idle BITS job HIGH + **RunCmd** (remove) —
+  but every Windows/Edge/Office/Google updater uses BITS constantly, so ~49 HIGH FPs. A BITS job is
+  corroborating evidence, not standalone HIGH. Now **POSSIBLE + `Info` by default**, escalating to
+  **HIGH + RunCmd** only when a transfer's remote URL is a raw IP (`bits_suspicious_remote_regex`) or it
+  stages an executable/script into a user-writable path (`bits_suspicious_local_regex`). Legit
+  Microsoft/Google updater transfers verified to stay POSSIBLE; raw-IP C2 + exec-to-Temp/Downloads
+  verified to escalate. **49 HIGH → 0** on a clean box (only genuinely-suspicious transfers stay HIGH).
+
+Round-3 escalation regexes (`bits_suspicious_*`) are generic heuristics (raw-IP URL / exec-to-userpath),
+NOT malware-signature literals, so they live in the `fp_allowlists` block alongside the allowlist. Engine
+parse-clean **PS 5.1 + 7 (0 errors)**, BOM intact, JSON valid.
+
 > **Rule:** new FP allowlists go in `data/detection_signatures.json` `fp_allowlists` block (never inline
 > literals in the `.ps1`); load via `Join-AllowRegex`. Prefer **downgrade to POSSIBLE** over deleting a
 > detection — POSSIBLE is shown but never auto-selected for destructive remediation. **Not yet validated
