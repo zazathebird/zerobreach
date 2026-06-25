@@ -626,7 +626,7 @@ function Invoke-VerifiedAnnihilation {
         try {
             $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
             $target  = "\??\$Path"
-            $cur     = Get-ItemPropertyValue -Path $regPath -Name "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+            $cur     = Get-RegVal -Path $regPath -Name "PendingFileRenameOperations"
             if ($null -eq $cur) { $cur = @() }
             Set-ItemProperty -Path $regPath -Name "PendingFileRenameOperations" -Value ([string[]]($cur) + @($target, "")) -Type MultiString -Force -ErrorAction Stop
             Out-Typewriter "KERNEL HOOKED: QUEUED FOR NEXT REBOOT." "WARN"; $global:KillCount++
@@ -946,6 +946,44 @@ function Get-AuthSig([string]$Path) {
     # just get $null. -LiteralPath also avoids wildcard expansion on bracketed paths.
     try { Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop } catch { $null }
 }
+function Get-RegVal {
+    # Safe wrapper. Get-ItemPropertyValue throws a *terminating* error when the named
+    # value is absent ("Property X does not exist"), which -ErrorAction SilentlyContinue
+    # does NOT suppress; left unhandled it unwinds to the script trap and is logged as a
+    # noisy "RECOVERED ERROR" (and on grouped phases could skip detections). Catch it here
+    # so callers just get $null for a missing/locked value. Never call Get-ItemPropertyValue
+    # raw — use Get-RegVal.
+    param([string]$Path, [string]$Name)
+    try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
+}
+function Get-WinEventSafe {
+    # Safe wrapper. Get-WinEvent -FilterHashtable throws a *terminating* error that
+    # -ErrorAction SilentlyContinue does NOT suppress when a ProviderName/LogName isn't
+    # registered on the box ("The parameter is incorrect") — left unhandled it unwinds to
+    # the script trap and is logged as a noisy "RECOVERED ERROR". Catch it so callers get
+    # an empty array. Never call Get-WinEvent -FilterHashtable raw in a phase body.
+    param([hashtable]$Filter, [int]$MaxEvents = 0)
+    try {
+        if ($MaxEvents -gt 0) { Get-WinEvent -FilterHashtable $Filter -MaxEvents $MaxEvents -ErrorAction Stop }
+        else                  { Get-WinEvent -FilterHashtable $Filter -ErrorAction Stop }
+    } catch { @() }
+}
+function Get-FileHashSafe {
+    # Get-FileHash lives in Microsoft.PowerShell.Utility; on a box with a corrupted
+    # module/type environment it can fail to auto-load ("the term 'Get-FileHash' is not
+    # recognized"), which unwinds to the script trap as a noisy RECOVERED ERROR and breaks
+    # hash-based detection. Compute SHA256 directly via .NET (always available, no module
+    # dependency). Returns uppercase hex (matching Get-FileHash's .Hash), or $null on a
+    # locked/unreadable file. Never call Get-FileHash raw in a phase body — use this.
+    param([string]$Path)
+    $sha = $null; $fs = $null
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $fs  = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        ([BitConverter]::ToString($sha.ComputeHash($fs))) -replace '-',''
+    } catch { $null }
+    finally { if ($fs) { $fs.Dispose() }; if ($sha) { $sha.Dispose() } }
+}
 function Get-SignatureVerdict { param([string]$FilePath)
     if ($global:SIG_CACHE.ContainsKey($FilePath)) { return $global:SIG_CACHE[$FilePath] }
     $result = @{ Status='Unknown'; Signer=''; Trusted=$false; IsMs=$false; Exists=$false }
@@ -1234,7 +1272,7 @@ Show-SectionBanner "PRE-FLIGHT SYSTEMS & LOG AUDIT"
 
 Show-PhaseHeader "PHASE 1" "ANTI-FORENSIC EVENT LOG AUDIT"
 Invoke-QuantumBar "PARSING SECURITY EVENTS" 10 140
-$logClears = Get-WinEvent -FilterHashtable @{LogName='System','Security'; ID=104,1102} -ErrorAction SilentlyContinue |
+$logClears = Get-WinEventSafe @{LogName='System','Security'; ID=104,1102} |
     Where-Object { Test-InScope $_.TimeCreated }
 if ($logClears) {
     foreach ($clear in $logClears) {
@@ -1248,7 +1286,7 @@ if ($logClears) {
 
 Show-PhaseHeader "PHASE 2" "POWERSHELL SCRIPT BLOCK LOG AUDIT (EVENT 4104)"
 Invoke-QuantumBar "SCANNING POWERSHELL OPERATIONAL LOGS" 8 120
-$psLogs = Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-PowerShell/Operational'; ID=4104} -ErrorAction SilentlyContinue |
+$psLogs = Get-WinEventSafe @{LogName='Microsoft-Windows-PowerShell/Operational'; ID=4104} |
     Where-Object { Test-InScope $_.TimeCreated }
 # FIX: filter out this script's own footprint
 $psHits = $psLogs | Where-Object {
@@ -1671,7 +1709,7 @@ foreach ($ht in @($env:PUBLIC,$env:LOCALAPPDATA,$env:TEMP,"$env:USERPROFILE\AppD
         # file (.json/.db/.log/.dat/.profile/cache, or extension-less browser-profile files like
         # "History"/"Login Data") is normal OS/app housekeeping, so only payload-type extensions are
         # flagged here — everything else is skipped (the benign-name allowlist drops shell files first).
-        $cloaked = Get-ScanFiles -Path $ht -TimeScoped |
+        $cloaked = (Get-ScanFiles -Path $ht -TimeScoped) |
             Where-Object {
                 $_.Attributes -match "Hidden" -and $_.Attributes -match "System" -and
                 $_.Name -notmatch $CLOAKED_BENIGN_RE -and
@@ -1740,13 +1778,13 @@ $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execu
 if (Test-Path $ifeoPath) {
     Get-ChildItem -Path $ifeoPath -ErrorAction SilentlyContinue | ForEach-Object {
         if (Get-ItemProperty -Path $_.PSPath -Name "Debugger" -ErrorAction SilentlyContinue) {
-            $dbg = (Get-ItemPropertyValue -Path $_.PSPath -Name "Debugger" -ErrorAction SilentlyContinue)
+            $dbg = (Get-RegVal -Path $_.PSPath -Name "Debugger")
             Out-Decrypt -Text "$($_.PSChildName) -> Debugger = $dbg" -Prefix "  [IFEO HIT] "
             Add-Finding -ID "IFEO_$($_.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 21" -ThreatType "IFEO Hijack/Persistence" `
                 -Severity $SEV_CRITICAL -Description "IFEO Debugger set on $($_.PSChildName) = $dbg — common backdoor/persistence technique" `
                 -Target "$($_.PSPath)|Debugger" -FixAction "DeleteReg" -FixParam "$($_.PSPath)|Debugger" -Group "IFEO Persistence"
         }
-        $gf = (Get-ItemPropertyValue -Path $_.PSPath -Name "GlobalFlag" -ErrorAction SilentlyContinue)
+        $gf = (Get-RegVal -Path $_.PSPath -Name "GlobalFlag")
         if ($null -ne $gf -and $gf -ne 0) {
             Add-Finding -ID "IFEO_GF_$($_.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 21" -ThreatType "IFEO/GFlags Injection" `
                 -Severity $SEV_HIGH -Description "IFEO GlobalFlag set on $($_.PSChildName) = $gf (GFlags injection vector)" `
@@ -1758,7 +1796,7 @@ if (Test-Path $ifeoPath) {
 
 Show-PhaseHeader "PHASE 22" "APPINIT_DLLS KERNEL INJECTION SCRUB"
 foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Windows")) {
-    $ai = Get-ItemPropertyValue -Path $p -Name "AppInit_DLLs" -ErrorAction SilentlyContinue
+    $ai = Get-RegVal -Path $p -Name "AppInit_DLLs"
     if ($ai -and $ai.Trim() -ne "") {
         Out-Typewriter "  -> APPINIT_DLLS SET: $ai" "CRIT"
         Add-Finding -ID "APPINIT_$($p -replace '[^a-z0-9]','')" -Phase "PHASE 22" -ThreatType "DLL Injection/Rootkit" `
@@ -1802,8 +1840,8 @@ Show-PhaseHeader "PHASE 25" "GPO LOCKDOWN — TASKMGR/REGEDIT/CMD DISABLED"
 $gpoU = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System"
 $gpoM = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
 foreach ($pol in @("DisableTaskMgr","DisableRegistryTools","DisableCMD")) {
-    $vU = (Get-ItemPropertyValue -Path $gpoU -Name $pol -ErrorAction SilentlyContinue)
-    $vM = (Get-ItemPropertyValue -Path $gpoM -Name $pol -ErrorAction SilentlyContinue)
+    $vU = (Get-RegVal -Path $gpoU -Name $pol)
+    $vM = (Get-RegVal -Path $gpoM -Name $pol)
     if ($vU -eq 1) {
         Out-Typewriter "  -> $pol DISABLED (HKCU)" "CRIT"
         Add-Finding -ID "GPO_$pol" -Phase "PHASE 25" -ThreatType "GPO Lockdown (Malware)" -Severity $SEV_HIGH `
@@ -2189,7 +2227,7 @@ if ($bcd -match "testsigning\s+Yes" -or $bcd -match "nointegritychecks\s+Yes") {
 Show-SectionBanner "CREDENTIAL & USER ABUSE DETECTION"
 
 Show-PhaseHeader "PHASE 41" "LSA / WDIGEST / LSA PROTECTION AUDIT"
-$wdigest = Get-ItemPropertyValue "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -Name "UseLogonCredential" -ErrorAction SilentlyContinue
+$wdigest = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -Name "UseLogonCredential"
 if ($wdigest -eq 1) {
     Out-Typewriter "  -> WDIGEST PLAINTEXT CREDS ENABLED." "CRIT"
     Add-Finding -ID "WDIGEST_ENABLE" -Phase "PHASE 41" -ThreatType "Credential Theft Vector" -Severity $SEV_CRITICAL `
@@ -2198,7 +2236,7 @@ if ($wdigest -eq 1) {
         -FixAction "RunCmd" -FixParam "Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest' -Name UseLogonCredential -Value 0 -Type DWord -Force" `
         -Group "Credential Security"
 } else { Out-Typewriter "  -> [OK] WDIGEST PLAINTEXT STORAGE DISABLED." "GOOD" }
-$lsaProtect = Get-ItemPropertyValue "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RunAsPPL" -ErrorAction SilentlyContinue
+$lsaProtect = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\Lsa" -Name "RunAsPPL"
 if ($lsaProtect -ne 1) {
     Out-Typewriter "  -> LSA PROTECTION NOT ENABLED." "WARN"
     Add-Finding -ID "LSA_PPL" -Phase "PHASE 41" -ThreatType "LSA Hardening" -Severity $SEV_HIGH `
@@ -2315,7 +2353,7 @@ foreach ($af in $accessFiles) {
 Show-PhaseHeader "PHASE 46" "NULL SESSION / NTLM LEVEL / FINAL LSA HARDENING"
 Out-Typewriter "AUDITING LSA SECURITY SETTINGS..." "INFO"
 $lsaPath = "HKLM:\System\CurrentControlSet\Control\Lsa"
-$lmCompat = Get-ItemPropertyValue $lsaPath -Name "LmCompatibilityLevel" -ErrorAction SilentlyContinue
+$lmCompat = Get-RegVal $lsaPath -Name "LmCompatibilityLevel"
 if ($null -eq $lmCompat -or $lmCompat -lt 5) {
     Out-Typewriter "  -> NTLM LEVEL TOO LOW: $lmCompat (should be 5 = NTLMv2 only)" "WARN"
     Add-Finding -ID "NTLM_LEVEL" -Phase "PHASE 46" -ThreatType "Credential Security" -Severity $SEV_HIGH `
@@ -2360,7 +2398,7 @@ $klSearchPaths  = @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\D
 # One bounded walk, anchored regex over all patterns (was 4 roots x 9 patterns = 36 recursions).
 $klRegex = ($klFilePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
 $klFound = $false
-$klHits = Get-ScanFiles -Path $klSearchPaths -TimeScoped | Where-Object { $_.Name -match $klRegex }
+$klHits = (Get-ScanFiles -Path $klSearchPaths -TimeScoped) | Where-Object { $_.Name -match $klRegex }
 foreach ($hit in $klHits) {
     Out-ThreatBanner "KEYLOGGER LOG FILE" $hit.FullName
     Add-Finding -ID "KLFILE_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 48" -ThreatType "Keylogger" `
@@ -2490,7 +2528,7 @@ if ($bcdedit2 -match "recoveryenabled.*No") {
         -Group "Recovery / Backup Tampering"
     $global:RansomwareRisk += 5
 } else { Out-Typewriter "  -> [OK] RECOVERY ENABLED." "GOOD" }
-$wbadminLog = Get-WinEvent -FilterHashtable @{LogName='System'; ProviderName='Microsoft-Windows-Backup'} -MaxEvents 20 -ErrorAction SilentlyContinue |
+$wbadminLog = Get-WinEventSafe @{LogName='System'; ProviderName='Microsoft-Windows-Backup'} -MaxEvents 20 |
     Where-Object { Test-InScope $_.TimeCreated -and $_.Id -in @(521,527,528) }
 if ($wbadminLog.Count -gt 0) {
     Out-Typewriter "  -> $($wbadminLog.Count) BACKUP DELETION/FAILURE EVENTS FOUND." "WARN"
@@ -2553,7 +2591,7 @@ $regServices = (Get-ChildItem "HKLM:\System\CurrentControlSet\Services" -ErrorAc
 $hiddenFromSCM = $regServices | Where-Object { $_ -notin $scServices }
 $rootSvcFound = $false
 foreach ($svc in $hiddenFromSCM) {
-    $svcType = (Get-ItemPropertyValue "HKLM:\System\CurrentControlSet\Services\$svc" -Name "Type" -ErrorAction SilentlyContinue)
+    $svcType = (Get-RegVal "HKLM:\System\CurrentControlSet\Services\$svc" -Name "Type")
     if ($svcType -in @(1,2,16,32)) {
         Out-Typewriter "  -> SERVICE IN REGISTRY HIDDEN FROM SCM: $svc (Type=$svcType)" "WARN"
         Add-Finding -ID "RKSVC_$($svc -replace '[^a-z0-9]','')" -Phase "PHASE 57" -ThreatType "Rootkit/Hidden Service" `
@@ -2785,7 +2823,7 @@ foreach ($share in $shares) {
     if ($sigBudgetHit) { break }
     Out-Typewriter "  -> OPEN SHARE: $($share.Name) @ $($share.Path)" "WARN"
     if ($share.Path -and (Test-Path $share.Path)) {
-        $malInShare = Get-ScanFiles -Path $share.Path -TimeScoped |
+        $malInShare = (Get-ScanFiles -Path $share.Path -TimeScoped) |
             Where-Object { $_.Extension -match "\.(exe|bat|cmd|vbs|js|ps1)$" } |
             Select-Object -First 500
         foreach ($mis in $malInShare) {
@@ -2858,7 +2896,7 @@ foreach ($sp in $stealerProcs) {
         -Target "PID:$($sp.Id)" -FixAction "KillProcess" -FixParam $sp.Id -Group "Info-Stealer"
     $global:SpywareHits++
 }
-$stealerFiles = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped |
+$stealerFiles = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped) |
     Where-Object { $_.Name -match "passwords|credentials|wallet|login|autofill|cookie" -and $_.Extension -match "\.(zip|txt|log|db)$" }
 foreach ($sf in $stealerFiles) {
     # Exclude legitimate browser storage + known-benign dictionaries/caches (ZxcvbnData password
@@ -3014,7 +3052,7 @@ $emailHits = 0
 # Extensions worth content-scanning for HTML/JS smuggling & redirector payloads.
 $emailTextExt = @(".htm",".html",".js",".jse",".vbs",".vbe",".hta",".wsf",".svg",".log",".txt",".xml")
 foreach ($attachPath in $emailAttachPaths) {
-    $emailFiles = Get-ScanFiles -Path $attachPath -TimeScoped |
+    $emailFiles = (Get-ScanFiles -Path $attachPath -TimeScoped) |
         Where-Object { $_.Length -lt 50MB } | Select-Object -First 500
     $inCache = ($attachPath -match 'Olk\\Attachments|Content\.Outlook|Temporary Internet Files')
     foreach ($ef in $emailFiles) {
@@ -3023,7 +3061,7 @@ foreach ($attachPath in $emailAttachPaths) {
 
         # 1) Known-malware hash match (strongest signal) — only hash small/medium files.
         if ($KNOWN_MALWARE_HASHES.Count -gt 0 -and $ef.Length -lt 25MB) {
-            $fh = (Get-FileHash -LiteralPath $ef.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+            $fh = (Get-FileHashSafe $ef.FullName)
             if ($fh -and ($KNOWN_MALWARE_HASHES -contains $fh.ToLower())) {
                 $sev = $SEV_CRITICAL; $reasons += "SHA256 matches known malware ($($fh.Substring(0,16))...)"
             }
@@ -3229,7 +3267,7 @@ try {
 Show-SectionBanner "FINAL HARDENING & LOCKDOWN AUDIT"
 
 Show-PhaseHeader "PHASE 76" "TERMINAL SERVICES / RDP SHADOWING AUDIT"
-$rdpShadow = Get-ItemPropertyValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" -Name "Shadow" -ErrorAction SilentlyContinue
+$rdpShadow = Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" -Name "Shadow"
 if ($null -ne $rdpShadow) {
     Out-Typewriter "  -> RDP SHADOW POLICY SET: $rdpShadow" "WARN"
     Add-Finding -ID "RDP_SHADOW" -Phase "PHASE 76" -ThreatType "RDP Surveillance" `
@@ -3329,7 +3367,7 @@ if ($PhasePlan.Universal) {
     # (was 4 roots x 12 names = 48 recursions, one over the entire user profile).
     $tunnelRegex = ($tunnelNames | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $tunnelFound = $false
-    $tunnelHits = Get-ScanFiles -Path $tunnelRoots | Where-Object { $_.Name -match $tunnelRegex }
+    $tunnelHits = (Get-ScanFiles -Path $tunnelRoots) | Where-Object { $_.Name -match $tunnelRegex }
     foreach ($hit in $tunnelHits) {
         $tunnelFound = $true
         Out-Decrypt -Text $hit.FullName -Prefix "  [TUNNEL TOOL] "
@@ -3382,7 +3420,7 @@ if ($PhasePlan.Universal) {
     }
 
     Show-PhaseHeader "PHASE 86" "RECYCLE BIN STAGING AREA SCAN" "UNIVERSAL"
-    $recycleBin = Get-ScanFiles -Path "C:\`$Recycle.Bin" -TimeScoped |
+    $recycleBin = (Get-ScanFiles -Path "C:\`$Recycle.Bin" -TimeScoped) |
         Where-Object { $_.Extension -match "\.(exe|dll|js|vbs|bat|cmd|ps1|hta|wsf)$" }
     foreach ($rb in $recycleBin) {
         Out-Decrypt -Text $rb.FullName -Prefix "  [RECYCLE BIN PAYLOAD] "
@@ -3410,7 +3448,7 @@ if ($PhasePlan.Universal) {
     $domain = (Get-WmiObject Win32_ComputerSystem).PartOfDomain
     if ($domain) {
         Out-Typewriter "  -> MACHINE IS DOMAIN-JOINED. RUNNING AD SWEEPS..." "INFO"
-        $dcSyncEvts = Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4662} -ErrorAction SilentlyContinue |
+        $dcSyncEvts = Get-WinEventSafe @{LogName='Security'; ID=4662} |
             Where-Object { (Test-InScope $_.TimeCreated) -and $_.Message -match "1131f6aa|1131f6ad|89e95b76" }
         if ($dcSyncEvts.Count -gt 0) {
             Out-ThreatBanner "POSSIBLE DCSYNC ATTACK" "$($dcSyncEvts.Count) replication events from non-DC"
@@ -3418,7 +3456,7 @@ if ($PhasePlan.Universal) {
                 -Description "DCSync indicators: $($dcSyncEvts.Count) AD replication events outside DC — possible credential dump" `
                 -Target "Security EventLog (4662)" -FixAction "Info" -Group "Active Directory Attacks"
         } else { Out-Typewriter "  -> [OK] NO DCSYNC INDICATORS." "GOOD" }
-        $goldenTicket = Get-WinEvent -FilterHashtable @{LogName='Security'; ID=4769} -ErrorAction SilentlyContinue |
+        $goldenTicket = Get-WinEventSafe @{LogName='Security'; ID=4769} |
             Where-Object { (Test-InScope $_.TimeCreated) -and $_.Message -match "0x17" -and $_.Message -match "krbtgt" }
         if ($goldenTicket.Count -gt 0) {
             Out-ThreatBanner "POSSIBLE GOLDEN TICKET" "$($goldenTicket.Count) KRBTGT RC4 requests"
@@ -3444,7 +3482,7 @@ if ($PhasePlan.Universal) {
     $stegoTools = @("openstego*","steghide*","outguess*","jphide*","stegosuite*","stepic*","imagesteganography*")
     # One bounded walk + anchored regex (was 3 roots x 7 names = 21 recursions incl. whole profile).
     $stegoRegex = ($stegoTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
-    $stegoHits = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE) | Where-Object { $_.Name -match $stegoRegex }
+    $stegoHits = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE)) | Where-Object { $_.Name -match $stegoRegex }
     foreach ($hit in $stegoHits) {
         Out-Typewriter "  -> STEGO TOOL: $($hit.FullName)" "WARN"
         Add-Finding -ID "STEGO_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 89" -ThreatType "Steganography/Exfil Tool" `
@@ -3475,7 +3513,7 @@ if ($PhasePlan.Advanced) {
     $yaraExt   = @(".exe",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
     $yaraHits  = 0
     # Single bounded walk across all roots (was per-root recursion x5, -First 200 each).
-    $candidates = Get-ScanFiles -Path $yaraRoots -TimeScoped |
+    $candidates = (Get-ScanFiles -Path $yaraRoots -TimeScoped) |
         Where-Object { ($yaraExt -contains $_.Extension.ToLower()) -and $_.Length -lt 10MB } |
         Select-Object -First 200
         foreach ($cand in $candidates) {
@@ -3511,7 +3549,7 @@ if ($PhasePlan.Advanced) {
                 # Built-in known-malware hash list + user-supplied custom IOC hashes.
                 if (($KNOWN_MALWARE_HASHES.Count -gt 0 -or $global:CustomIocs.Hashes.Count -gt 0) -and $cand.Length -lt 25MB) {
                     try {
-                        $hash = (Get-FileHash -Path $cand.FullName -Algorithm SHA256 -ErrorAction Stop).Hash.ToLower()
+                        $hash = (Get-FileHashSafe $cand.FullName).ToLower()
                         if (($KNOWN_MALWARE_HASHES -contains $hash) -or ($global:CustomIocs.Hashes -contains $hash)) {
                             Out-Decrypt -Text "IOC hash match: $($cand.FullName)" -Prefix "  [IOC HIT] "
                             Add-Finding -ID "IOC_HASH_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
@@ -3533,7 +3571,7 @@ if ($PhasePlan.Advanced) {
     $motwHits = 0
     foreach ($root in @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop")) {
         if (-not (Test-Path $root)) { continue }
-        $exes = Get-ScanFiles -Path $root -TimeScoped |
+        $exes = (Get-ScanFiles -Path $root -TimeScoped) |
             Where-Object { $_.Extension -match "\.(exe|msi|dll|scr|js|vbs|hta|ps1|bat|lnk|iso|img)$" }
         foreach ($exe in $exes) {
             $stream = Get-Item -Path $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue
@@ -3564,7 +3602,7 @@ if ($PhasePlan.Advanced) {
             }
         }
     }
-    $enableLua = Get-ItemPropertyValue "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA" -ErrorAction SilentlyContinue
+    $enableLua = Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA"
     if ($enableLua -eq 0) {
         Out-Typewriter "  -> UAC DISABLED (EnableLUA=0)" "CRIT"
         Add-Finding -ID "UAC_DISABLED" -Phase "PHASE 92" -ThreatType "UAC Disabled" -Severity $SEV_HIGH `
@@ -3632,7 +3670,7 @@ if ($PhasePlan.Advanced) {
         # NB: .sct/.wsc are scriptlet-specific. .xsl is overwhelmingly benign (every
         # lxml/Python/Office install ships thousands) so it is NOT matched by extension
         # alone — Squiblytwo (.xsl via wmic) is caught by the run-key/content checks below.
-        $sctFiles = Get-ScanFiles -Path $root -TimeScoped |
+        $sctFiles = (Get-ScanFiles -Path $root -TimeScoped) |
             Where-Object { $_.Extension -match "\.(sct|wsc)$" }
         foreach ($s in $sctFiles) {
             Out-ThreatBanner "COM SCRIPTLET FILE" $s.FullName
@@ -3689,7 +3727,7 @@ if ($PhasePlan.Advanced) {
     Show-PhaseHeader "PHASE 96" "PRINT SPOOLER / PRINTNIGHTMARE (CVE-2021-34527)" "PRINTNIGHTMARE"
     Out-Typewriter "AUDITING POINT-AND-PRINT POLICY AND SPOOLER DRIVER DIR..." "HUNT"
     $pnHits = 0
-    $pnoarp = Get-ItemPropertyValue "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "NoWarningNoElevationOnInstall" -ErrorAction SilentlyContinue
+    $pnoarp = Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Printers\PointAndPrint" -Name "NoWarningNoElevationOnInstall"
     if ($pnoarp -eq 1) {
         Out-ThreatBanner "PRINTNIGHTMARE EXPOSURE" "Point-and-Print NoWarningNoElevationOnInstall=1"
         Add-Finding -ID "PRINTNIGHT_POE" -Phase "PHASE 96" -ThreatType "PrintNightmare (CVE-2021-34527)" `
@@ -3737,7 +3775,7 @@ if ($PhasePlan.Advanced) {
     $coHits = 0
     foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,"$env:LOCALAPPDATA\Apps","$env:USERPROFILE\Downloads")) {
         if (-not (Test-Path $root)) { continue }
-        Get-ScanFiles -Path $root -TimeScoped |
+        (Get-ScanFiles -Path $root -TimeScoped) |
             Where-Object { $_.Extension -match "\.(application|manifest|deploy)$" } |
             Select-Object -First 50 | ForEach-Object {
             Add-Finding -ID "CLICKONCE_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 97" -ThreatType "ClickOnce Abuse" `
@@ -3764,7 +3802,7 @@ if ($PhasePlan.Advanced) {
     foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
         if ($sigBudgetHit) { break }
         if (-not (Test-Path $root)) { continue }
-        $sigCandidates = Get-ScanFiles -Path $root -TimeScoped |
+        $sigCandidates = (Get-ScanFiles -Path $root -TimeScoped) |
             Where-Object { $_.Extension -match "\.(exe|dll)$" }
         foreach ($f in $sigCandidates) {
             if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
@@ -3894,7 +3932,7 @@ if ($PhasePlan.Advanced) {
     $arcHits = 0
     foreach ($root in @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop",$env:TEMP)) {
         if (-not (Test-Path $root)) { continue }
-        Get-ScanFiles -Path $root -TimeScoped |
+        (Get-ScanFiles -Path $root -TimeScoped) |
             Where-Object { ($_.Extension -match "\.(zip|7z|rar|iso|img)$") -and $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Length -gt 1024 } |
             Select-Object -First 40 | ForEach-Object {
             Add-Finding -ID "ARCHIVE_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 103" `
@@ -4026,7 +4064,7 @@ if ($PhasePlan.Advanced) {
     $dumpTools = @("procdump*.exe","dumpert*.exe","memdump*.exe","outflank-dumpert*","nanodump*","handlekatz*","lsassy*","pypykatz*")
     # One bounded walk + anchored regex (was 3 roots x 8 names = 24 recursions incl. whole profile).
     $dumpRegex = ($dumpTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
-    $dumpHits = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE) | Where-Object { $_.Name -match $dumpRegex }
+    $dumpHits = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE)) | Where-Object { $_.Name -match $dumpRegex }
     foreach ($hit in $dumpHits) {
         Out-ThreatBanner "MEMORY DUMPER TOOL" $hit.FullName
         Add-Finding -ID "DUMPTOOL_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 106" -ThreatType "Credential Dumping Tool" `
@@ -5364,7 +5402,7 @@ function Invoke-FixMode {
                         if (Test-Path $f.FixParam) {
                             # Kernel-queue for locked files
                             $rp  = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                            $cur = Get-ItemPropertyValue $rp "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                            $cur = Get-RegVal $rp "PendingFileRenameOperations"
                             if ($null -eq $cur) { $cur = @() }
                             Set-ItemProperty $rp "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$($f.FixParam)", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
                             Out-Typewriter "  -> QUEUED FOR REBOOT DELETION." "WARN"
@@ -5414,7 +5452,7 @@ function Invoke-FixMode {
                     else {
                         $vault = Join-Path $OUT_ROOT "quarantine"
                         if (-not (Test-Path $vault)) { New-Item -Path $vault -ItemType Directory -Force | Out-Null }
-                        $sha = (Get-FileHash -LiteralPath $src -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                        $sha = (Get-FileHashSafe $src)
                         $stub = ([System.IO.Path]::GetFileName($src)) -replace '[^a-zA-Z0-9._-]','_'
                         $tag  = "{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmssfff'), $stub
                         # ".quar" extension neutralizes double-click execution while preserving bytes.
@@ -5425,7 +5463,7 @@ function Invoke-FixMode {
                             # Locked file: copy bytes to vault, then kernel-queue the original for reboot deletion.
                             try { Copy-Item -LiteralPath $src -Destination $dest -Force -ErrorAction Stop } catch {}
                             $rp  = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                            $cur = Get-ItemPropertyValue $rp "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                            $cur = Get-RegVal $rp "PendingFileRenameOperations"
                             if ($null -eq $cur) { $cur = @() }
                             Set-ItemProperty $rp "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$src", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
                         }

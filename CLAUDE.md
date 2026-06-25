@@ -6,6 +6,28 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ZeroBreach V23 "Kraken Console" is a Windows-only MSP incident response tool with two interchangeable servers sitting between a cyberpunk HTML/JS frontend and a PowerShell scan engine (`ZeroBreach-V23.ps1`) that performs 107 phases of malware detection.
 
+## Bugs Fixed (2026-06-25) — live DEEP run cleanup (recovered-error noise + the REAL Phase-68 flood)
+
+A live admin `-Mode DEEP -Hours 0` run was re-run end-to-end (as admin, headless) and graded. Four
+classes of problem, all in `ZeroBreach-V23.ps1`, all now fixed + re-validated on a clean DEEP run.
+Three new **safe-wrapper** helpers were added next to `Get-AuthSig` (~`:942`) and all raw call sites
+routed through them (same rule as `Get-AuthSig`: never call the raw cmdlet in a phase body).
+
+| Bug | Root cause | Fix |
+|---|---|---|
+| **7 "RECOVERED ERROR" lines** (GlobalFlag, DisableTaskMgr, UseLogonCredential, LmCompatibilityLevel, Property Type, Shadow, + a Get-WinEvent) | `Get-ItemPropertyValue ... -EA SilentlyContinue` throws a *terminating* error when the value is absent ("Property X does not exist") — `-EA SilentlyContinue` does NOT suppress it (the trap pattern). Same for `Get-WinEvent -FilterHashtable` ("The parameter is incorrect") when a ProviderName isn't registered. | Added **`Get-RegVal`** (try/catch→`$null`) — routed all 14 `Get-ItemPropertyValue` sites. Added **`Get-WinEventSafe`** (try/catch→`@()`) — routed the 5 `-EA SilentlyContinue` `Get-WinEvent` sites (the 3 `-EA Stop` ones were already in try/catch). |
+| **`Get-FileHash` not recognized** (`:3048`) | On a box with a corrupted module/type env (paired with an "AuditToString is already present" TypeData error) `Get-FileHash` (Microsoft.PowerShell.Utility) can fail to auto-load → RECOVERED ERROR + broken hash detection. | Added **`Get-FileHashSafe`** — computes SHA256 via **.NET** (`[System.Security.Cryptography.SHA256]`, always available); routed all 3 `Get-FileHash` sites. Returns uppercase hex (matches `.Hash`) or `$null`. |
+| **19,981-line Phase 68 "SUSPECT CREDENTIAL FILE" flood** — the big one (≈half the 4.5 MB log). Flagged `.ses`/`.tmp`/`.py`/`.png` with no cred name and wrong extension. | **`Get-ScanFiles` ends with `return ,$results.ToArray()`.** The unary comma makes the function emit the whole `FileInfo[]` as **one** pipeline object. When piped **directly** (`Get-ScanFiles ... \| Where-Object {…}`), `$_` = the entire array, so `$_.Name -match …` runs against an *array of all names* → a non-empty subset → **truthy**, the `-and` is always true, and Where-Object passes **every** file. Assigning to a variable first (or wrapping the call in **parens**) unwraps the comma; piping directly or wrapping in `@(…)` does **not**. Manifested worst in Phase 68 (filter uses `-and` + hit the 20000 file cap); ~15 callers shared the latent bug. | Wrapped **all 15 direct-pipe `Get-ScanFiles` callers** in parens: `$x = (Get-ScanFiles …) \| Where-Object {…}`. Verified on PS 5.1: 3-path scan now matches **2** (`passwords.txt`), not 20000. The 2 pure-assignment callers (`:1495`, `:2452`) were already correct (assignment unwraps). |
+
+> **Rule:** never pipe `Get-ScanFiles` directly into `Where-Object`/`ForEach-Object` — its
+> `return ,$arr` makes the whole array arrive as one item, so the filter silently matches
+> everything (or nothing). **Wrap the call in parens** `(Get-ScanFiles …) | …` or assign to a
+> variable first. `@(Get-ScanFiles …)` does NOT fix it. And never call `Get-ItemPropertyValue` /
+> `Get-WinEvent -FilterHashtable` / `Get-FileHash` raw in a phase body — use `Get-RegVal` /
+> `Get-WinEventSafe` / `Get-FileHashSafe`. Engine parse-clean PS 5.1 + 7 (0 errors), BOM intact.
+> (Note: the environmental "AuditToString is already present" TypeData RECOVERED ERROR at startup
+> is a machine-level duplicate types file, not an engine bug — benign, recovered.)
+
 ## Launching
 
 ```powershell
