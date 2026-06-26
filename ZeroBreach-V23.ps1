@@ -2084,10 +2084,24 @@ foreach ($pd in $pathDirs) {
         foreach ($dll in $recentDlls) {
             $sig = Get-AuthSig $dll.FullName
             if ($sig.Status -ne "Valid") {
+                # An unsigned DLL in a writable PATH dir is corroborating evidence, NOT a standalone
+                # auto-delete: legit dev tools (Git's mingw64\bin, Python, Node, Ruby) ship piles of
+                # unsigned DLLs in their own install dirs that sit on PATH — auto-deleting them breaks
+                # the install (rule #1: never damage the system). So POSSIBLE by default (surfaced for
+                # review, never auto-selected), escalating to HIGH+DeleteFile only when the DLL sits in
+                # a user-writable malware-staging dir (Temp/Downloads/AppData/ProgramData) — the actual
+                # drop spots for a planted search-order-hijack DLL.
+                $stagingDir = $dll.FullName -match '\\(temp|tmp|downloads|appdata|programdata|public)\\'
                 Out-Decrypt -Text $dll.FullName -Prefix "  [UNSIGNED DLL IN PATH] "
-                Add-Finding -ID "DLLHIJACK_$($dll.Name -replace '[^a-z0-9]','')" -Phase "PHASE 32" -ThreatType "DLL Hijack" `
-                    -Severity $SEV_HIGH -Description "Unsigned DLL in writable PATH dir: $($dll.FullName)" `
-                    -Target $dll.FullName -FixAction "DeleteFile" -FixParam $dll.FullName -Group "DLL Hijack / PATH"
+                if ($stagingDir) {
+                    Add-Finding -ID "DLLHIJACK_$($dll.Name -replace '[^a-z0-9]','')" -Phase "PHASE 32" -ThreatType "DLL Hijack" `
+                        -Severity $SEV_HIGH -Description "Unsigned DLL in a user-writable PATH staging dir (possible search-order hijack): $($dll.FullName)" `
+                        -Target $dll.FullName -FixAction "DeleteFile" -FixParam $dll.FullName -Group "DLL Hijack / PATH"
+                } else {
+                    Add-Finding -ID "DLLHIJACK_$($dll.Name -replace '[^a-z0-9]','')" -Phase "PHASE 32" -ThreatType "DLL Hijack" `
+                        -Severity $SEV_POSSIBLE -Description "Unsigned DLL in a writable PATH dir (review — often a legit dev tool's own DLL): $($dll.FullName)" `
+                        -Target $dll.FullName -FixAction "DeleteFile" -FixParam $dll.FullName -Group "DLL Hijack / PATH"
+                }
             }
         }
     } catch { }
@@ -2868,6 +2882,13 @@ $sigBudgetHit = $false
 # The IR tool itself usually lives under a shared user profile (e.g. a "Users" share), so never
 # flag — let alone offer to DELETE — the scanner's own files. Skip anything under our script root.
 $selfRoot = $PSScriptRoot
+# The local user-profiles tree (C:\Users) is frequently shared as "Users", but the exes under it
+# are the operator's OWN downloads/installers/dev builds (7-Zip, app setups, PyInstaller dist\*.exe)
+# — not a worm someone dropped into a foreign share. The worm-propagation concern is an unsigned
+# PE that appeared in a share you DON'T control, so only those escalate to HIGH+DeleteFile; unsigned
+# exes inside the local profiles tree are surfaced for review only (rule #1: never auto-delete the
+# user's own files).
+$usersRoot = Split-Path $env:USERPROFILE -Parent
 foreach ($share in $shares) {
     if ($sigBudgetHit) { break }
     Out-Typewriter "  -> OPEN SHARE: $($share.Name) @ $($share.Path)" "WARN"
@@ -2885,12 +2906,20 @@ foreach ($share in $shares) {
             $sig = Get-AuthSig $mis.FullName
             if ($sig.Status -ne "Valid") {
                 if ($mis.Extension -match "\.(exe|scr|com|pif)$") {
-                    # A real unsigned PE dropped in an open share is the classic worm-propagation vector.
-                    Out-ThreatBanner "UNSIGNED EXE IN OPEN SHARE" $mis.FullName
-                    Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
-                        -Severity $SEV_HIGH -Description "Unsigned executable in open share: $($mis.FullName)" `
-                        -Target $mis.FullName -FixAction "DeleteFile" -FixParam $mis.FullName -Group "Network Share Worms"
-                    $global:WormHits++
+                    if ($usersRoot -and $mis.FullName.ToLower().StartsWith($usersRoot.ToLower())) {
+                        # Unsigned PE inside the local profiles tree — the user's own download/build, not
+                        # a foreign worm. Surface for review; never auto-delete the user's installers.
+                        Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
+                            -Severity $SEV_POSSIBLE -Description "Unsigned executable in a shared user-profile path (review — usually the user's own download/build): $($mis.FullName)" `
+                            -Target $mis.FullName -FixAction "Info" -Group "Network Share Worms"
+                    } else {
+                        # A real unsigned PE dropped in a foreign/public open share is the classic worm vector.
+                        Out-ThreatBanner "UNSIGNED EXE IN OPEN SHARE" $mis.FullName
+                        Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
+                            -Severity $SEV_HIGH -Description "Unsigned executable in open share: $($mis.FullName)" `
+                            -Target $mis.FullName -FixAction "DeleteFile" -FixParam $mis.FullName -Group "Network Share Worms"
+                        $global:WormHits++
+                    }
                 } else {
                     # An unsigned *script* in a share is weak signal — a user's own profile share is full
                     # of their own .ps1/.bat/.js. Surface for review only; never auto-delete the user's scripts.
