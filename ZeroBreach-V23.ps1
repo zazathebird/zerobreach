@@ -205,7 +205,7 @@ if ($OutDir -and (Test-Path $OutDir -IsValid)) {
 }
 $REPORT_PATH   = Join-Path $OUT_ROOT "KrakenReport_$STAMP.txt"
 $HTML_PATH     = Join-Path $OUT_ROOT "KrakenReport_$STAMP.html"
-$AUDIT_JSON    = Join-Path $env:TEMP "ZeroBreach_AuditCache_$(Get-Date -Format 'yyyyMMdd').json"
+$AUDIT_JSON    = Join-Path $OUT_ROOT "ZeroBreach_AuditCache_$(Get-Date -Format 'yyyyMMdd').json"
 $BASELINE_PATH = Join-Path $OUT_ROOT "KrakenBaseline_$STAMP.json"
 $SNAPSHOT_PATH = Join-Path $OUT_ROOT "KrakenSnapshot_$STAMP.reg"
 $LOG_LINES  = [System.Collections.Generic.List[string]]::new()
@@ -729,7 +729,7 @@ function Get-ScanFiles {
             $dir = $stack.Pop()
             try {
                 foreach ($f in [System.IO.Directory]::EnumerateFiles($dir, $Filter)) {
-                    if ($results.Count -ge $MaxFiles) { break }
+                    if ($results.Count -ge $MaxFiles -or [datetime]::UtcNow -ge $deadline) { break }
                     try {
                         $fi   = New-Object System.IO.FileInfo $f
                         $attr = [int]$fi.Attributes
@@ -893,6 +893,24 @@ function Get-SignatureVerdict { param([string]$FilePath)
     } catch {}
     $global:SIG_CACHE[$FilePath] = $result
     return $result
+}
+
+# Raw Authenticode signature, cached per-path. Get-AuthenticodeSignature throws a
+# *terminating* error on locked / in-use files (e.g. a running process's own .exe, or
+# CBS temp binaries in System32) which -ErrorAction SilentlyContinue does NOT suppress —
+# those bubbled to the global trap as repeated "RECOVERED ERROR" log spam and cost time.
+# Here the throw is swallowed and the verdict cached so the same binary is verified once
+# across all phases. Returns the native Signature object, or $null when it could not be
+# read. IMPORTANT: callers must treat $null as "undetermined / skip", never as "unsigned",
+# so locked legitimate OS files are not mis-flagged as rootkits.
+$global:AUTHSIG_CACHE = @{}
+function Get-AuthSig { param([string]$FilePath)
+    if (-not $FilePath) { return $null }
+    if ($global:AUTHSIG_CACHE.ContainsKey($FilePath)) { return $global:AUTHSIG_CACHE[$FilePath] }
+    $sig = $null
+    try { $sig = Get-AuthenticodeSignature -LiteralPath $FilePath -ErrorAction Stop } catch { $sig = $null }
+    $global:AUTHSIG_CACHE[$FilePath] = $sig
+    return $sig
 }
 
 # Classify a finding for the remediation selection-mode presets:
@@ -1346,32 +1364,44 @@ Show-PhaseHeader "PHASE 9" "BROWSER HIJACK — SHORTCUT & HOMEPAGE AUDIT"
 Out-Typewriter "SCANNING BROWSER SHORTCUTS FOR HIJACKED TARGETS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
 $shortcutDirs = @("$env:USERPROFILE\Desktop","$env:APPDATA\Microsoft\Windows\Start Menu\Programs","$env:PUBLIC\Desktop")
-foreach ($dir in $shortcutDirs) {
-    if (-not (Test-Path $dir)) { continue }
-    $lnks = Get-ChildItem -Path $dir -Filter "*.lnk" -ErrorAction SilentlyContinue
-    foreach ($lnk in $lnks) {
-        try {
-            $shell = New-Object -ComObject WScript.Shell -ErrorAction Stop
-            $sc = $shell.CreateShortcut($lnk.FullName)
-            if ($sc.Arguments -match "http|--load-extension|--disable-extensions|javascript:|data:") {
-                Out-ThreatBanner "BROWSER SHORTCUT HIJACK" "$($lnk.Name) | Args: $($sc.Arguments)"
-                Add-Finding -ID "LNK_HIJACK_$($lnk.Name -replace '[^a-z0-9]','')" -Phase "PHASE 9" -ThreatType "Browser Hijacker" `
-                    -Severity $SEV_CRITICAL -Description "Hijacked browser shortcut: $($lnk.Name) | $($sc.Arguments)" `
-                    -Target $lnk.FullName -FixAction "RunCmd" -FixParam "`$_sh=New-Object -ComObject WScript.Shell;`$_sc=`$_sh.CreateShortcut('$($lnk.FullName)');`$_sc.Arguments='';`$_sc.Save()" -Group "Browser Hijacks"
-                $global:SpywareHits++
-            }
-        } catch {}
+$_lnkShell = $null
+try { $_lnkShell = New-Object -ComObject WScript.Shell -ErrorAction Stop } catch {}
+if ($_lnkShell) {
+    foreach ($dir in $shortcutDirs) {
+        if (-not (Test-Path $dir)) { continue }
+        $lnks = Get-ChildItem -Path $dir -Filter "*.lnk" -ErrorAction SilentlyContinue
+        foreach ($lnk in $lnks) {
+            try {
+                $sc = $_lnkShell.CreateShortcut($lnk.FullName)
+                if ($sc.Arguments -match "http|--load-extension|--disable-extensions|javascript:|data:") {
+                    Out-ThreatBanner "BROWSER SHORTCUT HIJACK" "$($lnk.Name) | Args: $($sc.Arguments)"
+                    Add-Finding -ID "LNK_HIJACK_$($lnk.Name -replace '[^a-z0-9]','')" -Phase "PHASE 9" -ThreatType "Browser Hijacker" `
+                        -Severity $SEV_CRITICAL -Description "Hijacked browser shortcut: $($lnk.Name) | $($sc.Arguments)" `
+                        -Target $lnk.FullName -FixAction "RunCmd" -FixParam "`$_sh=New-Object -ComObject WScript.Shell;`$_sc=`$_sh.CreateShortcut('$($lnk.FullName)');`$_sc.Arguments='';`$_sc.Save()" -Group "Browser Hijacks"
+                    $global:SpywareHits++
+                }
+            } catch {}
+        }
     }
 }
 $chromePrefs = "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Preferences"
 if (Test-Path $chromePrefs) {
-    $prefs = Get-Content $chromePrefs -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
-    if ($prefs.homepage -and $prefs.homepage -notmatch "^(https?://(www\.)?google\.|about:blank|newtab)") {
-        Out-Typewriter "  -> HIJACKED CHROME HOMEPAGE: $($prefs.homepage)" "CRIT"
-        Add-Finding -ID "CHROME_HOMEPAGE" -Phase "PHASE 9" -ThreatType "Browser Hijacker" -Severity $SEV_HIGH `
-            -Description "Suspicious Chrome homepage: $($prefs.homepage)" -Target $chromePrefs `
-            -FixAction "Info" -Group "Browser Hijacks"
-        $global:SpywareHits++
+    # Regex-extract homepage field instead of full ConvertFrom-Json — Preferences can be 20MB+
+    # and PS 5.1 ConvertFrom-Json is O(n) slow on large files, causing a multi-minute hang.
+    $chromeRaw = $null
+    try { $chromeRaw = [System.IO.File]::ReadAllText($chromePrefs) } catch {}
+    if ($chromeRaw) {
+        $hpMatch = [regex]::Match($chromeRaw, '"homepage"\s*:\s*"([^"]+)"')
+        if ($hpMatch.Success) {
+            $hp = $hpMatch.Groups[1].Value
+            if ($hp -notmatch '^(https?://(www\.)?google\.|about:blank|newtab)') {
+                Out-Typewriter "  -> HIJACKED CHROME HOMEPAGE: $hp" "CRIT"
+                Add-Finding -ID "CHROME_HOMEPAGE" -Phase "PHASE 9" -ThreatType "Browser Hijacker" -Severity $SEV_HIGH `
+                    -Description "Suspicious Chrome homepage: $hp" -Target $chromePrefs `
+                    -FixAction "Info" -Group "Browser Hijacks"
+                $global:SpywareHits++
+            }
+        }
     }
 }
 Out-Typewriter "  -> BROWSER HIJACK AUDIT COMPLETE." "VER"
@@ -1397,12 +1427,11 @@ foreach ($td in $targetDirs) {
     $otherFiles = $recentFiles | Where-Object { $malExt -notcontains $_.Extension.ToLower() }
     if ($exeFiles.Count -gt 0) {
         $exeGroup = "$($td.L) — Executables ($($exeFiles.Count) files)"
+        # Severity by location — skip Get-AuthenticodeSignature (CRL network call, blocks per file)
+        $sev = if ($td.P -match 'Temp|INetCache') { $SEV_HIGH } else { $SEV_POSSIBLE }
         foreach ($f in $exeFiles) {
-            $sig = Get-AuthenticodeSignature $f.FullName -ErrorAction SilentlyContinue
-            $isMalicious = ($sig.Status -ne "Valid") -and ($td.P -match "Temp|INetCache")
-            $sev = if ($isMalicious) { $SEV_HIGH } else { $SEV_POSSIBLE }
             Add-Finding -ID "TEMPEXE_$($f.Name -replace '[^a-z0-9]','')" -Phase "PHASE 10" -ThreatType "Suspicious File" `
-                -Severity $sev -Description "$(if($isMalicious){'Unsigned executable'} else {'Executable'}) in $($td.L): $($f.Name)" `
+                -Severity $sev -Description "Executable in $($td.L): $($f.Name)" `
                 -Target $f.FullName -FixAction "DeleteFile" -FixParam $f.FullName -Group $exeGroup
         }
         Out-Typewriter "  -> FLAGGED $($exeFiles.Count) EXECUTABLES IN $($td.L)." "WARN"
@@ -1502,8 +1531,8 @@ $recentSysFiles = Get-ChildItem -Path "$env:WINDIR\System32" -File -ErrorAction 
     Where-Object { Test-InScope $_.LastWriteTime -and $_.Extension -match "\.(exe|dll|sys)$" }
 $foundSys = $false
 foreach ($sf in $recentSysFiles) {
-    $sig = Get-AuthenticodeSignature $sf.FullName -ErrorAction SilentlyContinue
-    if ($sig.Status -ne "Valid" -and $sig.Status -ne "NotSigned") {
+    $sig = Get-AuthSig $sf.FullName
+    if ($sig -and $sig.Status -ne "Valid" -and $sig.Status -ne "NotSigned") {
         $foundSys = $true
         Out-Decrypt -Text $sf.FullName -Prefix "  [UNSIGNED SYS32 BINARY] "
             $newName = "$($sf.FullName).kraken"
@@ -1554,21 +1583,37 @@ foreach ($adsDir in @("$env:LOCALAPPDATA","$env:TEMP","$env:USERPROFILE\Download
 }
 
 Show-PhaseHeader "PHASE 18" "DEEP CLOAKED PARASITE SCAN (HIDDEN+SYSTEM ATTRIBUTES)"
-foreach ($ht in @($env:PUBLIC,$env:LOCALAPPDATA,$env:TEMP,"$env:USERPROFILE\AppData\Roaming")) {
+# Prune OS-managed app sandboxes ('packages' = Store apps, 'windowsapps' = MSIX): their
+# app-data is legitimately Hidden+System and produced a ~15k-finding flood that bloated
+# reports to 50MB and froze the UI. The real cloaked-malware signal is a Hidden+System
+# *executable/script* (or an extensionless binary) in a user-writable path — so also gate
+# on extension and cap total findings so no future tree can flood the report again.
+$_p18Prune  = $global:SCAN_PRUNE_DIRS + @('packages','windowsapps','user data','default','extensions','local extension settings','managed extension storage','sync app settings')
+$_p18Cap    = 200
+$_cloakedN  = 0
+$_p18Capped = $false
+:p18roots foreach ($ht in @($env:PUBLIC,$env:LOCALAPPDATA,$env:TEMP,"$env:USERPROFILE\AppData\Roaming")) {
+    if ($_cloakedN -ge $_p18Cap) { $_p18Capped = $true; break p18roots }
     Out-Typewriter "SWEEPING HIDDEN/SYSTEM ATTRS: $ht" "HUNT"
     if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 900 }
     if (Test-Path $ht) {
-        $cloaked = Get-ScanFiles -Path $ht -TimeScoped |
-            Where-Object { $_.Attributes -match "Hidden" -and $_.Attributes -match "System" }
+        $cloaked = @(Get-ScanFiles -Path $ht -TimeScoped -PruneDirs $_p18Prune |
+            Where-Object {
+                $_.Attributes -match "Hidden" -and $_.Attributes -match "System" -and
+                (($malExt -contains $_.Extension.ToLower()) -or ($_.Extension -eq ''))
+            })
         foreach ($c in $cloaked) {
+            if ($_cloakedN -ge $_p18Cap) { $_p18Capped = $true; break }
             Out-ThreatBanner "CLOAKED FILE (HIDDEN+SYSTEM)" $c.FullName
             Add-Finding -ID "CLOAKED_$($c.Name -replace '[^a-z0-9]','')" -Phase "PHASE 18" -ThreatType "Rootkit/Trojan" `
-                -Severity $SEV_HIGH -Description "Hidden+System attributed file: $($c.FullName)" `
+                -Severity $SEV_HIGH -Description "Hidden+System executable/script: $($c.FullName)" `
                 -Target $c.FullName -FixAction "DeleteFile" -FixParam $c.FullName -Group "Cloaked/Hidden Files"
+            $_cloakedN++
         }
         if ($cloaked.Count -eq 0) { Out-Typewriter "  -> [OK] NO CLOAKED FILES." "GOOD" }
     }
 }
+if ($_p18Capped) { Out-Typewriter "  -> [!] CLOAKED-FILE CAP ($_p18Cap) REACHED — further hits suppressed; review the $_p18Cap above." "WARN" }
 
 Show-PhaseHeader "PHASE 19" "SCRIPT EXECUTION ASSOCIATION AUDIT"
 Out-Typewriter "CHECKING .JS .VBS .HTA .WSF HANDLER ASSOCIATIONS..." "INFO"
@@ -1835,10 +1880,11 @@ foreach ($sp in @("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup","
     if (Test-Path $sp) {
         $startItems = Get-ChildItem -Path $sp -File -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
         foreach ($si in $startItems) {
-            $sig = Get-AuthenticodeSignature $si.FullName -ErrorAction SilentlyContinue
-            $sev = if ($sig.Status -ne "Valid") { $SEV_HIGH } else { $SEV_POSSIBLE }
+            $sig = Get-AuthSig $si.FullName
+            $unsigned = (-not $sig -or $sig.Status -ne "Valid")
+            $sev = if ($unsigned) { $SEV_HIGH } else { $SEV_POSSIBLE }
             Add-Finding -ID "STARTUP_$($si.Name -replace '[^a-z0-9]','')" -Phase "PHASE 31" -ThreatType "Startup Persistence" `
-                -Severity $sev -Description "Startup folder item: $($si.Name) ($(if ($sig.Status -ne 'Valid') {'UNSIGNED'} else {'signed'}))" `
+                -Severity $sev -Description "Startup folder item: $($si.Name) ($(if ($unsigned) {'UNSIGNED'} else {'signed'}))" `
                 -Target $si.FullName -FixAction "DeleteFile" -FixParam $si.FullName -Group "Startup Folder Persistence"
         }
     }
@@ -1857,8 +1903,8 @@ foreach ($pd in $pathDirs) {
         Out-Typewriter "  -> WRITABLE PATH ENTRY: $pd" "WARN"
         $recentDlls = Get-ChildItem -Path $pd -Filter "*.dll" -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
         foreach ($dll in $recentDlls) {
-            $sig = Get-AuthenticodeSignature $dll.FullName -ErrorAction SilentlyContinue
-            if ($sig.Status -ne "Valid") {
+            $sig = Get-AuthSig $dll.FullName
+            if ($sig -and $sig.Status -ne "Valid") {
                 Out-Decrypt -Text $dll.FullName -Prefix "  [UNSIGNED DLL IN PATH] "
                 Add-Finding -ID "DLLHIJACK_$($dll.Name -replace '[^a-z0-9]','')" -Phase "PHASE 32" -ThreatType "DLL Hijack" `
                     -Severity $SEV_HIGH -Description "Unsigned DLL in writable PATH dir: $($dll.FullName)" `
@@ -2121,7 +2167,8 @@ Show-PhaseHeader "PHASE 44" "TOKEN / PRIVILEGE ABUSE — ELEVATED PROCS IN USER 
 Out-Typewriter "CHECKING FOR SYSTEM-LEVEL PROCESSES IN USER PATHS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
 $elevatedInUS = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.Path -match "AppData|Temp|Downloads|Desktop" -and (try { $_.GetOwnerSid().ReturnValue -eq 0 } catch { $false })
+    if ($_.Path -notmatch "AppData|Temp|Downloads|Desktop") { return $false }
+    try { $_.GetOwnerSid().ReturnValue -eq 0 } catch { $false }
 }
 foreach ($proc in $elevatedInUS) {
     $sid = $proc.GetOwnerSid().Sid
@@ -2145,8 +2192,8 @@ $accessFiles = @(
 )
 foreach ($af in $accessFiles) {
     if (Test-Path $af) {
-        $sig = Get-AuthenticodeSignature $af -ErrorAction SilentlyContinue
-        if ($sig.Status -ne "Valid") {
+        $sig = Get-AuthSig $af
+        if ($sig -and $sig.Status -ne "Valid") {
             Out-Typewriter "  -> UNSIGNED ACCESSIBILITY BINARY: $af" "CRIT"
             Add-Finding -ID "STICKY_$([IO.Path]::GetFileNameWithoutExtension($af))" -Phase "PHASE 45" `
                 -ThreatType "Sticky Keys / Accessibility Backdoor" -Severity $SEV_CRITICAL `
@@ -2199,7 +2246,7 @@ if (-not $hookHits) { Out-Typewriter "  -> [OK] NO OBVIOUS HOOK KEYLOGGER PROCES
 Show-PhaseHeader "PHASE 48" "KEYLOGGER FILE & REGISTRY ARTIFACT SCAN" "KEYLOGGER"
 Out-Typewriter "SCANNING FOR KEYSTROKE LOG FILES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$klFilePatterns = @("*keystroke*","*keylog*","*keypress*","*kgb*","*.klg","*.kl","*typed*","*capture*log*","*hook.log*")
+$klFilePatterns = @("*keystroke*","*keylog*","*keypress*","*kgb*","*.klg","*.kl","*hook.log*")
 $klSearchPaths  = @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Documents")
 # One bounded walk, anchored regex over all patterns (was 4 roots x 9 patterns = 36 recursions).
 $klRegex = ($klFilePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
@@ -2622,8 +2669,8 @@ foreach ($share in $shares) {
             Where-Object { $_.Extension -match "\.(exe|bat|cmd|vbs|js|ps1)$" } |
             Select-Object -First 500
         foreach ($mis in $malInShare) {
-            $sig = Get-AuthenticodeSignature $mis.FullName -ErrorAction SilentlyContinue
-            if ($sig.Status -ne "Valid") {
+            $sig = Get-AuthSig $mis.FullName
+            if ($sig -and $sig.Status -ne "Valid") {
                 Out-ThreatBanner "UNSIGNED EXE IN OPEN SHARE" $mis.FullName
                 Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
                     -Severity $SEV_HIGH -Description "Unsigned executable in open share: $($mis.FullName)" `
@@ -2682,7 +2729,8 @@ foreach ($sp in $stealerProcs) {
         -Target "PID:$($sp.Id)" -FixAction "KillProcess" -FixParam $sp.Id -Group "Info-Stealer"
     $global:SpywareHits++
 }
-$stealerFiles = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped |
+$_p68Prune = $global:SCAN_PRUNE_DIRS + @('user data','default','extensions','local extension settings','firefox','mozilla','edge','brave-browser','opera','vivaldi')
+$stealerFiles = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped -PruneDirs $_p68Prune |
     Where-Object { $_.Name -match "passwords|credentials|wallet|login|autofill|cookie" -and $_.Extension -match "\.(zip|txt|log|db)$" }
 foreach ($sf in $stealerFiles) {
     if ($sf.FullName -notmatch "Chrome\\User Data|Firefox\\Profiles") {  # exclude legitimate browser storage
@@ -2700,13 +2748,13 @@ Out-Typewriter "CHECKING FOR PROCESSES WITH ANOMALOUS MODULE COUNTS..." "HUNT"
 Invoke-QuantumBar "PROCESS MEMORY MAP ANALYSIS" 12 120
 $hollowFound = $false
 $hollowCandidates = Get-Process -ErrorAction SilentlyContinue | Where-Object {
-    $_.Path -and (Test-Path $_.Path) -and
-    $_.Name -notmatch "^(svchost|System|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|conhost|MsMpEng|NisSrv|SecurityHealth)$" -and
-    (try { $_.Modules.Count -lt 3 } catch { $false })
+    if (-not ($_.Path -and (Test-Path $_.Path))) { return $false }
+    if ($_.Name -match "^(svchost|System|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|conhost|MsMpEng|NisSrv|SecurityHealth)$") { return $false }
+    try { $_.Modules.Count -lt 3 } catch { $false }
 }
 foreach ($proc in $hollowCandidates) {
-    $sig = Get-AuthenticodeSignature $proc.Path -ErrorAction SilentlyContinue
-    if ($sig.Status -ne "Valid" -and $proc.Path -match "AppData|Temp") {
+    $sig = Get-AuthSig $proc.Path
+    if ($sig -and $sig.Status -ne "Valid" -and $proc.Path -match "AppData|Temp") {
         Out-Typewriter "  -> POSSIBLE HOLLOW PROCESS: $($proc.Name) PID:$($proc.Id) @ $($proc.Path) (only $($proc.Modules.Count) modules)" "WARN"
         Add-Finding -ID "HOLLOW_$($proc.Id)" -Phase "PHASE 69" -ThreatType "Process Hollowing" `
             -Severity $SEV_HIGH -Description "Possible hollow process: $($proc.Name) PID:$($proc.Id) in AppData/Temp with $($proc.Modules.Count) modules loaded" `
@@ -3163,8 +3211,8 @@ if ($PhasePlan.Universal) {
         $_.Name -notmatch "^(svchost|System|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|audiodg|conhost|taskhostw|RuntimeBroker|sihost|SearchHost)$"
     }
     foreach ($proc in $extended) {
-        $sig = Get-AuthenticodeSignature $proc.Path -ErrorAction SilentlyContinue
-        if ($sig.Status -eq "NotSigned" -and $proc.Path -match "AppData|Temp") {
+        $sig = Get-AuthSig $proc.Path
+        if ($sig -and $sig.Status -eq "NotSigned" -and $proc.Path -match "AppData|Temp") {
             Out-Typewriter "  -> LOW-MODULE UNSIGNED PROC: $($proc.Name) PID:$($proc.Id) @ $($proc.Path) [$($proc.Modules.Count) modules]" "WARN"
             Add-Finding -ID "HOLLOW_EXT_$($proc.Id)" -Phase "PHASE 83" -ThreatType "Process Hollowing" `
                 -Severity $SEV_HIGH -Description "Unsigned low-module process from user path: $($proc.Name) PID:$($proc.Id) [$($proc.Modules.Count) modules]" `
@@ -3404,7 +3452,7 @@ if ($PhasePlan.Advanced) {
         try {
             $unsignedDlls = $p.Modules | Where-Object {
                 $_.FileName -and ($_.FileName -match "AppData|Temp|Downloads|ProgramData") -and
-                ((Get-AuthenticodeSignature $_.FileName -ErrorAction SilentlyContinue).Status -ne "Valid")
+                (($_s = Get-AuthSig $_.FileName) -and $_s.Status -ne "Valid")
             }
             foreach ($udll in $unsignedDlls) {
                 Out-Typewriter "  -> $($p.Name) PID:$($p.Id) loaded UNSIGNED user-path DLL: $($udll.FileName)" "CRIT"
@@ -3496,7 +3544,8 @@ if ($PhasePlan.Advanced) {
     if (Test-Path $spoolDir) {
         Get-ChildItem -Path $spoolDir -Recurse -Filter "*.dll" -ErrorAction SilentlyContinue |
             Where-Object { Test-InScope $_.LastWriteTime } | Select-Object -First 30 | ForEach-Object {
-            if ((Get-AuthenticodeSignature $_.FullName -ErrorAction SilentlyContinue).Status -ne "Valid") {
+            $_s = Get-AuthSig $_.FullName
+            if ($_s -and $_s.Status -ne "Valid") {
                 Add-Finding -ID "SPOOLDRV_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 96" -ThreatType "Print Spooler Hijack" `
                     -Severity $SEV_HIGH -Description "Unsigned DLL in spooler driver dir: $($_.FullName)" `
                     -Target $_.FullName -FixAction "DeleteFile" -FixParam $_.FullName -Group "PrintNightmare"
@@ -3536,8 +3585,8 @@ if ($PhasePlan.Advanced) {
         if (-not (Test-Path $root)) { continue }
         Get-ScanFiles -Path $root -TimeScoped |
             Where-Object { $_.Extension -match "\.(exe|dll)$" } | Select-Object -First 100 | ForEach-Object {
-            $sig = Get-AuthenticodeSignature $_.FullName -ErrorAction SilentlyContinue
-            if ($sig.SignerCertificate) {
+            $sig = Get-AuthSig $_.FullName
+            if ($sig -and $sig.SignerCertificate) {
                 $subj = $sig.SignerCertificate.Subject
                 foreach ($lc in $leakedCerts) {
                     if ($subj -match [regex]::Escape($lc)) {
