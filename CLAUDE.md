@@ -391,6 +391,45 @@ parse-clean **PS 5.1 + 7 (0 errors)**, BOM intact, JSON valid.
 > detection — POSSIBLE is shown but never auto-selected for destructive remediation. **Not yet validated
 > on a live admin run** (estimates are simulated against the saved report).
 
+## Detection FP tuning — Round 4 (2026-06-26) — VALIDATED ON FRESH LIVE RUNS (engine)
+
+Rounds 1–3 were *simulated* against a stale 06-23 report. Round 4 was driven by **fresh live admin
+`DEEP -Hours 0` runs** (`KrakenBaseline_20260626_022730` = before; `_024320`/`_03xxxx` = after) on a
+healthy box. The before-run had **319 auto-selected destructive findings** (CRITICAL/HIGH + a
+destructive FixAction); round 4 cut that to **75** (verified on the final live run
+`KrakenBaseline_20260626_025617`) by fixing seven more floods — **and uncovered a PS-5.1-only
+runtime bug that had silently broken the round-2/3 BITS + named-pipe regexes.** The residual 75 are
+a healthy low-count tail (≤5 per phase, incl. the deliberate TEMP/Run-key tripwires) — no floods.
+
+> **THE BIG ONE — PS 5.1 `Get-Sig` string-indexing bug (`~V23:895/897/898`).** `Get-Sig` ends with
+> `@($SIG.$Name)`, but a function returning a **single-element** `@(...)` emits the bare scalar
+> (PowerShell unwraps it). So `(Get-Sig 'bits_suspicious_remote_regex')[0]` indexed into the returned
+> **string** and yielded its **first character** — `'h'`. Then `$url -match 'h'` matched **every**
+> `https://` URL, so Phase 31 flagged **all 48 BITS jobs HIGH+RunCmd** ("raw-IP remote:
+> outlook.office365.com"). `c2_named_pipe_regex` had the identical bug (→ `'m'`). Fixed all three to
+> **`@(Get-Sig X)[0]`** (force-array, *then* index). Verified on real `powershell.exe` 5.1: BITS now
+> matches only raw IPs. **Why rounds 2/3 missed it:** they were simulated in PS 7 reading the JSON
+> directly, never exercising `Get-Sig[0]` on 5.1. **Rule: never `(fn …)[0]` when `fn` may return a
+> single value — wrap `@(fn …)[0]`, or assign to an `@()` var first (cf. the `Get-ScanFiles` `,$arr`
+> rule). The only safe bare `)[0]` is on a genuine array literal/`-split` result.**
+
+The other six round-4 fixes (all **downgrade-or-skip only** — none can make remediation *more*
+aggressive; engine `.ps1` logic, no new signature literals):
+
+| Phase | Before (live) | Root cause | Fix |
+|---|---|---|---|
+| **32** DLL-hijack | 100 HIGH DeleteFile | System32 (admin-writable, on PATH, catalog-signed) flagged; after skipping `%WINDIR%` the flood *shifted* to legit dev-tool DLLs (`Git\mingw64\bin\lib*.dll`, Python/Node) — auto-delete would break the install | Skip `%WINDIR%` dirs (System32 unsigned bins already covered by Phase 15); base case → **POSSIBLE**, escalate to HIGH+DeleteFile only for DLLs in a user-writable staging dir (Temp/Downloads/AppData/ProgramData) |
+| **66** share-worm | 68 HIGH DeleteFile | `C:\Users` is shared, so it flagged the IR tool's **own** source + the user's dev project + the user's **own** downloads/PyInstaller builds, offering to delete `ZeroBreach-V23.ps1`, 7-Zip, etc. | Skip `$PSScriptRoot`; unsigned **scripts** → POSSIBLE; unsigned **exes inside the local `C:\Users` tree** → POSSIBLE (your own files); HIGH+DeleteFile reserved for exes in a **foreign/public** share |
+| **24** COM hijack | 15 HIGH DeleteRegKey | `-Recurse` flagged every per-user CLSID **and subkey** (Teams add-in, etc.) — per-user COM registration is normal | Top-level GUID keys only; HIGH+DeleteRegKey **only when the HKCU CLSID shadows an HKLM one** (the real T1546.015 technique); pure per-user → POSSIBLE+Info |
+| **15** System32 sig | up to 100 CRITICAL RunCmd | The engine's startup TypeData corruption degrades catalog verification **in-process** → `Status=UnknownError` on legit catalog-signed DLLs → "rename System32 DLL" | Split by status: real tamper (HashMismatch/NotTrusted) → CRITICAL; **unverifiable → POSSIBLE+Info** (System32 is a hard-protected target anyway) |
+| **19** script assoc | 7 HIGH RunCmd | `.js=JSFile`/`.vbs=VBSFile`/… are the **default** Windows associations on every box | → **POSSIBLE** + opt-in RunCmd (it's a hardening suggestion, not a threat) |
+| **75** Defender excl | 10 HIGH RunCmd | An exclusion is corroborating evidence; legit RMM (Datto/CentraStage)/dev tools add them and auto-removing can break the excluded software | Path + process exclusions → **POSSIBLE** + opt-in RunCmd |
+
+> **Rule (reinforced):** validate FP tuning on a **live `powershell.exe` 5.1** run, not a PS-7
+> simulation — runtime-specific behaviors (single-value unwrap, `(try{}…)` as expression, `,$arr`
+> return) only surface on the real engine. Every round-4 change is downgrade-or-skip; the auto-
+> selected destructive set can only shrink. Engine parse-clean PS 5.1 + 7 (0 errors), BOM intact.
+
 ## GUI Feature Layer (added 2026-06-09, harvested from the deleted "gui from other project" folder)
 
 The PirateLife React GUI was mined for its best ideas, ported to **vanilla JS** (no React), then

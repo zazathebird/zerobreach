@@ -1,8 +1,25 @@
-# RESUME HANDOFF — updated 2026-06-23
+# RESUME HANDOFF — updated 2026-06-26
 
-Everything is committed to **`main`** (local only — not pushed). Latest commit: `b1b7252`
-(FP-tune round 3). Engine `ZeroBreach-V23.ps1` was touched ONLY for FP severity/allowlist tuning
-(rounds 1–3) — no scan-logic/coverage regression.
+Everything is committed to **`main`** and **PUSHED** to origin. Latest engine work: **FP-tune
+round 4** (`65782ce` + the doc commit after it). Engine `ZeroBreach-V23.ps1` was touched ONLY for
+FP severity/allowlist tuning + one PS-5.1 runtime-bug fix — no scan-logic/coverage regression.
+
+## Round 4 (2026-06-26) — VALIDATED ON FRESH LIVE RUNS (the big one)
+Driven by **live admin `DEEP -Hours 0` runs** (not the stale 06-23 simulation). Cut auto-selected
+**destructive** findings **319 → 75** (3 live runs: before `_022730`, after `_024320`/`_025617`).
+The residual 75 are a healthy low-count tail (≤5 per phase, incl. deliberate tripwires) — no floods.
+Highlights (full table in CLAUDE.md → "Round 4"):
+- **PS-5.1 `Get-Sig` string-indexing bug** — `(Get-Sig X)[0]` indexed into the *unwrapped string*
+  (→ first char `'h'`), so `-match 'h'` matched every https URL → Phase 31 flagged all 48 BITS jobs
+  HIGH. Same bug broke the named-pipe regex. This silently broke the round-2/3 fixes **on the real
+  5.1 runtime** (they were only simulated in PS 7). Fixed → `@(Get-Sig X)[0]`.
+- Phase 32 (DLL-hijack), 66 (share-worm), 24 (COM), 15 (System32 sig), 19 (script assoc), 75
+  (Defender excl) — all downgraded/skip-fixed so legit dev-tool DLLs, the user's own exes/scripts,
+  Teams' per-user COM, catalog-signed System32 DLLs, Windows default assocs, and RMM exclusions are
+  **never auto-selected for destructive remediation**. Every change is downgrade-or-skip only.
+- All parse-clean PS 5.1 + 7 (0 errors), BOM intact, JSON valid; verified across 3 live runs.
+
+## (historical) Rounds 1–3 context below
 
 ## Where we are
 
