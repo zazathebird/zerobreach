@@ -892,10 +892,10 @@ $TRUSTED_ROOT_CA_RE     = Join-AllowRegex 'trusted_root_ca_issuers'
 $CLOAKED_BENIGN_RE      = Join-AllowRegex 'cloaked_benign_names'
 $INFOSTEALER_BENIGN_RE  = Join-AllowRegex 'infostealer_benign_paths'
 $SAFEBOOT_DEFAULTS      = @((Get-Sig 'safeboot_default_entries') | ForEach-Object { "$_".ToLower() })
-$C2_NAMED_PIPE_RE       = if (@(Get-Sig 'c2_named_pipe_regex').Count) { (Get-Sig 'c2_named_pipe_regex')[0] } else { '(?!)' }
+$C2_NAMED_PIPE_RE       = if (@(Get-Sig 'c2_named_pipe_regex').Count) { @(Get-Sig 'c2_named_pipe_regex')[0] } else { '(?!)' }
 $HIDDEN_TASK_BENIGN_RE  = Join-AllowRegex 'hidden_task_benign_paths'
-$BITS_SUSP_REMOTE_RE    = if (@(Get-Sig 'bits_suspicious_remote_regex').Count) { (Get-Sig 'bits_suspicious_remote_regex')[0] } else { '(?!)' }
-$BITS_SUSP_LOCAL_RE     = if (@(Get-Sig 'bits_suspicious_local_regex').Count) { (Get-Sig 'bits_suspicious_local_regex')[0] } else { '(?!)' }
+$BITS_SUSP_REMOTE_RE    = if (@(Get-Sig 'bits_suspicious_remote_regex').Count) { @(Get-Sig 'bits_suspicious_remote_regex')[0] } else { '(?!)' }
+$BITS_SUSP_LOCAL_RE     = if (@(Get-Sig 'bits_suspicious_local_regex').Count) { @(Get-Sig 'bits_suspicious_local_regex')[0] } else { '(?!)' }
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
@@ -1643,14 +1643,28 @@ foreach ($sf in $recentSysFiles) {
     }
     $sigSeen++
     $sig = Get-AuthSig $sf.FullName
-    if ($sig.Status -ne "Valid" -and $sig.Status -ne "NotSigned") {
+    $sigStatus = "$($sig.Status)"
+    # Most System32 DLLs are CATALOG-signed (SignatureType=Catalog, Status=Valid) — those pass.
+    # Of the remaining states, only an actual tamper signal (HashMismatch / NotTrusted publisher)
+    # is a real rootkit indicator. An UnknownError/Incompatible/unverifiable status is what a
+    # catalog-signed system file returns when the catalog can't be read (e.g. a transient corrupted
+    # type/module env) — that previously flooded ~100 CRITICAL "rename System32 DLL" FPs. System32
+    # is a Test-ProtectedTarget hard-block we never auto-act on, so an unverifiable result is
+    # surfaced for REVIEW only (POSSIBLE + Info), never an auto-rename.
+    if ($sigStatus -ne "Valid" -and $sigStatus -ne "NotSigned") {
         $foundSys = $true
         Out-Decrypt -Text $sf.FullName -Prefix "  [UNSIGNED SYS32 BINARY] "
+        if ($sigStatus -eq "HashMismatch" -or $sigStatus -eq "NotTrusted") {
             $newName = "$($sf.FullName).kraken"
             Add-Finding -ID "SYS32_UNSIGNED_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 15" -ThreatType "Rootkit/Trojan" `
-                -Severity $SEV_CRITICAL -Description "Unsigned/invalid binary in System32: $($sf.Name) — possible rootkit/trojan dropper" `
+                -Severity $SEV_CRITICAL -Description "Tampered/untrusted binary in System32 ($sigStatus): $($sf.Name) — possible rootkit/trojan dropper" `
                 -Target $sf.FullName -FixAction "RunCmd" -FixParam "Rename-Item -LiteralPath '$($sf.FullName)' -NewName '$newName' -Force -ErrorAction SilentlyContinue" -Group "Unsigned System32 Binaries"
-        $global:RootkitHits++
+            $global:RootkitHits++
+        } else {
+            Add-Finding -ID "SYS32_UNSIGNED_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 15" -ThreatType "Rootkit/Trojan" `
+                -Severity $SEV_POSSIBLE -Description "System32 binary signature unverifiable ($sigStatus — often catalog-signed; review): $($sf.Name)" `
+                -Target $sf.FullName -FixAction "Info" -Group "Unsigned System32 Binaries"
+        }
     }
 }
 $sigSw.Stop()
@@ -1733,9 +1747,13 @@ Out-Typewriter "CHECKING .JS .VBS .HTA .WSF HANDLER ASSOCIATIONS..." "INFO"
 foreach ($ext in @(".js",".vbs",".hta",".wsf",".wsh",".jse",".vbe")) {
     $assoc = cmd.exe /c "assoc $ext 2>nul"
     if ($assoc -notmatch "txtfile" -and $assoc -match "=") {
+        # NOTE: .js=JSFile, .vbs=VBSFile, .hta=htafile etc. are the DEFAULT Windows associations on
+        # every box — their mere presence is NOT a threat, it's a hardening opportunity (remap to
+        # txtfile so double-click can't execute). So this is POSSIBLE + opt-in RunCmd (shown for
+        # review, never auto-applied), not a HIGH auto-selected finding. ~7 default-assoc FPs removed.
         Out-Typewriter "  -> SCRIPT EXT $ext MAPPED TO EXECUTABLE HANDLER: $assoc" "WARN"
         Add-Finding -ID "SCRIPT_ASSOC_$($ext -replace '\.','')" -Phase "PHASE 19" -ThreatType "Script Handler Abuse" `
-            -Severity $SEV_HIGH -Description "Script extension $ext mapped to executable handler: $assoc" `
+            -Severity $SEV_POSSIBLE -Description "Script extension $ext uses the default executable handler ($assoc) — optional hardening: remap to txtfile" `
             -Target "File Association: $ext" -FixAction "RunCmd" -FixParam "assoc $ext=txtfile" -Group "Script Execution Hardening"
     }
 }
@@ -1826,14 +1844,37 @@ Out-Typewriter "SCANNING HKCU COM OVERRIDES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
 $hkcuClsid = "HKCU:\SOFTWARE\Classes\CLSID"
 if (Test-Path $hkcuClsid) {
-    $comHijacks = Get-ChildItem -Path $hkcuClsid -Recurse -ErrorAction SilentlyContinue
-    foreach ($k in $comHijacks) {
-        Out-Decrypt -Text $k.PSPath -Prefix "  [COM HIJACK] "
-        Add-Finding -ID "COM_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 24" -ThreatType "COM Hijack" `
-            -Severity $SEV_HIGH -Description "HKCU COM override found (COM hijack persistence): $($k.PSPath)" `
-            -Target $k.PSPath -FixAction "DeleteRegKey" -FixParam $k.PSPath -Group "COM Object Hijacks"
+    # Per-user COM registration (HKCU\Classes\CLSID) is NORMAL — Teams add-ins, Office, OneDrive,
+    # .NET and shell extensions all register here. The actual COM-hijack technique (T1546.015) is an
+    # HKCU CLSID that SHADOWS a CLSID already registered in HKLM (so the per-user one wins at load
+    # time). So: only enumerate top-level {GUID} keys (NOT -Recurse, which flooded every InprocServer32/
+    # ProgID/TypeLib subkey as a separate finding), and escalate ONLY when the same CLSID exists in
+    # HKLM. A purely per-user CLSID with no HKLM twin is review-only (POSSIBLE + Info), never auto-acted.
+    $comTopKeys = @(Get-ChildItem -Path $hkcuClsid -ErrorAction SilentlyContinue)
+    $comShadow = 0
+    foreach ($k in $comTopKeys) {
+        $guid = $k.PSChildName
+        if ($guid -notmatch '^\{[0-9A-Fa-f-]{36}\}$') { continue }   # only real CLSID GUID keys
+        $shadowsHklm = (Test-Path "HKLM:\SOFTWARE\Classes\CLSID\$guid") -or `
+                       (Test-Path "HKLM:\SOFTWARE\Wow6432Node\Classes\CLSID\$guid")
+        $inproc = (Get-RegVal -Path "$($k.PSPath)\InprocServer32" -Name "(default)")
+        if (-not $inproc) { $inproc = (Get-RegVal -Path "$($k.PSPath)\LocalServer32" -Name "(default)") }
+        if ($shadowsHklm) {
+            # Real hijack: a per-user CLSID overriding a system-registered COM object.
+            Out-Decrypt -Text $k.PSPath -Prefix "  [COM HIJACK] "
+            $comShadow++
+            Add-Finding -ID "COM_$($guid -replace '[^a-z0-9]','')" -Phase "PHASE 24" -ThreatType "COM Hijack" `
+                -Severity $SEV_HIGH -Description "HKCU COM override SHADOWS an HKLM-registered CLSID (COM hijack persistence): $guid -> $inproc" `
+                -Target $k.PSPath -FixAction "DeleteRegKey" -FixParam $k.PSPath -Group "COM Object Hijacks"
+        } else {
+            # Pure per-user registration (no HKLM twin) — normal for add-ins; surface for review only.
+            Add-Finding -ID "COM_$($guid -replace '[^a-z0-9]','')" -Phase "PHASE 24" -ThreatType "COM Hijack" `
+                -Severity $SEV_POSSIBLE -Description "Per-user COM registration (review — usually a legit add-in): $guid -> $inproc" `
+                -Target $k.PSPath -FixAction "Info" -Group "COM Object Hijacks"
+        }
     }
-    if ($comHijacks.Count -eq 0) { Out-Typewriter "  -> [OK] NO HKCU COM OVERRIDES." "GOOD" }
+    if ($comTopKeys.Count -eq 0) { Out-Typewriter "  -> [OK] NO HKCU COM OVERRIDES." "GOOD" }
+    else { Out-Typewriter ("  -> COM AUDIT: {0} per-user CLSID(s), {1} shadowing HKLM." -f $comTopKeys.Count, $comShadow) "VER" }
 } else { Out-Typewriter "  -> [OK] HKCU CLSID ABSENT." "GOOD" }
 
 Show-PhaseHeader "PHASE 25" "GPO LOCKDOWN — TASKMGR/REGEDIT/CMD DISABLED"
@@ -2029,6 +2070,11 @@ if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseco
 $pathDirs = $env:PATH -split ";"
 foreach ($pd in $pathDirs) {
     if (-not (Test-Path $pd)) { continue }
+    # Skip OS system directories (System32/SysWOW64/WinSxS, all under %WINDIR%). They are admin-
+    # writable by design and packed with catalog-signed DLLs — NOT the DLL-search-order hijack
+    # vector (that's a NON-system writable dir earlier in PATH). Unsigned binaries planted in
+    # System32 are already audited by Phase 15, so this is no coverage loss, just FP suppression.
+    if ($pd.TrimEnd('\').ToLower().StartsWith($env:WINDIR.ToLower())) { continue }
     try {
         $testFile = "$pd\__zbtest_$(Get-Random).tmp"
         [IO.File]::WriteAllText($testFile, "test")
@@ -2819,26 +2865,39 @@ $shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object
 $sigSeen = 0
 $sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
 $sigBudgetHit = $false
+# The IR tool itself usually lives under a shared user profile (e.g. a "Users" share), so never
+# flag — let alone offer to DELETE — the scanner's own files. Skip anything under our script root.
+$selfRoot = $PSScriptRoot
 foreach ($share in $shares) {
     if ($sigBudgetHit) { break }
     Out-Typewriter "  -> OPEN SHARE: $($share.Name) @ $($share.Path)" "WARN"
     if ($share.Path -and (Test-Path $share.Path)) {
         $malInShare = (Get-ScanFiles -Path $share.Path -TimeScoped) |
-            Where-Object { $_.Extension -match "\.(exe|bat|cmd|vbs|js|ps1)$" } |
+            Where-Object { $_.Extension -match "\.(exe|scr|com|pif|bat|cmd|vbs|js|ps1)$" } |
             Select-Object -First 500
         foreach ($mis in $malInShare) {
             if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
                 $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
                 $sigBudgetHit = $true; break
             }
+            if ($selfRoot -and $mis.FullName -like "$selfRoot*") { continue }   # never flag our own files
             $sigSeen++
             $sig = Get-AuthSig $mis.FullName
             if ($sig.Status -ne "Valid") {
-                Out-ThreatBanner "UNSIGNED EXE IN OPEN SHARE" $mis.FullName
-                Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
-                    -Severity $SEV_HIGH -Description "Unsigned executable in open share: $($mis.FullName)" `
-                    -Target $mis.FullName -FixAction "DeleteFile" -FixParam $mis.FullName -Group "Network Share Worms"
-                $global:WormHits++
+                if ($mis.Extension -match "\.(exe|scr|com|pif)$") {
+                    # A real unsigned PE dropped in an open share is the classic worm-propagation vector.
+                    Out-ThreatBanner "UNSIGNED EXE IN OPEN SHARE" $mis.FullName
+                    Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
+                        -Severity $SEV_HIGH -Description "Unsigned executable in open share: $($mis.FullName)" `
+                        -Target $mis.FullName -FixAction "DeleteFile" -FixParam $mis.FullName -Group "Network Share Worms"
+                    $global:WormHits++
+                } else {
+                    # An unsigned *script* in a share is weak signal — a user's own profile share is full
+                    # of their own .ps1/.bat/.js. Surface for review only; never auto-delete the user's scripts.
+                    Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
+                        -Severity $SEV_POSSIBLE -Description "Unsigned script in open share (review — often a user's own file): $($mis.FullName)" `
+                        -Target $mis.FullName -FixAction "Info" -Group "Network Share Worms"
+                }
             }
         }
     }
@@ -3240,9 +3299,14 @@ try {
     $prefs = Get-MpPreference -ErrorAction Stop
     if ($prefs.ExclusionPath.Count -gt 0) {
         foreach ($exc in $prefs.ExclusionPath) {
+            # A Defender exclusion IS a real evasion technique (T1562.001) worth surfacing, but it is
+            # corroborating evidence — NOT a standalone auto-remediate. Legit RMM (Datto/CentraStage),
+            # AV migrations and dev tools all add exclusions; auto-removing them changes security
+            # posture and can break the excluded software (Defender may then quarantine its files).
+            # So POSSIBLE + opt-in RunCmd: shown for operator review, never auto-selected/removed.
             Out-Typewriter "  -> DEFENDER PATH EXCLUSION: $exc" "CRIT"
             Add-Finding -ID "DEFENDER_EXC_$($exc -replace '[^a-z0-9]','')" -Phase "PHASE 75" -ThreatType "Defender Tampering" `
-                -Severity $SEV_HIGH -Description "Defender exclusion path (malware hiding spot): $exc" `
+                -Severity $SEV_POSSIBLE -Description "Defender path exclusion (review — could be a malware hiding spot or a legit RMM/dev exclusion): $exc" `
                 -Target "Defender Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionPath '$exc'" `
                 -Group "Defender Exclusions"
         }
@@ -3251,7 +3315,7 @@ try {
         foreach ($exc in $prefs.ExclusionProcess) {
             Out-Typewriter "  -> DEFENDER PROCESS EXCLUSION: $exc" "WARN"
             Add-Finding -ID "DEFENDER_PROC_EXC_$($exc -replace '[^a-z0-9]','')" -Phase "PHASE 75" -ThreatType "Defender Tampering" `
-                -Severity $SEV_HIGH -Description "Defender process exclusion: $exc — malware can use this process name to evade detection" `
+                -Severity $SEV_POSSIBLE -Description "Defender process exclusion (review — could aid evasion or be a legit RMM/dev exclusion): $exc" `
                 -Target "Defender Process Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionProcess '$exc'" `
                 -Group "Defender Exclusions"
         }
