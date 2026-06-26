@@ -19,6 +19,28 @@ Highlights (full table in CLAUDE.md → "Round 4"):
   **never auto-selected for destructive remediation**. Every change is downgrade-or-skip only.
 - All parse-clean PS 5.1 + 7 (0 errors), BOM intact, JSON valid; verified across 3 live runs.
 
+### Residual 75 auto-destructive — triaged (NOT floods; your call on further tuning)
+After round 4 the remaining destructive set is a low-count tail. Reviewed the live `_025617` report:
+- **By-design / tripwires (leave):** P10 TEMP executables (×38 — incl. your own dev scripts
+  `zbparse.ps1`/`transpile-check.js`/etc.; TEMP-exe=HIGH is intentional), the
+  `ZeroBreach_TEST_DELETEME` Run-key/task/Outlook tripwires (P20/P29/P74.5), security-posture items
+  (P41 RunAsPPL, P46 LmCompat, P42 Guest), AnyDesk/Ollama startup `.lnk` (P31 — dual-use, worth surfacing).
+- **Minor 1-off FPs — judgment calls I deliberately did NOT auto-tune while you were AFK** (each trades
+  detection coverage, so they want your sign-off):
+  - **P20 Run-key (CRITICAL DeleteReg):** Discord / Teams / Logitech Download Assistant flagged
+    because their `AppData\Local\…` Run value matches the `AppData|Temp|cmd|powershell` regex. Plain
+    **AppData** is too broad a signal (every legit app autostarts from there). *Recommended:* drop the
+    bare `AppData` term from the Run-key match (keep Temp/powershell/cmd/encoded) — the
+    `..._DELETEME` tripwire still fires (it points at `%TEMP%`). I left it unchanged pending your OK.
+  - 1-each CRITICAL/HIGH on legit files: Sysinternals `readme.txt` (P53 ransom-note heuristic),
+    LGHUB `config.json` (P63), Python `LocalCache` (P48/P94), a few `\Microsoft\Windows\…` system
+    tasks (P29 — System32\Tasks is hard-protected so never auto-acted), claude-scratchpad `.ps1` in
+    TEMP (P90, content-matched my own analysis scripts). All low-volume; not worth coverage risk
+    without your input.
+
+None of the 75 is a flood and the safety guard hard-blocks the protected ones; the system-damage risk
+the round addressed (mass auto-delete of System32 DLLs / dev tools / the user's own files) is gone.
+
 ## (historical) Rounds 1–3 context below
 
 ## Where we are
