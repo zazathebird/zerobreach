@@ -1,9 +1,37 @@
-# RESUME HANDOFF — updated 2026-06-28
+# RESUME HANDOFF — updated 2026-06-28 (session 2)
 
 > **OPEN ITEM (only one left): live GUI end-to-end validation.** All engine/FP work is done,
 > committed, pushed, and live-re-graded. The browser+admin remediation path is the last unvalidated
 > thing. Prep is done (tripwires laid, server parse-clean) — see "NEXT SESSION" runbook below. The
 > USER runs the browser click-through; the model debugs from artifacts they bring back.
+
+## Session 2 (2026-06-28 PM) — phase-"skipping" diagnosed (NOT an engine bug) + 2 server fixes — `c0477ae`
+User watched a live DEEP run and reported it "skipped MANY MANY phases (unless instant)." Investigated
+the in-progress + finished console log (`KrakenConsole_20260628_152000.log`): **all 115 phases ran
+contiguous, 0 RECOVERED ERRORs** — nothing skipped at the engine level. Root cause was **frontend
+display cadence**: the visible phase counter/progress bar updates only on `scan_state` (app.js
+`:205-211`), but the server emitted `scan_state` only every 12 log lines (`%12`). A sub-second phase
+emits <12 lines, so several phases pass between emits and the counter jumps (e.g. 94→97) — the fast
+phases *look* skipped. Many phases genuinely ran in 0–0.3s on this box.
+
+Two server-only changes committed (`c0477ae`, engine `ZeroBreach-V23.ps1` untouched; parse-clean PS
+5.1 + 7, all 3 here-strings, BOM intact):
+1. **Phase-skip display fix** — also emit `scan_state` immediately whenever the phase number changes
+   (in the scan-runspace parse loop, next to the `$PREX.Match` at `~:669`), in addition to the `%12`
+   cadence. Counter can no longer skip a phase. **Not yet visually confirmed in-browser** (fold into
+   the live-GUI validation below).
+2. **Durable run logs** — `reports\server_console_*.log` (main-thread console via `Start-Transcript`,
+   stopped in the accept-loop `finally`) + `reports\server_events_*.log` (the FULL SSE stream — every
+   log_line/finding/[FIX] line + remediation_complete, teed by `Enqueue`/`REnqueue` since runspace
+   output never hits the console). Path carried on `$script:State.EventLogFile`. These give the next
+   live-GUI session real post-run artifacts to debug from.
+
+Fresh full-scope re-grade of `KrakenBaseline_20260628_152000.json` (DEEP `-Hours 0`): **855 findings,
+52 auto-destructive** (matches the `_143641` baseline), breakdown all by-design/known-FP tail (P10×34
+TEMP execs + tripwires, P20/P29/P74.5 `_DELETEME` tripwires, P41/42/46 hardening, P31 AnyDesk/Ollama
+`.lnk`, round-4-known 1-offs P48/53/63/90/94/96). **0** drive-root/`icacls /reset /T`/`vssadmin delete
+shadows`/`/remove:g` FixParams — round 5 holds at full scope. **NOT pushed** (commit is local on main;
+push when convenient).
 
 Latest engine work: **FP-tune round 5** (2026-06-28). Engine `ZeroBreach-V23.ps1` touched ONLY for
 FP severity/FixAction tuning — no scan-logic/coverage regression. See CLAUDE.md → "Round 5".

@@ -6,6 +6,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ZeroBreach V23 "Kraken Console" is a Windows-only MSP incident response tool with two interchangeable servers sitting between a cyberpunk HTML/JS frontend and a PowerShell scan engine (`ZeroBreach-V23.ps1`) that performs 107 phases of malware detection.
 
+## Bugs Fixed (2026-06-28) — UI phase-"skipping" (display artifact, NOT engine) + durable run logs (`c0477ae`)
+
+User reported a live DEEP run "skipped MANY MANY phases (unless instant)." It did **not** — the
+console log (`KrakenConsole_20260628_152000.log`) shows **all 115 phases ran contiguous, 0 RECOVERED
+ERRORs**; many phases just run in 0–0.3s. Two **server-only** fixes (`ZeroBreach-Server.ps1`; engine
+untouched; parse-clean PS 5.1 + 7, all here-strings, BOM intact):
+
+| Bug | Root cause | Fix |
+|---|---|---|
+| **Phase counter appears to skip fast phases** (e.g. jumps 94→97) | The visible phase counter/progress bar updates **only** on `scan_state` (`app.js:205-211`), but the server emitted `scan_state` only every **12 log lines** (`%12`, scan runspace). A sub-second phase emits <12 lines, so several phases pass between emits → the counter jumps. | In the scan-runspace parse loop (next to `$PREX.Match`, ~`:669`) detect a phase-number change and **emit a `scan_state` immediately**, in addition to the `%12` cadence. Counter can't skip a phase. **Not yet visually confirmed in-browser** — fold into the live-GUI validation. |
+| **No durable post-run artifacts** (browser/console are ephemeral; runspace output never reaches the console) | Validation/debug needs the full event stream on disk. | Added `reports\server_console_*.log` (main-thread console via `Start-Transcript`, stopped in the accept-loop `finally`) + `reports\server_events_*.log` (FULL SSE stream — every log_line/finding/`[FIX]` + remediation_complete summary, teed by `Enqueue`/`REnqueue`). Path on `$script:State.EventLogFile`. |
+
+> **Rule:** the GUI phase counter is driven by `scan_state`, which the server throttles to every 12
+> log lines — so any UI element that must track phase precisely needs a phase-change-triggered emit,
+> not the `%12` tick. When a user reports "skipped phases," first grep the `KrakenConsole_*.log` for
+> the `PHASE N — … took` markers + `RECOVERED ERROR` before suspecting the engine — it's almost
+> always the display cadence, not a dropped phase.
+
 ## Bugs Fixed (2026-06-25) — live DEEP run cleanup (recovered-error noise + the REAL Phase-68 flood)
 
 A live admin `-Mode DEEP -Hours 0` run was re-run end-to-end (as admin, headless) and graded. Four

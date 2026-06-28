@@ -1,23 +1,17 @@
 # ZeroBreach — Next Steps (post-/clear handoff)
 
-> ### ▶ START HERE — next session (updated 2026-06-22)
-> **Goal: validate the performance fix on a real machine, with logging, then profile what's left.**
-> The user will run the tool; they want **all activity logged**. Recommended order:
-> 1. ~~**Add lightweight per-phase wall-clock timing to `ZeroBreach-V23.ps1`**~~ ✅ DONE 2026-06-22.
->    `Stop-PhaseTiming` (~`V23:358`) + `Show-PhaseHeader` now emit one clean `⏱ PHASE N — <name>
->    took X.Xs` line per phase (flows through SSE into console/report; STEALTH-suppressed; parse-clean,
->    BOM intact). The AUDIT COMPLETE block flushes the final phase and prints a **10-slowest** summary;
->    timings are also serialized to `audit_*.json` as `PhaseTimings` (`[{Phase,Seconds}]`). Globals:
->    `$global:PHASE_SW / PHASE_TIMING_LBL / PHASE_TIMINGS` (~`V23:160`).
-> 2. **NEXT — have the user run `Launch-GUI.bat` as admin**, full scan → Phase 107, then send back: the
->    console output + the newest `reports/audit_*.json`. (They've offered to run it.) The `PhaseTimings`
->    array + the "10 SLOWEST" console block are the profiling data to read.
-> 3. From those timings, fix any phase still slow and profile the two unprofiled suspects:
->    **server-side per-line SSE flush** (`ZeroBreach-Server.ps1`) and **Defender cmdlet latency**
->    (`Get-Mp*` calls in Phases 74.6/74.7/75).
-> Context: the file-walk hang fix (Get-ScanFiles) + proactive-hardening deployment decisions are DONE
-> this session — see the 2026-06-22 session log below and `CLAUDE.md`. All changes parse-clean +
-> unit-tested; committed to git.
+> ### ▶ START HERE — next session (updated 2026-06-28, session 2)
+> **The single open item is live GUI end-to-end validation. Read `HANDOFF.md` first** — it has the
+> current state and the user runbook (the model debugs from artifacts the user brings back).
+> Engine FP-tuning is COMPLETE through round 5 (CLAUDE.md → "Round 5"); the last fresh full re-grade
+> (`KrakenBaseline_20260628_152000.json`) is **52 auto-destructive, 0 system-damage FixParams** — holds.
+> Latest server work (`c0477ae`, local on main, **NOT pushed**): phase-"skipping" was diagnosed as a
+> display-cadence artifact (NOT an engine skip — all 115 phases ran, 0 RECOVERED ERRORs) and fixed
+> (emit `scan_state` on phase change); plus durable run logs (`reports\server_console_*.log` +
+> `server_events_*.log`). **The phase-skip fix is not yet visually confirmed in-browser** — verify it
+> during the live-GUI validation (the counter should step 1→115 without jumping past fast phases).
+>
+> Profiling (per-phase `⏱ took X.Xs` timing) is DONE and live — see the 2026-06-22 session log below.
 
 > **Read this first after a context clear.** It is the work plan for the PowerShell
 > build of ZeroBreach. Written 2026-06-06. Companion to `CLAUDE.md`.
