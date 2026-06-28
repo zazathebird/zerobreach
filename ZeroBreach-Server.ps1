@@ -50,6 +50,20 @@ if (-not (Test-Path $script:REPORTS)) {
     }
 }
 
+# ── Durable logging ─────────────────────────────────────────────────────────────
+# Post-run validation needs more than the (ephemeral) browser/console. Two files in reports\:
+#   • server_console_*.log — main-thread server console (banners, listener/request errors),
+#     captured via Start-Transcript; Stop-Transcript runs in the accept-loop finally.
+#   • server_events_*.log  — the FULL SSE event stream (every log_line, finding, [FIX] line,
+#     and the remediation_complete applied/failed/skipped/blocked summary), teed to disk by
+#     Enqueue/REnqueue inside the scan + remediation runspaces (their output never hits the
+#     console — it only flows to the in-memory EventLog → SSE → browser, so a transcript alone
+#     would miss it). Path is carried on $script:State.EventLogFile so both runspaces can reach it.
+$script:LOG_STAMP   = Get-Date -Format 'yyyyMMdd_HHmmss'
+$script:EVENT_LOG   = Join-Path $script:REPORTS ('server_events_{0}.log'  -f $script:LOG_STAMP)
+$script:CONSOLE_LOG = Join-Path $script:REPORTS ('server_console_{0}.log' -f $script:LOG_STAMP)
+try { Start-Transcript -LiteralPath $script:CONSOLE_LOG -Force -ErrorAction Stop | Out-Null } catch {}
+
 # ── MITRE ATT&CK map (loaded once; injected into the scan runspace for tagging) ─
 # data/*.json is NOT AMSI-scanned, so this is safe to load at runtime.
 $script:MITRE_MAP = $null
@@ -73,6 +87,7 @@ $script:State = [hashtable]::Synchronized(@{
     LineCount    = 0
     ResultsPath  = ''
     Listening    = $true
+    EventLogFile = $script:EVENT_LOG   # durable tee of the SSE event stream (set above); read by Enqueue/REnqueue
     ScanEpoch    = 0      # bumped each time EventLog is cleared for a new scan; SSE clients rewind on change
     Process      = $null
     EngineReport = ''     # filename of the engine's rich KrakenBaseline_*.json from the last scan
@@ -540,7 +555,15 @@ function Classify {
 
 function Enqueue {
     param([hashtable]$Ev)
-    [void]$ScanState.EventLog.Add(($Ev | ConvertTo-Json -Compress -Depth 4))
+    $json = $Ev | ConvertTo-Json -Compress -Depth 4
+    [void]$ScanState.EventLog.Add($json)
+    # Tee to the durable event log (runspace output never reaches the console — see header).
+    if ($ScanState.EventLogFile) {
+        $line = ('{0} {1}{2}' -f (Get-Date -Format 'HH:mm:ss'), $json, [Environment]::NewLine)
+        for ($i = 0; $i -lt 3; $i++) {
+            try { [System.IO.File]::AppendAllText($ScanState.EventLogFile, $line); break } catch { Start-Sleep -Milliseconds 15 }
+        }
+    }
 }
 
 # ── MITRE ATT&CK resolution ($MitreMap injected from the main thread; may be $null) ─
@@ -644,13 +667,33 @@ try {
 
         # Phase number
         $pm = $PREX.Match($raw)
-        if ($pm.Success) { $ScanState.Phase = [int]$pm.Groups[1].Value }
+        $phaseChanged = $false
+        if ($pm.Success) {
+            $newPhase = [int]$pm.Groups[1].Value
+            if ($newPhase -ne $ScanState.Phase) { $ScanState.Phase = $newPhase; $phaseChanged = $true }
+        }
 
         # Phase name from banner lines like  "──── PHASE 5 ── Description ────"
         if ($raw.Contains('PHASE') -and $raw.Contains([char]0x2500)) {
             $parts = $raw -split [char]0x2500
             if ($parts.Count -ge 3) {
                 $ScanState.PhaseName = ($parts[2].Trim().Trim([char]0x2500)).Trim()
+            }
+        }
+
+        # Force an immediate scan_state on every phase change so the UI counter can't
+        # "skip" fast (sub-second) phases — the periodic %12 broadcast below alone lets
+        # several phases pass between emits, making the counter jump (e.g. 94 -> 97).
+        if ($phaseChanged) {
+            Enqueue @{
+                type          = 'scan_state'
+                phase         = $ScanState.Phase
+                phase_total   = $ScanState.PhaseTotal
+                phase_name    = $ScanState.PhaseName
+                section       = $ScanState.Section
+                elapsed       = $elapsed
+                threat_counts = $ScanState.ThreatCounts
+                running       = $true
             }
         }
 
@@ -836,7 +879,17 @@ try {
 # the documented remediation driver. Variables injected: $RemState, $RemReports,
 # $ReportPath (validated inside reports/), $FixIds (string[]).
 $script:REMEDIATE_SCRIPT = @'
-function REnqueue { param([hashtable]$Ev) [void]$RemState.EventLog.Add(($Ev | ConvertTo-Json -Compress -Depth 4)) }
+function REnqueue {
+    param([hashtable]$Ev)
+    $json = $Ev | ConvertTo-Json -Compress -Depth 4
+    [void]$RemState.EventLog.Add($json)
+    if ($RemState.EventLogFile) {
+        $line = ('{0} {1}{2}' -f (Get-Date -Format 'HH:mm:ss'), $json, [Environment]::NewLine)
+        for ($i = 0; $i -lt 3; $i++) {
+            try { [System.IO.File]::AppendAllText($RemState.EventLogFile, $line); break } catch { Start-Sleep -Milliseconds 15 }
+        }
+    }
+}
 function RLog { param([string]$Text, [string]$Sev = 'INFO') REnqueue @{ type='log_line'; text=$Text; severity=$Sev; phase=0; elapsed=0 } }
 
 # SAFETY: hard backstop — mirror of Test-ProtectedTarget (main thread). The tool must NEVER
@@ -1253,4 +1306,7 @@ finally {
     $script:State.Listening = $false
     try { $Listener.Stop(); $Listener.Close() } catch {}
     Write-Host '[ZeroBreach] Server stopped.' -ForegroundColor Cyan
+    if ($script:EVENT_LOG)   { Write-Host ('[ZeroBreach] Event log:   ' + $script:EVENT_LOG)   -ForegroundColor DarkCyan }
+    if ($script:CONSOLE_LOG) { Write-Host ('[ZeroBreach] Console log: ' + $script:CONSOLE_LOG) -ForegroundColor DarkCyan }
+    try { Stop-Transcript | Out-Null } catch {}
 }
