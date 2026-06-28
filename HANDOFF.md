@@ -2,7 +2,8 @@
 
 Latest engine work: **FP-tune round 5** (2026-06-28). Engine `ZeroBreach-V23.ps1` touched ONLY for
 FP severity/FixAction tuning — no scan-logic/coverage regression. See CLAUDE.md → "Round 5".
-**NOTE: round 5 is NOT yet committed** — review `git diff ZeroBreach-V23.ps1` then commit/push.
+**Round 5 COMMITTED + PUSHED** as `b59a3e4` (2026-06-28) — parse-clean PS 5.1 (5.1.26100) + 7.6.3,
+BOM intact.
 
 ## Round 5 (2026-06-28) — the Phase 108 `icacls C:\ /reset /T` catastrophe + ACL-cluster siblings
 Driven by live `DEEP -Hours 1` runs (`_124244` before, `_132719` after). **Phase 108 offered a
@@ -38,8 +39,7 @@ run, so a fresh `-Hours 0` re-grade would show ~53.
   None is a flood; all are hard-protected where relevant. Ask the user before downgrading these.
 
 ### What's NOT done / next
-- **COMMIT + PUSH round 5** (engine `ZeroBreach-V23.ps1` + CLAUDE.md/HANDOFF.md/memory) — left
-  uncommitted per "commit only when asked". `git diff ZeroBreach-V23.ps1` to review.
+- ~~COMMIT + PUSH round 5~~ DONE — `b59a3e4`, pushed to origin/main 2026-06-28.
 - Optional: fresh `-Hours 0` re-grade to confirm the Phase-29 fix (~53) on a live 5.1 run.
 - The original **live GUI end-to-end validation** (browser remediation on tripwires, MITRE badges,
   HTML/CSV export, IOC save→scan, STEALTH) is STILL pending — round 5 was engine/findings only.
