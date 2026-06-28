@@ -1,9 +1,15 @@
 # RESUME HANDOFF — updated 2026-06-28
 
+> **OPEN ITEM (only one left): live GUI end-to-end validation.** All engine/FP work is done,
+> committed, pushed, and live-re-graded. The browser+admin remediation path is the last unvalidated
+> thing. Prep is done (tripwires laid, server parse-clean) — see "NEXT SESSION" runbook below. The
+> USER runs the browser click-through; the model debugs from artifacts they bring back.
+
 Latest engine work: **FP-tune round 5** (2026-06-28). Engine `ZeroBreach-V23.ps1` touched ONLY for
 FP severity/FixAction tuning — no scan-logic/coverage regression. See CLAUDE.md → "Round 5".
 **Round 5 COMMITTED + PUSHED** as `b59a3e4` (2026-06-28) — parse-clean PS 5.1 (5.1.26100) + 7.6.3,
-BOM intact.
+BOM intact. **Live `-Hours 0` re-grade DONE** (`KrakenBaseline_20260628_143641`, auto-destructive 52,
+Phase-29 fix confirmed, 0 drive-root/`icacls /reset` ops).
 
 ## Round 5 (2026-06-28) — the Phase 108 `icacls C:\ /reset /T` catastrophe + ACL-cluster siblings
 Driven by live `DEEP -Hours 1` runs (`_124244` before, `_132719` after). **Phase 108 offered a
@@ -49,8 +55,48 @@ run, so a fresh `-Hours 0` re-grade would show ~53.
   (own dev scripts + tripwires), `_DELETEME` tripwires (P20/P29/P74.5), Logitech-via-rundll32,
   OneDC_Updater non-MS task, AnyDesk/Ollama startup `.lnk` (P31), P41/42/46 hardening, and the
   round-4-known 1-off FPs (P48/53/63/90/94/96 — still need user sign-off before downgrading).
-- The original **live GUI end-to-end validation** (browser remediation on tripwires, MITRE badges,
-  HTML/CSV export, IOC save→scan, STEALTH) is STILL pending — round 5 was engine/findings only.
+- **THE ONE REMAINING ITEM → live GUI end-to-end validation.** Round 5 was engine/findings only;
+  the browser+admin path has never been exercised. Runbook below.
+
+## NEXT SESSION — live GUI end-to-end validation (the only open item)
+
+**Prep already done (2026-06-28, this session):** all 5 benign `_DELETEME` tripwires are freshly
+laid down on the box (TEMP `.bat`, Downloads `.cmd`, HKCU Run value, Outlook-cache `.bat`, disabled
+scheduled task — verified present); `ZeroBreach-Server.ps1` parses clean PS 5.1 (5.1.26100) + 7.6.3,
+BOM intact; `app.js` `node --check` clean. So the launch is ready — nothing else to set up.
+
+**Split (decided with user — saves tokens, no loss to debugging):**
+- **USER runs the browser click-through** (eyes-on, can't be driven headlessly here). The model's
+  debug ability depends on *artifacts*, not who launched — so when something's off, the user pastes
+  the server console / browser-console error, points at the report JSON, or drops a screenshot.
+- **MODEL can do the API/server layer headlessly** (no browser) if desired BEFORE handing off, or to
+  reproduce a bug the user hits: start the PS server, then hit `/api/export/html`, `/api/export/csv`,
+  `/api/ioc` GET+POST (verify the `.ioc` prefixed-text emit — `hash:`/`ip:`/`domain:`/`regex:`/`file:`),
+  `/api/report?name=KrakenBaseline_…`, `/api/remediate {report,ids[]}` (id-filter + the protected
+  HARD-block → `blocked` count), and STEALTH JSON parsing. These are server-driver logic, browser-free.
+
+**User runbook (what to click + what to capture):**
+1. `Launch-GUI.bat` as admin (self-elevates; pure-PS server, no Python). Browser auto-opens.
+   - If blank/grey screen: it self-heals (reloads ≤2×). If it stays blank, capture
+     `zerobreach_launch_error.log` (project root) + browser console.
+2. Config → **DEEP**, **All time** → start scan. Wait for `scan_complete`.
+3. **FINDINGS view** — confirm: MITRE badges render (clickable `.item-mitre`); the `🛡 PROTECTED`
+   items show a green/shield badge and their checkbox is **disabled** (can't tick); vendor items show
+   `✔ TRUSTED`. The 5 `_DELETEME` tripwires should be present + tickable.
+4. **Force-test the hard block:** the protected items must stay un-tickable even via Select-All; the
+   completion modal should report a non-zero `blocked` count if you somehow POST one.
+5. **REMEDIATION** → select ONLY the `_DELETEME` tripwires → type `PURGE` → EXECUTE. Confirm:
+   TEMP `.bat` + Downloads `.cmd` deleted (DeleteFile), HKCU Run value removed (DeleteReg), scheduled
+   task unregistered (RunCmd), Outlook-cache `.bat` moved to `reports\quarantine\` with a `.quar.json`
+   manifest (Quarantine). `remediation_complete` shows applied/failed/skipped/blocked.
+6. **Exports:** HTML + CSV download buttons produce files. **IOC Manager:** save a set → confirm
+   `reports\custom_iocs.ioc` written in prefixed-text format → rescan picks it up via `-IocFile`.
+7. **(optional) STEALTH** scan → confirm findings still parse (engine emits JSON, server buffers+parses).
+
+**Capture for the model:** the `KrakenConsole_*.log` / server console, the `remediation_complete`
+payload, the `reports\quarantine\*.quar.json`, and a screenshot of the FINDINGS view (badges +
+disabled checkboxes). Re-lay tripwires between runs with the create block in CLAUDE.md → "Remediation
+test tripwires" (cleanup block there too).
 
 ---
 
