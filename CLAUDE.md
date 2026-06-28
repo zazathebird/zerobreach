@@ -430,6 +430,40 @@ aggressive; engine `.ps1` logic, no new signature literals):
 > return) only surface on the real engine. Every round-4 change is downgrade-or-skip; the auto-
 > selected destructive set can only shrink. Engine parse-clean PS 5.1 + 7 (0 errors), BOM intact.
 
+## Detection FP tuning — Round 5 (2026-06-28) — VALIDATED ON LIVE DEEP RUNS (engine)
+
+Driven by two fresh live `DEEP -Hours 1` runs (`KrakenBaseline_20260628_123250` QUICK,
+`_124244` DEEP) the user ran, then re-validated on a fresh `DEEP -Hours 1` run (`_132719`).
+**The headline bug: Phase 108 offered `icacls "C:\" /reset /T /C /Q` — a recursive ACL reset of
+the entire C: drive — as a HIGH auto-applicable remediation, and it fires on EVERY healthy box**
+(`%SystemDrive%\` is in `critical_acl_paths`, and the C:\ root carries a default `BUILTIN\Users`
+append ACE). That is exactly the system-wrecking auto-action **rule #1** forbids. A
+destructive-`FixParam` sweep found a whole **family of siblings**. Cut live auto-destructive
+**21 → 7** (`_124244` → `_132719`); the residual 7 are all by-design (2 `_DELETEME` tripwires +
+3 security-hardening posture items P41/P42/P46 + Logitech-via-rundll32 + a non-MS `OneDC_Updater`
+task). All changes are **downgrade-or-skip** (engine `.ps1` logic only, no new signature literals;
+the dangerous `icacls`/`takeown` commands are moved into the finding **description** for manual use).
+
+| Phase | Before (live) | Root cause | Fix |
+|---|---|---|---|
+| **108** ACL/owner | `icacls "C:\" /reset /T` + System32\Tasks etc. (HIGH, every run) + `takeown`/`setowner` (CRIT) | `%SystemDrive%\` root always has a default Users-append ACE; recursive `/reset /T` on a system path (esp. the drive root) is catastrophic | **Skip the bare drive-root** (`^[A-Za-z]:\\?$`); weak-ACE → **POSSIBLE + Info**; ownership-tamper → keep CRITICAL but **FixAction Info** |
+| **16, 43-SAM, 111, 112, 115** | siblings: `icacls /reset /T`, `vssadmin delete shadows /all`, `icacls /remove SIDs`, single-file ACL resets — all auto-RunCmd HIGH/CRIT | an ACL/ownership weakness on a system path is a real privesc surface but auto-resetting it can break the OS or an app's updater | all → **FixAction Info** (detect + advise; command in description). Severity kept. (Phase 43 VSS-delete was already INFO/opt-in — left.) |
+| **109 / 113** | `hosts` (a non-PE file in `protected_system_files`) flagged **CRITICAL every run**; `UnknownError` (in-process catalog read fail) → CRIT/HIGH FPs; spurious `sfc /scannow` HIGH | signature-checking a non-PE file is meaningless; `UnknownError` is the same catalog degradation round-4 fixed for Phase 15 | **Skip non-PE files** (`\.(exe|dll|sys)$`); **status-split** (HashMismatch/NotTrusted → CRIT/HIGH, unverifiable → POSSIBLE+Info); SFC fires **only on genuine tamper**. Same split applied to the accessibility-backdoor sub-check. |
+| **8** browser ext | Google Docs Offline (Google first-party) auto-`DeleteFile`'d for having `nativeMessaging`/`<all_urls>` | the permission heuristic (`Get-ExtensionRisk` HIGH/POSSIBLE) fires on many legit extensions | only a **known-adware NAME** match (CRITICAL) stays `DeleteFile`; permission-only hits → **POSSIBLE + Info** |
+| **17** ADS | benign `SmartScreen` ADS stripped off `rufus.exe`/Win11 ISO (HIGH RunCmd) | filter only excluded `Zone.Identifier`, not the other benign OS/app metadata streams | benign-stream allowlist (`SmartScreen`, `Afp_*`, `com.apple.*`, …) + downgrade to **POSSIBLE** (strip stays opt-in) |
+| **24** COM | benign per-user shell CLSIDs (`{031E4825…}`/`{86ca1aa0…}`, **no** Inproc/LocalServer32) → `DeleteRegKey` HIGH | shadowing HKLM alone isn't a hijack — a functioning hijack needs an actual per-user server override | escalate only when `$shadowsHklm -and $inproc`; else → POSSIBLE+Info |
+| **20** Run-key | Discord/Teams/Logitech CRITICAL-`DeleteReg`'d (matched bare `AppData`) | every legit app autostarts from `AppData\Local` | drop bare `AppData` from the strong regex; **AppData-only → POSSIBLE+Info**; Temp/script-host/encoded/LOLBin stay CRITICAL (the `_DELETEME` tripwire still fires via `Temp`) |
+| **26** BHO | every Browser Helper Object HIGH auto-`DeleteRegKey` | legit BHOs exist (Adobe/Office/Java/AV); a registered BHO alone isn't a hijacker | → **POSSIBLE + Info** (review, never auto-removed) |
+| **29** task XML | legit `\Microsoft\Windows\…` system tasks (CleanupTemporaryState, TempSignedLicenseExchange, AD RMS Client) flagged HIGH `DeleteFile` — surfaced only at all-time (`-Hours 0`) | the on-disk task-XML sub-check (`~:2002`) didn't mirror the action-loop's `\Microsoft\` exclusion, and their XML legitimately contains `Temp`/`AppData` substrings | **skip `\Tasks\Microsoft\`**; downgrade the weak on-disk content match to **POSSIBLE + Info** (the action-based check still flags genuinely-malicious non-MS tasks CRITICAL) |
+
+> **Rule (reinforced):** **never ship a destructive `FixParam` that an auto-select (CRITICAL/HIGH
+> + destructive FixAction) can fire on a healthy box** — `icacls /reset /T`, `vssadmin delete
+> shadows /all`, recursive deletes, drive-root operations. Put the suggested command in the
+> **description** and use `FixAction Info` so an operator runs it by hand. Validate FP tuning on a
+> **live `powershell.exe` 5.1** DEEP run and re-grade auto-destructive count from the baseline JSON
+> (CRIT/HIGH + DeleteFile/DeleteReg/DeleteRegKey/KillProcess/RunCmd/Quarantine). Engine parse-clean
+> PS 5.1 (5.1.26100) + 7.6.3 (0 errors), BOM intact.
+
 ## GUI Feature Layer (added 2026-06-09, harvested from the deleted "gui from other project" folder)
 
 The PirateLife React GUI was mined for its best ideas, ported to **vanilla JS** (no React), then

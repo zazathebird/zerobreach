@@ -1441,13 +1441,22 @@ foreach ($ep in $extPaths) {
     foreach ($ext in $extDirs) {
         $risk = Get-ExtensionRisk -ExtPath $ext.FullName
         if ($risk.Risk -eq "CLEAN") { continue }
-        $sev = switch ($risk.Risk) { "CRITICAL" { $SEV_CRITICAL } "HIGH" { $SEV_HIGH } default { $SEV_POSSIBLE } }
-        $label = if ($risk.Risk -in @("CRITICAL","HIGH")) { "☣ $($risk.Risk)" } else { "? POSSIBLE" }
-        Out-Typewriter "  -> $label — $($ep.B) EXT: $($risk.Name) | $($risk.Reason)" "CRIT"
-        Add-Finding -ID "EXT_$($ext.Name)" -Phase "PHASE 8" -ThreatType "Browser Extension/Hijacker" `
-            -Severity $sev -Description "$($ep.B) extension: $($risk.Name) | $($risk.Reason)" `
-            -Target $ext.FullName -FixAction "DeleteFile" -FixParam $ext.FullName `
-            -Group "Browser Extensions ($($ep.B))"
+        # Only a NAME match against the known adware/hijacker list (CRITICAL) is confident enough to
+        # auto-delete an extension. The permission-based heuristics (nativeMessaging / <all_urls> /
+        # webRequest -> HIGH/POSSIBLE) fire on MANY legit extensions (password managers, Google Docs
+        # Offline, ad blockers), so those are surfaced for REVIEW only (POSSIBLE + Info), never removed.
+        if ($risk.Risk -eq "CRITICAL") {
+            Out-Typewriter "  -> ☣ CRITICAL — $($ep.B) EXT: $($risk.Name) | $($risk.Reason)" "CRIT"
+            Add-Finding -ID "EXT_$($ext.Name)" -Phase "PHASE 8" -ThreatType "Browser Extension/Hijacker" `
+                -Severity $SEV_CRITICAL -Description "$($ep.B) extension (known adware/hijacker): $($risk.Name) | $($risk.Reason)" `
+                -Target $ext.FullName -FixAction "DeleteFile" -FixParam $ext.FullName `
+                -Group "Browser Extensions ($($ep.B))"
+        } else {
+            Out-Typewriter "  -> ? POSSIBLE — $($ep.B) EXT: $($risk.Name) | $($risk.Reason)" "WARN"
+            Add-Finding -ID "EXT_$($ext.Name)" -Phase "PHASE 8" -ThreatType "Browser Extension/Hijacker" `
+                -Severity $SEV_POSSIBLE -Description "$($ep.B) extension with broad/powerful permissions ($($risk.Reason)) — review only; many legitimate extensions request these, so it is NOT auto-removed: $($risk.Name)" `
+                -Target $ext.FullName -FixAction "Info" -Group "Browser Extensions ($($ep.B))"
+        }
         $global:SpywareHits++
     }
 }
@@ -1685,8 +1694,8 @@ foreach ($cp in @("$env:WINDIR\System32","$env:WINDIR\SysWOW64","$env:WINDIR\Sys
         if ($suspAce) {
             Out-Typewriter "  -> WORLD-WRITABLE ACE ON $cp" "CRIT"
             Add-Finding -ID "ACL_$($cp -replace '[^a-z0-9]','')" -Phase "PHASE 16" -ThreatType "Permission Abuse" `
-                -Severity $SEV_HIGH -Description "World-writable ACE on critical path: $cp" `
-                -Target $cp -FixAction "RunCmd" -FixParam "icacls '$cp' /reset /T /Q" -Group "NTFS Permission Abuse"
+                -Severity $SEV_HIGH -Description "World-writable ACE on critical path: $cp — review manually. A recursive ACL reset on a system directory can break the OS, so this is NOT auto-applied. Suggested (run by hand after confirming): icacls '$cp' /reset /T /Q" `
+                -Target $cp -FixAction "Info" -Group "NTFS Permission Abuse"
         } else { Out-Typewriter "  -> [OK] ACL SECURE." "GOOD" }
     }
 }
@@ -1696,14 +1705,19 @@ foreach ($adsDir in @("$env:LOCALAPPDATA","$env:TEMP","$env:USERPROFILE\Download
     Out-Typewriter "ADS SCAN: $adsDir..." "INFO"
     if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
     if (Test-Path $adsDir) {
+        # Skip benign OS/app-added streams. Windows tags downloaded files with Zone.Identifier AND a
+        # 'SmartScreen' stream; browsers/cloud/macOS/AV add their own metadata streams. Flagging these
+        # (e.g. on rufus.exe / a Win11 ISO) is a pure FP, so allowlist them. The real signal is an ADS
+        # hiding *executable* content, not metadata — remaining hits are surfaced POSSIBLE (review).
+        $benignStream = 'Zone\.Identifier|SmartScreen|^Afp_|com\.apple\.|com\.dropbox\.|OECustomProperty|encryptable|favicon|Win32App_|\$CmdTcID|KAVICHS|cdtag|ms-properties'
         $streams = Get-Item -Path "$adsDir\*" -Stream * -ErrorAction SilentlyContinue |
-            Where-Object { $_.Stream -ne ':$DATA' -and $_.Stream -notmatch 'Zone\.Identifier' }
+            Where-Object { $_.Stream -ne ':$DATA' -and $_.Stream -notmatch $benignStream }
         foreach ($s in $streams) {
             $adsFile   = $s.FileName -replace "'","''"
             $adsStream = $s.Stream   -replace "'","''"
             Out-Decrypt -Text "$($s.FileName):$($s.Stream)" -Prefix "  [ADS HIT] "
             Add-Finding -ID "ADS_$($s.FileName.GetHashCode())" -Phase "PHASE 17" -ThreatType "ADS Parasite" `
-                -Severity $SEV_HIGH -Description "Alternate Data Stream: $($s.FileName):$($s.Stream)" `
+                -Severity $SEV_POSSIBLE -Description "Alternate Data Stream (review — most ADS are benign app/OS metadata; an ADS hiding executable content is the real signal): $($s.FileName):$($s.Stream)" `
                 -Target "$($s.FileName):$($s.Stream)" -FixAction "RunCmd" -FixParam "Remove-Item -LiteralPath '$adsFile' -Stream '$adsStream' -Force -ErrorAction SilentlyContinue" `
                 -Group "Alternate Data Streams"
         }
@@ -1780,11 +1794,20 @@ foreach ($rp in $runPaths) {
         $keys = Get-ItemProperty -Path $rp -ErrorAction SilentlyContinue
         foreach ($prop in ($keys.psobject.properties | Where-Object { $_.Name -notmatch "^PS" }).Name) {
             $val = $keys.$prop
-            if ($val -match "AppData|Temp|cmd\.exe|powershell|wscript|cscript|mshta|\.js|\.vbs|\.hta|regsvr32|rundll32|certutil|bitsadmin|msiexec.*http|IEX|EncodedCommand") {
+            # Strong indicators (Temp / script host / encoded / LOLBin / remote) = CRITICAL auto-deletable.
+            # Bare 'AppData' is NOT a strong signal on its own — Discord, Teams, Slack, OneDrive, Logitech
+            # and most updaters legitimately autostart from AppData\Local, so an AppData-only value is
+            # review-only (POSSIBLE + Info), never auto-removed. (The _DELETEME tripwire points at %TEMP%.)
+            if ($val -match "Temp|cmd\.exe|powershell|wscript|cscript|mshta|\.js|\.vbs|\.hta|regsvr32|rundll32|certutil|bitsadmin|msiexec.*http|IEX|EncodedCommand") {
                 Out-Decrypt -Text "$prop = $val" -Prefix "  [RUN KEY] "
                 Add-Finding -ID "RUNKEY_$($prop -replace '[^a-z0-9]','')" -Phase "PHASE 20" -ThreatType "Registry Persistence" `
                     -Severity $SEV_CRITICAL -Description "Malicious Run key: [$rp] $prop = $val" `
                     -Target "$rp|$prop" -FixAction "DeleteReg" -FixParam "$rp|$prop" -Group "Run Key Persistence"
+            } elseif ($val -match "AppData") {
+                Out-Decrypt -Text "$prop = $val" -Prefix "  [RUN KEY?] "
+                Add-Finding -ID "RUNKEY_$($prop -replace '[^a-z0-9]','')" -Phase "PHASE 20" -ThreatType "Registry Persistence" `
+                    -Severity $SEV_POSSIBLE -Description "Run key launches from AppData (review — common for legitimate apps, so NOT auto-removed): [$rp] $prop = $val" `
+                    -Target "$rp|$prop" -FixAction "Info" -Group "Run Key Persistence"
             }
         }
     }
@@ -1859,12 +1882,15 @@ if (Test-Path $hkcuClsid) {
                        (Test-Path "HKLM:\SOFTWARE\Wow6432Node\Classes\CLSID\$guid")
         $inproc = (Get-RegVal -Path "$($k.PSPath)\InprocServer32" -Name "(default)")
         if (-not $inproc) { $inproc = (Get-RegVal -Path "$($k.PSPath)\LocalServer32" -Name "(default)") }
-        if ($shadowsHklm) {
-            # Real hijack: a per-user CLSID overriding a system-registered COM object.
+        if ($shadowsHklm -and $inproc) {
+            # Real hijack: a per-user CLSID overriding a system-registered COM object WITH an actual
+            # server path (Inproc/LocalServer32). A CLSID that merely shadows HKLM but has NO server
+            # override (null Inproc/Local) is not a functioning hijack — it's a benign per-user shell
+            # CLSID key holding only settings/sub-keys (e.g. {031E4825-...}/{86ca1aa0-...}) — review only.
             Out-Decrypt -Text $k.PSPath -Prefix "  [COM HIJACK] "
             $comShadow++
             Add-Finding -ID "COM_$($guid -replace '[^a-z0-9]','')" -Phase "PHASE 24" -ThreatType "COM Hijack" `
-                -Severity $SEV_HIGH -Description "HKCU COM override SHADOWS an HKLM-registered CLSID (COM hijack persistence): $guid -> $inproc" `
+                -Severity $SEV_HIGH -Description "HKCU COM override SHADOWS an HKLM-registered CLSID with a per-user server override (COM hijack persistence): $guid -> $inproc" `
                 -Target $k.PSPath -FixAction "DeleteRegKey" -FixParam $k.PSPath -Group "COM Object Hijacks"
         } else {
             # Pure per-user registration (no HKLM twin) — normal for add-ins; surface for review only.
@@ -1905,9 +1931,12 @@ foreach ($bho in $bhoPaths) {
         $bhoKeys = Get-ChildItem -Path $bho -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
         foreach ($k in $bhoKeys) {
             Out-Decrypt -Text $k.Name -Prefix "  [BHO HIT] "
+            # BHOs are a legacy IE hijack vector, but legitimate ones exist (Adobe PDF, Office/Lync,
+            # Java, AV toolbars). A registered BHO alone isn't proof of a hijacker, so surface for
+            # REVIEW (POSSIBLE + Info) rather than blanket-deleting every BHO key automatically.
             Add-Finding -ID "BHO_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 26" -ThreatType "Browser Hijacker/BHO" `
-                -Severity $SEV_HIGH -Description "Browser Helper Object in registry: $($k.Name)" `
-                -Target $k.PSPath -FixAction "DeleteRegKey" -FixParam $k.PSPath -Group "Browser Helper Objects"
+                -Severity $SEV_POSSIBLE -Description "Browser Helper Object registered (review — legit BHOs exist for Adobe/Office/Java/AV; NOT auto-removed): $($k.Name)" `
+                -Target $k.PSPath -FixAction "Info" -Group "Browser Helper Objects"
             $global:SpywareHits++
         }
         if ($bhoKeys.Count -eq 0) { Out-Typewriter "  -> [OK] BHO HIVE SECURE." "GOOD" }
@@ -1974,12 +2003,20 @@ foreach ($td in @("$env:WINDIR\System32\Tasks","$env:WINDIR\SysWOW64\Tasks")) {
     if (Test-Path $td) {
         $taskFiles = Get-ChildItem -Path $td -Recurse -File -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
         foreach ($tf in $taskFiles) {
+            # Skip first-party Windows tasks (\Tasks\Microsoft\...) — mirror the action-loop's
+            # \Microsoft\ exclusion above. Their XML legitimately contains 'Temp'/'AppData' substrings
+            # (CleanupTemporaryState, TempSignedLicenseExchange, Active Directory RMS Client, ...), so
+            # the bare content heuristic floods them HIGH+DeleteFile on every healthy box.
+            if ($tf.FullName -match '\\Tasks\\Microsoft\\') { continue }
             $content = Get-Content $tf.FullName -Raw -ErrorAction SilentlyContinue
             if ($content -match "AppData|Temp|powershell.*-enc|IEX|wscript|mshta") {
                 Out-Decrypt -Text $tf.FullName -Prefix "  [TASK FILE] "
+                # On-disk XML content match is a weak corroborating signal (the authoritative detection
+                # is the action-based CRITICAL finding above) — review-only, never an auto-delete of a
+                # task file (System32\Tasks is hard-protected anyway).
                 Add-Finding -ID "TASKFILE_$($tf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 29" -ThreatType "Task Persistence" `
-                    -Severity $SEV_HIGH -Description "Suspicious task XML on disk: $($tf.FullName)" `
-                    -Target $tf.FullName -FixAction "DeleteFile" -FixParam $tf.FullName -Group "Scheduled Task Persistence"
+                    -Severity $SEV_POSSIBLE -Description "Task XML on disk references Temp/AppData/script host (review — weak signal; the action-based check flags genuinely-malicious non-Microsoft tasks): $($tf.FullName)" `
+                    -Target $tf.FullName -FixAction "Info" -Group "Scheduled Task Persistence"
             }
         }
     }
@@ -2331,9 +2368,8 @@ $samPerms = cmd.exe /c "icacls %WINDIR%\System32\config\SAM 2>&1"
 if ($samPerms -match "Everyone|Users.*:(F|M|W)") {
     Out-ThreatBanner "SAM HIVE OVER-PERMISSIVE" "Everyone/Users has write/modify access to SAM"
     Add-Finding -ID "SAM_PERMS" -Phase "PHASE 43" -ThreatType "Credential Exposure (HiveNightmare)" `
-        -Severity $SEV_CRITICAL -Description "SAM hive ACL misconfigured — Everyone/Users can read (CVE-2021-36934 HiveNightmare)" `
-        -Target "%WINDIR%\System32\config\SAM" -FixAction "RunCmd" `
-        -FixParam "icacls '$env:WINDIR\System32\config' /reset /T /Q; vssadmin delete shadows /all /quiet" `
+        -Severity $SEV_CRITICAL -Description "SAM hive ACL misconfigured — Everyone/Users can read (CVE-2021-36934 HiveNightmare). Manual remediation (NOT auto-applied — it resets config ACLs and the shadow purge is irreversible / removes restore points): icacls %WINDIR%\System32\config\*.* /reset , then 'vssadmin delete shadows /all /quiet' ONLY after confirming no shadow is needed for recovery." `
+        -Target "%WINDIR%\System32\config\SAM" -FixAction "Info" `
         -Group "SAM / HiveNightmare"
     $global:RootkitHits++
 } else { Out-Typewriter "  -> [OK] SAM HIVE PERMISSIONS SECURE." "GOOD" }
@@ -4274,6 +4310,10 @@ if ($PhasePlan.Integrity) {
     $aclFindings = 0
     foreach ($cp in $aclPaths) {
         if (-not (Test-Path -LiteralPath $cp)) { continue }
+        # A bare drive root (C:\) ALWAYS carries a default ACE granting BUILTIN\Users create/append
+        # rights — flagging it is a guaranteed FP, and 'icacls C:\ /reset /T' would recursively reset
+        # ACLs across the entire volume (catastrophic). Never audit/auto-remediate a drive root here.
+        if ($cp -match '^[A-Za-z]:\\?$') { continue }
         Out-Typewriter "  ACL: $cp" "INFO"
         try {
             $acl  = Get-Acl -LiteralPath $cp -ErrorAction SilentlyContinue
@@ -4282,9 +4322,12 @@ if ($PhasePlan.Integrity) {
                 $aclFindings++
                 $idr = "$($ace.IdentityReference)"
                 Out-Glitch "  [WEAK ACL] $cp <- $idr : $($ace.FileSystemRights)" Red
+                # Review-only: a recursive 'icacls /reset /T' on a protected system directory can
+                # break the OS, so it is NEVER auto-applied. Surfaced as POSSIBLE + Info; the suggested
+                # command is in the description for an operator to run by hand after confirming.
                 Add-Finding -ID "ACL108_$([Math]::Abs(("$cp$idr").GetHashCode()))" -Phase "PHASE 108" -ThreatType "Permission Abuse / Privesc" `
-                    -Severity $SEV_HIGH -Description "Weak ACE on protected path: '$idr' has '$($ace.FileSystemRights)' on $cp (privilege-escalation surface — a non-admin can replace SYSTEM-run files here)." `
-                    -Target $cp -FixAction "RunCmd" -FixParam "icacls `"$cp`" /reset /T /C /Q" -Group "NTFS Permission Abuse"
+                    -Severity $SEV_POSSIBLE -Description "Weak ACE on protected path: '$idr' has '$($ace.FileSystemRights)' on $cp (privilege-escalation surface — a non-admin could replace SYSTEM-run files here). Review manually; suggested fix (do NOT auto-apply — recursive reset can break the OS): icacls `"$cp`" /reset /T /C /Q" `
+                    -Target $cp -FixAction "Info" -Group "NTFS Permission Abuse"
             }
         } catch { Out-Typewriter "  -> ACL READ FAILED: $cp" "WARN" }
     }
@@ -4297,8 +4340,8 @@ if ($PhasePlan.Integrity) {
                 $aclFindings++
                 Out-Glitch "  [OWNER TAMPER] $pf owned by $o" Red
                 Add-Finding -ID "OWN108_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 108" -ThreatType "Ownership Tamper / Privesc" `
-                    -Severity $SEV_CRITICAL -Description "Protected system file owned by untrusted principal '$o': $pf (ownership change is a common pre-replacement tamper step)." `
-                    -Target $pf -FixAction "RunCmd" -FixParam "takeown /F `"$pf`" /A | Out-Null; icacls `"$pf`" /setowner `"NT SERVICE\TrustedInstaller`" /C /Q" -Group "Ownership Tampering"
+                    -Severity $SEV_CRITICAL -Description "Protected system file owned by untrusted principal '$o': $pf (ownership change is a common pre-replacement tamper step). Review manually; suggested fix (NOT auto-applied — changing owner on a system binary is invasive): takeown /F `"$pf`" /A && icacls `"$pf`" /setowner `"NT SERVICE\TrustedInstaller`" /C /Q" `
+                    -Target $pf -FixAction "Info" -Group "Ownership Tampering"
             }
         } catch {}
     }
@@ -4308,22 +4351,36 @@ if ($PhasePlan.Integrity) {
     Show-PhaseHeader "PHASE 109" "SYSTEM BINARY INTEGRITY & SIGNATURE VERIFICATION" "INTEGRITY"
     Out-Typewriter "VERIFYING AUTHENTICODE / CATALOG SIGNATURES ON PROTECTED BINARIES..." "HUNT"
     Invoke-QuantumBar "CRYPTOGRAPHIC SIGNATURE CHECK" 14 100
-    $sigBad = 0
+    $sigBad = 0       # genuine tamper — drives the SFC recommendation
+    $sigUnverif = 0   # signature unverifiable in-process — review-only
     foreach ($pf in @(Get-Perm 'protected_system_files' | ForEach-Object { Expand-EnvPath $_ })) {
         if (-not (Test-Path -LiteralPath $pf)) { continue }
+        # Only PE files (.exe/.dll/.sys) carry an Authenticode/catalog signature. A non-PE entry in
+        # the list (e.g. drivers\etc\hosts) is NEVER 'Valid' signed, so signature-checking it is a
+        # guaranteed CRITICAL FP every run — hosts integrity is covered by its own poisoning phase.
+        if ($pf -notmatch '\.(exe|dll|sys)$') { continue }
         $v = Get-SignatureVerdict -FilePath $pf
-        # A core OS binary that is unsigned/invalid, OR a Microsoft-named file not signed by a trusted publisher = tamper.
-        if ($v.Status -ne 'Valid') {
+        if ($v.Status -eq 'Valid' -and $v.Trusted) { continue }
+        # Split by status (cf. Phase 15): a real tamper signal (HashMismatch / NotTrusted publisher,
+        # or a Valid sig from a non-trusted signer) is CRITICAL/HIGH. An UnknownError/NotSigned/
+        # unverifiable status is what a catalog-signed OS file returns when the catalog can't be read
+        # in-process (transient corrupted type/module env) — surface POSSIBLE + Info, never escalate.
+        if ($v.Status -eq 'HashMismatch' -or $v.Status -eq 'NotTrusted') {
             $sigBad++
             Out-Glitch "  [INTEGRITY FAIL] $pf — signature: $($v.Status)" Red
             Add-Finding -ID "SIG109_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
                 -Severity $SEV_CRITICAL -Description "Protected system binary failed signature check (Status=$($v.Status), Signer='$($v.Signer)'): $pf — possible replacement/patch. Verify with: sfc /scannow" `
                 -Target $pf -FixAction "Info" -Group "System Binary Integrity"
-        } elseif (-not $v.Trusted) {
+        } elseif ($v.Status -eq 'Valid' -and -not $v.Trusted) {
             $sigBad++
             Out-Typewriter "  -> UNTRUSTED SIGNER on $pf : $($v.Signer)" "WARN"
             Add-Finding -ID "SIG109U_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
                 -Severity $SEV_HIGH -Description "System binary signed by a non-trusted publisher '$($v.Signer)': $pf (expected Microsoft). Possible substitution." `
+                -Target $pf -FixAction "Info" -Group "System Binary Integrity"
+        } else {
+            $sigUnverif++
+            Add-Finding -ID "SIG109X_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
+                -Severity $SEV_POSSIBLE -Description "Protected system binary signature unverifiable (Status=$($v.Status) — usually catalog-signed but the catalog couldn't be read in-process; review): $pf" `
                 -Target $pf -FixAction "Info" -Group "System Binary Integrity"
         }
     }
@@ -4332,6 +4389,8 @@ if ($PhasePlan.Integrity) {
             -Description "$sigBad protected binaries failed integrity verification — run System File Checker to restore originals from the component store." `
             -Target "System File Checker" -FixAction "RunCmd" -FixParam "sfc /scannow" -Group "System Binary Integrity"
         Out-Typewriter "  -> $sigBad BINARY INTEGRITY FAILURES — SFC RECOMMENDED." "CRIT"
+    } elseif ($sigUnverif -gt 0) {
+        Out-Typewriter "  -> $sigUnverif binary signature(s) unverifiable in-process (review only; not auto-acted)." "WARN"
     } else { Out-Typewriter "  -> [OK] ALL PROTECTED BINARIES VALIDLY SIGNED BY TRUSTED PUBLISHERS." "GOOD" }
 
     # Accessibility-binary backdoor cross-check (sethc/utilman replaced or IFEO-debugged)
@@ -4339,11 +4398,18 @@ if ($PhasePlan.Integrity) {
         $abPath = Expand-EnvPath "%WINDIR%\System32\$ab"
         if (Test-Path -LiteralPath $abPath) {
             $v = Get-SignatureVerdict -FilePath $abPath
-            if ($v.Status -ne 'Valid' -or -not $v.IsMs) {
+            # Genuine tamper (bad hash / untrusted) or a validly-signed-but-NON-Microsoft replacement
+            # = real backdoor (CRITICAL + sfc restore). An unverifiable status (catalog unreadable
+            # in-process) is review-only — don't FP a legit sethc/utilman as a backdoor.
+            if (($v.Status -eq 'Valid' -and -not $v.IsMs) -or $v.Status -eq 'HashMismatch' -or $v.Status -eq 'NotTrusted') {
                 Out-ThreatBanner "ACCESSIBILITY BACKDOOR SUSPECT" "$ab signature=$($v.Status)"
                 Add-Finding -ID "ACCESS109_$ab" -Phase "PHASE 109" -ThreatType "Accessibility Backdoor" `
-                    -Severity $SEV_CRITICAL -Description "Accessibility binary $ab is not a valid Microsoft signed file (Status=$($v.Status)) — classic logon-screen SYSTEM backdoor. Restore with sfc /scannow." `
+                    -Severity $SEV_CRITICAL -Description "Accessibility binary $ab is not a valid Microsoft signed file (Status=$($v.Status), Signer='$($v.Signer)') — classic logon-screen SYSTEM backdoor. Restore with sfc /scannow." `
                     -Target $abPath -FixAction "RunCmd" -FixParam "sfc /scannow" -Group "Accessibility Backdoors"
+            } elseif ($v.Status -ne 'Valid') {
+                Add-Finding -ID "ACCESS109X_$ab" -Phase "PHASE 109" -ThreatType "Accessibility Backdoor" `
+                    -Severity $SEV_POSSIBLE -Description "Accessibility binary $ab signature unverifiable in-process (Status=$($v.Status); usually catalog-signed — review): $abPath" `
+                    -Target $abPath -FixAction "Info" -Group "Accessibility Backdoors"
             }
         }
         $ifeo = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$ab"
@@ -4411,8 +4477,8 @@ if ($PhasePlan.Integrity) {
                     $idr = "$($weak[0].IdentityReference)"
                     Out-ThreatBanner "WRITABLE SERVICE BINARY (PRIVESC)" "$($svc.Name): $exe"
                     Add-Finding -ID "SVCBIN111_$($svc.Name)" -Phase "PHASE 111" -ThreatType "Writable Service Binary / Privesc" `
-                        -Severity $SEV_CRITICAL -Description "Service '$($svc.Name)' runs '$exe' which is writable by '$idr' — a non-admin can replace it to gain $($svc.StartName) privileges." `
-                        -Target $exe -FixAction "RunCmd" -FixParam "icacls `"$exe`" /reset /C /Q" -Group "Service Privilege Escalation"
+                        -Severity $SEV_CRITICAL -Description "Service '$($svc.Name)' runs '$exe' which is writable by '$idr' — a non-admin can replace it to gain $($svc.StartName) privileges. Review manually; resetting the ACL may break the app's updater, so it is NOT auto-applied. Suggested: icacls `"$exe`" /reset /C /Q" `
+                        -Target $exe -FixAction "Info" -Group "Service Privilege Escalation"
                 }
             } catch {}
         }
@@ -4437,8 +4503,8 @@ if ($PhasePlan.Integrity) {
                 $idr = "$($weak[0].IdentityReference)"
                 Out-Glitch "  [WRITABLE PATH DIR] $pd <- $idr" Red
                 Add-Finding -ID "PATH112_$([Math]::Abs($pd.GetHashCode()))" -Phase "PHASE 112" -ThreatType "DLL Hijack / PATH Privesc" `
-                    -Severity $SEV_HIGH -Description "Directory on the system PATH is writable by '$idr': $pd — enables DLL/binary planting that elevated processes will load." `
-                    -Target $pd -FixAction "RunCmd" -FixParam "icacls `"$pd`" /remove:g `"*S-1-1-0`" `"*S-1-5-11`" `"*S-1-5-32-545`" /C /Q" -Group "DLL Hijack Surface"
+                    -Severity $SEV_HIGH -Description "Directory on the system PATH is writable by '$idr': $pd — enables DLL/binary planting that elevated processes will load. Review manually; stripping Users/Everyone here can break a legit app that owns this dir, so it is NOT auto-applied. Suggested: icacls `"$pd`" /remove:g `"*S-1-1-0`" `"*S-1-5-11`" `"*S-1-5-32-545`" /C /Q" `
+                    -Target $pd -FixAction "Info" -Group "DLL Hijack Surface"
             }
         } catch {}
     }
@@ -4459,7 +4525,12 @@ if ($PhasePlan.Integrity) {
             $v = Get-SignatureVerdict -FilePath $f.FullName
             if ($v.Status -ne 'Valid') {
                 $recentSys++
-                $sev = if ($f.Extension -match 'sys') { $SEV_CRITICAL } else { $SEV_HIGH }
+                # A recently-changed file with a genuine tamper status (HashMismatch/NotTrusted) is a
+                # strong drop indicator (CRITICAL for .sys, HIGH otherwise). An UnknownError/unverifiable
+                # status on a catalog-signed file (in-process catalog read failure) is review-only —
+                # being recently modified plus unverifiable is corroborating, not conclusive (POSSIBLE).
+                $genuine = ($v.Status -eq 'HashMismatch' -or $v.Status -eq 'NotTrusted')
+                $sev = if (-not $genuine) { $SEV_POSSIBLE } elseif ($f.Extension -match 'sys') { $SEV_CRITICAL } else { $SEV_HIGH }
                 Out-Typewriter "  -> CHANGED+UNVERIFIED: $($f.FullName) [$($v.Status)] $($f.LastWriteTime)" "CRIT"
                 Add-Finding -ID "RECSYS113_$([Math]::Abs($f.FullName.GetHashCode()))" -Phase "PHASE 113" -ThreatType "System File Tamper" `
                     -Severity $sev -Description "Recently-modified protected-directory file with failed signature ($($v.Status)): $($f.FullName) (modified $($f.LastWriteTime)). Driver/binary drop indicator." `
@@ -4541,8 +4612,8 @@ if ($PhasePlan.Integrity) {
                         $idr = "$($weak[0].IdentityReference)"
                         Out-ThreatBanner "HIJACKABLE AUTORUN TARGET" "$($p.Name): $texe"
                         Add-Finding -ID "AUTO115_$([Math]::Abs(("$ak$($p.Name)").GetHashCode()))" -Phase "PHASE 115" -ThreatType "Hijackable Autorun / Privesc" `
-                            -Severity $SEV_HIGH -Description "HKLM autorun '$($p.Name)' runs '$texe' which is writable by '$idr' — a non-admin can replace it to run code at every boot/logon as the next user." `
-                            -Target $texe -FixAction "RunCmd" -FixParam "icacls `"$texe`" /reset /C /Q" -Group "Hijackable Autoruns"
+                            -Severity $SEV_HIGH -Description "HKLM autorun '$($p.Name)' runs '$texe' which is writable by '$idr' — a non-admin can replace it to run code at every boot/logon as the next user. Review manually; resetting the ACL may break the app's updater, so it is NOT auto-applied. Suggested: icacls `"$texe`" /reset /C /Q" `
+                            -Target $texe -FixAction "Info" -Group "Hijackable Autoruns"
                     }
                 } catch {}
             }
