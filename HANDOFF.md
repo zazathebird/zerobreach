@@ -40,7 +40,15 @@ run, so a fresh `-Hours 0` re-grade would show ~53.
 
 ### What's NOT done / next
 - ~~COMMIT + PUSH round 5~~ DONE — `b59a3e4`, pushed to origin/main 2026-06-28.
-- Optional: fresh `-Hours 0` re-grade to confirm the Phase-29 fix (~53) on a live 5.1 run.
+- ~~Fresh `-Hours 0` re-grade to confirm the Phase-29 fix~~ DONE — live `DEEP -Hours 0` run under
+  PS 5.1.26100 (`KrakenBaseline_20260628_143641.json`, exit 0): **auto-destructive 52** (952 total),
+  matching the predicted ~53 and down from 75 at the pre-round-5 all-time baseline `_133545`. Verified
+  **0** `\Tasks\Microsoft\` tasks in the auto set (Phase-29 fix confirmed) and **0**
+  `icacls /reset /T` / `icacls "C:\` / drive-root ops (the only icacls/vssadmin RunCmd is Phase 43's
+  VSS option at INFO — not auto-selected). Residual 52 is all by-design: 34× Phase-10 TEMP execs
+  (own dev scripts + tripwires), `_DELETEME` tripwires (P20/P29/P74.5), Logitech-via-rundll32,
+  OneDC_Updater non-MS task, AnyDesk/Ollama startup `.lnk` (P31), P41/42/46 hardening, and the
+  round-4-known 1-off FPs (P48/53/63/90/94/96 — still need user sign-off before downgrading).
 - The original **live GUI end-to-end validation** (browser remediation on tripwires, MITRE badges,
   HTML/CSV export, IOC save→scan, STEALTH) is STILL pending — round 5 was engine/findings only.
 
