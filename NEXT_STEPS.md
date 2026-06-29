@@ -5,20 +5,26 @@
 > data source) + `WS0_COVERAGE_GAPS.md`; (2) **GAP 1** — `phase_map` backfilled, now all 119 phases,
 > all techniques resolve; (3) **Engine split** — the monolith is now a thin loader
 > (`ZeroBreach-V23.ps1`, lines 1-1175) that dot-sources `engine/Phases-1/2/3.ps1`, `engine/Summary.ps1`,
-> `engine/FixMode.ps1`. See **`ENGINE_SPLIT_PLAN.md`** (AS-BUILT section). Validated: parse-clean ×6,
-> byte-exact reconstruction (zero code change), headless `-Auto` run streamed phases across module
-> boundaries with no AMSI block + trap working.
+> `engine/FixMode.ps1`. See **`ENGINE_SPLIT_PLAN.md`** (AS-BUILT section).
 >
-> **⚠ NEW BUG FOUND (pre-existing, not from the split) — fix next:** **Phase 66 (NETWORK SHARE WORM
-> PROPAGATION SCAN) HANGS.** It enumerates SMB shares, hits the default **`C$` admin share (= all of
-> `C:\`)**, and signature-scans the entire system drive unbounded — the headless QUICK run never got
-> past it. The Get-ScanFiles perf bounding never covered this phase's share walk. Fix: skip
-> admin/default shares (C$/ADMIN$/IPC$) or bound the per-share walk with Get-ScanFiles (cap+deadline).
-> It is in `engine/Phases-2.ps1`. This blocks any full end-to-end scan, so do it FIRST next session.
+> **Two bugs found AND FIXED during split validation:**
+> - **Dot-source `exit` regression (split-caused):** `exit`/`exit 0` inside a dot-sourced file does
+>   NOT terminate the process — it returns to the loader, which then dot-sourced `FixMode.ps1` and hung
+>   on the interactive fix prompt in `-Auto` mode. Fixed by converting the terminating exits in
+>   `engine/Summary.ps1` (stealth/auto/no-findings) and `engine/FixMode.ps1` (declined) to
+>   **`[Environment]::Exit(0)`**, which truly terminates from within a dot-source. **Any future `exit`
+>   meant to stop the engine from inside `engine/*.ps1` MUST use `[Environment]::Exit(N)`, not `exit`.**
+> - **Phase 66 (NETWORK SHARE WORM SCAN) hang (pre-existing):** it hit the default `C$` admin share
+>   (= all of `C:\`) and signature-scanned the whole system drive. Fixed in `engine/Phases-2.ps1` by
+>   excluding drive-letter admin shares (`^([A-Za-z]|ADMIN|IPC|print)\$$`).
 >
-> **Then:** WS1 (externalize inline name-lists, GAP 2 — now easy: each phase module is editable in
-> isolation), WS2 (new malware domains, GAP 3), and the live admin `Launch-GUI.bat` full run for
-> timing/acceptance.
+> **Validated end-to-end:** parse-clean ×6, byte-exact reconstruction (zero code change), headless
+> `-Auto` QUICK run now completes, writes 2 report JSONs (606 findings), and **exits cleanly on its
+> own** with no fix-mode hang and no AMSI block. Server/`Launch-GUI.bat` interface unchanged.
+>
+> **Next:** WS1 (externalize inline name-lists, GAP 2 — now easy: each phase module edits in
+> isolation), WS2 (new malware domains, GAP 3), and a live admin `Launch-GUI.bat` full (non-QUICK)
+> run through phase 115 for timing/acceptance (only QUICK was machine-validated here).
 >
 > ---
 >

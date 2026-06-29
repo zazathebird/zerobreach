@@ -296,7 +296,7 @@ if ($global:TRANSCRIPT_ON) {
 # Stealth exit — emit JSON to stdout
 if ($global:STEALTH_MODE) {
     $auditCache | ConvertTo-Json -Depth 5 -Compress
-    exit 0
+    [Environment]::Exit(0)   # dot-sourced: plain 'exit' would only return to the loader (which would then run FixMode); force real process exit
 }
 
 # Auto/server exit — audit + reports are written above. The server-spawned child has no
@@ -304,12 +304,12 @@ if ($global:STEALTH_MODE) {
 # final confirm, "press any key") would block forever. Remediation is driven by the GUI.
 if ($Auto) {
     Out-Typewriter "AUDIT COMPLETE. $findingCount FINDINGS. REPORTS WRITTEN. (auto mode — fix handled by GUI)" "GOOD"
-    exit 0
+    [Environment]::Exit(0)   # dot-sourced: plain 'exit' would only return to the loader (which would then run FixMode); force real process exit
 }
 
 if ($findingCount -eq 0) {
     Out-Typewriter "NO FINDINGS. SYSTEM APPEARS CLEAN. FIX MODE NOT AVAILABLE." "GOOD"
     Write-Host ""; Out-Typewriter "PRESS ANY KEY TO EXIT." "INFO" 20
-    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); exit
+    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); [Environment]::Exit(0)
 }
 

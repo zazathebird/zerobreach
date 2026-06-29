@@ -193,7 +193,7 @@ if (-not $wormFound) { Out-Typewriter "  -> [OK] NO WORM AUTORUN ARTIFACTS." "GO
 Show-PhaseHeader "PHASE 66" "NETWORK SHARE WORM PROPAGATION SCAN" "WORM"
 Out-Typewriter "ENUMERATING OPEN NETWORK SHARES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "^(ADMIN|IPC|print)\$" }
+$shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "^([A-Za-z]|ADMIN|IPC|print)\$$" }
 foreach ($share in $shares) {
     Out-Typewriter "  -> OPEN SHARE: $($share.Name) @ $($share.Path)" "WARN"
     if ($share.Path -and (Test-Path $share.Path)) {

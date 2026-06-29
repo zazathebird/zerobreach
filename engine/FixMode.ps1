@@ -15,7 +15,7 @@ $fixEntry = (Read-Host).Trim().ToLower()
 if ($fixEntry -ne "y" -and $fixEntry -ne "yes") {
     Out-Typewriter "FIX MODE DECLINED. AUDIT LOG PRESERVED. EXITING." "INFO"
     Write-Host ""; Out-Typewriter "PRESS ANY KEY TO EXIT." "INFO" 20
-    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); exit
+    $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown'); [Environment]::Exit(0)
 }
 
 # ══════════════════════════════════════════════════════════════════════════════

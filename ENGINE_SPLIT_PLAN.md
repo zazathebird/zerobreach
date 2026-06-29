@@ -29,6 +29,14 @@ Every module carries a UTF-8 BOM. The loader keeps the `param()` block first and
 self-elevation/schedule logic (which `exit` before any scan), so the server/`Launch-GUI.bat`
 interface is unchanged — they still spawn `ZeroBreach-V23.ps1` with the same args.
 
+### ⚠ Dot-source `exit` gotcha (fixed — keep this rule)
+`exit` / `exit 0` inside a dot-sourced module does **NOT** terminate the process — it only returns
+to the loader, which then continues to the next dot-source. This broke `-Auto` mode (Summary's
+`exit 0` fell through into `FixMode.ps1` and hung on the fix prompt). **Any `exit` in `engine/*.ps1`
+that is meant to stop the whole engine MUST be `[Environment]::Exit(N)`.** Currently applied in
+`Summary.ps1` (stealth/auto/no-findings exits) and `FixMode.ps1` (declined exit). The loader's own
+`exit`s (elevation, schedule) are fine because they are not dot-sourced.
+
 ### To subdivide further later
 `Phases-1/2/3` can be split again at any `# ════ SECTION N` banner (cut at the blank line before
 the banner — comments only, never mid-statement). Keep Core/loader as the stable base.
