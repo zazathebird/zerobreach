@@ -1,15 +1,24 @@
 # ZeroBreach — Next Steps (post-/clear handoff)
 
-> ### ▶ START HERE — next session (updated 2026-06-29)
-> **WS0 inventory is DONE.** `data/coverage_matrix.json` (119 phases → MITRE → data source) and
-> `WS0_COVERAGE_GAPS.md` shipped; 9 techniques added to `data/mitre_mapping.json`. The engine-split
-> decision is finalized: **moderate split** into a dot-sourced `engine/` folder (see
-> **`ENGINE_SPLIT_PLAN.md`** in the repo for the exact layout + non-negotiable constraints).
-> Recommended
-> order next session: **(1)** GAP 1 — backfill `phase_map` for 74.5/74.6/74.7/105+/108–115 (minutes);
-> **(2)** execute the engine split as its own workstream, run the full validation loop; **(3)** WS1
-> (externalize inline name-lists, GAP 2) and WS2 (new malware domains, GAP 3). Still outstanding from
-> before: the live admin `Launch-GUI.bat` Phase-115 run for timing/acceptance.
+> ### ▶ START HERE — next session (updated 2026-06-29, part 2)
+> **DONE this session:** (1) **WS0 inventory** — `data/coverage_matrix.json` (119 phases → MITRE →
+> data source) + `WS0_COVERAGE_GAPS.md`; (2) **GAP 1** — `phase_map` backfilled, now all 119 phases,
+> all techniques resolve; (3) **Engine split** — the monolith is now a thin loader
+> (`ZeroBreach-V23.ps1`, lines 1-1175) that dot-sources `engine/Phases-1/2/3.ps1`, `engine/Summary.ps1`,
+> `engine/FixMode.ps1`. See **`ENGINE_SPLIT_PLAN.md`** (AS-BUILT section). Validated: parse-clean ×6,
+> byte-exact reconstruction (zero code change), headless `-Auto` run streamed phases across module
+> boundaries with no AMSI block + trap working.
+>
+> **⚠ NEW BUG FOUND (pre-existing, not from the split) — fix next:** **Phase 66 (NETWORK SHARE WORM
+> PROPAGATION SCAN) HANGS.** It enumerates SMB shares, hits the default **`C$` admin share (= all of
+> `C:\`)**, and signature-scans the entire system drive unbounded — the headless QUICK run never got
+> past it. The Get-ScanFiles perf bounding never covered this phase's share walk. Fix: skip
+> admin/default shares (C$/ADMIN$/IPC$) or bound the per-share walk with Get-ScanFiles (cap+deadline).
+> It is in `engine/Phases-2.ps1`. This blocks any full end-to-end scan, so do it FIRST next session.
+>
+> **Then:** WS1 (externalize inline name-lists, GAP 2 — now easy: each phase module is editable in
+> isolation), WS2 (new malware domains, GAP 3), and the live admin `Launch-GUI.bat` full run for
+> timing/acceptance.
 >
 > ---
 >

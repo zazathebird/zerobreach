@@ -1,8 +1,40 @@
-# Engine Split Plan (approved 2026-06-29 — NOT yet executed)
+# Engine Split — ✅ DONE 2026-06-29
 
-> Self-contained handoff doc (lives in the repo so it survives a machine change). This is the
-> finalized decision and exact plan for restructuring the scan engine. **Do this as its own
-> validated workstream, BEFORE WS1–WS6**, and run the full validation loop end-to-end after.
+> Self-contained handoff doc (lives in the repo so it survives a machine change). The split is
+> **implemented and validated** (parse-clean ×6, headless `-Auto` run streamed phases across the
+> module boundaries with no AMSI block, byte-exact reconstruction proved zero code loss). The
+> original design (below) called for grouping phases by threat category — that was **rejected during
+> implementation** because the 119 phases execute **linearly in numeric order** and reuse variables
+> across phases (e.g. Phase 52 reuses Phase 51's `$ransomScanFiles`; Phase 58 reuses Phase 40's
+> `$bcdedit2`; Phase 60 reuses Phase 59's `$dnsCache2`). Grouping by category would reorder execution
+> and break that. **The split is by contiguous phase RANGE instead**, which preserves exact execution
+> order and all cross-phase variables (every module is dot-sourced, in order, into the loader's
+> single scope, so vars/functions/the resilience trap all carry across exactly as inline).
+
+## AS-BUILT layout (2026-06-29)
+```
+ZeroBreach-V23.ps1     <- LOADER: lines 1-1175 of the old monolith (param(), elevation, schedule,
+                          globals, ALL helpers, Add-Finding, remediation fns, Get-Sig/Get-Perm
+                          loads, IOC import, banner, the resilience trap, ALL $PSScriptRoot usage)
+                          + a dot-source block that loads the 5 modules in execution order.
+engine/
+  Phases-1.ps1         old lines 1176-2468  (sections 1-11: phases 1-~54)
+  Phases-2.ps1         old lines 2469-3320  (sections 12-16 + universal backdoor phases 81-89)
+  Phases-3.ps1         old lines 3321-4226  (advanced phases 90-105 + perm/integrity 108-115)
+  Summary.ps1          old lines 4227-4541  (risk score + audit summary + the -Auto exit)
+  FixMode.ps1          old lines 4542-5350  (fix-mode entry, rollback, live dashboard, fix engine)
+data/*.json            signatures - unchanged
+```
+Every module carries a UTF-8 BOM. The loader keeps the `param()` block first and all
+self-elevation/schedule logic (which `exit` before any scan), so the server/`Launch-GUI.bat`
+interface is unchanged — they still spawn `ZeroBreach-V23.ps1` with the same args.
+
+### To subdivide further later
+`Phases-1/2/3` can be split again at any `# ════ SECTION N` banner (cut at the blank line before
+the banner — comments only, never mid-statement). Keep Core/loader as the stable base.
+
+---
+## Original plan (for reference — category grouping was NOT used; see note above)
 
 ## Decision
 Split the monolithic **`ZeroBreach-V23.ps1`** (~5,350 lines, 119 phases) into a **dot-sourced

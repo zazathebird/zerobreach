@@ -1876,6 +1876,89 @@
         "T1543.003",
         "T1021.002"
       ]
+    },
+    "PHASE 74.5": {
+      "name": "Email Attachment Malware Scan (Outlook Cache)",
+      "techniques": [
+        "T1566.001",
+        "T1204.002"
+      ]
+    },
+    "PHASE 74.6": {
+      "name": "Microsoft Defender Threat History Correlation",
+      "techniques": [
+        "T1204.002",
+        "T1566.001"
+      ]
+    },
+    "PHASE 74.7": {
+      "name": "Proactive Anti-Reinfection Hardening",
+      "techniques": [
+        "T1137",
+        "T1059.005",
+        "T1059.007",
+        "T1566.001"
+      ]
+    },
+    "PHASE 105+": {
+      "name": "Baseline Diff - New Findings Since Snapshot",
+      "techniques": []
+    },
+    "PHASE 108": {
+      "name": "NTFS ACL & Ownership Integrity (Critical Paths)",
+      "techniques": [
+        "T1222.001",
+        "T1574"
+      ]
+    },
+    "PHASE 109": {
+      "name": "System Binary Integrity & Signature Verification",
+      "techniques": [
+        "T1554",
+        "T1546.008"
+      ]
+    },
+    "PHASE 110": {
+      "name": "Registry Key ACL / Weak-Permission Audit",
+      "techniques": [
+        "T1574.011",
+        "T1222.001"
+      ]
+    },
+    "PHASE 111": {
+      "name": "Service Privesc - Unquoted Paths & Writable Binaries",
+      "techniques": [
+        "T1574.009",
+        "T1574.010"
+      ]
+    },
+    "PHASE 112": {
+      "name": "PATH / DLL-Hijack Surface - Writable Directories",
+      "techniques": [
+        "T1574.007",
+        "T1574.001"
+      ]
+    },
+    "PHASE 113": {
+      "name": "Recently Modified / Unsigned Files in System32 & Drivers",
+      "techniques": [
+        "T1554",
+        "T1014"
+      ]
+    },
+    "PHASE 114": {
+      "name": "Security Control Health & Tamper Consolidation",
+      "techniques": [
+        "T1562.001",
+        "T1562.002"
+      ]
+    },
+    "PHASE 115": {
+      "name": "Autorun Target Writable-Path Audit (Hijackable Persistence)",
+      "techniques": [
+        "T1547.001",
+        "T1574"
+      ]
     }
   }
 }
