@@ -1,0 +1,3434 @@
+{
+  "_comment": "WS0 coverage matrix: ZeroBreach-V23.ps1 phase -> MITRE ATT&CK technique -> data source. Generated 2026-06-29. signature_source: externalized=data/*.json only; partial=mixed data+inline literals; inline=signature literals live in the .ps1 (AMSI/portability risk, externalize per WS1/WS2); n/a=behavioral/registry/cmdlet, no signature strings.",
+  "generated": "2026-06-29",
+  "engine": "ZeroBreach-V23.ps1",
+  "phase_count": 119,
+  "techniques_referenced": [
+    "T1003.001",
+    "T1003.002",
+    "T1003.006",
+    "T1005",
+    "T1014",
+    "T1021.001",
+    "T1021.002",
+    "T1021.004",
+    "T1021.006",
+    "T1027",
+    "T1027.003",
+    "T1027.011",
+    "T1036",
+    "T1036.005",
+    "T1037",
+    "T1041",
+    "T1053.005",
+    "T1055",
+    "T1055.001",
+    "T1055.012",
+    "T1056.001",
+    "T1056.002",
+    "T1057",
+    "T1059.001",
+    "T1059.003",
+    "T1059.005",
+    "T1059.007",
+    "T1068",
+    "T1070.001",
+    "T1071",
+    "T1071.004",
+    "T1074.001",
+    "T1078",
+    "T1080",
+    "T1083",
+    "T1090",
+    "T1091",
+    "T1105",
+    "T1112",
+    "T1113",
+    "T1115",
+    "T1127",
+    "T1134",
+    "T1136.001",
+    "T1137",
+    "T1176",
+    "T1185",
+    "T1197",
+    "T1203",
+    "T1204.002",
+    "T1218",
+    "T1218.004",
+    "T1218.007",
+    "T1218.010",
+    "T1219",
+    "T1222.001",
+    "T1482",
+    "T1486",
+    "T1490",
+    "T1496",
+    "T1542",
+    "T1542.003",
+    "T1543.003",
+    "T1546.001",
+    "T1546.003",
+    "T1546.008",
+    "T1546.010",
+    "T1546.012",
+    "T1546.013",
+    "T1546.015",
+    "T1547",
+    "T1547.001",
+    "T1547.004",
+    "T1547.006",
+    "T1547.012",
+    "T1548.002",
+    "T1553.002",
+    "T1553.004",
+    "T1553.005",
+    "T1553.006",
+    "T1554",
+    "T1555",
+    "T1555.003",
+    "T1556",
+    "T1558.001",
+    "T1559",
+    "T1562.001",
+    "T1562.002",
+    "T1562.004",
+    "T1562.006",
+    "T1564",
+    "T1564.001",
+    "T1564.004",
+    "T1565.001",
+    "T1566.001",
+    "T1571",
+    "T1572",
+    "T1574",
+    "T1574.001",
+    "T1574.007",
+    "T1574.009",
+    "T1574.010",
+    "T1574.011",
+    "T1574.014",
+    "T1611"
+  ],
+  "tactic_coverage": {
+    "Defense Evasion": 42,
+    "Persistence": 31,
+    "Privilege Escalation": 30,
+    "Credential Access": 9,
+    "Execution": 8,
+    "Collection": 7,
+    "Command and Control": 7,
+    "Lateral Movement": 6,
+    "Impact": 4,
+    "Discovery": 3,
+    "Initial Access": 3,
+    "Exfiltration": 1
+  },
+  "phases": [
+    {
+      "phase": "PHASE 1",
+      "name": "ANTI-FORENSIC EVENT LOG AUDIT",
+      "detects": "Scans Security/System logs for event IDs 104/1102 (log clearing). Flags evidence of tampering.",
+      "threat_types": [
+        "Anti-Forensic"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1070.001",
+          "name": "Indicator Removal: Clear Windows Event Logs",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1070/001/"
+        }
+      ],
+      "data_source": [
+        "eventlog",
+        "cmdlet:Get-WinEvent"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 2",
+      "name": "POWERSHELL SCRIPT BLOCK LOG AUDIT (EVENT 4104)",
+      "detects": "Examines PS Operational log 4104 for IEX/EncodedCommand/WebClient/reflection/VirtualAlloc patterns; excludes own footprint.",
+      "threat_types": [
+        "Fileless/PowerShell"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1059.001",
+          "name": "Command and Scripting Interpreter: PowerShell",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1059/001/"
+        }
+      ],
+      "data_source": [
+        "eventlog",
+        "cmdlet:Get-WinEvent",
+        "sig:script_own_strings",
+        "inline-regex"
+      ],
+      "signature_source": "partial"
+    },
+    {
+      "phase": "PHASE 3",
+      "name": "PROCESS ANCESTRY & INJECTION AUDIT",
+      "detects": "Queries live Win32_Process command-lines for IEX/EncodedCommand/DownloadString/LOLBIN/injection keywords.",
+      "threat_types": [
+        "Process Injection/Fileless"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1055",
+          "name": "Process Injection",
+          "tactics": [
+            "Defense Evasion",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1055/"
+        },
+        {
+          "id": "T1057",
+          "name": "Process Discovery",
+          "tactics": [
+            "Discovery"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1057/"
+        }
+      ],
+      "data_source": [
+        "wmi",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 4",
+      "name": "LOLBIN ABUSE AUDIT",
+      "detects": "Enumerates 46 inline LOLBIN exe names running with suspicious args (http/AppData/Temp/.js/Base64/scrobj/UNC).",
+      "threat_types": [
+        "LoLBin Abuse"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1218",
+          "name": "System Binary Proxy Execution",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1218/"
+        }
+      ],
+      "data_source": [
+        "wmi",
+        "inline-regex",
+        "inline-list"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 5",
+      "name": "AMSI BYPASS & ETW PATCH DETECTION",
+      "detects": "Checks AMSI provider regkey, AmsiEnable flag, ETW autologger Start value for disable/zero.",
+      "threat_types": [
+        "AMSI Bypass",
+        "ETW Bypass"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1562.001",
+          "name": "Impair Defenses: Disable or Modify Tools",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/001/"
+        },
+        {
+          "id": "T1562.006",
+          "name": "Impair Defenses: Indicator Blocking",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/006/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 6",
+      "name": "KNOWN MALWARE PROCESS IOC DATABASE MATCH",
+      "detects": "Compares running processes to RAT/miner/keylogger IOC name arrays; kills matches.",
+      "threat_types": [
+        "RAT",
+        "Cryptominer",
+        "Keylogger"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1219",
+          "name": "Remote Access Tools",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1219/"
+        },
+        {
+          "id": "T1496",
+          "name": "Resource Hijacking",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1496/"
+        },
+        {
+          "id": "T1056.001",
+          "name": "Input Capture: Keylogging",
+          "tactics": [
+            "Collection",
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1056/001/"
+        }
+      ],
+      "data_source": [
+        "sig:known_rat_procs",
+        "sig:known_miner_procs",
+        "sig:known_keylogger_procs",
+        "cmdlet:Get-Process"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 7",
+      "name": "BROWSER CACHE & SERVICE WORKER AUDIT",
+      "detects": "Detects browser cache dirs (Chrome/Edge/FF/Brave/Opera) as INFO artifacts.",
+      "threat_types": [
+        "Browser Artifact"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1185",
+          "name": "Browser Session Hijacking",
+          "tactics": [
+            "Collection"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1185/"
+        }
+      ],
+      "data_source": [
+        "filewalk"
+      ],
+      "signature_source": "n/a",
+      "notes": "INFO only"
+    },
+    {
+      "phase": "PHASE 8",
+      "name": "BROWSER EXTENSION SANITIZATION (HEURISTIC)",
+      "detects": "Walks Chrome/Edge/Brave extension dirs via Get-ExtensionRisk; flags CRIT/HIGH/POSSIBLE.",
+      "threat_types": [
+        "Browser Extension/Hijacker"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1176",
+          "name": "Browser Extensions",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1176/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "heuristic:Get-ExtensionRisk"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 9",
+      "name": "BROWSER HIJACK — SHORTCUT & HOMEPAGE AUDIT",
+      "detects": "Inspects .lnk args (http/--load-extension/javascript:/data:) and Chrome homepage pref.",
+      "threat_types": [
+        "Browser Hijacker"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1112",
+          "name": "Modify Registry",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1112/"
+        },
+        {
+          "id": "T1176",
+          "name": "Browser Extensions",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1176/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex",
+        "com:WScript.Shell"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 10",
+      "name": "TEMP / DOWNLOAD DIRECTORY ANOMALY SWEEP",
+      "detects": "Time-scoped scan of TEMP/Downloads/INetCache for executable/script files.",
+      "threat_types": [
+        "Suspicious File"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1204.002",
+          "name": "User Execution: Malicious File",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1204/002/"
+        },
+        {
+          "id": "T1105",
+          "name": "Ingress Tool Transfer",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1105/"
+        }
+      ],
+      "data_source": [
+        "filewalk"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 11",
+      "name": "RECENT DOCUMENTS & JUMP LIST SCRUB",
+      "detects": "Audits Recent/AutomaticDestinations/CustomDestinations for recent items (INFO).",
+      "threat_types": [
+        "Browser/File Artifact"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1083",
+          "name": "File and Directory Discovery",
+          "tactics": [
+            "Discovery"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1083/"
+        }
+      ],
+      "data_source": [
+        "filewalk"
+      ],
+      "signature_source": "n/a",
+      "notes": "INFO only"
+    },
+    {
+      "phase": "PHASE 12",
+      "name": "PREFETCH & SHIMCACHE ARTIFACT AUDIT",
+      "detects": "Scans Prefetch .pf for script/LOLBIN execution traces (WSCRIPT/MSHTA/CERTUTIL/RUNDLL32+APPDATA/POWERSHELL -ENC).",
+      "threat_types": [
+        "Execution Trace"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1083",
+          "name": "File and Directory Discovery",
+          "tactics": [
+            "Discovery"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1083/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 13",
+      "name": "CRYPTOGRAPHIC SYSTEM FILE VERIFICATION (SFC)",
+      "detects": "Runs sfc /scannow; skipped in Auto/GUI/Stealth.",
+      "threat_types": [
+        "System Integrity"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1554",
+          "name": "Compromise Host Software Binary",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1554/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:sfc"
+      ],
+      "signature_source": "n/a",
+      "notes": "hardening/INFO; deferred in auto"
+    },
+    {
+      "phase": "PHASE 14",
+      "name": "DISM COMPONENT STORE RESTORATION",
+      "detects": "Flushes wuauserv cache, flags SoftwareDistribution; DISM /RestoreHealth interactive only.",
+      "threat_types": [
+        "System Integrity"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1554",
+          "name": "Compromise Host Software Binary",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1554/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:DISM"
+      ],
+      "signature_source": "n/a",
+      "notes": "hardening/INFO; deferred in auto"
+    },
+    {
+      "phase": "PHASE 15",
+      "name": "SYSTEM32 UNSIGNED BINARY AUDIT",
+      "detects": "Validates Authenticode on recent System32 exe/dll/sys; flags unsigned/invalid as rootkit.",
+      "threat_types": [
+        "Rootkit/Trojan"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1554",
+          "name": "Compromise Host Software Binary",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1554/"
+        },
+        {
+          "id": "T1036",
+          "name": "Masquerading",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1036/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "authenticode"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 16",
+      "name": "NTFS PERMISSION INTEGRITY — CRITICAL PATHS",
+      "detects": "Audits ACLs on System32/SysWOW64/drivers for world-writable ACEs.",
+      "threat_types": [
+        "Permission Abuse"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1222.001",
+          "name": "File and Directory Permissions Modification: Windows File and Directory Permissions Modification",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1222/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Acl"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 17",
+      "name": "ALTERNATE DATA STREAM (ADS) PARASITE SCAN",
+      "detects": "Scans LOCALAPPDATA/TEMP/Downloads for non-$DATA ADS (excl Zone.Identifier).",
+      "threat_types": [
+        "ADS Parasite"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1564.004",
+          "name": "Hide Artifacts: NTFS File Attributes",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1564/004/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Item -Stream"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 18",
+      "name": "DEEP CLOAKED PARASITE SCAN (HIDDEN+SYSTEM ATTRIBUTES)",
+      "detects": "User-writable paths for Hidden+System exec/script files; capped 200.",
+      "threat_types": [
+        "Rootkit/Trojan"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1564.001",
+          "name": "Hide Artifacts: Hidden Files and Directories",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1564/001/"
+        }
+      ],
+      "data_source": [
+        "filewalk"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 19",
+      "name": "SCRIPT EXECUTION ASSOCIATION AUDIT",
+      "detects": "Checks .js/.vbs/.hta/.wsf handler bindings for non-txtfile hijacks.",
+      "threat_types": [
+        "Script Handler Abuse"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1546.001",
+          "name": "Event Triggered Execution: Change Default File Association",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:assoc",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 20",
+      "name": "RUN / RUNONCE HEURISTIC SCRUB",
+      "detects": "Audits Run/RunOnce (HKCU/HKLM 64/32) for AppData/Temp/script/LOLBIN/IEX/EncodedCommand values.",
+      "threat_types": [
+        "Registry Persistence"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1547.001",
+          "name": "Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1547/001/"
+        }
+      ],
+      "data_source": [
+        "registry",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 21",
+      "name": "IMAGE FILE EXECUTION OPTIONS (IFEO) SCRUB",
+      "detects": "Flags IFEO Debugger values and nonzero GlobalFlag (GFlags injection).",
+      "threat_types": [
+        "IFEO Hijack/Persistence",
+        "IFEO/GFlags Injection"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1546.012",
+          "name": "Event Triggered Execution: Image File Execution Options Injection",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/012/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 22",
+      "name": "APPINIT_DLLS KERNEL INJECTION SCRUB",
+      "detects": "Flags non-empty AppInit_DLLs (64/32-bit).",
+      "threat_types": [
+        "DLL Injection/Rootkit"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1546.010",
+          "name": "Event Triggered Execution: AppInit DLLs",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/010/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 23",
+      "name": "WINLOGON / USERINIT / SHELL HIJACK DETECTION",
+      "detects": "Flags Winlogon Shell != explorer.exe and non-standard Userinit.",
+      "threat_types": [
+        "Winlogon Hijack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1547.004",
+          "name": "Boot or Logon Autostart Execution: Winlogon Helper DLL",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1547/004/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 24",
+      "name": "COM OBJECT HIJACK AUDIT (HKCU CLSID OVERRIDES)",
+      "detects": "Flags HKCU CLSID overrides (user COM hijack persistence).",
+      "threat_types": [
+        "COM Hijack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1546.015",
+          "name": "Event Triggered Execution: Component Object Model Hijacking",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/015/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 25",
+      "name": "GPO LOCKDOWN — TASKMGR/REGEDIT/CMD DISABLED",
+      "detects": "Flags DisableTaskMgr/DisableRegistryTools/DisableCMD=1 (anti-forensic).",
+      "threat_types": [
+        "GPO Lockdown (Malware)"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1562.001",
+          "name": "Impair Defenses: Disable or Modify Tools",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/001/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 26",
+      "name": "BROWSER HELPER OBJECT (BHO) PURGE",
+      "detects": "Time-scoped BHO regkeys (64/32) flagged as hijacker/spyware.",
+      "threat_types": [
+        "Browser Hijacker/BHO"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1176",
+          "name": "Browser Extensions",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1176/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 27",
+      "name": "SAFE MODE HIJACK (SAFEBOOT KEY AUDIT)",
+      "detects": "Flags unknown non-GUID SafeBoot Minimal/Network entries.",
+      "threat_types": [
+        "SafeBoot Hijack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1112",
+          "name": "Modify Registry",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1112/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 28",
+      "name": "ROGUE WIN32 SERVICE AUDIT",
+      "detects": "Flags service ImagePath with AppData/Temp/script/LOLBIN.",
+      "threat_types": [
+        "Malicious Service"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1543.003",
+          "name": "Create or Modify System Process: Windows Service",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1543/003/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 29",
+      "name": "TASK SCHEDULER DEEP AUDIT",
+      "detects": "Enumerates non-MS scheduled tasks + walks task XML for malicious Execute/Args.",
+      "threat_types": [
+        "Task Persistence"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1053.005",
+          "name": "Scheduled Task/Job: Scheduled Task",
+          "tactics": [
+            "Execution",
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1053/005/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-ScheduledTask",
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 30",
+      "name": "WMI EVENT FILTER / CONSUMER / BINDING AUDIT",
+      "detects": "Flags __EventFilter/__EventConsumer/__FilterToConsumerBinding (WMI persistence).",
+      "threat_types": [
+        "WMI Persistence"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1546.003",
+          "name": "Event Triggered Execution: WMI Event Subscription",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/003/"
+        }
+      ],
+      "data_source": [
+        "wmi"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 31",
+      "name": "BITS / POWERSHELL PROFILE / STARTUP PERSISTENCE",
+      "detects": "Active BITS jobs; PS profiles w/ IEX/DownloadString; Startup folder unsigned/recent.",
+      "threat_types": [
+        "BITS Persistence",
+        "PS Profile Persistence",
+        "Startup Persistence"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1197",
+          "name": "BITS Jobs",
+          "tactics": [
+            "Defense Evasion",
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1197/"
+        },
+        {
+          "id": "T1546.013",
+          "name": "Event Triggered Execution: PowerShell Profile",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/013/"
+        },
+        {
+          "id": "T1547.001",
+          "name": "Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1547/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-BitsTransfer",
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 32",
+      "name": "DLL SEARCH ORDER HIJACK — PATH AUDIT",
+      "detects": "Tests PATH dirs for write access; flags unsigned recent .dll in writable dirs.",
+      "threat_types": [
+        "DLL Hijack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1574.001",
+          "name": "Hijack Execution Flow: DLL Search Order Hijacking",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/001/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "authenticode"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 33",
+      "name": "HOSTS FILE INTEGRITY AUDIT",
+      "detects": "Flags non-standard hosts entries.",
+      "threat_types": [
+        "DNS Hijack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1565.001",
+          "name": "Data Manipulation: Stored Data Manipulation",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1565/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Content",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 34",
+      "name": "DNS CACHE POISONING AUDIT & FLUSH",
+      "detects": "Flags DNS cache entries matching suspicious-domain IOCs; flushes cache.",
+      "threat_types": [
+        "DNS Hijack/C2"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1071.004",
+          "name": "Application Layer Protocol: DNS",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1071/004/"
+        }
+      ],
+      "data_source": [
+        "sig:suspicious_dns_domains",
+        "cmdlet:Get-DnsClientCache"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 35",
+      "name": "PROXY & WINHTTP POISON RESET",
+      "detects": "Flags ProxyEnable=1; resets proxy.",
+      "threat_types": [
+        "Proxy Hijack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1090",
+          "name": "Proxy",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1090/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 36",
+      "name": "LIVE TCP/UDP THREAT SOCKET TERMINATION",
+      "detects": "Flags stratum miner ports, AppData/Temp procs on odd ports, reverse-DNS C2 matches.",
+      "threat_types": [
+        "Cryptominer",
+        "Suspicious Connection",
+        "C2 Beacon/RAT"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1071",
+          "name": "Application Layer Protocol",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1071/"
+        },
+        {
+          "id": "T1571",
+          "name": "Non-Standard Port",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1571/"
+        },
+        {
+          "id": "T1496",
+          "name": "Resource Hijacking",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1496/"
+        }
+      ],
+      "data_source": [
+        "sig:stratum_ports",
+        "sig:known_c2_domains",
+        "cmdlet:Get-NetTCPConnection",
+        "inline-regex"
+      ],
+      "signature_source": "partial"
+    },
+    {
+      "phase": "PHASE 37",
+      "name": "IPC NULL SESSION / SMB / PORTPROXY AUDIT",
+      "detects": "Flags active portproxy forwarding rules (C2 tunneling).",
+      "threat_types": [
+        "Port Tunneling"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1090",
+          "name": "Proxy",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1090/"
+        },
+        {
+          "id": "T1021.002",
+          "name": "Remote Services: SMB/Windows Admin Shares",
+          "tactics": [
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1021/002/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:netsh"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 38",
+      "name": "FIREWALL AUDIT & PERIMETER REVIEW",
+      "detects": "Flags non-MS inbound rules with public/Any exposure.",
+      "threat_types": [
+        "Firewall Hole",
+        "Hardening"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1562.004",
+          "name": "Impair Defenses: Disable or Modify System Firewall",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/004/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-NetFirewallRule",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 39",
+      "name": "ROGUE ROOT CERTIFICATE AUDIT (LM + USER)",
+      "detects": "Flags recently-added root CA certs (LM=CRIT, user=HIGH).",
+      "threat_types": [
+        "Rogue Certificate"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1553.004",
+          "name": "Subvert Trust Controls: Install Root Certificate",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1553/004/"
+        }
+      ],
+      "data_source": [
+        "certstore"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 40",
+      "name": "BCD STORE — DRIVER SIGNING / TESTSIGNING AUDIT",
+      "detects": "Flags testsigning/nointegritychecks=Yes (unsigned driver loading).",
+      "threat_types": [
+        "Bootkit/Rootkit Vector"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1553.006",
+          "name": "Subvert Trust Controls: Code Signing Policy Modification",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1553/006/"
+        },
+        {
+          "id": "T1542.003",
+          "name": "Pre-OS Boot: Bootkit",
+          "tactics": [
+            "Defense Evasion",
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1542/003/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:bcdedit",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 41",
+      "name": "LSA / WDIGEST / LSA PROTECTION AUDIT",
+      "detects": "Checks WDigest UseLogonCredential and RunAsPPL hardening.",
+      "threat_types": [
+        "Credential Theft Vector",
+        "LSA Hardening"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1003.001",
+          "name": "OS Credential Dumping: LSASS Memory",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1003/001/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a",
+      "notes": "hardening"
+    },
+    {
+      "phase": "PHASE 42",
+      "name": "LOCAL ADMINISTRATOR GHOST ACCOUNT AUDIT",
+      "detects": "Flags enabled local accounts matching backdoor name patterns; logs admins.",
+      "threat_types": [
+        "Ghost/Backdoor Account"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1136.001",
+          "name": "Create Account: Local Account",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1136/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-LocalUser",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 43",
+      "name": "SAM / HIVENIGHTMARE (CVE-2021-36934) AUDIT",
+      "detects": "Flags world-readable SAM ACL (HiveNightmare); enumerates VSS.",
+      "threat_types": [
+        "Credential Exposure (HiveNightmare)",
+        "Ransomware Recovery Vector"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1003.002",
+          "name": "OS Credential Dumping: Security Account Manager",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1003/002/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:icacls",
+        "cmdlet:vssadmin",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 44",
+      "name": "TOKEN / PRIVILEGE ABUSE — ELEVATED PROCS IN USER SPACE",
+      "detects": "Flags SYSTEM-context procs from user-writable paths via SID check.",
+      "threat_types": [
+        "Privilege Abuse/Trojan"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1134",
+          "name": "Access Token Manipulation",
+          "tactics": [
+            "Defense Evasion",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1134/"
+        }
+      ],
+      "data_source": [
+        "wmi",
+        "inline-logic:SID"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 45",
+      "name": "ACCESSIBILITY SHELL BACKDOOR (STICKY KEYS / UTILMAN)",
+      "detects": "Validates Authenticode on sethc/utilman/osk/magnify/narrator/displayswitch.",
+      "threat_types": [
+        "Sticky Keys / Accessibility Backdoor"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1546.008",
+          "name": "Event Triggered Execution: Accessibility Features",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/008/"
+        }
+      ],
+      "data_source": [
+        "authenticode",
+        "inline-list"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 46",
+      "name": "NULL SESSION / NTLM LEVEL / FINAL LSA HARDENING",
+      "detects": "Audits LmCompatibilityLevel; suggests LSA hardening.",
+      "threat_types": [
+        "Credential Security",
+        "Hardening"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1556",
+          "name": "Modify Authentication Process",
+          "tactics": [
+            "Credential Access",
+            "Defense Evasion",
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1556/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a",
+      "notes": "hardening"
+    },
+    {
+      "phase": "PHASE 47",
+      "name": "WINDOWS HOOK / RAW INPUT KEYLOGGER DETECTION",
+      "detects": "Flags procs with user32/hid module access from user paths (hook keylogger).",
+      "threat_types": [
+        "Keylogger"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1056.001",
+          "name": "Input Capture: Keylogging",
+          "tactics": [
+            "Collection",
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1056/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Process",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 48",
+      "name": "KEYLOGGER FILE & REGISTRY ARTIFACT SCAN",
+      "detects": "Scans for keystroke log files + 7 known keylogger regkeys (Ardamax/Spyrix/Refog/KGB...).",
+      "threat_types": [
+        "Keylogger"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1056.001",
+          "name": "Input Capture: Keylogging",
+          "tactics": [
+            "Collection",
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1056/001/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "registry",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 49",
+      "name": "CLIPBOARD MONITOR / SCREEN CAPTURE DETECTION",
+      "detects": "Flags procs named snag/screenshot/capture/clip from user paths.",
+      "threat_types": [
+        "Spyware/Keylogger"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1115",
+          "name": "Clipboard Data",
+          "tactics": [
+            "Collection"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1115/"
+        },
+        {
+          "id": "T1113",
+          "name": "Screen Capture",
+          "tactics": [
+            "Collection"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1113/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Process",
+        "inline-regex"
+      ],
+      "signature_source": "inline",
+      "notes": "shallow name-only"
+    },
+    {
+      "phase": "PHASE 50",
+      "name": "ACCESSIBILITY API / UIAUTOMATION KEYLOGGER CHECK",
+      "detects": "Flags procs using UIAutomation module from user paths.",
+      "threat_types": [
+        "Keylogger/Spyware"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1056.001",
+          "name": "Input Capture: Keylogging",
+          "tactics": [
+            "Collection",
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1056/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Process",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 51",
+      "name": "RANSOMWARE EXTENSION VELOCITY DETECTION",
+      "detects": "Scans doc folders for known ransomware extensions.",
+      "threat_types": [
+        "Ransomware"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1486",
+          "name": "Data Encrypted for Impact",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1486/"
+        }
+      ],
+      "data_source": [
+        "sig:ransomware_extensions",
+        "filewalk"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 52",
+      "name": "HIGH ENTROPY FILE DETECTION (ENCRYPTED PAYLOAD)",
+      "detects": "Entropy>7.5 sampling of phase-51 files (encrypted/packed).",
+      "threat_types": [
+        "Ransomware/Packed Malware"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1486",
+          "name": "Data Encrypted for Impact",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1486/"
+        },
+        {
+          "id": "T1027",
+          "name": "Obfuscated Files or Information",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1027/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "func:Get-FileEntropy"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 53",
+      "name": "RANSOM NOTE DETECTION",
+      "detects": "11 ransom-note filename patterns over phase-51 walk (anchored regex).",
+      "threat_types": [
+        "Ransomware"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1486",
+          "name": "Data Encrypted for Impact",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1486/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 54",
+      "name": "BACKUP PROCESS TAMPERING / BCDEDIT ABUSE",
+      "detects": "Flags recoveryenabled=No + backup deletion events 521/527/528.",
+      "threat_types": [
+        "Ransomware Prep"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1490",
+          "name": "Inhibit System Recovery",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1490/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:bcdedit",
+        "eventlog"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 55",
+      "name": "UNSIGNED / ANOMALOUS KERNEL DRIVER AUDIT",
+      "detects": "driverquery for Kernel + IsSigned=FALSE.",
+      "threat_types": [
+        "Rootkit/Unsigned Driver"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1014",
+          "name": "Rootkit",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1014/"
+        },
+        {
+          "id": "T1547.006",
+          "name": "Boot or Logon Autostart Execution: Kernel Modules and Extensions",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1547/006/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:driverquery"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 56",
+      "name": "HIDDEN PROCESS DISCREPANCY (WMI vs PS vs TASKLIST)",
+      "detects": "Cross-correlates 3 process enumerations to find rootkit-hidden procs.",
+      "threat_types": [
+        "Rootkit"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1014",
+          "name": "Rootkit",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1014/"
+        }
+      ],
+      "data_source": [
+        "wmi",
+        "cmdlet:Get-Process",
+        "cmdlet:tasklist"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 57",
+      "name": "SERVICE REGISTRY DELTA — HIDDEN SERVICE OBJECTS",
+      "detects": "Registry-vs-SCM delta for hidden service objects.",
+      "threat_types": [
+        "Rootkit/Hidden Service"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1014",
+          "name": "Rootkit",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1014/"
+        },
+        {
+          "id": "T1564",
+          "name": "Hide Artifacts",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1564/"
+        }
+      ],
+      "data_source": [
+        "registry",
+        "cmdlet:sc"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 58",
+      "name": "BOOTKIT / MBR INDICATORS",
+      "detects": "Flags winpe/safeboot AlternateShell BCD entries.",
+      "threat_types": [
+        "Bootkit"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1542.003",
+          "name": "Pre-OS Boot: Bootkit",
+          "tactics": [
+            "Defense Evasion",
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1542/003/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:bcdedit",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 59",
+      "name": "C2 BEACON INTERVAL / HIGH-FREQ DNS DETECTION",
+      "detects": "Flags >10 DNS queries to same domain + odd established connections from non-system procs.",
+      "threat_types": [
+        "C2 Beacon"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1071",
+          "name": "Application Layer Protocol",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1071/"
+        },
+        {
+          "id": "T1071.004",
+          "name": "Application Layer Protocol: DNS",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1071/004/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-DnsClientCache",
+        "cmdlet:Get-NetTCPConnection",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 60",
+      "name": "DNS TUNNELING DETECTION",
+      "detects": "Flags long DNS labels (>40) and high subdomain depth (>6).",
+      "threat_types": [
+        "DNS Tunneling"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1071.004",
+          "name": "Application Layer Protocol: DNS",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1071/004/"
+        },
+        {
+          "id": "T1572",
+          "name": "Protocol Tunneling",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1572/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-DnsClientCache",
+        "inline-logic"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 61",
+      "name": "RAT CONFIGURATION FILE & REGISTRY SCAN",
+      "detects": "Tests known RAT config file paths + regkeys from signatures.",
+      "threat_types": [
+        "RAT"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1219",
+          "name": "Remote Access Tools",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1219/"
+        }
+      ],
+      "data_source": [
+        "sig:rat_config_paths_raw",
+        "sig:rat_reg_paths"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 62",
+      "name": "NAMED PIPE BACKDOOR AUDIT",
+      "detects": "Enumerates named pipes matching RAT/C2 framework patterns (meterpreter/cobaltstrike/njrat/havoc/sliver...).",
+      "threat_types": [
+        "RAT/Backdoor Pipe"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1559",
+          "name": "Inter-Process Communication",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1559/"
+        }
+      ],
+      "data_source": [
+        "filesystem:pipes",
+        "inline-regex"
+      ],
+      "signature_source": "inline",
+      "notes": "inline C2 framework names SHOULD externalize"
+    },
+    {
+      "phase": "PHASE 63",
+      "name": "CPU ABUSE & MINER PROCESS DETECTION",
+      "detects": "High-CPU procs matching miner names + miner config files (pool/stratum/xmr).",
+      "threat_types": [
+        "Cryptominer"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1496",
+          "name": "Resource Hijacking",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1496/"
+        }
+      ],
+      "data_source": [
+        "wmi:perf",
+        "sig:known_miner_procs",
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "partial"
+    },
+    {
+      "phase": "PHASE 64",
+      "name": "MINER SCHEDULED TASK / SERVICE PERSISTENCE",
+      "detects": "Scheduled tasks with miner exe/keywords (xmr/stratum/pool/mining/coin).",
+      "threat_types": [
+        "Cryptominer"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1496",
+          "name": "Resource Hijacking",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1496/"
+        },
+        {
+          "id": "T1053.005",
+          "name": "Scheduled Task/Job: Scheduled Task",
+          "tactics": [
+            "Execution",
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1053/005/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-ScheduledTask",
+        "sig:known_miner_procs",
+        "inline-regex"
+      ],
+      "signature_source": "partial"
+    },
+    {
+      "phase": "PHASE 65",
+      "name": "WORM AUTORUN & USB SPREAD DETECTION",
+      "detects": "autorun.inf + hidden exe on removable drives.",
+      "threat_types": [
+        "Worm/USB Spread",
+        "Hardening"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1091",
+          "name": "Replication Through Removable Media",
+          "tactics": [
+            "Lateral Movement",
+            "Initial Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1091/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-PSDrive",
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 66",
+      "name": "NETWORK SHARE WORM PROPAGATION SCAN",
+      "detects": "Unsigned exe/script in open network shares (excl ADMIN/IPC/print).",
+      "threat_types": [
+        "Worm/Network Share"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1021.002",
+          "name": "Remote Services: SMB/Windows Admin Shares",
+          "tactics": [
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1021/002/"
+        },
+        {
+          "id": "T1080",
+          "name": "Taint Shared Content",
+          "tactics": [
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1080/"
+        }
+      ],
+      "data_source": [
+        "wmi",
+        "authenticode",
+        "filewalk"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 67",
+      "name": "ADWARE / PUP / SPYWARE REGISTRY SCAN",
+      "detects": "Scans hardcoded adware/PUP regkeys (Conduit/SearchProtect/Trovi/Babylon/Delta...).",
+      "threat_types": [
+        "Adware/PUP"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1112",
+          "name": "Modify Registry",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1112/"
+        }
+      ],
+      "data_source": [
+        "registry",
+        "inline-list"
+      ],
+      "signature_source": "inline",
+      "notes": "inline adware names SHOULD externalize"
+    },
+    {
+      "phase": "PHASE 68",
+      "name": "INFO-STEALER ARTIFACT SCAN (REDLINE/RACCOON/VIDAR)",
+      "detects": "Procs matching stealer names + credential/wallet files in user paths.",
+      "threat_types": [
+        "Info-Stealer"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1555",
+          "name": "Credentials from Password Stores",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1555/"
+        },
+        {
+          "id": "T1005",
+          "name": "Data from Local System",
+          "tactics": [
+            "Collection"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1005/"
+        }
+      ],
+      "data_source": [
+        "inline-regex",
+        "filewalk"
+      ],
+      "signature_source": "inline",
+      "notes": "inline stealer names SHOULD externalize"
+    },
+    {
+      "phase": "PHASE 69",
+      "name": "PROCESS HOLLOWING / INJECTION DETECTION",
+      "detects": "Procs with <3 modules, unsigned, in AppData/Temp (hollowing).",
+      "threat_types": [
+        "Process Hollowing"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1055.012",
+          "name": "Process Injection: Process Hollowing",
+          "tactics": [
+            "Defense Evasion",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1055/012/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Process",
+        "authenticode"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 70",
+      "name": "FILELESS REGISTRY PAYLOAD DETECTION",
+      "detects": "Run/Environment/IFEO/CLSID values with base64 blobs (>100 chars).",
+      "threat_types": [
+        "Fileless Malware"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1027.011",
+          "name": "Obfuscated Files or Information: Fileless Storage",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1027/011/"
+        }
+      ],
+      "data_source": [
+        "registry",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 71",
+      "name": "PHISHING / OVERLAY / FAKE BROWSER UI DETECTION",
+      "detects": "Procs named fakescreen/overlay/phish/credential-harvest.",
+      "threat_types": [
+        "Phishing/Overlay"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1056.002",
+          "name": "Input Capture: GUI Input Capture",
+          "tactics": [
+            "Collection",
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1056/002/"
+        },
+        {
+          "id": "T1185",
+          "name": "Browser Session Hijacking",
+          "tactics": [
+            "Collection"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1185/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Process",
+        "inline-regex"
+      ],
+      "signature_source": "inline",
+      "notes": "shallow name-only"
+    },
+    {
+      "phase": "PHASE 72",
+      "name": "BOTNET C2 IP / IOC BLACKLIST CHECK",
+      "detects": "TCP connections reverse-DNS matching botnet dynamic-DNS (.onion/duckdns/zapto/myftp...).",
+      "threat_types": [
+        "Botnet/C2"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1071",
+          "name": "Application Layer Protocol",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1071/"
+        },
+        {
+          "id": "T1219",
+          "name": "Remote Access Tools",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1219/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-NetTCPConnection",
+        "inline-regex"
+      ],
+      "signature_source": "inline",
+      "notes": "inline DDNS list overlaps suspicious_dns_domains"
+    },
+    {
+      "phase": "PHASE 73",
+      "name": "EXPLOIT KIT ARTIFACT & CVE-2021-36934 REMEDIATION",
+      "detects": "TEMP/LOCALAPPDATA files named shellcode/exploit/payload/cobalt/beacon.",
+      "threat_types": [
+        "Exploit Kit"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1203",
+          "name": "Exploitation for Client Execution",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1203/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 74",
+      "name": "MACRO / OFFICE / OUTLOOK PERSISTENCE AUDIT",
+      "detects": "Flags VBAWarnings=1 + Outlook WebView HTML auto-exec regkey.",
+      "threat_types": [
+        "Macro Abuse",
+        "Outlook Persistence"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1137",
+          "name": "Office Application Startup",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1137/"
+        },
+        {
+          "id": "T1204.002",
+          "name": "User Execution: Malicious File",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1204/002/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 74.5",
+      "name": "EMAIL ATTACHMENT MALWARE SCAN (OUTLOOK CACHE)",
+      "detects": "Outlook attachment caches: hash match, content rules, exec/script ext, lure filenames. Wires Quarantine.",
+      "threat_types": [
+        "Phishing / Email Trojan"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1566.001",
+          "name": "Phishing: Spearphishing Attachment",
+          "tactics": [
+            "Initial Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1566/001/"
+        },
+        {
+          "id": "T1204.002",
+          "name": "User Execution: Malicious File",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1204/002/"
+        }
+      ],
+      "data_source": [
+        "sig:email_scan_paths_raw",
+        "sig:known_malware_hashes",
+        "sig:email_content_rules",
+        "sig:email_attach_extensions",
+        "sig:email_lure_filename_patterns",
+        "cmdlet:Get-FileHash",
+        "func:Test-ContentRules",
+        "filewalk"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 74.6",
+      "name": "MICROSOFT DEFENDER THREAT HISTORY CORRELATION",
+      "detects": "Get-MpThreat/Detection; flags Defender-caught resources still on disk (CRIT+Quarantine) else INFO.",
+      "threat_types": [
+        "Defender-Flagged Residual",
+        "Defender Detection (handled)"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1204.002",
+          "name": "User Execution: Malicious File",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1204/002/"
+        },
+        {
+          "id": "T1566.001",
+          "name": "Phishing: Spearphishing Attachment",
+          "tactics": [
+            "Initial Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1566/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-MpThreat",
+        "cmdlet:Get-MpThreatDetection"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 74.7",
+      "name": "PROACTIVE ANTI-REINFECTION HARDENING",
+      "detects": "Office/Outlook macro+attachment security, WSH disable, Defender PUA + 6 ASR rules. INFO/opt-in.",
+      "threat_types": [
+        "Macro/Attachment Exposure",
+        "Script Host Exposure",
+        "Defender Posture",
+        "ASR Rule Not Enabled"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1137",
+          "name": "Office Application Startup",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1137/"
+        },
+        {
+          "id": "T1059.005",
+          "name": "Command and Scripting Interpreter: Visual Basic",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1059/005/"
+        },
+        {
+          "id": "T1059.007",
+          "name": "Command and Scripting Interpreter: JavaScript",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1059/007/"
+        },
+        {
+          "id": "T1566.001",
+          "name": "Phishing: Spearphishing Attachment",
+          "tactics": [
+            "Initial Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1566/001/"
+        }
+      ],
+      "data_source": [
+        "sig:proactive_office_keys",
+        "registry",
+        "cmdlet:Get-MpPreference"
+      ],
+      "signature_source": "externalized",
+      "notes": "hardening/opt-in RunCmd"
+    },
+    {
+      "phase": "PHASE 75",
+      "name": "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT",
+      "detects": "Enumerates Defender path/process exclusions as hiding spots.",
+      "threat_types": [
+        "Defender Tampering"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1562.001",
+          "name": "Impair Defenses: Disable or Modify Tools",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-MpPreference"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 76",
+      "name": "TERMINAL SERVICES / RDP SHADOWING AUDIT",
+      "detects": "Flags RDP Shadow policy allowing no-consent session view/control.",
+      "threat_types": [
+        "RDP Surveillance"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1021.001",
+          "name": "Remote Services: Remote Desktop Protocol",
+          "tactics": [
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1021/001/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 77",
+      "name": "SSH & WINRM REMOTE MANAGEMENT AUDIT",
+      "detects": "Flags running WinRM/sshd as remote-access vector.",
+      "threat_types": [
+        "Remote Management"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1021.004",
+          "name": "Remote Services: SSH",
+          "tactics": [
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1021/004/"
+        },
+        {
+          "id": "T1021.006",
+          "name": "Remote Services: Windows Remote Management",
+          "tactics": [
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1021/006/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Service"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 78",
+      "name": "SYSMON / LAPS / APPLOCKER STATUS AUDIT",
+      "detects": "Audits Sysmon + AppLocker policy presence (visibility gaps).",
+      "threat_types": [
+        "Hardening Gap"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1562.001",
+          "name": "Impair Defenses: Disable or Modify Tools",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Service",
+        "cmdlet:Get-AppLockerPolicy"
+      ],
+      "signature_source": "n/a",
+      "notes": "hardening"
+    },
+    {
+      "phase": "PHASE 79",
+      "name": "WINDOWS DEFENDER KICKSTART & EXCLUSION PURGE",
+      "detects": "Recommends purge exclusions + signature update + quick scan.",
+      "threat_types": [
+        "Hardening"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1562.001",
+          "name": "Impair Defenses: Disable or Modify Tools",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-MpPreference"
+      ],
+      "signature_source": "n/a",
+      "notes": "hardening/RunCmd"
+    },
+    {
+      "phase": "PHASE 80",
+      "name": "SECURE BOOT / TPM / BITLOCKER STATUS AUDIT",
+      "detects": "Flags Secure Boot disabled; reports TPM presence.",
+      "threat_types": [
+        "Boot Security"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1542",
+          "name": "Pre-OS Boot",
+          "tactics": [
+            "Defense Evasion",
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1542/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Confirm-SecureBootUEFI",
+        "wmi:Win32_Tpm"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 81",
+      "name": "NETSTAT HIGH-PORT REVERSE SHELL AUDIT",
+      "detects": "Established high-port TCP owned by shell/scripting tool (reverse shell).",
+      "threat_types": [
+        "Reverse Shell"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1571",
+          "name": "Non-Standard Port",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1571/"
+        },
+        {
+          "id": "T1059.003",
+          "name": "Command and Scripting Interpreter: Windows Command Shell",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1059/003/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-NetTCPConnection",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 82",
+      "name": "NETCAT / SOCAT / CHISEL / PLINK BINARY SCAN",
+      "detects": "User-path walk for tunneling tools (nc/ncat/socat/chisel/plink/ligolo/frpc...).",
+      "threat_types": [
+        "Tunneling Tool"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1572",
+          "name": "Protocol Tunneling",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1572/"
+        },
+        {
+          "id": "T1105",
+          "name": "Ingress Tool Transfer",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1105/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 83",
+      "name": "HOLLOW PROCESS DEEP SCAN (EXTENDED)",
+      "detects": "Unsigned low-module procs from AppData/Temp (extended hollowing).",
+      "threat_types": [
+        "Process Hollowing"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1055.012",
+          "name": "Process Injection: Process Hollowing",
+          "tactics": [
+            "Defense Evasion",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1055/012/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Process",
+        "authenticode"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 84",
+      "name": "APPLOCKER / GPO POLICY BYPASS AUDIT",
+      "detects": "Flags DisallowRun policy active (AppLocker bypass review).",
+      "threat_types": [
+        "Policy Bypass"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1562.001",
+          "name": "Impair Defenses: Disable or Modify Tools",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/001/"
+        },
+        {
+          "id": "T1218",
+          "name": "System Binary Proxy Execution",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1218/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 85",
+      "name": "LOLBIN PERSISTENCE (INSTALLUTIL / MSIEXEC)",
+      "detects": "Recently-modified InstallShield/Installer regkeys (LOLBin persistence).",
+      "threat_types": [
+        "LoLBin Persistence"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1218.004",
+          "name": "System Binary Proxy Execution: InstallUtil",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1218/004/"
+        },
+        {
+          "id": "T1218.007",
+          "name": "System Binary Proxy Execution: Msiexec",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1218/007/"
+        }
+      ],
+      "data_source": [
+        "registry"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 86",
+      "name": "RECYCLE BIN STAGING AREA SCAN",
+      "detects": "Exec/script files in $Recycle.Bin (staging).",
+      "threat_types": [
+        "Malware Staging"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1074.001",
+          "name": "Data Staged: Local Data Staging",
+          "tactics": [
+            "Collection"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1074/001/"
+        },
+        {
+          "id": "T1564.001",
+          "name": "Hide Artifacts: Hidden Files and Directories",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1564/001/"
+        }
+      ],
+      "data_source": [
+        "filewalk"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 87",
+      "name": "GPO SCRIPT DIRECTORY AUDIT",
+      "detects": "Recently-modified scripts in GroupPolicy Machine/User Scripts.",
+      "threat_types": [
+        "GPO Persistence"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1037",
+          "name": "Boot or Logon Initialization Scripts",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1037/"
+        }
+      ],
+      "data_source": [
+        "filewalk"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 88",
+      "name": "ACTIVE DIRECTORY / DOMAIN TRUST INDICATORS",
+      "detects": "Event 4662 DCSync GUIDs from non-DC; 4769 KRBTGT RC4 Golden Ticket.",
+      "threat_types": [
+        "DCSync / Domain Attack",
+        "Golden Ticket / Kerberos Attack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1482",
+          "name": "Domain Trust Discovery",
+          "tactics": [
+            "Discovery"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1482/"
+        },
+        {
+          "id": "T1003.006",
+          "name": "OS Credential Dumping: DCSync",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1003/006/"
+        },
+        {
+          "id": "T1558.001",
+          "name": "Steal or Forge Kerberos Tickets: Golden Ticket",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1558/001/"
+        }
+      ],
+      "data_source": [
+        "eventlog",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 89",
+      "name": "FINAL SWEEP — EXFIL CHANNELS & STEGO TOOLS",
+      "detects": "Mail/FTP-port connections from non-email procs + stego tools (steghide/outguess...).",
+      "threat_types": [
+        "Data Exfiltration",
+        "Steganography/Exfil Tool"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1041",
+          "name": "Exfiltration Over C2 Channel",
+          "tactics": [
+            "Exfiltration"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1041/"
+        },
+        {
+          "id": "T1027.003",
+          "name": "Obfuscated Files or Information: Steganography",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1027/003/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-NetTCPConnection",
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 90",
+      "name": "YARA-LITE BINARY STRING SCAN & CUSTOM IOC HASHES",
+      "detects": "User-path binaries: YARA-lite strings, content rules, SHA256 vs known+custom IOC hashes.",
+      "threat_types": [
+        "YARA-Lite Match",
+        "Phishing / Smuggling Content",
+        "Known-Malware Hash"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1027",
+          "name": "Obfuscated Files or Information",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1027/"
+        },
+        {
+          "id": "T1219",
+          "name": "Remote Access Tools",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1219/"
+        },
+        {
+          "id": "T1003.001",
+          "name": "OS Credential Dumping: LSASS Memory",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1003/001/"
+        }
+      ],
+      "data_source": [
+        "sig:yara_lite_rules",
+        "sig:email_content_rules",
+        "sig:known_malware_hashes",
+        "cmdlet:Get-FileHash",
+        "func:Test-ContentRules",
+        "filewalk"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 91",
+      "name": "MARK-OF-THE-WEB (MOTW) ZONE.IDENTIFIER STRIP",
+      "detects": "Downloads/Desktop exec/scripts >8KB missing Zone.Identifier (MOTW stripped).",
+      "threat_types": [
+        "MoTW Abuse"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1553.005",
+          "name": "Subvert Trust Controls: Mark-of-the-Web Bypass",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1553/005/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline",
+      "notes": "INFO/hardening"
+    },
+    {
+      "phase": "PHASE 92",
+      "name": "UAC AUTO-ELEVATE BYPASS REGISTRY STAGING",
+      "detects": "UAC bypass regkeys (fodhelper/computerdefaults) + EnableLUA=0.",
+      "threat_types": [
+        "UAC Bypass",
+        "UAC Disabled"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1548.002",
+          "name": "Abuse Elevation Control Mechanism: Bypass User Account Control",
+          "tactics": [
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1548/002/"
+        }
+      ],
+      "data_source": [
+        "sig:uac_bypass_regs",
+        "registry"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 93",
+      "name": "DEEP PROCESS MODULE / DLL INJECTION AUDIT",
+      "detects": "Unsigned DLLs loaded from user-writable paths in 60 non-system procs.",
+      "threat_types": [
+        "DLL Injection"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1055.001",
+          "name": "Process Injection: Dynamic-link Library Injection",
+          "tactics": [
+            "Defense Evasion",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1055/001/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Process",
+        "authenticode"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 94",
+      "name": "COM SCRIPTLET (.SCT/.WSC) ABUSE & SQUIBLYDOO",
+      "detects": ".sct/.wsc/.xsl files + regsvr32 /i: URL (Squiblydoo) in Run keys.",
+      "threat_types": [
+        "COM Scriptlet/Squiblydoo"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1218.010",
+          "name": "System Binary Proxy Execution: Regsvr32",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1218/010/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "registry",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 95",
+      "name": "APPDOMAINMANAGER .NET LOADER HIJACK",
+      "detects": "APPDOMAIN_MANAGER_ASM/TYPE env vars + System32 .exe.config appDomainManager entries.",
+      "threat_types": [
+        ".NET AppDomainManager Hijack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1574.014",
+          "name": "Hijack Execution Flow: AppDomainManager",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/014/"
+        }
+      ],
+      "data_source": [
+        "env",
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 96",
+      "name": "PRINT SPOOLER / PRINTNIGHTMARE (CVE-2021-34527)",
+      "detects": "Point-and-Print NoWarningNoElevation=1 + unsigned spooler driver DLLs.",
+      "threat_types": [
+        "PrintNightmare (CVE-2021-34527)",
+        "Print Spooler Hijack"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1547.012",
+          "name": "Boot or Logon Autostart Execution: Print Processors",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1547/012/"
+        },
+        {
+          "id": "T1068",
+          "name": "Exploitation for Privilege Escalation",
+          "tactics": [
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1068/"
+        }
+      ],
+      "data_source": [
+        "registry",
+        "filewalk",
+        "authenticode"
+      ],
+      "signature_source": "n/a"
+    },
+    {
+      "phase": "PHASE 97",
+      "name": "CLICKONCE / .APPLICATION DEPLOYMENT ABUSE",
+      "detects": "ClickOnce artifacts (.application/.manifest/.deploy) in user paths.",
+      "threat_types": [
+        "ClickOnce Abuse"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1127",
+          "name": "Trusted Developer Utilities Proxy Execution",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1127/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline",
+      "notes": "POSSIBLE"
+    },
+    {
+      "phase": "PHASE 98",
+      "name": "STOLEN / LEAKED CODE-SIGNING CERT DETECTION",
+      "detects": "Signed binaries matching known-leaked cert issuers (NVIDIA/Realtek/D-Link/Foxit...).",
+      "threat_types": [
+        "Stolen Code-Sign Cert"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1553.002",
+          "name": "Subvert Trust Controls: Code Signing",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1553/002/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "authenticode",
+        "inline-list"
+      ],
+      "signature_source": "inline",
+      "notes": "inline leaked-cert list SHOULD externalize"
+    },
+    {
+      "phase": "PHASE 99",
+      "name": "LOLBAS EXPANDED PROCESS ABUSE AUDIT",
+      "detects": "Running procs vs LOLBAS list w/ suspicious args (http/Base64/IEX/scrobj).",
+      "threat_types": [
+        "LOLBAS Abuse"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1218",
+          "name": "System Binary Proxy Execution",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1218/"
+        }
+      ],
+      "data_source": [
+        "sig:lolbas_expanded",
+        "wmi",
+        "inline-regex"
+      ],
+      "signature_source": "partial"
+    },
+    {
+      "phase": "PHASE 100",
+      "name": "BROWSER PASSWORD/COOKIE DB RECENT ACCESS",
+      "detects": "Chrome/Edge/FF credential DB accessed in last 60min (stealer behavior).",
+      "threat_types": [
+        "Info-Stealer Activity"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1555.003",
+          "name": "Credentials from Password Stores: Credentials from Web Browsers",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1555/003/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-list"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 101",
+      "name": "WSL / DOCKER CONTAINER ESCAPE SURFACE",
+      "detects": "Enumerates WSL distros + Docker presence (lateral surface).",
+      "threat_types": [
+        "Container Surface"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1611",
+          "name": "Escape to Host",
+          "tactics": [
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1611/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:wsl",
+        "cmdlet:docker"
+      ],
+      "signature_source": "n/a",
+      "notes": "INFO"
+    },
+    {
+      "phase": "PHASE 102",
+      "name": "SVCHOST PARENT-CHILD MASQUERADE VALIDATION",
+      "detects": "Validates svchost parent=services.exe and path in System32/SysWOW64.",
+      "threat_types": [
+        "Process Masquerade"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1036.005",
+          "name": "Masquerading: Match Legitimate Name or Location",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1036/005/"
+        }
+      ],
+      "data_source": [
+        "wmi",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 103",
+      "name": "SUSPICIOUS COMPRESSED ARCHIVE PAYLOAD AUDIT",
+      "detects": "Recent (<7d) archives (.zip/.7z/.rar/.iso/.img) in Downloads/Desktop/Temp.",
+      "threat_types": [
+        "Suspicious Archive"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1204.002",
+          "name": "User Execution: Malicious File",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1204/002/"
+        },
+        {
+          "id": "T1027.003",
+          "name": "Obfuscated Files or Information: Steganography",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1027/003/"
+        }
+      ],
+      "data_source": [
+        "filewalk"
+      ],
+      "signature_source": "n/a",
+      "notes": "POSSIBLE"
+    },
+    {
+      "phase": "PHASE 104",
+      "name": "SCHEDULED TASK XML DEEP PARSE / HIDDEN TASKS",
+      "detects": "System32\\Tasks XML for Hidden=true + SDDL D:P ACL locks (anti-forensic).",
+      "threat_types": [
+        "Hidden Scheduled Task",
+        "SDDL-Locked Task"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1053.005",
+          "name": "Scheduled Task/Job: Scheduled Task",
+          "tactics": [
+            "Execution",
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1053/005/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 105",
+      "name": "PERSISTENCE HEATMAP & CROSS-VECTOR CORRELATION",
+      "detects": "Aggregates findings by ThreatType; flags >=3 persistence vectors as multi-vector CRIT.",
+      "threat_types": [
+        "Multi-Vector Persistence"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1547",
+          "name": "Boot or Logon Autostart Execution",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1547/"
+        },
+        {
+          "id": "T1053.005",
+          "name": "Scheduled Task/Job: Scheduled Task",
+          "tactics": [
+            "Execution",
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1053/005/"
+        },
+        {
+          "id": "T1543.003",
+          "name": "Create or Modify System Process: Windows Service",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1543/003/"
+        }
+      ],
+      "data_source": [
+        "correlation"
+      ],
+      "signature_source": "n/a",
+      "notes": "meta-correlation"
+    },
+    {
+      "phase": "PHASE 105+",
+      "name": "BASELINE DIFF — New Findings Since Snapshot",
+      "detects": "Compares current findings to baseline JSON; flags new findings since snapshot.",
+      "threat_types": [
+        "Baseline Diff"
+      ],
+      "mitre_techniques": [],
+      "data_source": [
+        "baseline-json"
+      ],
+      "signature_source": "n/a",
+      "notes": "meta; only when -Baseline passed"
+    },
+    {
+      "phase": "PHASE 106",
+      "name": "MEMORY DUMP ARTIFACT SCAN (MINIDUMP / CRASHDUMPS)",
+      "detects": ".dmp files in dump dirs + credential dumper tools (procdump/nanodump/pypykatz/lsassy...).",
+      "threat_types": [
+        "Memory Dump Artifact",
+        "Credential Dumping Tool"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1003.001",
+          "name": "OS Credential Dumping: LSASS Memory",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1003/001/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 107",
+      "name": "EVENT LOG THREAT HUNTING (4624/4688/7045)",
+      "detects": "4624 anomalous logons; 4688 suspicious process creation; 7045 rogue service installs.",
+      "threat_types": [
+        "Anomalous Logon",
+        "Suspicious Process Creation",
+        "Rogue Service Install"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1078",
+          "name": "Valid Accounts",
+          "tactics": [
+            "Initial Access",
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1078/"
+        },
+        {
+          "id": "T1543.003",
+          "name": "Create or Modify System Process: Windows Service",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1543/003/"
+        },
+        {
+          "id": "T1021.002",
+          "name": "Remote Services: SMB/Windows Admin Shares",
+          "tactics": [
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1021/002/"
+        }
+      ],
+      "data_source": [
+        "eventlog",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 108",
+      "name": "NTFS ACL & OWNERSHIP INTEGRITY (CRITICAL PATHS)",
+      "detects": "Weak-write ACEs on critical paths + untrusted ownership of protected system files.",
+      "threat_types": [
+        "Permission Abuse / Privesc",
+        "Ownership Tamper / Privesc"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1222.001",
+          "name": "File and Directory Permissions Modification: Windows File and Directory Permissions Modification",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1222/001/"
+        },
+        {
+          "id": "T1574",
+          "name": "Hijack Execution Flow",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/"
+        }
+      ],
+      "data_source": [
+        "perm:critical_acl_paths",
+        "perm:protected_system_files",
+        "perm:weak_write_identities",
+        "perm:trusted_file_owners",
+        "cmdlet:Get-Acl"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 109",
+      "name": "SYSTEM BINARY INTEGRITY & SIGNATURE VERIFICATION",
+      "detects": "Authenticode/catalog verify on protected + accessibility binaries; IFEO Debugger on accessibility.",
+      "threat_types": [
+        "Binary Tamper / Integrity",
+        "Accessibility Backdoor / IFEO"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1554",
+          "name": "Compromise Host Software Binary",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1554/"
+        },
+        {
+          "id": "T1546.008",
+          "name": "Event Triggered Execution: Accessibility Features",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/008/"
+        }
+      ],
+      "data_source": [
+        "authenticode",
+        "registry",
+        "perm:protected_system_files",
+        "perm:accessibility_binaries"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 110",
+      "name": "REGISTRY KEY ACL / WEAK-PERMISSION AUDIT",
+      "detects": "Weak ACLs on critical persistence/privesc regkeys allowing non-admin write.",
+      "threat_types": [
+        "Registry Permission Abuse"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1574.011",
+          "name": "Hijack Execution Flow: Services Registry Permissions Weakness",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/011/"
+        },
+        {
+          "id": "T1222.001",
+          "name": "File and Directory Permissions Modification: Windows File and Directory Permissions Modification",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1222/001/"
+        }
+      ],
+      "data_source": [
+        "registry",
+        "cmdlet:Get-Acl",
+        "perm:critical_reg_acl_keys",
+        "perm:weak_write_identities"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 111",
+      "name": "SERVICE PRIVESC — UNQUOTED PATHS & WRITABLE BINARIES",
+      "detects": "Unquoted service paths w/ spaces + weak-ACL service binaries.",
+      "threat_types": [
+        "Unquoted Service Path / Privesc",
+        "Writable Service Binary / Privesc"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1574.009",
+          "name": "Hijack Execution Flow: Path Interception by Unquoted Path",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/009/"
+        },
+        {
+          "id": "T1574.010",
+          "name": "Hijack Execution Flow: Services File Permissions Weakness",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/010/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-CimInstance",
+        "cmdlet:Get-Acl",
+        "perm:weak_write_identities",
+        "perm:unquoted_path_whitelist"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 112",
+      "name": "PATH / DLL-HIJACK SURFACE — WRITABLE DIRECTORIES",
+      "detects": "System PATH + extra dirs writable by non-admins (DLL planting).",
+      "threat_types": [
+        "DLL Hijack / PATH Privesc"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1574.007",
+          "name": "Hijack Execution Flow: Path Interception by PATH Environment Variable",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/007/"
+        },
+        {
+          "id": "T1574.001",
+          "name": "Hijack Execution Flow: DLL Search Order Hijacking",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/001/"
+        }
+      ],
+      "data_source": [
+        "env",
+        "cmdlet:Get-Acl",
+        "perm:system_path_extra_dirs",
+        "perm:weak_write_identities"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 113",
+      "name": "RECENTLY MODIFIED / UNSIGNED FILES IN SYSTEM32 & DRIVERS",
+      "detects": "Recent unsigned exe/dll/sys in System32 & drivers (driver drop/patch).",
+      "threat_types": [
+        "System File Tamper"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1554",
+          "name": "Compromise Host Software Binary",
+          "tactics": [
+            "Persistence"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1554/"
+        },
+        {
+          "id": "T1014",
+          "name": "Rootkit",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1014/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "authenticode",
+        "inline-regex"
+      ],
+      "signature_source": "inline"
+    },
+    {
+      "phase": "PHASE 114",
+      "name": "SECURITY CONTROL HEALTH & TAMPER CONSOLIDATION",
+      "detects": "Expected security services running; Defender tamper regkeys; RTP enabled; sig age >7d.",
+      "threat_types": [
+        "Security Control Tamper",
+        "Defender Tamper",
+        "Defender Health"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1562.001",
+          "name": "Impair Defenses: Disable or Modify Tools",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/001/"
+        },
+        {
+          "id": "T1562.002",
+          "name": "Impair Defenses: Disable Windows Event Logging",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1562/002/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-Service",
+        "registry",
+        "cmdlet:Get-MpComputerStatus",
+        "perm:expected_running_services",
+        "perm:defender_tamper_values"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 115",
+      "name": "AUTORUN TARGET WRITABLE-PATH AUDIT (HIJACKABLE PERSISTENCE)",
+      "detects": "HKLM autorun targets writable by non-admins (privesc via binary replace).",
+      "threat_types": [
+        "Hijackable Autorun / Privesc"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1547.001",
+          "name": "Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1547/001/"
+        },
+        {
+          "id": "T1574",
+          "name": "Hijack Execution Flow",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/"
+        }
+      ],
+      "data_source": [
+        "registry",
+        "cmdlet:Get-Acl",
+        "perm:weak_write_identities"
+      ],
+      "signature_source": "externalized"
+    }
+  ]
+}

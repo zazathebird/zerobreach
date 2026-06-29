@@ -48,10 +48,15 @@ Spin up agents per workstream; each researches public sources, drafts `data/*.js
 heuristic logic, and hands back diffs. The main session integrates, de-dupes, parse-checks,
 and AMSI-tests. **Inventory the existing 107 phases FIRST** so we extend rather than duplicate.
 
-### WS0 — Inventory & gap analysis (do this first, single pass)
-Map all 107 phases of `ZeroBreach-V23.ps1`: what each detects, which MITRE techniques it
-covers, where the signature data lives. Produce a coverage matrix (phase → ATT&CK technique →
-data source). Output: `data/coverage_matrix.json` + a short gap list. Everything else keys off this.
+### WS0 — Inventory & gap analysis — ✅ DONE 2026-06-29
+Mapped all **119 phases** (1–115 incl. 74.5/74.6/74.7 + 105+) of `ZeroBreach-V23.ps1`. Outputs
+shipped: **`data/coverage_matrix.json`** (phase → detection → MITRE technique → data source +
+`signature_source` flag), **`WS0_COVERAGE_GAPS.md`** (the gap list, GAP 1–5), and 9 new techniques
+added to `data/mitre_mapping.json`. 105 distinct techniques; all 12 active tactics covered.
+Decision also made this session: **moderate engine split** into a dot-sourced `engine/` folder
+(see `engine-split-decision` memory) — do it as its own validated workstream before WS1–WS6.
+Key gap callouts for the workstreams below: GAP 1 = backfill `phase_map` (74.5/74.6/74.7/105+/108–115);
+GAP 2 = externalize inline name-lists (WS1); GAP 3 = new domains loaders/banking-trojans/BYOVD (WS2).
 
 ### WS1 — Finish AMSI / portability hardening (quick, high value)
 Externalize or keyword-split the ~15 **inline attack-regexes** still in the script (they did
