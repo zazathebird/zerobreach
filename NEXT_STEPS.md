@@ -1,11 +1,11 @@
 # ZeroBreach — Next Steps (post-/clear handoff)
 
-> ### ▶ START HERE — next session (updated 2026-06-28, session 2)
+> ### ▶ START HERE — next session (updated 2026-06-29, session 2 COMPLETE)
 > **The single open item is live GUI end-to-end validation. Read `HANDOFF.md` first** — it has the
 > current state and the user runbook (the model debugs from artifacts the user brings back).
 > Engine FP-tuning is COMPLETE through round 5 (CLAUDE.md → "Round 5"); the last fresh full re-grade
 > (`KrakenBaseline_20260628_152000.json`) is **52 auto-destructive, 0 system-damage FixParams** — holds.
-> Latest server work (`c0477ae`, local on main, **NOT pushed**): phase-"skipping" was diagnosed as a
+> Latest server work (`c0477ae`, **PUSHED to origin**): phase-"skipping" was diagnosed as a
 > display-cadence artifact (NOT an engine skip — all 115 phases ran, 0 RECOVERED ERRORs) and fixed
 > (emit `scan_state` on phase change); plus durable run logs (`reports\server_console_*.log` +
 > `server_events_*.log`). **The phase-skip fix is not yet visually confirmed in-browser** — verify it
