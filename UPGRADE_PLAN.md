@@ -54,7 +54,7 @@ shipped: **`data/coverage_matrix.json`** (phase → detection → MITRE techniqu
 `signature_source` flag), **`WS0_COVERAGE_GAPS.md`** (the gap list, GAP 1–5), and 9 new techniques
 added to `data/mitre_mapping.json`. 105 distinct techniques; all 12 active tactics covered.
 Decision also made this session: **moderate engine split** into a dot-sourced `engine/` folder
-(see `engine-split-decision` memory) — do it as its own validated workstream before WS1–WS6.
+(see **`ENGINE_SPLIT_PLAN.md`** in the repo) — do it as its own validated workstream before WS1–WS6.
 Key gap callouts for the workstreams below: GAP 1 = backfill `phase_map` (74.5/74.6/74.7/105+/108–115);
 GAP 2 = externalize inline name-lists (WS1); GAP 3 = new domains loaders/banking-trojans/BYOVD (WS2).
 

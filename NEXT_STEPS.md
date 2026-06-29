@@ -3,8 +3,9 @@
 > ### ▶ START HERE — next session (updated 2026-06-29)
 > **WS0 inventory is DONE.** `data/coverage_matrix.json` (119 phases → MITRE → data source) and
 > `WS0_COVERAGE_GAPS.md` shipped; 9 techniques added to `data/mitre_mapping.json`. The engine-split
-> decision is finalized: **moderate split** into a dot-sourced `engine/` folder (see the
-> `engine-split-decision` memory for the exact layout + non-negotiable constraints). Recommended
+> decision is finalized: **moderate split** into a dot-sourced `engine/` folder (see
+> **`ENGINE_SPLIT_PLAN.md`** in the repo for the exact layout + non-negotiable constraints).
+> Recommended
 > order next session: **(1)** GAP 1 — backfill `phase_map` for 74.5/74.6/74.7/105+/108–115 (minutes);
 > **(2)** execute the engine split as its own workstream, run the full validation loop; **(3)** WS1
 > (externalize inline name-lists, GAP 2) and WS2 (new malware domains, GAP 3). Still outstanding from
