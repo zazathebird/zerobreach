@@ -839,6 +839,27 @@ $TUNNELING_TOOLS        = Get-Sig 'tunneling_tools'       # Phase 82
 $STEGO_TOOLS            = Get-Sig 'stego_tools'           # Phase 89
 $LEAKED_CERT_ISSUERS    = Get-Sig 'leaked_cert_issuers'   # Phase 98
 $CRED_DUMP_TOOLS        = Get-Sig 'cred_dump_tools'       # Phase 106
+# WS2 — detection-coverage expansion (all externalized data, AMSI-safe).
+$C2_PIPE_REGEX_ANCHORED   = Get-Sig 'c2_pipe_regex_anchored'    # Phase 62 (anchored pass)
+$C2_CONFIG_RULES          = Get-Sig 'c2_config_rules'          # Phase 90 content scan
+$BANKING_NAMED_PIPES      = Get-Sig 'banking_named_pipes'       # Phase 62
+$KNOWN_MALWARE_MUTEXES    = Get-Sig 'known_malware_mutexes'     # Phase 69 (mutex audit)
+$BYOVD_DRIVER_NAMES       = @((Get-Sig 'byovd_driver_names') | ForEach-Object { "$_".ToLower() })  # Phase 55.5
+$BYOVD_DRIVER_SHA256      = Get-Sig 'byovd_driver_sha256'       # Phase 55.5 (confirm)
+$BYOVD_CERT_TBS           = Get-Sig 'byovd_cert_tbs_hashes'     # Phase 55.5 (polymorphic)
+$LOADER_PROCS             = Get-Sig 'loader_procs'             # Phase 68/loader audit
+$LOADER_DROP_PATH_RULES   = Get-Sig 'loader_drop_path_rules'    # Phase 74.5/90 file scan
+$LOADER_BEHAVIOR_RULES    = Get-Sig 'loader_behavior_rules'     # process cmdline scan
+$LOADER_C2_DOMAINS        = Get-Sig 'loader_c2_domains'         # DNS-cache check
+$BANKING_TROJAN_PROCS     = Get-Sig 'banking_trojan_procs'      # process audit
+$BANKING_BEHAVIOR_RULES   = Get-Sig 'banking_behavior_rules'    # process cmdline scan
+$INFOSTEALER_C2_DOMAINS   = Get-Sig 'infostealer_c2_domains'    # DNS-cache check
+$INFOSTEALER_TARGET_PATHS = @((Get-Sig 'infostealer_target_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 68
+$INFOSTEALER_BEHAVIOR_RULES = Get-Sig 'infostealer_behavior_rules' # process/content scan
+$RANSOM_NOTE_FILENAMES    = Get-Sig 'ransom_note_filenames'     # Phase 53 doc walk
+$RANSOM_NOTE_CONTENT_RULES = Get-Sig 'ransom_note_content_rules' # Phase 53 doc walk
+$INHIBIT_RECOVERY_RULES   = Get-Sig 'inhibit_recovery_rules'    # Phase 43/shadow-copy + cmdline
+$ALL_MALWARE_CMDLINE_RULES = @($LOADER_BEHAVIOR_RULES + $BANKING_BEHAVIOR_RULES + $INFOSTEALER_BEHAVIOR_RULES + $INHIBIT_RECOVERY_RULES)
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
