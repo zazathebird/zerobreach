@@ -676,7 +676,7 @@ function Invoke-FixMode {
                     else {
                         $vault = Join-Path $OUT_ROOT "quarantine"
                         if (-not (Test-Path $vault)) { New-Item -Path $vault -ItemType Directory -Force | Out-Null }
-                        $sha = (Get-FileHash -LiteralPath $src -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+                        $sha = Get-Sha256File $src
                         $stub = ([System.IO.Path]::GetFileName($src)) -replace '[^a-zA-Z0-9._-]','_'
                         $tag  = "{0}_{1}" -f (Get-Date -Format 'yyyyMMddHHmmssfff'), $stub
                         # ".quar" extension neutralizes double-click execution while preserving bytes.

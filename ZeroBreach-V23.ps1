@@ -942,6 +942,22 @@ function Get-AuthSig { param([string]$FilePath)
     return $sig
 }
 
+# Module-independent SHA256 (lowercase hex, or $null). Uses .NET directly instead of
+# Get-FileHash because the engine's runtime context can break on-demand module autoloading
+# (a mid-autoload TypeData collision trips the resilience trap, leaving Get-FileHash
+# "not recognized" and aborting the rest of the scan). .NET crypto has no such dependency.
+function Get-Sha256File {
+    param([string]$FilePath)
+    if (-not $FilePath) { return $null }
+    $sha = $null; $fs = $null
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $fs  = [System.IO.File]::Open($FilePath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        return (-join ($sha.ComputeHash($fs) | ForEach-Object { $_.ToString('x2') }))
+    } catch { return $null }
+    finally { if ($fs) { $fs.Dispose() }; if ($sha) { $sha.Dispose() } }
+}
+
 # Classify a finding for the remediation selection-mode presets:
 #   Recommended = high-confidence, worth acting on (CRIT/HIGH with a concrete fix)
 #   Safe        = remediation will not delete user data / break the OS (reversible)

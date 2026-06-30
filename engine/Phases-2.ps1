@@ -86,15 +86,40 @@ try {
     $pipes = [System.IO.Directory]::GetFiles("\\.\pipe\")
     # Pattern names externalized to data (c2_pipe_patterns); generic hex tail kept inline (not a signature).
     $c2PipeRegex = (($C2_PIPE_PATTERNS | ForEach-Object { [regex]::Escape($_) }) -join '|') + '|[a-f0-9]{8,}'
-    $suspectPipes = $pipes | Where-Object { $_ -match $c2PipeRegex }
+    $suspectPipes = @($pipes | Where-Object { $_ -match $c2PipeRegex })
+    $pipeHits = 0
     foreach ($pipe in $suspectPipes) {
         Out-ThreatBanner "SUSPECT NAMED PIPE" $pipe
         Add-Finding -ID "PIPE_$($pipe -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "RAT/Backdoor Pipe" `
             -Severity $SEV_CRITICAL -Description "Suspect named pipe matching known C2/RAT pattern: $pipe" `
             -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
-        $global:RATHits++
+        $global:RATHits++; $pipeHits++
     }
-    if ($suspectPipes.Count -eq 0) { Out-Typewriter "  -> [OK] NO SUSPECT NAMED PIPES." "GOOD" }
+    # WS2: anchored C2-framework default-pipe regexes (CS msagent_/postex_, Havoc demon_pipe,
+    # Covenant gruntsvc, PoshC2...) matched against the bare pipe LEAF, so legit RPC pipes
+    # (srvsvc/wkssvc/...) only fire on the malicious _<digits> suffix. Plus TrickBot-class pipe.
+    $pSevMap = @{ "CRITICAL"=$SEV_CRITICAL; "HIGH"=$SEV_HIGH; "POSSIBLE"=$SEV_POSSIBLE }
+    foreach ($pipe in $pipes) {
+        if ($suspectPipes -contains $pipe) { continue }   # already reported above
+        $leaf = $pipe.Substring($pipe.LastIndexOf('\') + 1)
+        if (@($BANKING_NAMED_PIPES | Where-Object { $leaf -match [regex]::Escape($_) }).Count -gt 0) {
+            Out-ThreatBanner "BANKING TROJAN PIPE" $pipe
+            Add-Finding -ID "PIPEBANK_$($leaf -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "Banking Trojan Pipe" `
+                -Severity $SEV_HIGH -Description "Named pipe matching banking-trojan pattern (TrickBot-class): $pipe" `
+                -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
+            $global:RATHits++; $pipeHits++; continue
+        }
+        foreach ($r in $C2_PIPE_REGEX_ANCHORED) {
+            if ($leaf -match $r.Pattern) {
+                Out-ThreatBanner "C2 FRAMEWORK PIPE ($($r.Name))" $pipe
+                Add-Finding -ID "PIPEC2_$($leaf -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "C2 Framework Pipe" `
+                    -Severity $pSevMap[$r.Severity] -Description "Named pipe matches $($r.Name) default pattern: $pipe" `
+                    -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
+                $global:RATHits++; $pipeHits++; break
+            }
+        }
+    }
+    if ($pipeHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPECT NAMED PIPES." "GOOD" }
 } catch { Out-Typewriter "  -> PIPE ENUMERATION FAILED (ELEVATED SESSION REQUIRED)." "WARN" }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -195,7 +220,7 @@ if (-not $wormFound) { Out-Typewriter "  -> [OK] NO WORM AUTORUN ARTIFACTS." "GO
 Show-PhaseHeader "PHASE 66" "NETWORK SHARE WORM PROPAGATION SCAN" "WORM"
 Out-Typewriter "ENUMERATING OPEN NETWORK SHARES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "^([A-Za-z]|ADMIN|IPC|print)\$$" }
+$shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^([A-Za-z]|ADMIN|IPC|print)\$$' }
 foreach ($share in $shares) {
     Out-Typewriter "  -> OPEN SHARE: $($share.Name) @ $($share.Path)" "WARN"
     if ($share.Path -and (Test-Path $share.Path)) {
@@ -254,19 +279,27 @@ foreach ($sp in $stealerProcs) {
         -Target "PID:$($sp.Id)" -FixAction "KillProcess" -FixParam $sp.Id -Group "Info-Stealer"
     $global:SpywareHits++
 }
-$_p68Prune = $global:SCAN_PRUNE_DIRS + @('user data','default','extensions','local extension settings','firefox','mozilla','edge','brave-browser','opera','vivaldi')
-$stealerFiles = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped -PruneDirs $_p68Prune |
-    Where-Object { $_.Name -match "passwords|credentials|wallet|login|autofill|cookie" -and $_.Extension -match "\.(zip|txt|log|db)$" }
-foreach ($sf in $stealerFiles) {
-    if ($sf.FullName -notmatch "Chrome\\User Data|Firefox\\Profiles") {  # exclude legitimate browser storage
-        Out-Typewriter "  -> SUSPECT CREDENTIAL FILE: $($sf.FullName)" "CRIT"
-        Add-Finding -ID "STEALFILE_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
-            -Severity $SEV_HIGH -Description "Suspicious credential-named file in user path: $($sf.FullName)" `
-            -Target $sf.FullName -FixAction "DeleteFile" -FixParam $sf.FullName -Group "Info-Stealer"
-        $global:SpywareHits++
+# WS2: BOUNDED scan of the specific known credential-store paths ($INFOSTEALER_TARGET_PATHS,
+# ~31 entries) instead of a broad recursive name-match over TEMP/APPDATA/LOCALAPPDATA. The old
+# heuristic flagged ANY file named login/cookie/wallet/etc. and on real machines flooded with
+# thousands of benign dev/cache files — and used DeleteFile on them, which was dangerous. The
+# mere presence of a stealer-targeted store is INFO; a recent modification is POSSIBLE. Actual
+# theft/access detection lives in Phase 100 (recent-access) + Phase 99.5 (behavior rules).
+$stealerFileHits = 0
+foreach ($tp in $INFOSTEALER_TARGET_PATHS) {
+    foreach ($hit in @(Get-Item -Path $tp -Force -ErrorAction SilentlyContinue)) {
+        $recent = $false
+        try { $recent = ($hit.LastWriteTime -gt (Get-Date).AddDays(-7)) } catch {}
+        $sev = if ($recent) { $SEV_POSSIBLE } else { $SEV_INFO }
+        $sid = ($hit.FullName -replace '[^a-zA-Z0-9]','')
+        if ($sid.Length -gt 48) { $sid = $sid.Substring($sid.Length - 48) }
+        Add-Finding -ID "STEALTARGET_$sid" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
+            -Severity $sev -Description "Stealer-targeted credential/wallet store present$(if($recent){' (modified <7d)'}): $($hit.FullName)" `
+            -Target $hit.FullName -FixAction "Info" -Group "Info-Stealer Target Stores"
+        $stealerFileHits++
     }
 }
-if ($stealerProcs.Count -eq 0 -and $stealerFiles.Count -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
+if ($stealerProcs.Count -eq 0 -and $stealerFileHits -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
 
 Show-PhaseHeader "PHASE 69" "PROCESS HOLLOWING / INJECTION DETECTION" "INJECTION"
 Out-Typewriter "CHECKING FOR PROCESSES WITH ANOMALOUS MODULE COUNTS..." "HUNT"
@@ -288,6 +321,27 @@ foreach ($proc in $hollowCandidates) {
     }
 }
 if (-not $hollowFound) { Out-Typewriter "  -> [OK] NO OBVIOUS HOLLOW/INJECTED PROCESSES." "GOOD" }
+
+# WS2: known-malware mutex probe — try to open the single-instance mutexes used by
+# specific families (Pikabot, Amadey). Presence = active or residual infection. Very low FP.
+$mutexFound = $false
+foreach ($mx in $KNOWN_MALWARE_MUTEXES) {
+    foreach ($cand in @($mx, "Global\$mx", "Local\$mx")) {
+        $exists = $false
+        try { $m = [System.Threading.Mutex]::OpenExisting($cand); if ($m) { $exists = $true; $m.Dispose() } }
+        catch [System.UnauthorizedAccessException] { $exists = $true }   # exists but ACL-protected
+        catch { $exists = $false }                                       # not found / invalid name
+        if ($exists) {
+            Out-ThreatBanner "KNOWN-MALWARE MUTEX PRESENT" $cand
+            Add-Finding -ID "MUTEX_$($mx -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 69" -ThreatType "Active Malware Mutex" `
+                -Severity $SEV_CRITICAL -Description "Known-malware single-instance mutex present ($cand) — indicates active or residual infection (Pikabot/Amadey-class)." `
+                -Target $cand -FixAction "Info" -Group "Active Malware Mutex"
+            $global:TrojanHits++; $mutexFound = $true
+            break
+        }
+    }
+}
+if (-not $mutexFound) { Out-Typewriter "  -> [OK] NO KNOWN-MALWARE MUTEXES PRESENT." "GOOD" }
 
 Show-PhaseHeader "PHASE 70" "FILELESS REGISTRY PAYLOAD DETECTION" "FILELESS"
 Out-Typewriter "SCANNING REGISTRY FOR ENCODED PAYLOADS..." "HUNT"
@@ -414,7 +468,7 @@ foreach ($attachPath in $emailAttachPaths) {
 
         # 1) Known-malware hash match (strongest signal) — only hash small/medium files.
         if ($KNOWN_MALWARE_HASHES.Count -gt 0 -and $ef.Length -lt 25MB) {
-            $fh = (Get-FileHash -LiteralPath $ef.FullName -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash
+            $fh = Get-Sha256File $ef.FullName
             if ($fh -and ($KNOWN_MALWARE_HASHES -contains $fh.ToLower())) {
                 $sev = $SEV_CRITICAL; $reasons += "SHA256 matches known malware ($($fh.Substring(0,16))...)"
             }
