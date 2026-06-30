@@ -259,7 +259,7 @@ if ($PhasePlan.Advanced) {
     Show-PhaseHeader "PHASE 98" "STOLEN / LEAKED CODE-SIGNING CERT DETECTION" "STOLEN CERT"
     Out-Typewriter "AUDITING SIGNED BINARIES IN USER PATHS FOR KNOWN-LEAKED ISSUERS..." "HUNT"
     Invoke-QuantumBar "AUTHENTICODE CHAIN AUDIT" 12 100
-    $leakedCerts = @("Founder Software","Founder Group","CN=NVIDIA","CN=Realtek Semiconductor","D-Link Corporation","Realtek Semiconductor","Foxit Software")
+    $leakedCerts = $LEAKED_CERT_ISSUERS   # externalized to data (leaked_cert_issuers)
     $stolenHits = 0
     foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
         if (-not (Test-Path $root)) { continue }
@@ -507,7 +507,7 @@ if ($PhasePlan.Advanced) {
         }
     }
     # Check for PROCDUMP / dumper tool presence
-    $dumpTools = @("procdump*.exe","dumpert*.exe","memdump*.exe","outflank-dumpert*","nanodump*","handlekatz*","lsassy*","pypykatz*")
+    $dumpTools = $CRED_DUMP_TOOLS   # externalized to data (cred_dump_tools)
     # One bounded walk + anchored regex (was 3 roots x 8 names = 24 recursions incl. whole profile).
     $dumpRegex = ($dumpTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $dumpHits = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE) | Where-Object { $_.Name -match $dumpRegex }

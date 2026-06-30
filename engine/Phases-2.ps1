@@ -84,7 +84,9 @@ Show-PhaseHeader "PHASE 62" "NAMED PIPE BACKDOOR AUDIT" "RAT/C2"
 Out-Typewriter "ENUMERATING NAMED PIPE ENDPOINTS..." "HUNT"
 try {
     $pipes = [System.IO.Directory]::GetFiles("\\.\pipe\")
-    $suspectPipes = $pipes | Where-Object { $_ -match "meterpreter|msf|cobaltstrike|beacon|njrat|asyncrat|quasar|remcos|dlltest|netbus|poisonivy|havoc|sliver|[a-f0-9]{8,}" }
+    # Pattern names externalized to data (c2_pipe_patterns); generic hex tail kept inline (not a signature).
+    $c2PipeRegex = (($C2_PIPE_PATTERNS | ForEach-Object { [regex]::Escape($_) }) -join '|') + '|[a-f0-9]{8,}'
+    $suspectPipes = $pipes | Where-Object { $_ -match $c2PipeRegex }
     foreach ($pipe in $suspectPipes) {
         Out-ThreatBanner "SUSPECT NAMED PIPE" $pipe
         Add-Finding -ID "PIPE_$($pipe -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "RAT/Backdoor Pipe" `
@@ -217,16 +219,7 @@ if ($shares.Count -eq 0) { Out-Typewriter "  -> [OK] NO NON-STANDARD SHARES FOUN
 Show-PhaseHeader "PHASE 67" "ADWARE / PUP / SPYWARE REGISTRY SCAN" "SPYWARE"
 Out-Typewriter "SCANNING FOR KNOWN ADWARE / PUP REGISTRY KEYS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$adwarePaths = @(
-    "HKCU:\SOFTWARE\Conduit","HKCU:\SOFTWARE\SearchProtect","HKCU:\SOFTWARE\Trovi",
-    "HKCU:\SOFTWARE\BabylonToolbar","HKCU:\SOFTWARE\Delta","HKCU:\SOFTWARE\Iminent",
-    "HKCU:\SOFTWARE\ISearchIQ","HKCU:\SOFTWARE\BrowserDefender","HKCU:\SOFTWARE\Funmoods",
-    "HKCU:\SOFTWARE\VisualBee","HKCU:\SOFTWARE\WebCake","HKCU:\SOFTWARE\Savings Bull",
-    "HKCU:\SOFTWARE\Sweet Page","HKCU:\SOFTWARE\SnapDo","HKCU:\SOFTWARE\V-Bates",
-    "HKCU:\SOFTWARE\YSearchUtil","HKLM:\SOFTWARE\Conduit","HKLM:\SOFTWARE\SearchProtect",
-    "HKLM:\SOFTWARE\BabylonToolbar","HKCU:\SOFTWARE\CrossRider","HKCU:\SOFTWARE\Superfish",
-    "HKLM:\SOFTWARE\Superfish","HKCU:\SOFTWARE\SpeedBit","HKCU:\SOFTWARE\Spigot"
-)
+$adwarePaths = $ADWARE_PUP_REGS   # externalized to data (adware_pup_regs)
 $adwareFound = $false
 foreach ($ap in $adwarePaths) {
     if (Test-Path $ap) {
@@ -252,7 +245,7 @@ $stealerPaths = @(
     "$env:APPDATA\Mozilla\Firefox\Profiles\*\logins.json",
     "$env:APPDATA\Mozilla\Firefox\Profiles\*\key4.db"
 )
-$stealerRegex = "redline|raccoon|vidar|azorult|formbook|agent tesla|lokibot|sneaker|negasteal|hawkeye|loki|masslogger"
+$stealerRegex = ($INFOSTEALER_PROCS | ForEach-Object { [regex]::Escape($_) }) -join '|'  # externalized (infostealer_procs)
 $stealerProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name.ToLower() -match $stealerRegex }
 foreach ($sp in $stealerProcs) {
     Out-ThreatBanner "INFO-STEALER PROCESS IOC" "$($sp.Name) PID:$($sp.Id)"
@@ -338,8 +331,9 @@ if ($phishProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO PHISHING OVERLAY PRO
 Show-PhaseHeader "PHASE 72" "BOTNET C2 IP / IOC BLACKLIST CHECK" "BOTNET"
 Out-Typewriter "CROSS-REFERENCING ACTIVE CONNECTIONS AGAINST C2 IOC LIST..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-# Common botnet / malware C2 infrastructure fingerprints
-$botnetDomainPatterns = @("\.onion\b","duckdns\.org","zapto\.org","webhop\.me","myftp\.biz","viewdns\.net","freeddns\.com")
+# Common botnet / malware C2 infrastructure fingerprints. Merged onto the shared
+# DDNS list (suspicious_dns_domains) instead of a duplicate inline set; .onion kept inline.
+$botnetDomainPatterns = @("\.onion\b") + ($SUSPICIOUS_DNS_DOMAINS | ForEach-Object { [regex]::Escape($_) })
 $allConns = Get-NetTCPConnection -ErrorAction SilentlyContinue
 $botFound = $false
 foreach ($conn in ($allConns | Select-Object -First 50)) {
@@ -719,7 +713,7 @@ if ($PhasePlan.Universal) {
     if (-not $foundShell) { Out-Typewriter "  -> [OK] NO REVERSE SHELL SOCKETS." "GOOD" }
 
     Show-PhaseHeader "PHASE 82" "NETCAT / SOCAT / CHISEL / PLINK BINARY SCAN" "UNIVERSAL"
-    $tunnelNames = @("nc.exe","ncat.exe","socat.exe","chisel.exe","plink.exe","putty.exe","proxychains*","ligolo*","frpc.exe","frps.exe","bore.exe","rpivot*")
+    $tunnelNames = $TUNNELING_TOOLS   # externalized to data (tunneling_tools)
     $tunnelRoots = @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE,"$env:WINDIR\Temp")
     # One bounded walk; anchored regex so "nc.exe" doesn't substring-match "sync.exe"
     # (was 4 roots x 12 names = 48 recursions, one over the entire user profile).
@@ -837,7 +831,7 @@ if ($PhasePlan.Universal) {
                 -Target "PID:$($ec.OwningProcess)" -FixAction "KillProcess" -FixParam $ec.OwningProcess -Group "Data Exfiltration"
         }
     }
-    $stegoTools = @("openstego*","steghide*","outguess*","jphide*","stegosuite*","stepic*","imagesteganography*")
+    $stegoTools = $STEGO_TOOLS   # externalized to data (stego_tools)
     # One bounded walk + anchored regex (was 3 roots x 7 names = 21 recursions incl. whole profile).
     $stegoRegex = ($stegoTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $stegoHits = Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE) | Where-Object { $_.Name -match $stegoRegex }

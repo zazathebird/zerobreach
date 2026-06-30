@@ -831,6 +831,14 @@ $EMAIL_LURE_PATTERNS    = Get-Sig 'email_lure_filename_patterns'
 $PROACTIVE_PERSIST_REGS = Get-Sig 'proactive_persistence_regs'
 $PROACTIVE_OFFICE_KEYS  = Get-Sig 'proactive_office_keys'
 $PROACTIVE_LURE_EXTS    = @((Get-Sig 'proactive_lure_extensions') | ForEach-Object { "$_".ToLower() })
+# WS1 — name-lists externalized out of engine/*.ps1 (AMSI/portability). One key per phase.
+$C2_PIPE_PATTERNS       = Get-Sig 'c2_pipe_patterns'      # Phase 62
+$ADWARE_PUP_REGS        = Get-Sig 'adware_pup_regs'       # Phase 67
+$INFOSTEALER_PROCS      = Get-Sig 'infostealer_procs'     # Phase 68
+$TUNNELING_TOOLS        = Get-Sig 'tunneling_tools'       # Phase 82
+$STEGO_TOOLS            = Get-Sig 'stego_tools'           # Phase 89
+$LEAKED_CERT_ISSUERS    = Get-Sig 'leaked_cert_issuers'   # Phase 98
+$CRED_DUMP_TOOLS        = Get-Sig 'cred_dump_tools'       # Phase 106
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)

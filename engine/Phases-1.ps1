@@ -58,7 +58,9 @@ if ($suspectProcs) {
 
 Show-PhaseHeader "PHASE 4" "LOLBIN ABUSE AUDIT (Living-Off-The-Land Binaries)"
 Invoke-QuantumBar "SCANNING LOLBIN EXECUTION TRACES" 10 110
-$lolbins = @("mshta","wscript","cscript","regsvr32","rundll32","certutil","bitsadmin","msiexec","installutil","regasm","regsvcs","msbuild","cmstp","odbcconf","ieexec","pcalua","presentationhost","infdefaultinstall","diskshadow","esentutl","extrac32","findstr","forfiles","gpscript","hh","makecab","mavinject","msdeploy","msdt","pcwrun","replace","rpcping","syncappvpublishingserver","vbc","winrm","wmic","xwizard","msconfig","fodhelper","eventvwr","sdclt","wusa","csc")
+# Consolidated onto the shared LOLBAS list (was a near-duplicate inline 46-name
+# list); single source of truth in data/detection_signatures.json (lolbas_expanded).
+$lolbins = $LOLBAS_EXPANDED
 $lolHits = $false
 # One WMI enumeration + case-insensitive name lookup instead of one filtered
 # Get-WmiObject query per LOLBIN name (was ~46 WMI round-trips per scan).
