@@ -53,6 +53,15 @@ contiguous (1-80) + 55.5/74.5/74.6/74.7, 2 recovered errors *survived* (were pre
 phases), baseline+report JSON written, clean self-exit. Parse-clean on live PS 5.1.26100 + 7.6.3, BOM
 intact on all 6 files.
 
+**Phase 53 FP fix (`9700f97`) — found by this session's validation.** The auto-destructive re-grade of
+the live DEEP baseline surfaced a **pre-existing** rule-#1 violation: the generic `*readme*.txt` note
+pattern auto-selected `…\SysinternalsSuite\readme.txt` as CRITICAL + DeleteFile on a healthy box. Split
+the note filename patterns by confidence — STRONG tokens (`DECRYPT`/`YOUR_FILES`/`HOW_TO_DECRYPT`/
+`!readme!`/`restore_files`/`help_decrypt`/`ransom` + CISA family names) stay CRITICAL + DeleteFile;
+GENERIC English words (`readme.txt`/`RECOVER`/`HOW TO RECOVER`/`IMPORTANT.txt`) are destructive ONLY
+if the file CONTENT also matches a ransom-note construct (`Test-ContentRules`), else POSSIBLE + Info.
+Re-checked live: the Sysinternals readme is now POSSIBLE/Info, Phase 53 auto-destructive = 0.
+
 **New durable rules in CLAUDE.md:** edit modules-not-monolith; every phase module needs its own
 top-level trap; module `exit` must be `[Environment]::Exit`; `$PSScriptRoot` in a module = `engine\`
 (use `$global:ZB_ROOT`).
