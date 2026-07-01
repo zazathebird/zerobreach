@@ -1331,18 +1331,44 @@ if (-not $entropyHits) { Out-Typewriter "  -> [OK] NO SUSPICIOUSLY HIGH ENTROPY 
 Show-PhaseHeader "PHASE 53" "RANSOM NOTE DETECTION" "RANSOMWARE"
 Out-Typewriter "SCANNING FOR RANSOM NOTE ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
-$ransomNotePatterns = @("*readme*.txt","*DECRYPT*","*RECOVER*","*ransom*","*YOUR_FILES*","*HOW_TO_DECRYPT*","*!readme!*","*restore_files*","*HOW TO RECOVER*","*IMPORTANT*.txt","*help_decrypt*") + $RANSOM_NOTE_FILENAMES  # WS2: + CISA-sourced known-family note filenames
-# Collapse 11 patterns × N roots (was 55 full recursions) into ONE in-memory regex over the
-# shared phase-51 walk. Wildcards -> regex: escape, then \* -> .*  (case-insensitive -match).
-$noteRegex = ($ransomNotePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
+# Filename patterns split by confidence (FP fix — rule #1: never auto-delete a healthy-box file):
+#  STRONG  = tokens that essentially never occur in a benign filename -> CRITICAL + DeleteFile.
+#  GENERIC = common English words that DO occur in legit files (readme.txt / IMPORTANT.txt / RECOVER)
+#            -> only CRITICAL + DeleteFile if the file CONTENT also matches a ransom-note construct;
+#            otherwise POSSIBLE + Info (shown, never auto-deleted). This stops e.g. Sysinternals'
+#            readme.txt being auto-selected for deletion.
+$strongNotePatterns  = @("*DECRYPT*","*ransom*","*YOUR_FILES*","*HOW_TO_DECRYPT*","*!readme!*","*restore_files*","*help_decrypt*") + $RANSOM_NOTE_FILENAMES  # WS2: + CISA-sourced known-family note filenames
+$genericNotePatterns = @("*readme*.txt","*RECOVER*","*HOW TO RECOVER*","*IMPORTANT*.txt")
+# Collapse patterns × N roots (was 55 full recursions) into ONE in-memory regex over the shared
+# phase-51 walk. Wildcards -> regex: escape, then \* -> .*  (case-insensitive -match).
+$strongRegex  = ($strongNotePatterns  | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
+$genericRegex = ($genericNotePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
 $noteFound = $false
-$noteFiles = $ransomScanFiles | Where-Object { $_.Name -match $noteRegex }
-foreach ($note in $noteFiles) {
+foreach ($note in ($ransomScanFiles | Where-Object { $_.Name -match $strongRegex })) {
     Out-ThreatBanner "RANSOM NOTE DETECTED" $note.FullName
     Add-Finding -ID "RANSOMNOTE_$($note.Name -replace '[^a-z0-9]','')" -Phase "PHASE 53" -ThreatType "Ransomware" `
         -Severity $SEV_CRITICAL -Description "Ransom note file found: $($note.FullName)" `
         -Target $note.FullName -FixAction "DeleteFile" -FixParam $note.FullName -Group "Ransom Notes"
     $global:RansomwareRisk += 10; $noteFound = $true
+}
+foreach ($note in ($ransomScanFiles | Where-Object { $_.Name -match $genericRegex -and $_.Name -notmatch $strongRegex })) {
+    # Generic filename — confirm with content before treating as a real (deletable) note.
+    $confirmed = $false
+    if ($RANSOM_NOTE_CONTENT_RULES.Count -gt 0 -and $note.Length -lt 102400) {
+        $confirmed = (Test-ContentRules -FilePath $note.FullName -Rules $RANSOM_NOTE_CONTENT_RULES).Hit
+    }
+    if ($confirmed) {
+        Out-ThreatBanner "RANSOM NOTE DETECTED" $note.FullName
+        Add-Finding -ID "RANSOMNOTE_$($note.Name -replace '[^a-z0-9]','')" -Phase "PHASE 53" -ThreatType "Ransomware" `
+            -Severity $SEV_CRITICAL -Description "Ransom note (filename + content confirmed): $($note.FullName)" `
+            -Target $note.FullName -FixAction "DeleteFile" -FixParam $note.FullName -Group "Ransom Notes"
+        $global:RansomwareRisk += 10
+    } else {
+        Add-Finding -ID "RANSOMNOTE_$($note.Name -replace '[^a-z0-9]','')" -Phase "PHASE 53" -ThreatType "Ransomware" `
+            -Severity $SEV_POSSIBLE -Description "File name resembles a ransom note but content is not confirmed (likely a legitimate readme — review, do not auto-delete): $($note.FullName)" `
+            -Target $note.FullName -FixAction "Info" -Group "Ransom Notes"
+    }
+    $noteFound = $true
 }
 # WS2: renamed-note detection — scan small text-like notes in the bounded ransom walk for
 # ransom-note CONTENT constructs (catches notes that don't match a known filename). FixAction
