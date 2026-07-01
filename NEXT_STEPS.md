@@ -1,18 +1,33 @@
 # ZeroBreach — Next Steps (post-/clear handoff)
 
-> ### ▶ START HERE — next session (updated 2026-07-01, session 3: prep re-verified)
-> **The single open item is live GUI end-to-end validation. Read `HANDOFF.md` first** — it has the
-> current state and the user runbook (the model debugs from artifacts the user brings back).
-> **Prep re-verified 2026-07-01:** all 5 `_DELETEME` tripwires still present; server parse-clean on
-> PS 5.1.26100 + 7.6.3, BOM intact; `app.js` clean. Ready to `Launch-GUI.bat` as admin — no setup
-> needed. One local docs-only commit (`f198420`) is unpushed (user said push later; no code impact).
-> Engine FP-tuning is COMPLETE through round 5 (CLAUDE.md → "Round 5"); the last fresh full re-grade
-> (`KrakenBaseline_20260628_152000.json`) is **52 auto-destructive, 0 system-damage FixParams** — holds.
-> Latest server work (`c0477ae`, **PUSHED to origin**): phase-"skipping" was diagnosed as a
-> display-cadence artifact (NOT an engine skip — all 115 phases ran, 0 RECOVERED ERRORs) and fixed
-> (emit `scan_state` on phase change); plus durable run logs (`reports\server_console_*.log` +
-> `server_events_*.log`). **The phase-skip fix is not yet visually confirmed in-browser** — verify it
-> during the live-GUI validation (the counter should step 1→115 without jumping past fast phases).
+> ### ▶ START HERE — next session (updated 2026-07-01, session 4: engine split + WS2 port DONE)
+> **BIG ARCHITECTURE CHANGE this session — read the 2026-07-01 CHANGELOG entry first.** The engine is
+> no longer a monolith: `ZeroBreach-V23.ps1` is now a thin loader that dot-sources `engine/Phases-1/2/3
+> .ps1` + `Summary.ps1` + `FixMode.ps1`. We adopted the work-rig branch's split architecture but rebuilt
+> it on `main`'s live-validated engine (FP rounds 1-5 + safety guard intact), merged the WS1/WS2
+> detection research into `data/*.json`, and ported 6 new/upgraded detections (Phases 55.5, 53, 62, 66,
+> 69, 99.5 — **all `FixAction Info`, zero new auto-destructive findings**). **Edit phases in the
+> `engine/*.ps1` module, not the loader** (see CLAUDE.md "Engine is split" rules).
+>
+> **Validated headless this session:** FULL `-Auto` ran all 80 integer phases contiguous (1-80) +
+> 55.5/74.5/74.6/74.7, clean self-exit, reports written; all 6 files parse-clean PS 5.1.26100 + 7.6.3,
+> BOM intact. A load-bearing bug was found + fixed: the split had moved the resilience trap into the
+> loader, so a terminating error mid-module skipped phases 17-58 every run — fixed by giving each phase
+> module its own top-level trap (`29f5a0e`). **DEEP (1-115) headless run through the same fix was in
+> progress at handoff — confirm it reached 115 contiguous + re-grade the auto-destructive count from its
+> baseline JSON (baseline is 52; new Info-only phases should not raise it).**
+>
+> **STILL open (unchanged): live GUI end-to-end validation.** All 5 `_DELETEME` tripwires present;
+> `app.js` clean. `Launch-GUI.bat` as admin → verify export/IOC-save/STEALTH/remediation + that the
+> phase counter (server fix `c0477ae`) steps 1→115 without jumping past fast phases. FP-tuning is
+> COMPLETE through round 5; last full re-grade `KrakenBaseline_20260628_152000.json` = 52
+> auto-destructive, 0 system-damage FixParams.
+>
+> **Remaining WS work still on the work-rig branch** (nested `zerobreach/` folder, gitignored): WS3
+> false-positive tuning of the new WS2 detections, WS5 broader MITRE tagging, WS6 remediation/STEALTH
+> wiring. A known quality gap the fork flagged: the ACL `AccessControl.ObjectSecurity` TypeData
+> collision (2 benign RECOVERED ERRORs/run) may degrade `Get-AuthenticodeSignature` to a no-op —
+> consider an early `Import-Module Microsoft.PowerShell.Security` in the loader or a .NET fallback.
 >
 > Profiling (per-phase `⏱ took X.Xs` timing) is DONE and live — see the 2026-06-22 session log below.
 

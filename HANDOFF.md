@@ -1,9 +1,26 @@
-# RESUME HANDOFF — updated 2026-07-01 (session 3: prep re-verified)
+# RESUME HANDOFF — updated 2026-07-01 (session 4: engine split + WS2 detection port)
 
-> **OPEN ITEM (only one left): live GUI end-to-end validation.** All engine/FP work is done,
-> committed, pushed, and live-re-graded. The browser+admin remediation path is the last unvalidated
-> thing. Prep is done (tripwires laid, server parse-clean) — see "NEXT SESSION" runbook below. The
-> USER runs the browser click-through; the model debugs from artifacts they bring back.
+> **THIS SESSION shipped a major architecture change** — read the 2026-07-01 `CHANGELOG.md` entry and
+> CLAUDE.md's new "Engine is split" rules before touching the engine. The monolith
+> `ZeroBreach-V23.ps1` is now a thin loader dot-sourcing `engine/Phases-1/2/3.ps1` + `Summary.ps1` +
+> `FixMode.ps1`. We took the work-rig branch's split architecture (it was the better long-term
+> approach — multiple detection agents can now edit separate modules) but rebuilt it on `main`'s
+> live-validated engine and its FP tuning, then merged the WS1/WS2 detection data and ported 6
+> new/upgraded detections (all `FixAction Info`, no new auto-destructive findings).
+>
+> **Commits this session (local, unpushed):** `efee013` docs · `dcf8793` split · `585fe57` data merge ·
+> `1894fa1` detection port · `29f5a0e` **the dot-source trap fix** · `3715fd8` docs. Plus the earlier
+> unpushed `f198420` (docs). **Push when ready** (all validated headless; the outer repo's remote is
+> `github.com/zazathebird/zerobreach`).
+>
+> **Validated headless:** parse-clean PS 5.1.26100 + 7.6.3 (all 6 files, BOM intact); FULL `-Auto` ran
+> phases 1-80 contiguous + fractional phases, clean self-exit, reports written. DEEP (1-115) run was
+> finishing at handoff — confirm 115 + re-grade auto-destructive from its baseline (target still 52).
+>
+> **OPEN ITEM (still the only user-facing one): live GUI end-to-end validation.** The browser+admin
+> remediation path remains the last unvalidated thing. Prep is done (tripwires laid, server + engine
+> parse-clean) — see "NEXT SESSION" runbook below. The USER runs the browser click-through; the model
+> debugs from artifacts they bring back.
 >
 > ### Session 3 (2026-07-01) — prep RE-VERIFIED, no code changes; ready to launch
 > Re-checked all prep before handing off for the browser run:
