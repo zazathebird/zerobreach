@@ -6,6 +6,57 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-01 — Engine split into `engine/` modules + WS2 detection port + the dot-source trap fix
+
+Opus had begun (on the `quarantine-work-dump-…` work-rig branch, dropped into the repo as the nested
+`zerobreach/` folder) splitting the monolithic engine into a dot-sourced `engine/` folder and doing a
+big WS1/WS2 detection expansion. **We adopted that architecture but rebuilt it on `main`'s
+live-validated engine** (which carries FP rounds 1-5 + the safety guard the fork's copy predated), so
+we keep the maintainability win without regressing any FP tuning.
+
+**Split (`dcf8793`).** Mechanical, byte-exact partition of the 5,749-line monolith at top-level AST
+statement boundaries (partition proven to reconstruct the original before any edit), into a thin
+loader + `engine/Phases-1.ps1` (1-58), `Phases-2.ps1` (59-89), `Phases-3.ps1` (90-115), `Summary.ps1`,
+`FixMode.ps1`. Split **by contiguous phase RANGE, not category** — phases run in numeric order and
+reuse variables across phases (`$ransomScanFiles` 51→53, `$bcdedit2` 40→58, `$dnsCache2` 59→60);
+dot-sourcing into the loader's one scope preserves that. Six targeted deviations from the monolith
+text: `$global:ZB_ROOT` set unconditionally (Phase 66's self-file guard needs the project root, since
+`$PSScriptRoot` in a module = `engine\`); 4× process-terminating `exit` → `[Environment]::Exit(0)` in
+Summary/FixMode (a plain `exit` in a dot-sourced file only returns to the loader → would fall through
+into FixMode's prompt and hang `-Auto`).
+
+**Data merge (`585fe57`).** Union-merged the fork's WS1/WS2 research into `data/*.json`:
+`detection_signatures.json` +28 keys (byovd_*, known_malware_mutexes, ransom_note_*, c2_pipe_*,
+loader/banking/infostealer procs + behavior rules, inhibit_recovery_rules, …), superset updates
+(known_malware_hashes 1→17, ransomware_extensions 70→79); `mitre_mapping.json` +9 techniques + 14
+phase_map entries; new `coverage_matrix.json`. AMSI rule respected — signatures stay in `data/`.
+
+**Detection port (`1894fa1`).** Ported the additive, non-conflicting WS2 detections, adapted to
+`main`'s helpers + FP tuning, **all `FixAction Info` → zero new auto-destructive findings**: Phase 55.5
+BYOVD driver audit, Phase 53 ransom-note names + content pass, Phase 62 anchored pipe *second* pass
+(KEEPING main's FP-safe first pass — did NOT take the fork's re-introduced broad `[a-f0-9]{8,}`
+catch-all), Phase 66 drive-letter admin-share exclusion, Phase 69 mutex probe, Phase 99.5 command-line
+heuristics. Left main's already-more-FP-tuned Phase 68 as-is.
+
+**The dot-source trap fix (`29f5a0e`) — the load-bearing bug.** Headless `-Auto` runs after the split
+silently ran phases 1-16, then jumped to 59 — **phases 17-58 dropped every run** (both QUICK and FULL).
+Root cause: in the monolith the script-scope `trap { Write-RecoveredError $_; continue }` resumed at the
+next **phase** (same scope); after the split the trap lives only in the loader, so a terminating error
+inside a dot-sourced module unwinds past all its remaining phases and `continue` resumes at the next
+**module**. The trigger was the benign System32 ACL `AccessControl.ObjectSecurity` TypeData collision at
+Phase 16. (The fork had the identical latent bug — its own handoff noted "the trap does not reliably
+continue through every phase" and chased individual `-EA Stop` ops instead of the root cause.) Fix:
+give `Phases-1/2/3` each a **top-of-module** `trap { Write-RecoveredError $_; continue }` (the same
+remedy CLAUDE.md already prescribes for grouped `if($PhasePlan.*)` blocks). Proven with a minimal
+dot-source repro. **Post-fix live headless validation:** FULL `-Auto` ran all 80 integer phases
+contiguous (1-80) + 55.5/74.5/74.6/74.7, 2 recovered errors *survived* (were previously fatal to 40
+phases), baseline+report JSON written, clean self-exit. Parse-clean on live PS 5.1.26100 + 7.6.3, BOM
+intact on all 6 files.
+
+**New durable rules in CLAUDE.md:** edit modules-not-monolith; every phase module needs its own
+top-level trap; module `exit` must be `[Environment]::Exit`; `$PSScriptRoot` in a module = `engine\`
+(use `$global:ZB_ROOT`).
+
 ## 2026-06-28 — UI phase-"skipping" (display artifact, NOT engine) + durable run logs (`c0477ae`)
 
 User reported a live DEEP run "skipped MANY MANY phases (unless instant)." It did **not** — the

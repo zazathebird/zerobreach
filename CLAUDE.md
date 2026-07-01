@@ -44,7 +44,17 @@ PowerShell 5.1+, admin rights.
 ├── Launch-GUI.bat              Entry point (self-elevates)
 ├── ZeroBreach-Server.ps1       Pure-PS HTTP server (default). HttpListener + SSE at /api/events.
 │                               SAVED WITH UTF-8 BOM — do not remove (see rules).
-├── ZeroBreach-V23.ps1          ~115-phase PS scan engine (also BOM). Self-elevates via RunAs.
+├── ZeroBreach-V23.ps1          THIN LOADER (also BOM). param()/elevation/schedule/globals/ALL
+│                               helpers/Get-Sig/Get-Perm/banner/resilience trap/menus, then
+│                               dot-sources engine/* in execution order. Self-elevates via RunAs.
+├── engine/                     Dot-sourced phase modules (each UTF-8 BOM). Split BY RANGE, not
+│   │                           category — phases run in numeric order and reuse vars across
+│   │                           phases; dot-sourcing into the loader's ONE scope preserves that.
+│   ├── Phases-1.ps1            Sections 1-11, phases 1-58 (incl. 55.5 BYOVD)
+│   ├── Phases-2.ps1            Sections 12-16 front, phases 59-89 (incl. 69 mutex, 74.5/.6/.7)
+│   ├── Phases-3.ps1            if($PhasePlan.Advanced) 90-105+ (incl. 99.5) + Integrity 108-115
+│   ├── Summary.ps1             risk score + audit summary + stealth/auto exits
+│   └── FixMode.ps1             fix-mode entry, rollback snapshot, Invoke-FixMode
 ├── gui/
 │   ├── templates/index.html    Single-page app (the only copy; served by both servers)
 │   └── static/
@@ -61,7 +71,10 @@ PowerShell 5.1+, admin rights.
 │   ├── ioc_defaults.json            Default IOC list for -IocFile
 │   ├── detection_signatures.json    Malware signatures + fp_allowlists. Loaded by Get-Sig. KEPT IN
 │   │                                DATA so AMSI/Defender doesn't flag the engine (see rules).
-│   └── mitre_mapping.json           MITRE ATT&CK technique map (wired into findings)
+│   ├── mitre_mapping.json           MITRE ATT&CK technique map (wired into findings)
+│   ├── coverage_matrix.json         Phase-by-phase coverage/gap matrix (WS0 reference — re-audit
+│   │                                pending; was generated against the work-rig engine)
+│   └── permission_baseline.json     ACL/owner baseline for the perm-integrity phases (108-115)
 └── reports/                    Auto-created; scan JSON, quarantine vault, durable server logs
 ```
 
@@ -112,6 +125,28 @@ for remediation** — POSSIBLE is shown but never auto-acted-on (the lever behin
 
 These are hard constraints distilled from every past regression (`CHANGELOG.md` has the stories).
 Violating one silently breaks a scan, hangs the tool, or damages a user's machine.
+
+### Engine is split — edit the modules, and mind the two dot-source traps
+- **The engine is `ZeroBreach-V23.ps1` (thin loader) + `engine/*.ps1` (dot-sourced phase modules).**
+  Edit a **phase** in the matching `engine/*.ps1`; edit **globals/helpers/Get-Sig loads/elevation**
+  in the loader. All modules dot-source into the loader's single scope, so cross-phase variables,
+  functions and traps carry across exactly as when it was one file — but two gotchas bite ONLY after
+  the split, so they are hard rules:
+- **Every phase module needs its OWN top-level `trap { Write-RecoveredError $_; continue }`** (already
+  in `Phases-1/2/3`). Reason: the loader's script-scope trap resumes at the next **dot-source
+  statement** (i.e. the next MODULE), so a terminating error mid-module would otherwise skip **all its
+  remaining phases**. This is exactly how the benign System32 ACL `AccessControl.ObjectSecurity`
+  TypeData collision at Phase 16 silently dropped phases 17-58. A module-level (or grouped-block)
+  trap makes `continue` resume at the next **phase** instead. Keep it as the module's first statement.
+- **Any `exit` inside `engine/*.ps1` that must stop the ENGINE has to be `[Environment]::Exit(N)`.**
+  A plain `exit` in a dot-sourced file only returns to the loader, which then runs the NEXT module
+  (this hung `-Auto`: `Summary.ps1`'s exit fell through into `FixMode.ps1`'s interactive prompt).
+  Applied in `Summary.ps1` + `FixMode.ps1`. The loader's own `exit`s (elevation/schedule) are fine.
+- **`$PSScriptRoot` inside a module resolves to `engine\`, not the project root** — use
+  `$global:ZB_ROOT` (set unconditionally near the top of the loader) for project-root paths.
+- **Keep all 6 files parse-clean on live `powershell.exe` 5.1 AND `pwsh` 7, UTF-8 BOM intact.** The
+  split preserves numeric phase order; if you subdivide a module further, cut only at a `# SECTION N`
+  banner (comment lines, never mid-statement).
 
 ### User rules (highest priority)
 1. **The tool must NEVER auto-select or auto-apply anything that damages the system.** Never ship a
@@ -174,7 +209,11 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **The GUI phase counter is driven by `scan_state`, throttled to every 12 log lines** — any UI element
   that must track phase precisely needs a phase-change-triggered emit, not the `%12` tick. When a user
   reports "skipped phases," first grep the `KrakenConsole_*.log` for `PHASE N — … took` + `RECOVERED
-  ERROR` before suspecting the engine — it's almost always display cadence, not a dropped phase.
+  ERROR` — usually it's display cadence, not a dropped phase. **BUT since the engine split, a genuine
+  skip IS possible**: if a phase module is missing its top-level `trap` (see the Engine-split rules), a
+  terminating error drops every remaining phase in that module. Confirm by checking the log for a
+  contiguous `PHASE N — … took` sequence — a hard gap (e.g. 16 → 59) right after a `RECOVERED ERROR`
+  means a module trap is missing, not display cadence.
 
 ### GUI
 - **Adding a cinematic effect = one `CINE_FX` entry in `app.js` + the matching `body.zbfx-<id>` CSS**
@@ -209,6 +248,17 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   hardening (Office/WSH/ASR, all opt-in `RunCmd`). Content rules match malicious *constructs*, not AV
   signature names. Driven by real Datto/Defender alerts. ASR: 3 low-FP rules Block, 3 higher-FP Audit;
   Office `VBAWarnings=2` (not 4).
+- **WS2 detection expansion** (ported from the work-rig branch 2026-07-01, all **`FixAction Info`** — no
+  new auto-destructive findings): **Phase 55.5** known-vulnerable signed-driver audit (BYOVD vs the
+  LOLDrivers name list, SHA256-confirmed via `Get-FileHashSafe`); **Phase 53** extended known-family
+  ransom-note filenames + a renamed-note *content*-rule pass; **Phase 62** anchored C2/banking named-pipe
+  second pass (CS/Havoc/Covenant/PoshC2 default pipes matched on the bare leaf — deliberately does NOT
+  reuse the broad `[a-f0-9]{8,}` catch-all that round-4 removed); **Phase 66** now excludes drive-letter
+  admin shares (`C$`/`D$`) so the worm scan doesn't walk the whole drive; **Phase 69** known-malware
+  single-instance mutex probe (Pikabot/Amadey); **Phase 99.5** (DEEP+ only) process command-line
+  heuristics vs externalized loader/banking/infostealer/inhibit-recovery behavior rules. Signatures live
+  in `data/detection_signatures.json` (WS2 keys: `byovd_*`, `known_malware_mutexes`, `ransom_note_*`,
+  `c2_pipe_regex_anchored`, `banking_named_pipes`, `*_behavior_rules`, `inhibit_recovery_rules`, …).
 - **GUI feature layer** — 12 themes + secret KRAKEN (type "kraken" for a ~19s cinematic, sets
   `zb_god=1`); synthesized sound; canvas VFX; command palette (Ctrl+K); EXECUTE REMEDIATION requires
   typing `PURGE`. **MSP Mode**: type "msp"/"gannon"/"staples" pre-scan → `gannon-orange` theme + badge.
