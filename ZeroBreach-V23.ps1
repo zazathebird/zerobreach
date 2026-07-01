@@ -901,6 +901,24 @@ $HIDDEN_TASK_BENIGN_RE  = Join-AllowRegex 'hidden_task_benign_paths'
 $BITS_SUSP_REMOTE_RE    = if (@(Get-Sig 'bits_suspicious_remote_regex').Count) { @(Get-Sig 'bits_suspicious_remote_regex')[0] } else { '(?!)' }
 $BITS_SUSP_LOCAL_RE     = if (@(Get-Sig 'bits_suspicious_local_regex').Count) { @(Get-Sig 'bits_suspicious_local_regex')[0] } else { '(?!)' }
 
+# WS2 detection-coverage expansion (2026-07-01) — all externalized data, AMSI-safe.
+# Consumed by: Phase 55.5 (BYOVD), Phase 53 (ransom-note names/content), Phase 62
+# (anchored C2/banking pipe second pass), Phase 69 (mutex probe), Phase 99.5 (cmdline
+# heuristics). Every one of these detections uses FixAction Info/Quarantine only — none
+# is auto-destructive on a healthy box (see CLAUDE.md rule #1).
+$BYOVD_DRIVER_NAMES        = @((Get-Sig 'byovd_driver_names') | ForEach-Object { "$_".ToLower() })  # Phase 55.5
+$BYOVD_DRIVER_SHA256       = Get-Sig 'byovd_driver_sha256'          # Phase 55.5 (SHA256 confirm)
+$RANSOM_NOTE_FILENAMES     = Get-Sig 'ransom_note_filenames'        # Phase 53 (known-family note names)
+$RANSOM_NOTE_CONTENT_RULES = Get-Sig 'ransom_note_content_rules'    # Phase 53 (renamed-note content)
+$BANKING_NAMED_PIPES       = Get-Sig 'banking_named_pipes'          # Phase 62 (TrickBot-class pipe)
+$C2_PIPE_REGEX_ANCHORED    = Get-Sig 'c2_pipe_regex_anchored'       # Phase 62 (anchored framework pipes)
+$KNOWN_MALWARE_MUTEXES     = Get-Sig 'known_malware_mutexes'        # Phase 69 (single-instance mutexes)
+$LOADER_BEHAVIOR_RULES     = Get-Sig 'loader_behavior_rules'        # Phase 99.5
+$BANKING_BEHAVIOR_RULES    = Get-Sig 'banking_behavior_rules'       # Phase 99.5
+$INFOSTEALER_BEHAVIOR_RULES= Get-Sig 'infostealer_behavior_rules'  # Phase 99.5
+$INHIBIT_RECOVERY_RULES    = Get-Sig 'inhibit_recovery_rules'       # Phase 99.5
+$ALL_MALWARE_CMDLINE_RULES = @($LOADER_BEHAVIOR_RULES + $BANKING_BEHAVIOR_RULES + $INFOSTEALER_BEHAVIOR_RULES + $INHIBIT_RECOVERY_RULES)
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
 #  Drives phases 108-115 (FORENSIC PERMISSION & INTEGRITY AUDIT). Path/key/owner

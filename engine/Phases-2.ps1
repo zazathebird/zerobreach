@@ -88,15 +88,42 @@ try {
     # The old inline pattern ended in "[a-f0-9]{8,}", which matched virtually every legitimate
     # Windows RPC/COM/GUID-named pipe -> ~100 CRITICAL false positives. Do NOT reintroduce a broad
     # hex/GUID catch-all here (see c2_named_pipe_regex note in detection_signatures.json).
-    $suspectPipes = $pipes | Where-Object { $_ -match $C2_NAMED_PIPE_RE }
+    $suspectPipes = @($pipes | Where-Object { $_ -match $C2_NAMED_PIPE_RE })
+    $pipeHits = 0
     foreach ($pipe in $suspectPipes) {
         Out-ThreatBanner "SUSPECT NAMED PIPE" $pipe
         Add-Finding -ID "PIPE_$($pipe -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "RAT/Backdoor Pipe" `
             -Severity $SEV_CRITICAL -Description "Suspect named pipe matching known C2/RAT pattern: $pipe" `
             -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
-        $global:RATHits++
+        $global:RATHits++; $pipeHits++
     }
-    if ($suspectPipes.Count -eq 0) { Out-Typewriter "  -> [OK] NO SUSPECT NAMED PIPES." "GOOD" }
+    # WS2: anchored C2-framework default-pipe regexes (CS msagent_/postex_, Havoc demon_pipe,
+    # Covenant gruntsvc, PoshC2...) matched against the bare pipe LEAF, so legit RPC pipes
+    # (srvsvc/wkssvc/...) only fire on the malicious _<digits> suffix. Plus TrickBot-class pipe.
+    # These stay OFF the broad hex/GUID catch-all main deliberately removed (round-4 FP fix) —
+    # anchored on the leaf keeps FPs near zero; all FixAction Info.
+    $pSevMap = @{ "CRITICAL"=$SEV_CRITICAL; "HIGH"=$SEV_HIGH; "POSSIBLE"=$SEV_POSSIBLE }
+    foreach ($pipe in $pipes) {
+        if ($suspectPipes -contains $pipe) { continue }   # already reported above
+        $leaf = $pipe.Substring($pipe.LastIndexOf('\') + 1)
+        if (@($BANKING_NAMED_PIPES | Where-Object { $leaf -match [regex]::Escape($_) }).Count -gt 0) {
+            Out-ThreatBanner "BANKING TROJAN PIPE" $pipe
+            Add-Finding -ID "PIPEBANK_$($leaf -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "Banking Trojan Pipe" `
+                -Severity $SEV_HIGH -Description "Named pipe matching banking-trojan pattern (TrickBot-class): $pipe" `
+                -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
+            $global:RATHits++; $pipeHits++; continue
+        }
+        foreach ($r in $C2_PIPE_REGEX_ANCHORED) {
+            if ($leaf -match $r.Pattern) {
+                Out-ThreatBanner "C2 FRAMEWORK PIPE ($($r.Name))" $pipe
+                Add-Finding -ID "PIPEC2_$($leaf -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "C2 Framework Pipe" `
+                    -Severity $pSevMap[$r.Severity] -Description "Named pipe matches $($r.Name) default pattern: $pipe" `
+                    -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
+                $global:RATHits++; $pipeHits++; break
+            }
+        }
+    }
+    if ($pipeHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPECT NAMED PIPES." "GOOD" }
 } catch { Out-Typewriter "  -> PIPE ENUMERATION FAILED (ELEVATED SESSION REQUIRED)." "WARN" }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -197,7 +224,7 @@ if (-not $wormFound) { Out-Typewriter "  -> [OK] NO WORM AUTORUN ARTIFACTS." "GO
 Show-PhaseHeader "PHASE 66" "NETWORK SHARE WORM PROPAGATION SCAN" "WORM"
 Out-Typewriter "ENUMERATING OPEN NETWORK SHARES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "^(ADMIN|IPC|print)\$" }
+$shares = Get-WmiObject Win32_Share -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch '^([A-Za-z]|ADMIN|IPC|print)\$$' }   # exclude drive-letter admin shares (C$/D$) too — scanning C$ walks the whole drive
 # Bounded sig loop — up to 500 share binaries × Get-AuthSig, which can block on online
 # cert-revocation (CRL/OCSP). Cap total checks + wall-clock across ALL shares so a slow
 # responder (or a UNC share over a slow link) can't hang the phase (see Phase 98).
@@ -349,6 +376,28 @@ foreach ($proc in $hollowCandidates) {
     }
 }
 if (-not $hollowFound) { Out-Typewriter "  -> [OK] NO OBVIOUS HOLLOW/INJECTED PROCESSES." "GOOD" }
+
+# WS2: known-malware mutex probe — try to open the single-instance mutexes used by specific
+# families (Pikabot, Amadey...). Presence = active or residual infection. Very low FP (these
+# names are unique to the malware). FixAction Info — a mutex handle isn't a file/reg to delete.
+$mutexFound = $false
+foreach ($mx in $KNOWN_MALWARE_MUTEXES) {
+    foreach ($cand in @($mx, "Global\$mx", "Local\$mx")) {
+        $exists = $false
+        try { $m = [System.Threading.Mutex]::OpenExisting($cand); if ($m) { $exists = $true; $m.Dispose() } }
+        catch [System.UnauthorizedAccessException] { $exists = $true }   # exists but ACL-protected
+        catch { $exists = $false }                                       # not found / invalid name
+        if ($exists) {
+            Out-ThreatBanner "KNOWN-MALWARE MUTEX PRESENT" $cand
+            Add-Finding -ID "MUTEX_$($mx -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 69" -ThreatType "Active Malware Mutex" `
+                -Severity $SEV_CRITICAL -Description "Known-malware single-instance mutex present ($cand) — indicates active or residual infection (Pikabot/Amadey-class)." `
+                -Target $cand -FixAction "Info" -Group "Active Malware Mutex"
+            $global:TrojanHits++; $mutexFound = $true
+            break
+        }
+    }
+}
+if (-not $mutexFound) { Out-Typewriter "  -> [OK] NO KNOWN-MALWARE MUTEXES PRESENT." "GOOD" }
 
 Show-PhaseHeader "PHASE 70" "FILELESS REGISTRY PAYLOAD DETECTION" "FILELESS"
 Out-Typewriter "SCANNING REGISTRY FOR ENCODED PAYLOADS..." "HUNT"

@@ -1330,7 +1330,7 @@ if (-not $entropyHits) { Out-Typewriter "  -> [OK] NO SUSPICIOUSLY HIGH ENTROPY 
 Show-PhaseHeader "PHASE 53" "RANSOM NOTE DETECTION" "RANSOMWARE"
 Out-Typewriter "SCANNING FOR RANSOM NOTE ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
-$ransomNotePatterns = @("*readme*.txt","*DECRYPT*","*RECOVER*","*ransom*","*YOUR_FILES*","*HOW_TO_DECRYPT*","*!readme!*","*restore_files*","*HOW TO RECOVER*","*IMPORTANT*.txt","*help_decrypt*")
+$ransomNotePatterns = @("*readme*.txt","*DECRYPT*","*RECOVER*","*ransom*","*YOUR_FILES*","*HOW_TO_DECRYPT*","*!readme!*","*restore_files*","*HOW TO RECOVER*","*IMPORTANT*.txt","*help_decrypt*") + $RANSOM_NOTE_FILENAMES  # WS2: + CISA-sourced known-family note filenames
 # Collapse 11 patterns × N roots (was 55 full recursions) into ONE in-memory regex over the
 # shared phase-51 walk. Wildcards -> regex: escape, then \* -> .*  (case-insensitive -match).
 $noteRegex = ($ransomNotePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
@@ -1342,6 +1342,23 @@ foreach ($note in $noteFiles) {
         -Severity $SEV_CRITICAL -Description "Ransom note file found: $($note.FullName)" `
         -Target $note.FullName -FixAction "DeleteFile" -FixParam $note.FullName -Group "Ransom Notes"
     $global:RansomwareRisk += 10; $noteFound = $true
+}
+# WS2: renamed-note detection — scan small text-like notes in the bounded ransom walk for
+# ransom-note CONTENT constructs (catches notes that don't match a known filename). FixAction
+# Info: content-only matches are weaker evidence than a filename hit, so never auto-delete.
+if ($RANSOM_NOTE_CONTENT_RULES.Count -gt 0) {
+    $noteSevMap = @{ "CRITICAL"=$SEV_CRITICAL; "HIGH"=$SEV_HIGH; "POSSIBLE"=$SEV_POSSIBLE }
+    $noteTextFiles = @($ransomScanFiles | Where-Object { $_.Extension -match '^\.(txt|html?|hta|rtf)$' -and $_.Length -lt 102400 } | Select-Object -First 300)
+    foreach ($tf in $noteTextFiles) {
+        $cr = Test-ContentRules -FilePath $tf.FullName -Rules $RANSOM_NOTE_CONTENT_RULES
+        if ($cr.Hit) {
+            Out-ThreatBanner "RANSOM NOTE CONTENT MATCH" "$($cr.Name): $($tf.FullName)"
+            Add-Finding -ID "RANSOMTEXT_$($tf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 53" -ThreatType "Ransomware" `
+                -Severity $noteSevMap[$cr.Severity] -Description "Ransom-note content construct ($($cr.Name)) in: $($tf.FullName)" `
+                -Target $tf.FullName -FixAction "Info" -Group "Ransom Notes"
+            $global:RansomwareRisk += 5; $noteFound = $true
+        }
+    }
 }
 if (-not $noteFound) { Out-Typewriter "  -> [OK] NO RANSOM NOTE FILES DETECTED." "GOOD" }
 
@@ -1385,6 +1402,39 @@ foreach ($ud in ($driverList | Where-Object { $_.'Is Signed' -eq "FALSE" -and $_
     $global:RootkitHits++; $driverHits = $true
 }
 if (-not $driverHits) { Out-Typewriter "  -> [OK] NO UNSIGNED KERNEL DRIVERS." "GOOD" }
+
+# ── PHASE 55.5: KNOWN-VULNERABLE SIGNED DRIVER AUDIT (BYOVD) ───────────────────
+# Phase 55 only catches *unsigned* drivers; the real BYOVD risk is signed-but-vulnerable
+# drivers (loaded as a kernel service to get kernel R/W and disable EDR). Match loaded/
+# registered drivers against the LOLDrivers name list; confirm with SHA256 when present.
+# All findings are FixAction Info (a vulnerable driver may be a legit utility — never
+# auto-remove; the operator enables the MS Vulnerable Driver Blocklist / WDAC instead).
+Show-PhaseHeader "PHASE 55.5" "KNOWN-VULNERABLE SIGNED DRIVER AUDIT (BYOVD)" "ROOTKIT"
+Out-Typewriter "CROSS-REFERENCING DRIVERS AGAINST LOLDrivers BYOVD LIST..." "HUNT"
+$byovdFound = $false
+if ($BYOVD_DRIVER_NAMES.Count -gt 0) {
+    $byovdSet = @{}; foreach ($n in $BYOVD_DRIVER_NAMES) { $byovdSet[$n] = $true }
+    $byovdHashSet = @{}; foreach ($h in $BYOVD_DRIVER_SHA256) { $byovdHashSet["$($h.SHA256)".ToLower()] = $h.File }
+    foreach ($drv in (Get-CimInstance Win32_SystemDriver -ErrorAction SilentlyContinue)) {
+        $path = "$($drv.PathName)" -replace '^\\\?\?\\',''
+        if (-not $path) { continue }
+        $leaf = ([System.IO.Path]::GetFileName($path)).ToLower()
+        if (-not $leaf -or -not $byovdSet.ContainsKey($leaf)) { continue }
+        $loaded = ($drv.State -eq 'Running' -or $drv.Started)
+        $sev = if ($loaded) { $SEV_CRITICAL } else { $SEV_HIGH }
+        $hashNote = ""
+        if (Test-Path $path) {
+            $sha = (Get-FileHashSafe $path)
+            if ($sha -and $byovdHashSet.ContainsKey($sha.ToLower())) { $hashNote = " [SHA256-confirmed]" }
+        }
+        Out-ThreatBanner "VULNERABLE BYOVD DRIVER" "$leaf (loaded=$loaded)$hashNote"
+        Add-Finding -ID "BYOVD_$($leaf -replace '[^a-z0-9]','')" -Phase "PHASE 55.5" -ThreatType "BYOVD / Vulnerable Driver" `
+            -Severity $sev -Description "Known-vulnerable signed driver present$hashNote (loaded=$loaded): $leaf @ $path. Abused via BYOVD for kernel R/W to disable EDR / escalate. NOTE: may be a legitimate utility (MSI Afterburner/CPU-Z/etc.) — verify before removal; consider enabling the Microsoft Vulnerable Driver Blocklist / WDAC." `
+            -Target $path -FixAction "Info" -Group "BYOVD Vulnerable Drivers"
+        $global:RootkitHits++; $byovdFound = $true
+    }
+}
+if (-not $byovdFound) { Out-Typewriter "  -> [OK] NO KNOWN-VULNERABLE BYOVD DRIVERS." "GOOD" }
 
 Show-PhaseHeader "PHASE 56" "HIDDEN PROCESS DISCREPANCY (WMI vs PS vs TASKLIST)" "ROOTKIT"
 Out-Typewriter "CROSS-CORRELATING PROCESS ENUMERATION METHODS..." "HUNT"

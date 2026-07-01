@@ -359,6 +359,34 @@
     }
     if ($lolbasHits -eq 0) { Out-Typewriter "  -> [OK] NO EXPANDED LOLBAS ABUSE." "GOOD" }
 
+    # ── PHASE 99.5: MALWARE COMMAND-LINE HEURISTICS ───────────────────────────
+    # One Win32_Process enumeration cross-checked against the externalized behavioral
+    # command-line rules (loader / banking-trojan / infostealer / inhibit-recovery). All
+    # FixAction Info — a running process needs operator triage, not an auto-kill (the rules
+    # are heuristic and could match a legit admin one-liner).
+    Show-PhaseHeader "PHASE 99.5" "MALWARE COMMAND-LINE HEURISTICS (LOADER/BANKING/STEALER/RECOVERY)" "BEHAVIOR"
+    Out-Typewriter "CROSS-CHECKING PROCESS COMMAND LINES AGAINST BEHAVIORAL RULES..." "HUNT"
+    $cmdRuleSevMap = @{ "CRITICAL"=$SEV_CRITICAL; "HIGH"=$SEV_HIGH; "POSSIBLE"=$SEV_POSSIBLE }
+    $cmdRuleHits = 0
+    if ($ALL_MALWARE_CMDLINE_RULES.Count -gt 0) {
+        foreach ($p in (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)) {
+            $cl = $p.CommandLine
+            if (-not $cl) { continue }
+            foreach ($r in $ALL_MALWARE_CMDLINE_RULES) {
+                if ($cl -match $r.Pattern) {
+                    $clShort = $cl.Substring(0,[Math]::Min(140,$cl.Length))
+                    Out-ThreatBanner "MALWARE CMDLINE ($($r.Name))" "$($p.Name) PID:$($p.ProcessId)"
+                    Add-Finding -ID "CMDRULE_$($p.ProcessId)_$($r.Name -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 99.5" -ThreatType "Malware Behavior" `
+                        -Severity $cmdRuleSevMap[$r.Severity] -Description "$($r.Name): $($p.Name) PID:$($p.ProcessId) | $clShort" `
+                        -Target "PID:$($p.ProcessId)" -FixAction "Info" -Group "Malware Command-Line Heuristics"
+                    $cmdRuleHits++
+                    break   # one finding per process
+                }
+            }
+        }
+    }
+    if ($cmdRuleHits -eq 0) { Out-Typewriter "  -> [OK] NO MALICIOUS COMMAND-LINE PATTERNS." "GOOD" }
+
     # ── PHASE 100: BROWSER CRED DB ACCESS AUDIT ───────────────────────────────
     Show-PhaseHeader "PHASE 100" "BROWSER PASSWORD/COOKIE DB RECENT ACCESS" "INFO-STEALER"
     Out-Typewriter "CHECKING LAST-ACCESS TIME ON BROWSER CREDENTIAL DATABASES..." "HUNT"
