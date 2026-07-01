@@ -1,0 +1,7 @@
+- [WS0 Inventory — ✅ DONE 2026-06-29](next_task_ws0.md) — coverage_matrix.json (119 phases→MITRE→data source) + WS0_COVERAGE_GAPS.md shipped; next is GAP 1 then the engine split then WS1-6
+- [Engine Split DONE](engine-split-decision.md) — ZeroBreach-V23.ps1 now a thin loader dot-sourcing engine/*.ps1 (by phase range); validated end-to-end; RULE: exit in modules must be [Environment]::Exit; fixed Phase 66 C$ hang
+- [WS1 Externalize Name-Lists — ✅ DONE 2026-06-30](ws1-externalize-namelists.md) — 9 inline AV-signature lists moved to data/*.json (P62/67/68/82/89/98/106 + P4/P72 consolidations); next is WS2 (GAP 3, new malware families) — the agent-parallel one
+- [WS2 Detection Expansion — ✅ DONE 2026-06-30](ws2-detection-expansion.md) — 5 agents researched loaders/banking/infostealers/2024-25 ransomware/C2/BYOVD → data + wired (P53 notes, P55.5 BYOVD, P69 mutex, P99.5 cmdline). DISCOVERY: phases 67-115 never ran headless (Phase 66 bug); fixed P66/P68-flood/Get-FileHash; engine now reaches ~P76. Full-115 validation still outstanding
+- [Email/Phishing Detection Rebuild](email-phishing-detection-rebuild.md) — Phases 74.5/74.6/74.7, reversible Quarantine, proactive hardening, ingest skill
+- [Performance Deep-Dive](perf-deep-dive-todo.md) — Get-ScanFiles deadline was inner-loop-incomplete (547s/475s phases); fixed + Phase-18 output flood capped + Get-AuthSig cache added (2026-06-26)
+- [Proactive Hardening Decisions](proactive-hardening-decisions.md) — user-approved ASR Block/Audit split, macros VBAWarnings=2, WSH opt-in
