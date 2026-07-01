@@ -1,8 +1,11 @@
 # ZeroBreach — Next Steps (post-/clear handoff)
 
-> ### ▶ START HERE — next session (updated 2026-06-29, session 2 COMPLETE)
+> ### ▶ START HERE — next session (updated 2026-07-01, session 3: prep re-verified)
 > **The single open item is live GUI end-to-end validation. Read `HANDOFF.md` first** — it has the
 > current state and the user runbook (the model debugs from artifacts the user brings back).
+> **Prep re-verified 2026-07-01:** all 5 `_DELETEME` tripwires still present; server parse-clean on
+> PS 5.1.26100 + 7.6.3, BOM intact; `app.js` clean. Ready to `Launch-GUI.bat` as admin — no setup
+> needed. One local docs-only commit (`f198420`) is unpushed (user said push later; no code impact).
 > Engine FP-tuning is COMPLETE through round 5 (CLAUDE.md → "Round 5"); the last fresh full re-grade
 > (`KrakenBaseline_20260628_152000.json`) is **52 auto-destructive, 0 system-damage FixParams** — holds.
 > Latest server work (`c0477ae`, **PUSHED to origin**): phase-"skipping" was diagnosed as a

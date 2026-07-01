@@ -1,9 +1,20 @@
-# RESUME HANDOFF — updated 2026-06-28 (session 2)
+# RESUME HANDOFF — updated 2026-07-01 (session 3: prep re-verified)
 
 > **OPEN ITEM (only one left): live GUI end-to-end validation.** All engine/FP work is done,
 > committed, pushed, and live-re-graded. The browser+admin remediation path is the last unvalidated
 > thing. Prep is done (tripwires laid, server parse-clean) — see "NEXT SESSION" runbook below. The
 > USER runs the browser click-through; the model debugs from artifacts they bring back.
+>
+> ### Session 3 (2026-07-01) — prep RE-VERIFIED, no code changes; ready to launch
+> Re-checked all prep before handing off for the browser run:
+> - **All 5 `_DELETEME` tripwires still present** (TEMP `.bat`, Downloads `.cmd`, HKCU Run value,
+>   Outlook-cache `.bat`, disabled scheduled task) — no need to re-lay.
+> - **`ZeroBreach-Server.ps1` parse-clean on PS 5.1.26100 AND 7.6.3**, UTF-8 BOM intact.
+> - **`app.js` `node --check` clean.**
+> - Git: **1 local commit ahead of origin — `f198420` (docs-only:** CLAUDE.md/CHANGELOG
+>   consolidation, no code). User said **push later** — safe to push anytime, no code impact.
+> - Nothing else changed this session. The live GUI click-through (runbook below) is untouched and
+>   is the sole remaining task; the `c0477ae` phase-counter fix still needs its first in-browser look.
 
 ## Session 2 (2026-06-28 PM) — phase-"skipping" diagnosed (NOT an engine bug) + 2 server fixes — `c0477ae`
 User watched a live DEEP run and reported it "skipped MANY MANY phases (unless instant)." Investigated
