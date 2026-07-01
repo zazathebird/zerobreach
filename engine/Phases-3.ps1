@@ -1,4 +1,5 @@
-﻿if ($PhasePlan.Advanced) {
+﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT phase in THIS module, not the next dot-sourced module (see CLAUDE.md engine-split rule)
+if ($PhasePlan.Advanced) {
     trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
     if (-not $global:STEALTH_MODE) {
         Write-Host ""

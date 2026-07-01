@@ -1,4 +1,5 @@
-﻿# ══════════════════════════════════════════════════════════════════════════════
+﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT phase in THIS module, not the next dot-sourced module (see CLAUDE.md engine-split rule)
+# ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 1: PRE-FLIGHT
 # ══════════════════════════════════════════════════════════════════════════════
 Show-SectionBanner "PRE-FLIGHT SYSTEMS & LOG AUDIT"

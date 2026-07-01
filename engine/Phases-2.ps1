@@ -1,4 +1,5 @@
-﻿# ══════════════════════════════════════════════════════════════════════════════
+﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT phase in THIS module, not the next dot-sourced module (see CLAUDE.md engine-split rule)
+# ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 12: RAT / C2 BEACON
 # ══════════════════════════════════════════════════════════════════════════════
 Show-ThreatCategoryHeader "RAT / C2 BEACON" "Beacon Intervals · DNS Tunneling · RAT Config/Registry · Named Pipes"
