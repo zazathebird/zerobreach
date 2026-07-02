@@ -921,6 +921,12 @@ $INFOSTEALER_BENIGN_RE  = Join-AllowRegex 'infostealer_benign_paths'
 $SAFEBOOT_DEFAULTS      = @((Get-Sig 'safeboot_default_entries') | ForEach-Object { "$_".ToLower() })
 $C2_NAMED_PIPE_RE       = if (@(Get-Sig 'c2_named_pipe_regex').Count) { @(Get-Sig 'c2_named_pipe_regex')[0] } else { '(?!)' }
 $HIDDEN_TASK_BENIGN_RE  = Join-AllowRegex 'hidden_task_benign_paths'
+$RUNKEY_BENIGN_RE       = Join-AllowRegex 'runkey_benign_values'     # Phase 20 (OneDrive/OS cleanup RunOnce)
+$KEYLOG_BENIGN_RE       = Join-AllowRegex 'keylogger_benign_paths'   # Phase 48 (py.typed-class library files)
+$YARA_BENIGN_RE         = Join-AllowRegex 'yara_benign_paths'        # Phase 90 (JIT/renderer runtime DLLs)
+$SCT_BENIGN_RE          = Join-AllowRegex 'sct_benign_paths'         # Phase 94 (library test scriptlets)
+$MINERCFG_BENIGN_RE     = Join-AllowRegex 'miner_config_benign_paths' # Phase 63 (LGHUB-class app configs)
+$SPOOLDLL_BENIGN_RE     = Join-AllowRegex 'spooler_benign_dlls'      # Phase 96 (catalog-signed MS printer resources)
 $BITS_SUSP_REMOTE_RE    = if (@(Get-Sig 'bits_suspicious_remote_regex').Count) { @(Get-Sig 'bits_suspicious_remote_regex')[0] } else { '(?!)' }
 $BITS_SUSP_LOCAL_RE     = if (@(Get-Sig 'bits_suspicious_local_regex').Count) { @(Get-Sig 'bits_suspicious_local_regex')[0] } else { '(?!)' }
 

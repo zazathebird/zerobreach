@@ -533,10 +533,19 @@ foreach ($rp in $runPaths) {
             # and most updaters legitimately autostart from AppData\Local, so an AppData-only value is
             # review-only (POSSIBLE + Info), never auto-removed. (The _DELETEME tripwire points at %TEMP%.)
             if ($val -match "Temp|cmd\.exe|powershell|wscript|cscript|mshta|\.js|\.vbs|\.hta|regsvr32|rundll32|certutil|bitsadmin|msiexec.*http|IEX|EncodedCommand") {
+                # OS/OneDrive write their own cmd.exe+del cleanup RunOnce values — allowlisted
+                # name=value pairs are review-only, never auto-DeleteReg on a healthy box.
+                if ("$prop = $val" -match $RUNKEY_BENIGN_RE) {
+                    Out-Decrypt -Text "$prop = $val" -Prefix "  [RUN KEY?] "
+                    Add-Finding -ID "RUNKEY_$($prop -replace '[^a-z0-9]','')" -Phase "PHASE 20" -ThreatType "Registry Persistence" `
+                        -Severity $SEV_POSSIBLE -Description "Run key matches a known-benign OS cleanup entry (allowlisted — review only): [$rp] $prop = $val" `
+                        -Target "$rp|$prop" -FixAction "Info" -Group "Run Key Persistence"
+                } else {
                 Out-Decrypt -Text "$prop = $val" -Prefix "  [RUN KEY] "
                 Add-Finding -ID "RUNKEY_$($prop -replace '[^a-z0-9]','')" -Phase "PHASE 20" -ThreatType "Registry Persistence" `
                     -Severity $SEV_CRITICAL -Description "Malicious Run key: [$rp] $prop = $val" `
                     -Target "$rp|$prop" -FixAction "DeleteReg" -FixParam "$rp|$prop" -Group "Run Key Persistence"
+                }
             } elseif ($val -match "AppData") {
                 Out-Decrypt -Text "$prop = $val" -Prefix "  [RUN KEY?] "
                 Add-Finding -ID "RUNKEY_$($prop -replace '[^a-z0-9]','')" -Phase "PHASE 20" -ThreatType "Registry Persistence" `
@@ -826,6 +835,28 @@ foreach ($sp in @("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup","
     if (Test-Path $sp) {
         $startItems = Get-ChildItem -Path $sp -File -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
         foreach ($si in $startItems) {
+            # .lnk shortcuts are never Authenticode-signed, so signing the shortcut itself flagged
+            # every legitimate startup entry as UNSIGNED/HIGH. Judge the resolved TARGET instead;
+            # an unresolvable target is review-only (POSSIBLE), never auto-deleted on a guess.
+            if ($si.Extension -ieq '.lnk') {
+                $tgt = $null
+                try { $tgt = (New-Object -ComObject WScript.Shell).CreateShortcut($si.FullName).TargetPath } catch {}
+                if (-not $tgt -or -not (Test-Path -LiteralPath $tgt)) {
+                    Add-Finding -ID "STARTUP_$($si.Name -replace '[^a-z0-9]','')" -Phase "PHASE 31" -ThreatType "Startup Persistence" `
+                        -Severity $SEV_POSSIBLE -Description "Startup shortcut with unresolvable/missing target (review): $($si.Name) -> $(if ($tgt) { $tgt } else { '?' })" `
+                        -Target $si.FullName -FixAction "Info" -Group "Startup Folder Persistence"
+                    continue
+                }
+                $sig = Get-AuthSig $tgt
+                $tgtSusp = ($tgt -match '\\(AppData|Temp|Downloads|Desktop|Public|ProgramData)\\.*\.(exe|scr|com|pif)$') -or ($tgt -match '\.(js|vbs|bat|cmd|ps1|hta|wsf)$')
+                # Unsigned target only stays HIGH when the target itself is in a drop location or is
+                # a script — an unsigned app in Program Files is common and stays review-only.
+                $sev = if ($sig.Status -ne 'Valid' -and $tgtSusp) { $SEV_HIGH } else { $SEV_POSSIBLE }
+                Add-Finding -ID "STARTUP_$($si.Name -replace '[^a-z0-9]','')" -Phase "PHASE 31" -ThreatType "Startup Persistence" `
+                    -Severity $sev -Description "Startup shortcut: $($si.Name) -> $tgt (target $(if ($sig.Status -ne 'Valid') {'UNSIGNED'} else {'signed'}))$(if ($sev -ne $SEV_HIGH) { ' — POSSIBLE = review-only; select manually to remove the shortcut' })" `
+                    -Target $si.FullName -FixAction "DeleteFile" -FixParam $si.FullName -Group "Startup Folder Persistence"
+                continue
+            }
             $sig = Get-AuthSig $si.FullName
             $sev = if ($sig.Status -ne "Valid") { $SEV_HIGH } else { $SEV_POSSIBLE }
             Add-Finding -ID "STARTUP_$($si.Name -replace '[^a-z0-9]','')" -Phase "PHASE 31" -ThreatType "Startup Persistence" `
@@ -1084,9 +1115,12 @@ $allLocalUsers = Get-LocalUser -ErrorAction SilentlyContinue
 foreach ($usr in $allLocalUsers) {
     if ($usr.Enabled -and $usr.Name -match "Temp|Admin1|Support|Test|Guest|Backdoor|HelpAssistant|DefaultAccount") {
         Out-Glitch "  [SUSPICIOUS ACCOUNT: $($usr.Name)]" Red
+        # Name-pattern match can hit a legitimate primary account (e.g. 'Techsupport' contains
+        # 'Support') — auto-disabling would lock a real user out, so the disable command is
+        # operator-run only (CLAUDE.md rule #1: never auto-destructive on a healthy box).
         Add-Finding -ID "ACCOUNT_$($usr.Name -replace '[^a-z0-9]','')" -Phase "PHASE 42" -ThreatType "Ghost/Backdoor Account" `
-            -Severity $SEV_HIGH -Description "Suspicious enabled local account: $($usr.Name)" `
-            -Target "LocalUser: $($usr.Name)" -FixAction "RunCmd" -FixParam "Disable-LocalUser -Name '$($usr.Name)'" -Group "Suspicious Accounts"
+            -Severity $SEV_HIGH -Description "Suspicious enabled local account: $($usr.Name) — verify with the owner; if unauthorized, disable manually: Disable-LocalUser -Name '$($usr.Name)' (NOT auto-applied — the name-pattern can match a legitimate primary account)" `
+            -Target "LocalUser: $($usr.Name)" -FixAction "Info" -Group "Suspicious Accounts"
     }
 }
 $admins = Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue
@@ -1210,7 +1244,12 @@ $hookHits = $false
 $rawInputProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object {
     $_.Name -notmatch "^(svchost|System|MsMpEng|SearchIndexer|lsass|wininit|services|csrss|smss|WmiPrvSE|fontdrvhost|dwm|audiodg|conhost)$" -and
     $_.Modules -and ($_.Modules | Where-Object { $_.ModuleName -match "user32|winuser|hid" })
-} | Where-Object { $_.Path -match "AppData|Temp|Downloads|Desktop" }
+} | Where-Object {
+    # Anchor to PATH COMPONENTS — a bare 'Desktop' substring matched Store package names like
+    # WhatsAppDesktop / DesktopAppInstaller under C:\Program Files\WindowsApps (store-signed,
+    # ACL-protected — not a user path) and auto-KillProcess'd healthy apps.
+    $_.Path -match '\\(AppData|Temp|Downloads|Desktop)\\' -and $_.Path -notlike "$env:ProgramFiles\WindowsApps\*"
+}
 foreach ($p in $rawInputProcs) {
     Out-Typewriter "  -> SUSPICIOUS HID ACCESS: $($p.Name) PID:$($p.Id) @ $($p.Path)" "CRIT"
     Add-Finding -ID "HOOK_$($p.Id)" -Phase "PHASE 47" -ThreatType "Keylogger" -Severity $SEV_HIGH `
@@ -1230,6 +1269,15 @@ $klRegex = ($klFilePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace
 $klFound = $false
 $klHits = (Get-ScanFiles -Path $klSearchPaths -TimeScoped) | Where-Object { $_.Name -match $klRegex }
 foreach ($hit in $klHits) {
+    # Name heuristics (*typed*, *capture*log*) hit library marker files inside package-manager
+    # trees (py.typed in site-packages et al.) — allowlisted paths are review-only.
+    if ($hit.FullName -match $KEYLOG_BENIGN_RE) {
+        Add-Finding -ID "KLFILE_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 48" -ThreatType "Keylogger" `
+            -Severity $SEV_POSSIBLE -Description "File name resembles a keystroke log but sits in a package/library tree (likely a library file — review, not auto-deleted): $($hit.FullName)" `
+            -Target $hit.FullName -FixAction "Info" -Group "Keylogger Artifacts"
+        $klFound = $true
+        continue
+    }
     Out-ThreatBanner "KEYLOGGER LOG FILE" $hit.FullName
     Add-Finding -ID "KLFILE_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 48" -ThreatType "Keylogger" `
         -Severity $SEV_CRITICAL -Description "Keystroke log file detected: $($hit.FullName)" `

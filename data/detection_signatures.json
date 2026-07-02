@@ -874,6 +874,48 @@
     "wallet-drawer",
     "\\\\service worker\\\\"
   ],
+  "_comment_runkey_benign_values": "Phase 20: matched against 'name = value' of Run/RunOnce entries. OneDrive writes its own cleanup RunOnce values (cmd.exe+del of its cached updater) — benign, downgraded to POSSIBLE/Info (never auto-DeleteReg). Patterns MUST pin the ENTIRE value to the exact benign command shape ($-anchored, no room for chained commands) or malware can name its value to self-allowlist. Covers both the machine-wide (\\Microsoft OneDrive\\) and per-user (\\Microsoft\\OneDrive\\) install paths.",
+  "runkey_benign_values": [
+    "^Delete Cached (Standalone )?Update Binary = [A-Za-z]:\\\\WINDOWS\\\\system32\\\\cmd\\.exe /q /c del /q \"[^\"]*\\\\Microsoft( |\\\\)OneDrive\\\\[^\"]*OneDriveSetup\\.exe\"$",
+    "^Logitech Download Assistant = [A-Za-z]:\\\\Windows\\\\system32\\\\rundll32\\.exe [A-Za-z]:\\\\Windows\\\\System32\\\\LogiLDA\\.dll,LogiFetch$"
+  ],
+  "_comment_miner_config_benign_paths": "Phase 63: config.json content heuristics (pools/stratum/mining words) hit legitimate app configs — LGHUB game-integration applets et al. Allowlisted parent paths downgrade to POSSIBLE/Info.",
+  "miner_config_benign_paths": [
+    "\\\\appdata\\\\local\\\\lghub\\\\",
+    "\\\\node_modules\\\\",
+    "\\\\site-packages\\\\"
+  ],
+  "_comment_spooler_benign_dlls": "Phase 96: Microsoft printer RESOURCE DLLs in spool\\drivers are catalog-signed (invisible to Get-AuthSig, which only sees embedded Authenticode) and grade as UNSIGNED on every box with a PCL/PS driver. Known resource-DLL names downgrade to POSSIBLE/Info.",
+  "spooler_benign_dlls": [
+    "\\\\pcl5ures\\.dll$",
+    "\\\\pclxl\\.dll$",
+    "\\\\unires\\.dll$",
+    "\\\\ps5ui\\.dll$",
+    "\\\\pscript5\\.dll$"
+  ],
+  "_comment_keylogger_benign_paths": "Phase 48: keystroke-log *name* heuristics (*typed*, *capture*log*, …) inside package-manager trees are library files (e.g. py.typed markers), not keylogger output. Downgraded to POSSIBLE/Info.",
+  "keylogger_benign_paths": [
+    "\\\\packages\\\\pythonsoftwarefoundation\\.python[^\\\\]*\\\\localcache\\\\",
+    "\\\\site-packages\\\\",
+    "\\\\node_modules\\\\"
+  ],
+  "_comment_yara_benign_paths": "Phase 90: JIT/renderer runtime DLLs legitimately contain VirtualAllocEx/WriteProcessMemory-class API strings (SwiftShader et al. compile shaders at runtime); package-manager trees ship API-name-bearing sources. Rule hits here downgrade to POSSIBLE/Info instead of HIGH/DeleteFile.",
+  "yara_benign_paths": [
+    "\\\\vk_swiftshader\\.dll$",
+    "\\\\swiftshader\\\\",
+    "\\\\libegl\\.dll$",
+    "\\\\libglesv2\\.dll$",
+    "\\\\d3dcompiler_4[67]\\.dll$",
+    "\\\\vulkan-1\\.dll$",
+    "\\\\site-packages\\\\",
+    "\\\\node_modules\\\\",
+    "\\\\appdata\\\\local\\\\temp\\\\claude\\\\"
+  ],
+  "_comment_sct_benign_paths": "Phase 94: .sct/.wsc scriptlets inside package-manager trees are library test fixtures (e.g. pywin32's Testpys.sct), not Squiblydoo staging. Downgraded to POSSIBLE/Info.",
+  "sct_benign_paths": [
+    "\\\\site-packages\\\\",
+    "\\\\node_modules\\\\"
+  ],
   "safeboot_default_entries": [
     "afd",
     "ahcache.sys",

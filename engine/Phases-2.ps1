@@ -157,6 +157,14 @@ $minerConfigFiles = Get-ChildItem -Path @($env:TEMP,$env:LOCALAPPDATA,"$env:USER
 foreach ($cf in $minerConfigFiles) {
     $content = Get-Content $cf.FullName -Raw -ErrorAction SilentlyContinue
     if ($content -match '"pools"|url.*stratum|"user".*[0-9A-Za-z]{90,}|monero|xmr|ethereum|mining') {
+        # Content words (mining/pools/…) hit legitimate app configs — LGHUB game-integration
+        # applets etc. Allowlisted parent paths are review-only, never auto-deleted.
+        if ($cf.FullName -match $MINERCFG_BENIGN_RE) {
+            Add-Finding -ID "MINERCFG_$($cf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 63" -ThreatType "Cryptominer" `
+                -Severity $SEV_POSSIBLE -Description "config.json matches miner keywords but sits in a known app/library tree (likely an app config — review, not auto-deleted): $($cf.FullName)" `
+                -Target $cf.FullName -FixAction "Info" -Group "Live Cryptominer"
+            continue
+        }
         Out-ThreatBanner "MINER CONFIG FILE" $cf.FullName
         Add-Finding -ID "MINERCFG_$($cf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 63" -ThreatType "Cryptominer" `
             -Severity $SEV_CRITICAL -Description "Miner configuration file found: $($cf.FullName)" `
@@ -892,8 +900,11 @@ if ($PhasePlan.Universal) {
         Where-Object { $_.Extension -match "\.(exe|dll|js|vbs|bat|cmd|ps1|hta|wsf)$" }
     foreach ($rb in $recycleBin) {
         Out-Decrypt -Text $rb.FullName -Prefix "  [RECYCLE BIN PAYLOAD] "
+        # POSSIBLE, not HIGH: recycled scripts/exes are routine on healthy boxes (users delete
+        # their own tools/projects). Staging is a heuristic, not confirmed malware — the operator
+        # can still select these manually for deletion; they are never auto-purged.
         Add-Finding -ID "RECYCLE_$($rb.Name -replace '[^a-z0-9]','')" -Phase "PHASE 86" -ThreatType "Malware Staging" `
-            -Severity $SEV_HIGH -Description "Executable in Recycle Bin (malware staging): $($rb.FullName)" `
+            -Severity $SEV_POSSIBLE -Description "Executable in Recycle Bin (possible staging — review; users routinely delete their own scripts): $($rb.FullName)" `
             -Target $rb.FullName -FixAction "DeleteFile" -FixParam $rb.FullName -Group "Recycle Bin Staging"
     }
     if ($recycleBin.Count -eq 0) { Out-Typewriter "  -> [OK] RECYCLE BIN CLEAR." "GOOD" }

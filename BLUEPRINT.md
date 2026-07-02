@@ -161,12 +161,17 @@ serves HTTP 200, `/api/state` answers. Remaining field test: a real *foreign* bo
 the dev machine) per the item below.
 
 ### Next (high value, ordered)
-1. **WS3 — FP-tune the WS2 detections** (55.5/53/62/66/69/99.5) from fresh live DEEP
-   baselines; re-grade to hold 52 (or ask user sign-off on the known 1-off FP list in
-   `HANDOFF.md`).
-2. **Round-4/5 leftover FPs** needing user sign-off: P48/P94 Python LocalCache, P53
-   Sysinternals readme, P63 LGHUB config, P90 scratchpad scripts, P96 printer-driver DLL,
-   P20 bare-`AppData` Run-key term.
+1. ~~**WS3 — FP-tune the WS2 detections**~~ **DONE 2026-07-02** — fresh live DEEP baseline
+   (`_143221`: 734 findings, 39 auto-destructive vs the 52 reference) shows the WS2 detections
+   clean (only P53's Info-only name matches). FP round 6 cleared the remaining healthy-box
+   auto-destructive tail with user sign-off (P20 OneDrive RunOnce, P31 .lnk target resolution,
+   P42 account→Info, P47 WindowsApps substring, P48/P94 package trees, P86→POSSIBLE,
+   P90 renderer DLLs) — see `CHANGELOG.md`.
+2. ~~**Round-4/5 leftover FPs** needing user sign-off~~ **RESOLVED 2026-07-02** — all cleared
+   in round 6: P48/P94 Python LocalCache + P90 scratchpad via package-tree allowlists; P53
+   already content-confirm/Info; P63 LGHUB + P96 printer-resource DLLs (catalog-signed,
+   invisible to Get-AuthSig) reappeared live in the `_192913` dev-profile re-run and were
+   allowlisted the same day (`miner_config_benign_paths`, `spooler_benign_dlls`).
 3. ~~**Per-phase progress truth**~~ **DONE 2026-07-02** — the server's phase regex now
    captures fractional phases (55.5, 74.5/.6/.7, 99.5); they advance the counter/progress
    as real plan steps, findings carry the true fractional phase, and MITRE resolves their

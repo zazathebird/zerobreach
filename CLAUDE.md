@@ -202,6 +202,10 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   online CRL/OCSP revocation checks that block ~15s each). Single-file/per-process call sites are fine.
 - **Use `Get-ScanFiles`, never raw `Get-ChildItem -Recurse`** over a user/AppData root (it caps files +
   wall-clock, prunes cache dirs, skips OneDrive placeholders). Scope ransomware/doc scans to doc folders.
+- **Anchor folder-name path tests to path COMPONENTS** (`'\\(AppData|Temp|Downloads|Desktop)\\'`),
+  never bare substrings — a bare `Desktop` matched the Store *package names* `WhatsAppDesktop` /
+  `DesktopAppInstaller` under `C:\Program Files\WindowsApps` and auto-KillProcess'd healthy signed
+  apps (Phase 47, fixed 2026-07-02). Treat `WindowsApps` as a signed store root, not a user path.
 - When bundling multiple phases under one `if ($PhasePlan.*)`, give the block its own inner
   `trap { Write-RecoveredError $_; continue }` (resumes at the next phase, not end-of-group).
 - **Validate on live `powershell.exe` 5.1**, not a PS-7 simulation — the unwrap / `(try{})` /
@@ -214,6 +218,11 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   `data/detection_signatures.json`, loaded at runtime via `Get-Sig` (data files aren't AMSI-scanned).
 - **FP allowlists are NOT signatures** — they go in the `fp_allowlists` block of that same JSON, loaded
   via `Join-AllowRegex` (empty key → `(?!)`, suppresses nothing). No new literal lists in the `.ps1`.
+- **An allowlist entry matched against attacker-controllable text (run-key values, command lines,
+  task actions) must pin the ENTIRE string to the exact benign shape** — `^…$` anchors, bounded
+  wildcards like `[^"]*` (never `.*` spanning the name/value boundary). A name-only prefix pattern
+  lets malware self-allowlist by naming its value e.g. "Uninstall OneDrive" (caught in review,
+  2026-07-02). Path-only allowlists are fine — attackers don't control where OneDrive installs.
 - **Prefer downgrade-to-POSSIBLE over deleting a detection.** POSSIBLE is shown but never auto-acted-on.
 
 ### Remediation safety (`ZeroBreach-Server.ps1` — engine stays audit-only in `-Auto`)

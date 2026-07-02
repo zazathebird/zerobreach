@@ -6,6 +6,68 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-02 (evening) — FP-tune round 6 (WS3): the fresh-DEEP healthy-box tail, user-signed-off
+
+Graded the same-day live DEEP baseline (`KrakenBaseline_20260702_143221.json`: 734 findings,
+**39 auto-destructive** vs the 52 reference — no floods) and, with user sign-off, cleared every
+remaining healthy-box FP in the auto-destructive tail. The WS2 detections themselves came back
+clean (only Phase 53's already-Info name matches) — WS3's re-grade goal is met. All fixes are
+downgrade-to-POSSIBLE or FixAction Info; **zero detections deleted**. Four new `fp_allowlists`
+keys in `data/detection_signatures.json` (`runkey_benign_values`, `keylogger_benign_paths`,
+`yara_benign_paths`, `sct_benign_paths`), loaded via `Join-AllowRegex` in the loader.
+
+- **P20** (CRIT/DeleteReg ×2): OneDrive's own updater-cleanup RunOnce values (`Delete Cached
+  (Standalone )Update Binary` = `cmd /c del ...OneDriveSetup.exe`) matched the cmd.exe+del
+  heuristic on every healthy OneDrive box → allowlisted name=value pairs are POSSIBLE/Info.
+- **P31** (HIGH/DeleteFile ×3): `.lnk` shortcuts can never be Authenticode-signed, so every
+  startup shortcut (Ollama/AnyDesk/Tailscale) graded UNSIGNED/HIGH → now resolves the shortcut
+  TARGET (WScript.Shell COM, try/catch) and judges that: signed or unsigned-in-Program-Files →
+  POSSIBLE (still manually deletable); unsigned target in a drop path (AppData/Temp/Downloads/…)
+  or a script, or unresolvable → stays flagged (unresolvable = POSSIBLE/Info, never a blind delete).
+- **P42** (HIGH/RunCmd): `Disable-LocalUser` auto-fired on the box's real primary account
+  ("Techsupport" contains "Support") → detection stays HIGH but FixAction Info with the manual
+  command in the description (rule #1: never auto-destructive on a healthy box).
+- **P47** (HIGH/KillProcess ×2): bare-substring path test — `Desktop` matched the *package names*
+  `WhatsAppDesktop` / `DesktopAppInstaller` under `C:\Program Files\WindowsApps` and killed
+  store-signed apps → path test anchored to components (`\\(AppData|Temp|Downloads|Desktop)\\`)
+  + explicit WindowsApps exclusion. New CLAUDE.md rule.
+- **P48** (CRIT/DeleteFile): `*typed*` name heuristic hit `py.typed` (an empty PEP-561 marker) in
+  Python site-packages → allowlisted package trees (Python LocalCache/site-packages/node_modules)
+  are POSSIBLE/Info.
+- **P86** (HIGH/DeleteFile ×14): every recycled script/exe auto-deleted — today it was the user's
+  own deleted project copy → POSSIBLE (keeps DeleteFile for manual selection, never auto).
+- **P90** (HIGH/DeleteFile): YARA `WMI_Reflective` hit CurseForge's `vk_swiftshader.dll` — JIT
+  renderers legitimately contain `VirtualAllocEx`-class API strings → allowlisted runtime DLL
+  names + package trees are POSSIBLE/Info.
+- **P94** (HIGH/DeleteFile): pywin32's own `Testpys.sct` test fixture in site-packages →
+  allowlisted package trees are POSSIBLE/Info.
+
+**Review pass caught two allowlist bugs before commit** (subagent review of the diff, both
+fixed + regression-tested on live 5.1): (1) a speculative `^Uninstall .{0,40}(OneDrive|…)`
+pattern was **attacker-satisfiable** — it constrained only the value *name*, so malware named
+"Uninstall OneDrive" would self-allowlist; removed, and the OneDrive pattern now pins the
+ENTIRE value to the exact benign command shape (`$`-anchored, `[^"]*` blocks chained commands).
+Data-file rule: **an fp_allowlist entry matched against attacker-controllable text must anchor
+the full string, not a prefix.** (2) The pattern missed the per-user OneDrive install
+(`\Microsoft\OneDrive\` vs machine-wide `\Microsoft OneDrive\`) — now covers both.
+
+**Live headless DEEP re-run validation** (`_192913`, this dev profile — a *different* user than
+the `_143221` baseline): 853 findings, **0 recovered errors**, full phase coverage; every round-6
+downgrade path fired correctly (P31 "target signed → POSSIBLE" for Ollama/AnyDesk, P48/P94 →
+Info, P86 → POSSIBLE ×34, no P20/P47 FPs). The dev profile also surfaced the round-4/5 leftover
+FPs live, cleared in a second batch (user pre-authorized): **P63** LGHUB game-integration
+`config.json` matching miner keywords (`miner_config_benign_paths` → POSSIBLE/Info); **P96**
+Microsoft printer resource DLLs (PCL5URES et al.) are **catalog-signed — invisible to
+`Get-AuthSig`, which only reads embedded Authenticode** — so they graded UNSIGNED/DeleteFile on
+every PCL/PS-driver box (`spooler_benign_dlls` → POSSIBLE/Info); **P90** dev-scratchpad test
+scripts (`Temp\claude\` added to `yara_benign_paths`); **P20** the ubiquitous
+`Logitech Download Assistant` LogiLDA run key (exact-value-anchored allowlist entry). Remaining
+auto-destructive tail on the dev box is genuine signal: unsigned scripts in Temp (P10, dev
+debris the tool *should* flag), tripwires, hardening RunCmds, and real Defender correlations.
+
+Validated: JSON parses; all 6 engine files parse-clean on live PS 5.1.26100 **and** 7.x, BOMs
+intact; allowlist regexes regression-tested on live 5.1 (16 positive/negative cases, all pass).
+
 ## 2026-07-02 (later still) — Per-phase progress truth: fractional phases are real plan steps
 
 The server's phase regex `PHASE\s+(\d+)[^\d]` truncated fractional phases (55.5, 74.5/.6/.7,

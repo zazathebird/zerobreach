@@ -26,6 +26,15 @@ if ($PhasePlan.Advanced) {
                 $text  = [System.Text.Encoding]::ASCII.GetString($bytes)
                 foreach ($rule in $YARA_LITE_RULES) {
                     if ($text -match $rule.Pattern) {
+                        # JIT/renderer runtime DLLs (SwiftShader etc.) legitimately contain
+                        # VirtualAllocEx-class API strings; allowlisted paths are review-only.
+                        if ($cand.FullName -match $YARA_BENIGN_RE) {
+                            Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                                -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
+                                -Description "YARA rule '$($rule.Name)' matched an allowlisted runtime/library file (JIT renderers legitimately contain these API strings — review only): $($cand.FullName)" `
+                                -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches"
+                            $yaraHits++; break
+                        }
                         $sev = if ($rule.Severity -eq "CRITICAL") { $SEV_CRITICAL } else { $SEV_HIGH }
                         Out-Decrypt -Text "$($rule.Name) -> $($cand.FullName)" -Prefix "  [YARA HIT] "
                         Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
@@ -177,6 +186,15 @@ if ($PhasePlan.Advanced) {
         $sctFiles = (Get-ScanFiles -Path $root -TimeScoped) |
             Where-Object { $_.Extension -match "\.(sct|wsc)$" }
         foreach ($s in $sctFiles) {
+            # Library test fixtures (pywin32's Testpys.sct in site-packages etc.) are not
+            # Squiblydoo staging — allowlisted package trees are review-only.
+            if ($s.FullName -match $SCT_BENIGN_RE) {
+                Add-Finding -ID "SCT_$($s.Name -replace '[^a-z0-9]','')" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
+                    -Severity $SEV_POSSIBLE -Description "COM scriptlet inside a package/library tree (likely a library test fixture — review, not auto-deleted): $($s.FullName)" `
+                    -Target $s.FullName -FixAction "Info" -Group "COM Scriptlet Abuse"
+                $sctHits++
+                continue
+            }
             Out-ThreatBanner "COM SCRIPTLET FILE" $s.FullName
             Add-Finding -ID "SCT_$($s.Name -replace '[^a-z0-9]','')" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
                 -Severity $SEV_HIGH -Description "COM scriptlet (Squiblydoo vector): $($s.FullName)" `
@@ -257,10 +275,18 @@ if ($PhasePlan.Advanced) {
             }
             $sigSeen++
             if ((Get-AuthSig $sd.FullName).Status -ne "Valid") {
+                # MS printer RESOURCE DLLs are catalog-signed — invisible to Get-AuthSig, which
+                # only reads embedded Authenticode — so they grade "unsigned" on healthy boxes.
+                if ($sd.FullName -match $SPOOLDLL_BENIGN_RE) {
+                    Add-Finding -ID "SPOOLDRV_$($sd.Name -replace '[^a-z0-9]','')" -Phase "PHASE 96" -ThreatType "Print Spooler Hijack" `
+                        -Severity $SEV_POSSIBLE -Description "Known printer resource DLL without embedded signature (catalog-signed — review only): $($sd.FullName)" `
+                        -Target $sd.FullName -FixAction "Info" -Group "PrintNightmare"
+                } else {
                 Add-Finding -ID "SPOOLDRV_$($sd.Name -replace '[^a-z0-9]','')" -Phase "PHASE 96" -ThreatType "Print Spooler Hijack" `
                     -Severity $SEV_HIGH -Description "Unsigned DLL in spooler driver dir: $($sd.FullName)" `
                     -Target $sd.FullName -FixAction "DeleteFile" -FixParam $sd.FullName -Group "PrintNightmare"
                 $pnHits++
+                }
             }
         }
         $sigSw.Stop()
