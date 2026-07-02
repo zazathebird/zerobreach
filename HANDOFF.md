@@ -1,19 +1,32 @@
-# RESUME HANDOFF — updated 2026-07-02 (session 5: finding-stream fix + BLUEPRINT + portable release)
+# RESUME HANDOFF — updated 2026-07-02 (session 6: FP round 6 — WS3 + ALL sign-off FPs cleared)
 
 > ## ▶ START HERE after /clear
 > 1. Read **`BLUEPRINT.md`** (product map + §7 roadmap) — it supersedes NEXT_STEPS/UPGRADE_PLAN.
-> 2. This session (5) fixed the dead live-finding pipeline + the `$SEV` classify shadow, created
->    BLUEPRINT.md, and shipped the portable release build (`tools/Build-Release.ps1` + MotW
->    self-unblock + README deploy guide). All validated headless incl. two real `/api/scan/start`
->    end-to-end scans and a release zip extracted-to-spaced-path boot test. All committed locally;
->    **push when the user says**.
+> 2. **Session 6 (2026-07-02 evening, commit `fcb8199`) closed BLUEPRINT §7 items 1+2:** graded the
+>    same-day live DEEP baseline `_143221` (39 auto-destructive vs the 52 reference; WS2 detections
+>    clean), got user sign-off, and cleared EVERY healthy-box FP in the auto-destructive tail —
+>    P20 OneDrive-RunOnce/LogiLDA, P31 (.lnk TARGET resolution — shortcuts are never signed),
+>    P42→Info (was auto-disabling the box's real account), P47 (bare `Desktop` substring matched
+>    `WhatsAppDesktop` under WindowsApps → component-anchored), P48/P94 package trees, P63 LGHUB,
+>    P86→POSSIBLE, P90 renderer DLLs + scratchpad, P96 (catalog-signed printer DLLs — Get-AuthSig
+>    can't see catalog sigs). 6 new `fp_allowlists` keys; all downgrade-or-Info, zero detections
+>    deleted. A review subagent caught an **attacker-satisfiable allowlist pattern**
+>    ("Uninstall OneDrive" name-prefix → self-allowlist) before commit → new CLAUDE.md rule:
+>    value-allowlists must `^…$`-pin the exact benign shape. Validated: parse-clean 5.1.26100 + 7,
+>    BOMs intact, 16-case regex regression on live 5.1, and a full headless DEEP re-run `_192913`
+>    (853 findings, 0 recovered errors, every downgrade path fired). **Committed locally, NOT
+>    pushed** (several sessions' commits stacked — push when the user says).
 > 3. **THE open acceptance item is unchanged: the user's browser click-through** — runbook below
 >    ("NEXT SESSION — live GUI end-to-end validation") + the session-5 additions (live ticker/
 >    chips populate DURING the scan, severity-colored log lines + working CRIT/HIGH/POSSIBLE
 >    filters, clean box-drawing banners, real completion-modal counts).
-> 4. After that: BLUEPRINT §7 "Next" list (WS3 FP-tune of WS2 detections; the 6 known 1-off FPs
->    awaiting user sign-off; per-phase progress truth; scan profiles; coverage-matrix re-audit;
->    release-zip field test on a genuinely foreign box).
+> 4. Next CODING items per BLUEPRINT §7: **scan profiles** (named config presets, JSON sidecar +
+>    GUI picker) and **coverage-matrix re-audit (WS0)**; then the USB foreign-box field test.
+
+> ## Session 5 header (superseded pointers kept below for context)
+> Session 5 fixed the dead live-finding pipeline + the `$SEV` classify shadow, created
+> BLUEPRINT.md, and shipped the portable release build (`tools/Build-Release.ps1` + MotW
+> self-unblock + README deploy guide) — all validated headless.
 >
 > ## Session 5b (2026-07-02) — portable distribution (user's core requirement)
 > - **`tools/Build-Release.ps1`** — validated release-zip builder (parse+BOM+JSON gate, runtime
