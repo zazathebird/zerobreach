@@ -17,10 +17,21 @@
 > phases 1-80 contiguous + fractional phases, clean self-exit, reports written. DEEP (1-115) run was
 > finishing at handoff — confirm 115 + re-grade auto-destructive from its baseline (target still 52).
 >
-> **OPEN ITEM (still the only user-facing one): live GUI end-to-end validation.** The browser+admin
-> remediation path remains the last unvalidated thing. Prep is done (tripwires laid, server + engine
-> parse-clean) — see "NEXT SESSION" runbook below. The USER runs the browser click-through; the model
-> debugs from artifacts they bring back.
+ > **UPDATE 2026-07-01 PM — the live GUI run HAPPENED and the engine side PASSED.** User launched
+> `Launch-GUI.bat` as admin and ran a **DEEP** scan in the browser: all **115 phases contiguous, 0
+> RECOVERED ERRORS**, new phases (55.5/69/99.5) fired, clean exit ~9.5 min on the real PS 5.1 server
+> (`http://localhost:1183`). Logs saved in `reports/` (timestamps `*_20260701_185*` / `_190044`).
+> **NEXT SESSION: analyze those logs** — especially `server_events_20260701_185058.log` for (a) the
+> phase-counter cadence (validate server fix `c0477ae` — did scan_state step 1→115 without jumping),
+> and (b) whether remediation/export/IOC-save/STEALTH were exercised. **Also check:** the server's
+> `audit_20260701_190044.json` shows `findings: []` while `KrakenBaseline_20260701_185111.json` has the
+> real findings — confirm that's an expected summary shape, not a server-summary wiring gap. If the SSE
+> log shows the user didn't click remediate/export, ask them to exercise those next GUI run.
+>
+> **OPEN ITEM (narrowed): browser click-through of destructive remediation (PURGE + protected HARD
+> BLOCK), export downloads, IOC save→re-scan, STEALTH.** The scan/engine path is now proven live; these
+> UX paths still need a confirming look (headless/API already validated them). Prep done (tripwires
+> laid, server + engine parse-clean) — see "NEXT SESSION" runbook below.
 >
 > ### Session 3 (2026-07-01) — prep RE-VERIFIED, no code changes; ready to launch
 > Re-checked all prep before handing off for the browser run:
