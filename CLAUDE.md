@@ -119,7 +119,12 @@ trailing space)/`[HUNT]`/`[INFO]` → `CRITICAL | HIGH | POSSIBLE | CLEAN | INFO
 keywords → `RAT | Rootkit | Ransomware | Keylogger | Worm | Miner | Trojan | Spyware | Fileless
 | Other`.
 
-Phase headers: `PHASE\s+(\d+)[^\d]`. **Only CRITICAL/HIGH + a destructive FixAction is auto-selected
+Phase headers: `PHASE\s+(\d+(?:\.\d+)?)[^\d]` — **fractional phases (55.5, 74.5/.6/.7, 99.5) keep
+their decimal** (since 2026-07-02): they advance the GUI counter/progress as real plan steps,
+findings carry the true fractional phase, and both `Resolve-Mitre` copies look up the fractional
+`phase_map` key first (integer-floor fallback). `phase_total` stays the plan ceiling per mode
+(QUICK 30 / FULL 80 / DEEP+ 115, mirroring the loader's `$PhasePlan`).
+**Only CRITICAL/HIGH + a destructive FixAction is auto-selected
 for remediation** — POSSIBLE is shown but never auto-acted-on (the lever behind every FP downgrade).
 **Child stdout is UTF-8 end-to-end:** the loader sets `[Console]::OutputEncoding` to UTF-8 when
 stdout is redirected; the server reads with `StandardOutputEncoding = UTF8`. Don't change either

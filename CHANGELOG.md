@@ -6,6 +6,26 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-02 (later still) — Per-phase progress truth: fractional phases are real plan steps
+
+The server's phase regex `PHASE\s+(\d+)[^\d]` truncated fractional phases (55.5, 74.5/.6/.7,
+99.5) to their integer part, so during e.g. PHASE 74.5→74.7 the GUI counter sat frozen at 74
+(looked like a stall), no phase-change `scan_state` was forced, findings from those phases were
+tagged with the wrong phase, and the fractional `phase_map` keys that already existed in
+`data/mitre_mapping.json` ("PHASE 55.5", "PHASE 74.5/.6/.7", "PHASE 99.5") were **unreachable**.
+
+- **`ZeroBreach-Server.ps1`** (server-only; engine untouched): `$PREX` → `PHASE\s+(\d+(?:\.\d+)?)[^\d]`;
+  phase values keep their decimal (int stays int — no `74.0` artifacts in JSON); all 5 parse
+  sites updated (parse loop, `[FINDING]` intercept, STEALTH blob, `Get-ReportFindings`);
+  both `Resolve-Mitre` copies now try the exact (possibly fractional) `phase_map` key first,
+  then fall back to the integer floor. `phase_total` stays the plan ceiling per mode —
+  `$MODE_PHASES` documented as mirroring the loader's `$PhasePlan` (30/80/115); stale `107`
+  fallbacks (pre-split count) bumped to 115 here and in `app.js`.
+- Frontend needed no logic changes (audited: display/percent/`PH${phase}` all handle decimals).
+- Validated: parse-clean PS 5.1.26100 + 7.6.3 (file + all 3 here-strings), BOM intact,
+  `node --check` clean; functional regex/conversion/JSON-shape test on live 5.1 (74→74.5→74.6
+  →74.7→75 = 4 counter advances; `{"phase":74.5}` / `{"phase":74}` serialization).
+
 ## 2026-07-02 (later) — Portable distribution: Build-Release.ps1 + Mark-of-the-Web self-unblock
 
 The user's core requirement — "copy/download/transfer this tool and run on any Windows system" —

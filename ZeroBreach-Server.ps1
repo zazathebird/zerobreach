@@ -96,7 +96,7 @@ $script:State = [hashtable]::Synchronized(@{
     Running      = $false
     ScanComplete = $false
     Phase        = 0
-    PhaseTotal   = 107
+    PhaseTotal   = 115
     PhaseName    = ''
     Section      = ''
     Mode         = 'FULL'
@@ -277,7 +277,7 @@ function Get-CsvReport {
 
 # Main-thread MITRE resolver (mirrors the runspace copy; uses $script:MITRE_MAP).
 function Resolve-MitreMain {
-    param([string]$Line, [string]$ThreatType, [int]$Phase)
+    param([string]$Line, [string]$ThreatType, $Phase)
     $map = $script:MITRE_MAP
     if (-not $map) { return $null }
     $ll = "$Line".ToLower()
@@ -291,7 +291,10 @@ function Resolve-MitreMain {
         if ($arr) { $id = [string]$arr[0] }
     }
     if (-not $id -and $Phase -gt 0) {
+        # Mirror of the runspace Resolve-Mitre: exact (possibly fractional) phase key
+        # first, then the integer phase's entry.
         $pe = $map.phase_map."PHASE $Phase"
+        if (-not ($pe -and $pe.techniques)) { $pe = $map.phase_map."PHASE $([int][math]::Floor([double]$Phase))" }
         if ($pe -and $pe.techniques) { $id = [string]$pe.techniques[0] }
     }
     if (-not $id) { return $null }
@@ -374,7 +377,7 @@ function Get-EngineReportFindings {
     foreach ($f in @($report.Findings)) {
         $sev = "$($f.Severity)".ToUpper()
         $tt  = "$($f.ThreatType)"; if (-not $tt) { $tt = $null }
-        $phNum = 0; $pm = [regex]::Match("$($f.Phase)", '\d+'); if ($pm.Success) { $phNum = [int]$pm.Value }
+        $phNum = 0; $pm = [regex]::Match("$($f.Phase)", '\d+(?:\.\d+)?'); if ($pm.Success) { $phNum = if ($pm.Value.Contains('.')) { [double]$pm.Value } else { [int]$pm.Value } }
         $line = if ($f.Target) { "$($f.Description) -> $($f.Target)" } else { "$($f.Description)" }
         $mit  = Resolve-MitreMain $line $tt $phNum
         $prot = Test-ProtectedTarget "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
@@ -558,8 +561,13 @@ $TKW = @{
     Other      = @('backdoor','exploit','cve-','lolbin','uac bypass')
 }
 
-$PREX = [regex]'PHASE\s+(\d+)[^\d]'
+# Captures fractional phases (55.5, 74.5/.6/.7, 99.5) as well as integers — they are
+# real plan steps with their own banners, findings and MITRE map entries.
+$PREX = [regex]'PHASE\s+(\d+(?:\.\d+)?)[^\d]'
 
+# Plan-derived ceilings — must mirror the engine loader's $PhasePlan switch
+# (QUICK 1-30, FULL 1-80, DEEP/PARANOID/STEALTH 1-115). Fractional phases
+# interpolate within these bounds rather than adding to the total.
 $MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115 }
 
 function Classify {
@@ -592,7 +600,7 @@ function Enqueue {
 # Fallback chain mirrors data/mitre_mapping.json's intent: most-specific keyword first,
 # then the threat-type category, then the phase's dominant technique.
 function Resolve-Mitre {
-    param([string]$Line, [string]$ThreatType, [int]$Phase)
+    param([string]$Line, [string]$ThreatType, $Phase)
     if (-not $MitreMap) { return $null }
     $ll = $Line.ToLower()
     $id = $null
@@ -605,7 +613,10 @@ function Resolve-Mitre {
         if ($arr) { $id = [string]$arr[0] }
     }
     if (-not $id -and $Phase -gt 0) {
+        # Fractional phases (55.5, 74.5, ...) have their own map keys; fall back to
+        # the integer phase's entry when a fractional key is absent.
         $pe = $MitreMap.phase_map."PHASE $Phase"
+        if (-not ($pe -and $pe.techniques)) { $pe = $MitreMap.phase_map."PHASE $([int][math]::Floor([double]$Phase))" }
         if ($pe -and $pe.techniques) { $id = [string]$pe.techniques[0] }
     }
     if (-not $id) { return $null }
@@ -625,7 +636,7 @@ $iocFile  = "$($ScanConfig.ioc_file)"
 
 # ── Reset state for new scan ────────────────────────────────────────────────────
 $ScanState.Mode         = $mode
-$ScanState.PhaseTotal   = if ($MODE_PHASES[$mode]) { $MODE_PHASES[$mode] } else { 107 }
+$ScanState.PhaseTotal   = if ($MODE_PHASES[$mode]) { $MODE_PHASES[$mode] } else { 115 }
 $ScanState.Phase        = 0
 $ScanState.PhaseName    = ''
 $ScanState.Section      = ''
@@ -699,7 +710,10 @@ try {
                 if ($fsev -in @('CRITICAL','HIGH','POSSIBLE')) {
                     $pnum = $ScanState.Phase
                     $pm2 = $PREX.Match("$($fobj.phase) ")
-                    if ($pm2.Success) { $pnum = [int]$pm2.Groups[1].Value }
+                    if ($pm2.Success) {
+                        $pv2 = $pm2.Groups[1].Value
+                        $pnum = if ($pv2.Contains('.')) { [double]$pv2 } else { [int]$pv2 }
+                    }
                     # Canonical threat bucket: engine ThreatType is free text — try the
                     # 10 canonical names first, then keyword-classify type+description.
                     $ttRaw = "$($fobj.tt)"
@@ -734,7 +748,11 @@ try {
         $pm = $PREX.Match($raw)
         $phaseChanged = $false
         if ($pm.Success) {
-            $newPhase = [int]$pm.Groups[1].Value
+            # Keep the decimal on fractional phases so they advance the counter (and
+            # force the scan_state emit below) instead of truncating to the previous
+            # integer phase and looking like a stall.
+            $pv = $pm.Groups[1].Value
+            $newPhase = if ($pv.Contains('.')) { [double]$pv } else { [int]$pv }
             if ($newPhase -ne $ScanState.Phase) { $ScanState.Phase = $newPhase; $phaseChanged = $true }
         }
 
@@ -816,8 +834,8 @@ try {
                     $tt  = "$($ef.ThreatType)"
                     if (-not $tt) { $tt = $null }
                     $phNum = 0
-                    $pm2 = [regex]::Match("$($ef.Phase)", '\d+')
-                    if ($pm2.Success) { $phNum = [int]$pm2.Value }
+                    $pm2 = [regex]::Match("$($ef.Phase)", '\d+(?:\.\d+)?')
+                    if ($pm2.Success) { $phNum = if ($pm2.Value.Contains('.')) { [double]$pm2.Value } else { [int]$pm2.Value } }
                     $line = if ($ef.Target) { "[$sev] $($ef.Description) -> $($ef.Target)" } else { "[$sev] $($ef.Description)" }
 
                     Enqueue @{ type='log_line'; text=$line; severity=$sev; phase=$phNum; elapsed=$ScanState.Elapsed }

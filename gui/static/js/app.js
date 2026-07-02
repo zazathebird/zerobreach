@@ -29,7 +29,7 @@ const STATE = {
   totalThreats: 0,
   elapsedSec: 0,
   currentPhase: 0,
-  totalPhases: 107,
+  totalPhases: 115,
   scanStartMs: 0,   // local clock origin (re-synced from server elapsed)
   lastEventMs: 0,   // last time any SSE event arrived (drives the "still working" heartbeat)
 };
@@ -227,7 +227,7 @@ function dispatchEvent(data) {
 function handleSync(data) {
   // Called once on SSE connect to restore state after page reload mid-scan
   STATE.currentPhase = data.phase || 0;
-  STATE.totalPhases  = data.phase_total || 107;
+  STATE.totalPhases  = data.phase_total || 115;
   STATE.elapsedSec   = data.elapsed || 0;
   STATE.threatCounts = data.threat_counts || {};
   if (data.running) {

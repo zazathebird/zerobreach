@@ -59,7 +59,7 @@ entry files + all engine modules are UTF-8 **with BOM**; JSON outputs are UTF-8 
 | Line shape | Meaning |
 |---|---|
 | `[FINDING] {compact JSON}` | **Authoritative live finding** — emitted by `Add-Finding` in non-interactive runs. Keys: `id, sev, phase, tt, desc, target, fix, group`. The server converts CRITICAL/HIGH/POSSIBLE into SSE `finding` events (exact severity, canonical threat bucket, MITRE-resolved) and never shows the raw line. |
-| `PHASE N — …` banner / `PHASE N — … took X.Xs` | Phase tracking (`PHASE\s+(\d+)[^\d]`) + per-phase profiling. |
+| `PHASE N — …` banner / `PHASE N — … took X.Xs` | Phase tracking (`PHASE\s+(\d+(?:\.\d+)?)[^\d]` — fractional phases keep their decimal and advance the counter) + per-phase profiling. |
 | everything else | `log_line` (severity regex-classified for coloring only — **never** into findings). |
 | STEALTH mode | one compressed-JSON audit blob on stdout; server buffers + parses post-exit. |
 
@@ -167,8 +167,11 @@ the dev machine) per the item below.
 2. **Round-4/5 leftover FPs** needing user sign-off: P48/P94 Python LocalCache, P53
    Sysinternals readme, P63 LGHUB config, P90 scratchpad scripts, P96 printer-driver DLL,
    P20 bare-`AppData` Run-key term.
-3. **Per-phase progress truth**: `phase_total` counts integer phases only — fold fractional
-   phases (55.5, 74.5/.6/.7, 99.5) into an accurate plan-derived total per mode.
+3. ~~**Per-phase progress truth**~~ **DONE 2026-07-02** — the server's phase regex now
+   captures fractional phases (55.5, 74.5/.6/.7, 99.5); they advance the counter/progress
+   as real plan steps, findings carry the true fractional phase, and MITRE resolves their
+   dedicated `phase_map` keys (previously unreachable). `phase_total` stays the plan
+   ceiling per mode (30/80/115, mirroring the loader's `$PhasePlan`).
 4. **Scan profiles** — save/load named config presets (mode/hours/IOC file/flags) via a
    small JSON sidecar + GUI picker.
 5. **Coverage matrix re-audit (WS0)** — `data/coverage_matrix.json` was generated against
