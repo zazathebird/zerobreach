@@ -174,6 +174,15 @@ $global:SKIP_SLOW_OUTPUT = $false   # [K] toggles this — kills typewriter/quan
 $redir = $false; try { $redir = [Console]::IsOutputRedirected } catch {}
 $global:NONINTERACTIVE = ($Auto -or $redir)
 if ($global:NONINTERACTIVE) { $global:SKIP_SLOW_OUTPUT = $true }
+# Redirected stdout (GUI server) defaults to the OEM codepage on PS 5.1, so box-drawing
+# banners arrive as mojibake in the web UI. Match the server's UTF-8 reader. Attached
+# consoles keep their native codepage (changing it there garbles the interactive view).
+if ($redir) {
+    try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch {}
+}
+# Bind the Security module (Get-AuthenticodeSignature / Get-Acl) up front, before the
+# known AccessControl.ObjectSecurity TypeData collision can degrade them mid-scan.
+try { Import-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue } catch {}
 
 # ── Output flood guard ───────────────────────────────────────────────────────
 # A single over-broad detection can match tens of thousands of benign files
@@ -523,6 +532,20 @@ function Add-Finding {
         Timestamp   = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     })
     $global:TotalAnomalies++
+    # ── Structured finding stream (GUI runs) ─────────────────────────────────
+    # Human-readable phase output carries no severity tags, so the web server
+    # cannot classify findings from text. Emit one machine-readable JSON line per
+    # registered finding; the server turns it into an exact-severity SSE `finding`
+    # event. Runtime data only — no signature literals (AMSI-safe). STEALTH keeps
+    # stdout to the single audit blob.
+    if ($global:NONINTERACTIVE -and -not $global:STEALTH_MODE) {
+        try {
+            $fj = @{ id = $ID; sev = $Severity; phase = $Phase; tt = $ThreatType
+                     desc = $Description; target = $Target; fix = $FixAction; group = $grpKey } |
+                  ConvertTo-Json -Compress
+            Write-Host "[FINDING] $fj"
+        } catch {}
+    }
     # ── Live tree update ──────────────────────────────────────────────────────
     if ($null -ne $global:GUI_LIVE_TREE -and -not $global:GUI_LIVE_TREE.IsDisposed) {
         $finding = $global:AuditFindings[$global:AuditFindings.Count - 1]

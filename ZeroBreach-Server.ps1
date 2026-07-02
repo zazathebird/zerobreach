@@ -121,7 +121,7 @@ $script:SEV_PATTERNS = [ordered]@{
     CRITICAL = [regex]'\[CRIT\]|CRITICAL|\[!!\]|THREAT BANNER|IOC HIT|BLATANT'
     HIGH     = [regex]'\[HIGH\]|HIGH SEVERITY|\[WARN\]|SUSPICIOUS'
     POSSIBLE = [regex]'\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMAL'
-    CLEAN    = [regex]'\[OK\]|CLEAN|NO .* FOUND|->\s*\[OK\]'
+    CLEAN    = [regex]'\[OK\s*\]|CLEAN|NO .* FOUND|->\s*\[OK\s*\]'
     INFO     = [regex]'\[INFO\]|\[VER\]|EXECUTED|EVALUATED'
     HUNT     = [regex]'\[HUNT\]|SCANNING|CHECKING|AUDITING'
 }
@@ -514,11 +514,15 @@ try {
 # Variables injected: $ScanState, $ScanConfig (hashtable), $ScanPsPath, $ScanReports
 $script:SCAN_SCRIPT = @'
 # ── Inline classification (can't reference main-script functions from runspace) ─
-$SEV = [ordered]@{
+# NOTE: named $SEV_RX, not $SEV — PowerShell variables are case-insensitive, so a
+# dict named $SEV is SHADOWED inside Classify by its local `$sev = 'INFO'`, making
+# $SEV.Keys read the string 'INFO' (→ $null) and every line classify as INFO. This
+# exact bug shipped and silently killed severity classification for weeks.
+$SEV_RX = [ordered]@{
     CRITICAL = [regex]'\[CRIT\]|CRITICAL|\[!!\]|THREAT BANNER|IOC HIT|BLATANT'
     HIGH     = [regex]'\[HIGH\]|HIGH SEVERITY|\[WARN\]|SUSPICIOUS'
     POSSIBLE = [regex]'\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMAL'
-    CLEAN    = [regex]'\[OK\]|CLEAN|NO .* FOUND|->\s*\[OK\]'
+    CLEAN    = [regex]'\[OK\s*\]|CLEAN|NO .* FOUND|->\s*\[OK\s*\]'
     INFO     = [regex]'\[INFO\]|\[VER\]|EXECUTED|EVALUATED'
     HUNT     = [regex]'\[HUNT\]|SCANNING|CHECKING|AUDITING'
 }
@@ -543,7 +547,7 @@ $MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115 }
 function Classify {
     param([string]$L)
     $sev = 'INFO'
-    foreach ($k in $SEV.Keys) { if ($SEV[$k].IsMatch($L)) { $sev = $k; break } }
+    foreach ($k in $SEV_RX.Keys) { if ($SEV_RX[$k].IsMatch($L)) { $sev = $k; break } }
     $ll = $L.ToLower()
     $tt = $null
     foreach ($k in $TKW.Keys) {
@@ -665,6 +669,49 @@ try {
         $elapsed = [int]([datetime]::Now - $ScanState.StartTime).TotalSeconds
         $ScanState.Elapsed = $elapsed
 
+        # Structured finding line — the engine's Add-Finding emits one compact-JSON
+        # line per registered finding in GUI runs ("[FINDING] {...}"). This is the
+        # authoritative live-finding source: exact severity, no text-regex guessing.
+        # The raw JSON line never reaches the log view.
+        if ($raw.StartsWith('[FINDING] ')) {
+            $fobj = $null
+            try { $fobj = $raw.Substring(10) | ConvertFrom-Json } catch {}
+            if ($fobj) {
+                $fsev = "$($fobj.sev)".ToUpper()
+                if ($fsev -in @('CRITICAL','HIGH','POSSIBLE')) {
+                    $pnum = $ScanState.Phase
+                    $pm2 = $PREX.Match("$($fobj.phase) ")
+                    if ($pm2.Success) { $pnum = [int]$pm2.Groups[1].Value }
+                    # Canonical threat bucket: engine ThreatType is free text — try the
+                    # 10 canonical names first, then keyword-classify type+description.
+                    $ttRaw = "$($fobj.tt)"
+                    $tt2 = $null
+                    foreach ($k in $TKW.Keys) { if ($ttRaw -match "^$k") { $tt2 = $k; break } }
+                    if (-not $tt2) { $tt2 = (Classify ("$ttRaw $($fobj.desc)")).tt }
+                    if (-not $tt2) { $tt2 = 'Other' }
+                    $mit = Resolve-Mitre "$($fobj.desc)" $tt2 $pnum
+                    $f = [ordered]@{
+                        type        = 'finding'
+                        id          = $ScanState.Findings.Count
+                        line        = ('[{0}] {1}' -f $fsev, "$($fobj.desc)")
+                        severity    = $fsev
+                        threat_type = $tt2
+                        phase       = $pnum
+                        mitre       = $mit
+                        mitre_id    = if ($mit) { $mit.id } else { $null }
+                        fix_action  = "$($fobj.fix)"
+                        target      = "$($fobj.target)"
+                        timestamp   = [datetime]::Now.ToString('HH:mm:ss')
+                    }
+                    [void]$ScanState.Findings.Add($f)
+                    if ($ScanState.ThreatCounts.ContainsKey($tt2)) { $ScanState.ThreatCounts[$tt2]++ }
+                    else { $ScanState.ThreatCounts['Other']++ }
+                    Enqueue $f
+                }
+                continue
+            }
+        }
+
         # Phase number
         $pm = $PREX.Match($raw)
         $phaseChanged = $false
@@ -709,30 +756,9 @@ try {
             elapsed  = $elapsed
         }
 
-        # Finding event for notable severity
-        if ($cl.sev -in @('CRITICAL','HIGH','POSSIBLE')) {
-            $mit = Resolve-Mitre $raw $cl.tt $ScanState.Phase
-            $f = [ordered]@{
-                type        = 'finding'
-                id          = $ScanState.Findings.Count
-                line        = $raw
-                severity    = $cl.sev
-                threat_type = $cl.tt
-                phase       = $ScanState.Phase
-                mitre       = $mit
-                mitre_id    = if ($mit) { $mit.id } else { $null }
-                timestamp   = [datetime]::Now.ToString('HH:mm:ss')
-            }
-            [void]$ScanState.Findings.Add($f)
-
-            $tt = $cl.tt
-            if ($tt) {
-                if ($ScanState.ThreatCounts.ContainsKey($tt)) { $ScanState.ThreatCounts[$tt]++ }
-                else { $ScanState.ThreatCounts['Other']++ }
-            }
-
-            Enqueue $f
-        }
+        # Finding events come exclusively from the structured "[FINDING] {...}" lines
+        # intercepted above — creating them from text-severity matches here too would
+        # double-count every detection. Classify is kept only for log-line coloring.
 
         # Periodic scan_state broadcast
         if ($ScanState.LineCount % 12 -eq 0) {
