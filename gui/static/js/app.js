@@ -16,6 +16,9 @@ const STATE = {
   findings: [],
   threatCounts: {},
   selectedFindings: new Set(),
+  findingsAutoSelected: false,  // SAFETY: severity-based auto-select runs ONCE per report load;
+                                // later re-renders seed checkboxes from selectedFindings so an
+                                // operator's deselection can never silently re-arm (see renderFindingsTree).
   ioc: null,            // { hashes, ips, domains, regex, files, _path }
   iocTab: 'hashes',
   iocLoaded: false,
@@ -835,6 +838,7 @@ function loadEngineFindings(name) {
       STATE.engineReport = name;
       STATE.findings = notable;
       STATE.selectedFindings.clear();
+      STATE.findingsAutoSelected = false;   // fresh report → allow the one-time severity auto-select
       updateBadge();
       // Correct the completion modal: the live SSE count is ~0 in GUI mode (engine emits clean
       // output); the engine report is the real total. notable = actionable, list = all severities.
@@ -913,6 +917,12 @@ function renderFindingsTree() {
   const container = $('findings-tree');
   container.innerHTML = '';
 
+  // SAFETY (B1): only the FIRST render after a report loads may auto-select by severity.
+  // Every later render (e.g. switching back into the Findings view) must reflect the
+  // operator's actual selection, or a deliberately-deselected destructive finding would
+  // silently re-check and could fire on PURGE.
+  const firstPass = !STATE.findingsAutoSelected;
+
   const groups   = {};
   const counts   = { CRITICAL: 0, HIGH: 0, POSSIBLE: 0, CLEAN: 0 };
 
@@ -966,7 +976,9 @@ function renderFindingsTree() {
       const shortText = (finding.line || '').substring(0, 120);
       // SAFETY: protected (system-critical) findings can NEVER be selected/auto-selected.
       // Vendor-trusted (RMM partner tooling) is NOT auto-selected, but stays manually selectable.
-      const autoCheck = (finding.severity === 'CRITICAL' || finding.severity === 'HIGH') && !finding.protected && !finding.vendor_trusted;
+      const autoEligible = (finding.severity === 'CRITICAL' || finding.severity === 'HIGH') && !finding.protected && !finding.vendor_trusted;
+      // First render: auto-select eligible items. Re-renders: mirror the operator's live selection.
+      const autoCheck = firstPass ? autoEligible : STATE.selectedFindings.has(finding.id);
       if (finding.protected) item.classList.add('protected');
       if (finding.vendor_trusted) item.classList.add('vendor-trusted');
       item.innerHTML = `
@@ -979,7 +991,7 @@ function renderFindingsTree() {
         <span class="item-phase">PH${finding.phase}</span>
       `;
 
-      if (autoCheck) STATE.selectedFindings.add(finding.id);
+      if (firstPass && autoEligible) STATE.selectedFindings.add(finding.id);
 
       // MITRE badge opens the technique page without toggling the checkbox row.
       const mb = item.querySelector('.item-mitre');
@@ -1011,6 +1023,7 @@ function renderFindingsTree() {
     container.appendChild(groupEl);
   });
 
+  STATE.findingsAutoSelected = true;   // one-time auto-select consumed; re-renders now mirror selection
   updateRemediationBtn();
 }
 
@@ -1409,7 +1422,13 @@ function initMspListener() {
   const TRIGGERS = ['msp', 'gannon', 'staples'];
   document.addEventListener('keydown', (e) => {
     if (STATE.scanning) return;
-    if (e.key.length === 1) {
+    // Don't sniff keystrokes typed into form fields or while a modal/command palette is open —
+    // otherwise typing an IOC like "kraken.io" or the word "msp" into an input fires the
+    // cinematic / flips the whole UI into MSP mode mid-task.
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (document.querySelector('.modal:not(.hidden), #cmd-palette')) return;
+    if (e.key && e.key.length === 1) {
       STATE.mspBuffer += e.key.toLowerCase();
       if (STATE.mspBuffer.length > 10) STATE.mspBuffer = STATE.mspBuffer.slice(-10);
       $('msp-input-display').textContent = STATE.mspBuffer + '_';

