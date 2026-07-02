@@ -1,4 +1,27 @@
-# RESUME HANDOFF — updated 2026-07-02 (session 5: SSE-log analysis + live finding stream fix + BLUEPRINT)
+# RESUME HANDOFF — updated 2026-07-02 (session 5: finding-stream fix + BLUEPRINT + portable release)
+
+> ## ▶ START HERE after /clear
+> 1. Read **`BLUEPRINT.md`** (product map + §7 roadmap) — it supersedes NEXT_STEPS/UPGRADE_PLAN.
+> 2. This session (5) fixed the dead live-finding pipeline + the `$SEV` classify shadow, created
+>    BLUEPRINT.md, and shipped the portable release build (`tools/Build-Release.ps1` + MotW
+>    self-unblock + README deploy guide). All validated headless incl. two real `/api/scan/start`
+>    end-to-end scans and a release zip extracted-to-spaced-path boot test. All committed locally;
+>    **push when the user says**.
+> 3. **THE open acceptance item is unchanged: the user's browser click-through** — runbook below
+>    ("NEXT SESSION — live GUI end-to-end validation") + the session-5 additions (live ticker/
+>    chips populate DURING the scan, severity-colored log lines + working CRIT/HIGH/POSSIBLE
+>    filters, clean box-drawing banners, real completion-modal counts).
+> 4. After that: BLUEPRINT §7 "Next" list (WS3 FP-tune of WS2 detections; the 6 known 1-off FPs
+>    awaiting user sign-off; per-phase progress truth; scan profiles; coverage-matrix re-audit;
+>    release-zip field test on a genuinely foreign box).
+>
+> ## Session 5b (2026-07-02) — portable distribution (user's core requirement)
+> - **`tools/Build-Release.ps1`** — validated release-zip builder (parse+BOM+JSON gate, runtime
+>   files only, SHA256 sidecar, `-OutDir`/`-IncludePython`). `dist/` gitignored.
+> - **MotW self-unblock** at server startup (runtime tree only); README "Deploy to another
+>   machine" section (zip → verify → Unblock → extract → Launch-GUI.bat).
+> - **Proven:** extracted release in a spaced path boots, serves the GUI (HTTP 200), answers
+>   `/api/state`; all packaged scripts parse clean from the extracted tree.
 
 > ## Session 5 (2026-07-02) — the promised log analysis, and what it found
 > Analyzed the 2026-07-01 live GUI DEEP run artifacts (`server_events_20260701_185058.log`,

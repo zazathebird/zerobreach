@@ -23,3 +23,5 @@ zerobreach/
 # OS noise
 Thumbs.db
 desktop.ini
+
+dist/

@@ -1,7 +1,8 @@
 # ZeroBreach V23 - "Kraken Console"
 
 Windows-only MSP incident-response / malware-detection tool. A PowerShell scan engine
-(107 phases) behind a local web GUI. Runs from any folder (USB-portable). Admin required.
+(~115 phases) behind a local web GUI, with MITRE ATT&CK tagging, a hard safety guard on
+remediation, and reversible quarantine. Runs from any folder (USB-portable). Admin required.
 
 ---
 
@@ -13,6 +14,35 @@ Windows-only MSP incident-response / malware-detection tool. A PowerShell scan e
 4. Watch findings stream live; a JSON report lands in **`reports\`** when done.
 
 That is it. No install, no Python, no internet needed.
+
+---
+
+## Deploy to another machine (copy / download / USB)
+
+The tool is a self-contained folder - PowerShell 5.1 (built into every Windows 10/11) is the
+only dependency. Two ways to move it:
+
+**A. Build a release zip (recommended - clean runtime files only):**
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Build-Release.ps1
+```
+This validates every script (parse + BOM) and data file (JSON), then writes
+`dist\ZeroBreach-V23_<stamp>.zip` + a `.sha256` sidecar. Add `-OutDir D:\` to write straight
+to a USB stick, `-IncludePython` to bundle the parked Flask server.
+
+**B. Just copy the whole folder** (works fine; brings dev files and old reports along).
+
+**On the target box:**
+1. Copy the zip over (verify the `.sha256` if it traveled through email/cloud).
+2. Right-click the zip → **Properties → Unblock** → OK. (Clears the Mark-of-the-Web that
+   downloads/transfers stamp on files; skipping this can trigger SmartScreen warnings on
+   first launch. The server also self-unblocks its runtime tree at startup as a fallback.)
+3. **Extract All** → open the `ZeroBreach\` folder → double-click **`Launch-GUI.bat`** →
+   approve UAC. Done - reports land in the extracted folder's `reports\`.
+
+Needs: Windows 10/11, admin rights, a writable location (not a read-only/ejected drive).
+No internet, no installs, no Defender exclusions (signatures live in `data\*.json`
+specifically so AMSI doesn't flag the engine).
 
 ### Alternative server (optional, parked)
 `Launch-GUI.bat python` uses the Flask/SocketIO server in `_python\` instead. This build is
@@ -36,7 +66,7 @@ Pick in the GUI, or pass `-Mode` on the CLI.
 | `FULL` | Standard full audit |
 | `DEEP` | Full + deeper/slower checks |
 | `PARANOID` | Most aggressive heuristics, more findings (and more noise) |
-| `STEALTH` | Silent; emits JSON instead of formatted text (parser support still WIP) |
+| `STEALTH` | Silent; engine emits one JSON blob, parsed into findings at completion |
 
 **Time window:** how far back to look. `0` = all time, `N` = last N hours.
 
@@ -104,13 +134,16 @@ powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Schedule DAILY -H
 ```
 Launch-GUI.bat              Entry point (double-click)
 ZeroBreach-Server.ps1       Local web server (default)
-ZeroBreach-V23.ps1          The 107-phase scan engine
+ZeroBreach-V23.ps1          Scan-engine loader (dot-sources engine\)
+engine\                     The ~115 scan phases + summary + fix mode
 gui\                        Web UI (HTML/CSS/JS)
 data\
   detection_signatures.json Built-in malware signatures (loaded at runtime)
   ioc_defaults.json         Default IOC list for -IocFile
-  mitre_mapping.json        MITRE ATT&CK map (not yet wired in)
-reports\                    Scan results (JSON), auto-created
+  mitre_mapping.json        MITRE ATT&CK map (wired into findings + exports)
+  permission_baseline.json  ACL baseline for the permission-integrity phases
+tools\Build-Release.ps1     Portable release-zip builder (see Deploy above)
+reports\                    Scan results, quarantine vault, server logs (auto-created)
 _python\                    Alternate Flask server (parked)
 ```
 
@@ -128,6 +161,8 @@ _python\                    Alternate Flask server (parked)
 ---
 
 ## Project docs (for development)
-- `CLAUDE.md` - architecture, gotchas, parsing details.
-- `NEXT_STEPS.md` - current work status and what is next.
-- `UPGRADE_PLAN.md` - the planned major detection/quality upgrade.
+- `BLUEPRINT.md` - the product map: architecture, data contracts, safety model, roadmap. Start here.
+- `CLAUDE.md` - hard rules, gotchas, parsing details for anyone editing code.
+- `HANDOFF.md` - current session state + the live-GUI validation runbook.
+- `CHANGELOG.md` - dated history of fixes and false-positive tuning rounds.
+- `NEXT_STEPS.md` / `UPGRADE_PLAN.md` - historical plans (superseded by BLUEPRINT.md).

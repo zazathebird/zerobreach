@@ -151,6 +151,15 @@ now also eyeballing the live finding ticker/chips + clean banner glyphs. Runbook
   acceptance gap and visually confirms the new live-finding stream + UTF-8 banners.
 - Push the unpushed local commits on `main`.
 
+### Done 2026-07-02 — portable distribution
+`tools/Build-Release.ps1` builds the transferable artifact: validates every script
+(parse + BOM) and data file (JSON), stages runtime files only, writes
+`dist/ZeroBreach-V23_<stamp>.zip` + SHA256 sidecar (`-OutDir` targets a USB directly;
+`-IncludePython` optional). The server self-unblocks its runtime tree at startup
+(Mark-of-the-Web). **Proven:** extracted release to a spaced path → server boots, GUI
+serves HTTP 200, `/api/state` answers. Remaining field test: a real *foreign* box (not
+the dev machine) per the item below.
+
 ### Next (high value, ordered)
 1. **WS3 — FP-tune the WS2 detections** (55.5/53/62/66/69/99.5) from fresh live DEEP
    baselines; re-grade to hold 52 (or ask user sign-off on the known 1-off FP list in
@@ -164,8 +173,9 @@ now also eyeballing the live finding ticker/chips + clean banner glyphs. Runbook
    small JSON sidecar + GUI picker.
 5. **Coverage matrix re-audit (WS0)** — `data/coverage_matrix.json` was generated against
    the work-rig engine; regenerate against `main` and publish the gap list.
-6. **USB portability field test** — run from a stick with a space in the path on a
-   non-dev box; confirm URL-ACL fallback + reports land on the stick.
+6. **USB portability field test** — extract a `Build-Release.ps1` zip on a **non-dev** box
+   (spaced path already proven locally); confirm SmartScreen/Unblock flow, URL-ACL fallback,
+   and reports landing beside the extracted copy.
 
 ### Later
 - **WS4 performance**: parallelize independent phases (runspace pools, PS-5.1-safe), cache
@@ -173,8 +183,9 @@ now also eyeballing the live finding ticker/chips + clean banner glyphs. Runbook
 - **WS5 reporting**: richer executive summary, per-tactic MITRE rollup, trend/diff view
   across baselines (`-Baseline` is already wired).
 - **Scheduled scans productized**: `-Schedule` + SMTP delivery hardening, plus a GUI panel.
-- **Build**: PyInstaller spec test for the parked Python server is deprioritized; instead
-  consider a self-contained PS2EXE or plain zip-with-BAT distribution + `assets/icon.ico`.
+- **Build**: zip-with-BAT distribution is DONE (`tools/Build-Release.ps1`). PyInstaller for
+  the parked Python server stays deprioritized; optional polish: `assets/icon.ico`, a signed
+  launcher, or PS2EXE if SmartScreen friction ever matters.
 - **Fleet ideas** (multi-box): central drop-folder for baselines + a compare view.
 
 ## 8. Doc map

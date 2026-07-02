@@ -6,6 +6,28 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-02 (later) — Portable distribution: Build-Release.ps1 + Mark-of-the-Web self-unblock
+
+The user's core requirement — "copy/download/transfer this tool and run on any Windows system" —
+productized:
+
+- **`tools/Build-Release.ps1`** (new): builds `dist/ZeroBreach-V23_<stamp>.zip` + SHA256 sidecar
+  from runtime files only (entry BAT/PS1s, `engine/`, `gui/`, `data/`, README; excludes reports/
+  dev docs/work-rig; `-IncludePython` opt-in, `-OutDir` can target a USB directly). Refuses to
+  pack unless every script parses clean WITH its UTF-8 BOM and every data JSON parses — the
+  release gate is the same as the dev gate. `dist/` gitignored.
+- **MotW self-unblock** (`ZeroBreach-Server.ps1` startup): transferred/downloaded copies carry
+  Zone.Identifier ADS on every file; the server now `Unblock-File`s the runtime tree (root
+  entry files + `engine/` + `gui/` + `data/`, never `reports/`) at startup. `-ExecutionPolicy
+  Bypass` already covers our scripts — this is defense-in-depth for foreign boxes. README gained
+  a "Deploy to another machine" section (zip → verify sha → Unblock → extract → `Launch-GUI.bat`).
+- **Proven end-to-end:** built a release, extracted it to a directory **with spaces** (the
+  historical UAC-quoting gotcha), booted the extracted server → GUI serves HTTP 200 with
+  branding, `/api/state` answers, all 7 packaged scripts parse clean from the extracted tree.
+  (Lesson re-learned while writing the packager: a `.ps1` written without BOM parses as ANSI
+  mojibake on live 5.1 — the BOM rule applies to `tools/` too.)
+- README also de-staled: 115 phases, MITRE wired, STEALTH parsing done, doc map → BLUEPRINT.md.
+
 ## 2026-07-02 — Live finding stream was dead: structured `[FINDING]` lines + UTF-8 stdout pipeline + BLUEPRINT.md
 
 Analyzing the 2026-07-01 live GUI DEEP run's SSE log (`server_events_20260701_185058.log` — the

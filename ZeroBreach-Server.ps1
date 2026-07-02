@@ -36,6 +36,24 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
 # Keep the script dir as CWD even after UAC elevation (elevation can drop to System32).
 Set-Location -LiteralPath $PSScriptRoot
 $script:ROOT      = $PSScriptRoot
+
+# ── Portability: strip Mark-of-the-Web ─────────────────────────────────────────
+# A downloaded/transferred copy carries Zone.Identifier ADS on every extracted file.
+# -ExecutionPolicy Bypass covers our own scripts, but unblock the runtime tree anyway
+# so nothing downstream (engine spawn, data loads, browser-served assets) can trip on
+# zone marks on a foreign box. Runtime files only — reports/ and dev folders skipped.
+try {
+    Get-ChildItem -LiteralPath $script:ROOT -File -ErrorAction SilentlyContinue |
+        Where-Object { $_.Extension -in '.ps1','.bat','.md' } | Unblock-File -ErrorAction SilentlyContinue
+    foreach ($sub in @('engine', 'gui', 'data')) {
+        $dir = Join-Path $script:ROOT $sub
+        if (Test-Path $dir) {
+            Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in '.ps1','.js','.css','.html','.json' } |
+                Unblock-File -ErrorAction SilentlyContinue
+        }
+    }
+} catch {}
 $script:SCAN_PS   = Join-Path $ROOT 'ZeroBreach-V23.ps1'
 $script:GUI_DIR   = Join-Path $ROOT 'gui'
 $script:REPORTS   = Join-Path $ROOT 'reports'
