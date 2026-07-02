@@ -1,5 +1,10 @@
 # ZeroBreach — Next Steps (post-/clear handoff)
 
+> ### ⚠ SUPERSEDED 2026-07-02 — the prioritized roadmap now lives in **`BLUEPRINT.md` §7**
+> This file is kept as historical context (session logs + the original phase plans). For
+> current state read `BLUEPRINT.md` (product map + roadmap) and `HANDOFF.md` (session state
+> + the live-GUI runbook). Everything below reflects sessions up to 2026-07-01.
+
 > ### ▶ START HERE — next session (updated 2026-07-01, session 4: engine split + WS2 port DONE)
 > **BIG ARCHITECTURE CHANGE this session — read the 2026-07-01 CHANGELOG entry first.** The engine is
 > no longer a monolith: `ZeroBreach-V23.ps1` is now a thin loader that dot-sources `engine/Phases-1/2/3

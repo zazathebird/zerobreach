@@ -1,4 +1,52 @@
-# RESUME HANDOFF — updated 2026-07-01 (session 4: engine split + WS2 detection port)
+# RESUME HANDOFF — updated 2026-07-02 (session 5: SSE-log analysis + live finding stream fix + BLUEPRINT)
+
+> ## Session 5 (2026-07-02) — the promised log analysis, and what it found
+> Analyzed the 2026-07-01 live GUI DEEP run artifacts (`server_events_20260701_185058.log`,
+> `audit_20260701_190044.json`, `KrakenConsole_20260701_185111.log`):
+> - **✅ Phase-counter fix `c0477ae` VALIDATED** — `scan_state` events carry all 116 phase values
+>   0→115 with no gaps; the counter can no longer skip fast phases. (231 scan_state events total.)
+> - **🐞 FOUND + FIXED: the live finding stream was dead.** The whole DEEP run produced **0** SSE
+>   `finding` events and all-1266-lines-INFO classification, while the engine recorded **288
+>   findings** — the engine's stdout finding lines (`[RUN KEY] …`) carry no severity tags for the
+>   server's `Classify` regexes. That's also why `audit_20260701_190044.json` has `findings: []`
+>   (it snapshots the server's live findings — NOT an "expected summary shape"). **Fix:**
+>   `Add-Finding` now emits one `[FINDING] {compact JSON}` line per registered finding
+>   (NONINTERACTIVE, non-stealth); the server intercepts those as the authoritative live-finding
+>   source (exact severity, canonical threat bucket, MITRE, `fix_action`/`target` added to the
+>   event) and the old text-severity→finding path was retired (would double-count). Frontend
+>   needs no changes (audited: chips/ticker/badge consume `finding` events; sounds throttled;
+>   completion still replaces the list from `/api/report`).
+> - **🐞 FOUND + FIXED: mojibake in the GUI log** — child PS 5.1 wrote redirected stdout in the
+>   OEM codepage while the server read UTF-8. Loader now sets `[Console]::OutputEncoding` UTF-8
+>   when stdout is redirected. Also: `Classify` CLEAN regex now tolerates the padded `[OK ]` tag.
+> - **Also:** early `Import-Module Microsoft.PowerShell.Security` in the loader (pre-empts the
+>   ACL TypeData collision degrading `Get-AuthenticodeSignature`); **`BLUEPRINT.md` created** —
+>   product map + data contracts + prioritized roadmap (start there); CLAUDE.md/NEXT_STEPS/
+>   UPGRADE_PLAN refreshed to match.
+> - **Remediation/export/IOC/STEALTH were NOT exercised** in the 07-01 run (SSE log ends at
+>   `scan_complete`; no `[FIX]` lines) — the browser click-through below remains THE open item,
+>   now also covering: live finding ticker/chips populate during the scan, banners render clean
+>   (no `�`), and the completion modal's live counts are real.
+>
+> ### Session 5 validation (all on live PS 5.1.26100; server + engine parse-clean 5.1+7, BOMs intact)
+> 1. **Headless engine QUICK** (server-style UTF-8 redirect): exit 0, **218 `[FINDING]` lines**
+>    (12 CRIT / 9 HIGH / 175 POSSIBLE / 22 INFO), 0 mojibake, box-drawing banners clean.
+> 2. **End-to-end server scan #1** (real `/api/scan/start` → SSE log `_013641`): **217 finding
+>    events streamed live** with exact severities + resolved MITRE (`fix_action`/`target` on each),
+>    threat_counts populated, `audit_20260702_014027.json` findings **217** (was `[]`). But all
+>    log_lines still INFO → dug in → **found the `$sev`/`$SEV` case-insensitive variable shadow**:
+>    `Classify`'s local `$sev='INFO'` shadowed the `$SEV` regex dict (PS vars are case-insensitive),
+>    so severity classification had NEVER worked, on any run, ever. Dict renamed **`$SEV_RX`**.
+> 3. **End-to-end server scan #2** (post-fix, SSE log `_014742`): **229 finding events**
+>    (12 CRIT / 22 HIGH / 195 POSSIBLE), log_line severities finally real (69 CLEAN / 57 HUNT /
+>    13 POSSIBLE / 4 HIGH / 3 CRIT / rest INFO), `audit_20260702_015127.json` findings **229**,
+>    0 mojibake, 202s elapsed, clean scan_complete. Test server stopped after.
+>
+> **For the next browser run, additionally verify:** live intel ticker + threat chips populate
+> DURING the scan; log lines are severity-colored + the CRITICAL/HIGH/POSSIBLE log filters work;
+> banners show clean box-drawing (no `�`); completion modal live counts are no longer ~0.
+
+# (session 4 record) — updated 2026-07-01 (engine split + WS2 detection port)
 
 > **THIS SESSION shipped a major architecture change** — read the 2026-07-01 `CHANGELOG.md` entry and
 > CLAUDE.md's new "Engine is split" rules before touching the engine. The monolith

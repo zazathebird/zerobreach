@@ -1,9 +1,17 @@
 # ZeroBreach — "Opus Treatment" Upgrade Plan (post-/clear handoff)
 
-> **Read this AFTER a context clear**, together with `CLAUDE.md`, `NEXT_STEPS.md`, and the
-> saved memories. Written 2026-06-06. This is the work plan for the *major detection &
-> quality upgrade* the user requested. The original tool was built with Sonnet 4.6; the goal
-> is to take it as far as possible with Opus 4.8.
+> **⚠ STATUS 2026-07-02 — largely delivered; the live roadmap is `BLUEPRINT.md` §7.**
+> Workstream scoreboard: **WS0** coverage matrix exists (`data/coverage_matrix.json`) but was
+> generated against the work-rig engine — re-audit pending · **WS1** AMSI externalization DONE ·
+> **WS2** detection expansion DONE (data merged + 6 detections ported 2026-07-01, all Info-only) ·
+> **WS3** FP tuning DONE rounds 1-5 for the pre-WS2 engine; the WS2 detections still need their
+> own pass · **WS4** performance: the file-walk/sig-budget work landed 2026-06-22; phase
+> parallelization not started · **WS5** MITRE tagging DONE, richer reporting open ·
+> **WS6** remediation + STEALTH parsing DONE. The hard boundaries + validation loop below
+> remain authoritative for any future detection work.
+
+> Originally written 2026-06-06 as the work plan for the *major detection & quality upgrade*.
+> The original tool was built with Sonnet 4.6; the goal was to take it as far as possible.
 
 ## User's directive (verbatim intent)
 - Go over **every** feature, every malware form, every component. Improve, upgrade, increase

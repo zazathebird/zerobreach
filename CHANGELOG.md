@@ -6,6 +6,72 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-02 — Live finding stream was dead: structured `[FINDING]` lines + UTF-8 stdout pipeline + BLUEPRINT.md
+
+Analyzing the 2026-07-01 live GUI DEEP run's SSE log (`server_events_20260701_185058.log` — the
+durable event log added in `c0477ae` paid off on its first outing) settled both handoff questions
+and surfaced two real bugs:
+
+**✅ Phase-counter fix `c0477ae` validated.** The SSE log's `scan_state` events carry all 116 phase
+values 0→115 with no gaps — the phase-change-triggered emit works; the counter can no longer skip
+sub-second phases.
+
+**🐞 The live finding stream was dead (0 events on a 288-finding DEEP run).** Every one of the run's
+1266 classified lines came through severity INFO and **zero** SSE `finding` events fired, because
+the engine's human-readable detection lines (`[RUN KEY] …`, threat banners) carry none of the
+severity tags the server's `Classify` regexes look for. Knock-on effects: live threat chips/intel
+ticker/tally bars stayed empty all scan, and the server's `audit_*.json` wrote `findings: []` (it
+snapshots the live list — the handoff's "expected summary shape?" question is answered: no, it was
+this bug). **Fix, both sides of the pipe:**
+- **Engine:** `Add-Finding` (loader) now emits one machine-readable line per registered finding —
+  `[FINDING] {compact JSON}` with `id, sev, phase, tt, desc, target, fix, group` — gated to
+  `NONINTERACTIVE` and non-STEALTH. Runtime data only, no signature literals (AMSI rule holds).
+  Group caps (100/group) bound the volume.
+- **Server:** the scan runspace intercepts `[FINDING]` lines as the **authoritative** live-finding
+  source — exact severity, canonical threat bucket (name-match the 10 types, else keyword
+  classify), MITRE resolution, new `fix_action`/`target` fields on the SSE event — and drops the
+  raw JSON line from the log view. The old text-severity→finding path was **removed** (with
+  structured lines it would double-count every detection); `Classify` is now log-coloring only.
+- **Frontend audited, no changes needed:** chips/ticker/badge already consume `finding` events,
+  per-severity sounds are throttled (alert ≤1/2s), and completion still replaces the live list
+  with `/api/report` — no double-count at scan end.
+
+**🐞 Mojibake in every GUI banner.** Child PS 5.1 writes redirected stdout in the OEM codepage;
+the server reads UTF-8 (`StandardOutputEncoding`) — so all box-drawing glyphs arrived as `�`.
+The loader now sets `[Console]::OutputEncoding` to UTF-8 when stdout is redirected (attached
+consoles keep their codepage). Also fixed: `Classify`'s CLEAN regex now tolerates the engine's
+padded `[OK ]` tag (both server copies).
+
+**Also:** early `Import-Module Microsoft.PowerShell.Security` in the loader — pre-empts the known
+ACL `AccessControl.ObjectSecurity` TypeData collision degrading `Get-AuthenticodeSignature`
+mid-scan (the trigger of the old phases-17-58 skip). And **`BLUEPRINT.md` created**: the product
+map — architecture, data contracts (incl. the new `[FINDING]` contract), safety model, quality
+gates, prioritized roadmap. CLAUDE.md points to it; NEXT_STEPS.md/UPGRADE_PLAN.md marked
+superseded/scoreboarded.
+
+**🐞 Bonus catch — the `$sev`/`$SEV` case-insensitive shadow (severity classification NEVER
+worked).** The first end-to-end validation scan streamed finding events fine but every `log_line`
+still classified INFO — even `[OK ]` lines that plainly matched the fixed CLEAN regex. Root cause
+(found by extracting the runspace's actual `Classify` into a harness and instrumenting it on live
+5.1): PowerShell variables are **case-insensitive**, so `Classify`'s first line `$sev = 'INFO'`
+creates a local that shadows the script-scope `$SEV` pattern dictionary — `$SEV.Keys` then reads
+the *string* `'INFO'`, returns `$null`, and the match loop silently never runs. Every line ever
+classified by the PS server came out INFO — this predates the split and explains why even
+`-> [OK]` lines were INFO in every historical SSE log. Fixed by renaming the dict `$SEV_RX`
+(both uses, comment left at the definition); verified CLEAN/HIGH/CRITICAL/POSSIBLE/HUNT all
+classify correctly on live 5.1. New CLAUDE.md rule: never give a local the same letters as a
+broader-scope variable.
+
+**Validation:** all files parse-clean live PS 5.1.26100 + 7 (incl. the server's 3 here-strings via
+`ParseInput`), BOMs intact. Headless QUICK run (server-style UTF-8 redirect): exit 0, **218
+`[FINDING]` lines** (12 CRITICAL / 9 HIGH / 175 POSSIBLE / 22 INFO), multi-line descriptions
+escape to single lines, **0 mojibake**, box-drawing banners clean. **End-to-end server-driven
+scans (real `/api/scan/start` → SSE log):** run 1 (pre-`$SEV_RX`): 217 finding events streamed
+live with exact severities + resolved MITRE (`fix_action`/`target` present), threat_counts
+populated (Other 184 / Fileless 26 / RAT 6 / Rootkit 1), `audit_*.json` findings **217** (was
+`[]`), 0 mojibake. Run 2 (post-`$SEV_RX`): see HANDOFF "Session 5 validation" for the final
+severity-distribution numbers.
+
 ## 2026-07-01 — Engine split into `engine/` modules + WS2 detection port + the dot-source trap fix
 
 Opus had begun (on the `quarantine-work-dump-…` work-rig branch, dropped into the repo as the nested

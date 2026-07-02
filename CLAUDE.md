@@ -2,9 +2,11 @@
 
 Guidance for Claude Code (claude.ai/code) working in this repo.
 
-> **Detailed bug-fix history and the 5 rounds of FP tuning live in `CHANGELOG.md`.** This file
-> keeps the durable **rules** only. When you fix something noteworthy, add a dated entry to
-> `CHANGELOG.md` and, if it produces a new "never do X" lesson, a rule below.
+> **`BLUEPRINT.md` is the product map** (architecture, data contracts, safety model, roadmap) —
+> read it first for orientation. **Detailed bug-fix history and the FP-tuning rounds live in
+> `CHANGELOG.md`.** This file keeps the durable **rules** only. When you fix something
+> noteworthy, add a dated entry to `CHANGELOG.md` and, if it produces a new "never do X"
+> lesson, a rule below.
 
 ## What This Project Is
 
@@ -100,20 +102,33 @@ Self-elevates (`Start-Process -Verb RunAs`, re-passing args). Params:
 
 ### Output parsing + events
 
-`Classify` (PS runspace) / `classify_line()` (`_python/server.py`) apply two lookups:
-- **Severity** via `SEVERITY_PATTERNS`: `[CRIT]`/`[WARN]`/`[OK]`/`[HUNT]`/`[INFO]` → `CRITICAL |
-  HIGH | POSSIBLE | CLEAN | INFO | HUNT`.
-- **Threat type** via `THREAT_MAP` → `RAT | Rootkit | Ransomware | Keylogger | Worm | Miner | Trojan
-  | Spyware | Fileless | Other`.
+**Live findings come from structured lines, not text classification (since 2026-07-02).**
+`Add-Finding` (loader) emits one `[FINDING] {compact JSON}` stdout line per registered finding
+in non-interactive, non-stealth runs (keys: `id, sev, phase, tt, desc, target, fix, group`);
+the server's scan runspace converts CRITICAL/HIGH/POSSIBLE ones into SSE `finding` events
+(exact severity, canonical threat bucket, MITRE-resolved) and drops the raw JSON line from the
+log view. **Never re-add a text-severity → finding path in the server** (it would double-count
+every detection), and **never print findings to stdout except through `Add-Finding`.** The
+engine's human-readable output carries no severity tags — the 2026-07-01 DEEP run produced 0
+live finding events (empty threat counters + empty server `audit_*.json`) because the server
+tried to regex-classify that text.
 
-Only `CRITICAL`/`HIGH`/`POSSIBLE` lines become `finding` events; all lines become `log_line` events.
+`Classify` (PS runspace) / `classify_line()` (`_python/server.py`) still severity-classify every
+line, but **only for `log_line` coloring**: `[CRIT]`/`[WARN]`/`[OK ]` (padded — regex must allow
+trailing space)/`[HUNT]`/`[INFO]` → `CRITICAL | HIGH | POSSIBLE | CLEAN | INFO | HUNT`; threat
+keywords → `RAT | Rootkit | Ransomware | Keylogger | Worm | Miner | Trojan | Spyware | Fileless
+| Other`.
+
 Phase headers: `PHASE\s+(\d+)[^\d]`. **Only CRITICAL/HIGH + a destructive FixAction is auto-selected
 for remediation** — POSSIBLE is shown but never auto-acted-on (the lever behind every FP downgrade).
+**Child stdout is UTF-8 end-to-end:** the loader sets `[Console]::OutputEncoding` to UTF-8 when
+stdout is redirected; the server reads with `StandardOutputEncoding = UTF8`. Don't change either
+side alone — a mismatch renders every box-drawing banner as mojibake in the GUI.
 
 | Event (server→client) | Key payload fields |
 |---|---|
 | `log_line` | `text, severity, phase, elapsed` |
-| `finding` | `id, line, severity, threat_type, phase, mitre {id,name,tactic,url}, mitre_id, timestamp` |
+| `finding` | `id, line, severity, threat_type, phase, mitre {id,name,tactic,url}, mitre_id, fix_action, target, timestamp` |
 | `scan_state` | `phase, phase_total, phase_name, section, elapsed, threat_counts, running` |
 | `scan_complete` | `findings_count, threat_counts, elapsed, results_path, engine_report` |
 | `remediation_complete` | `applied, failed, skipped, blocked` |
@@ -158,6 +173,12 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
    if something is genuinely off (vendor name in a suspicious path, or an independent malicious signal).
 
 ### PowerShell engine safety (`ZeroBreach-V23.ps1`)
+- **PowerShell variables are CASE-INSENSITIVE — never give a local the same letters as a
+  broader-scope variable.** `$sev = 'INFO'` inside a function silently shadows a script-scope
+  `$SEV` dictionary, so `$SEV.Keys` reads the *string* and returns `$null` — no error, the loop
+  just never runs. This exact bug shipped in the server's `Classify` and killed ALL severity
+  classification for weeks (every SSE line INFO). The dict is now `$SEV_RX`; when a lookup
+  mysteriously returns nothing, check for a case-insensitive shadow first.
 - **Never call these raw in a phase body — use the safe wrapper:** `Get-AuthenticodeSignature` →
   `Get-AuthSig`; `Get-ItemPropertyValue` → `Get-RegVal`; `Get-WinEvent -FilterHashtable` →
   `Get-WinEventSafe`; `Get-FileHash` → `Get-FileHashSafe`. `-EA SilentlyContinue` does **not** suppress
@@ -312,9 +333,12 @@ Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
 ## Outstanding Work
 
 The bulk of the roadmap is **done and merged** (scan-blocking prompts, re-run handling, MITRE, IOC
-Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–5, VFX/themes/
-sound). **The last standing item is a full live admin `Launch-GUI.bat` browser run** exercising export
-downloads, IOC save→scan, STEALTH, and destructive remediation end-to-end (server/API layer already
-validated headless — see memory). Then: USB portability, per-phase progress parsing, scan profile
-save/load. See `NEXT_STEPS.md` for the prioritized plan and `UPGRADE_PLAN.md` for the larger detection
-upgrade. **Build**: test the PyInstaller spec, add `assets/icon.ico` + `version_info.txt`.
+Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–5, engine
+split + WS2 port, live finding stream + UTF-8 pipeline, VFX/themes/sound). The 2026-07-01 browser
+DEEP run **passed the scan/engine path live** (115 phases contiguous, phase counter validated).
+**The last standing acceptance item is the browser click-through** of destructive remediation
+(PURGE + protected HARD block), export downloads, IOC save→re-scan, and STEALTH — now also
+eyeballing the live finding ticker/chips and clean banner glyphs. **The prioritized roadmap lives
+in `BLUEPRINT.md` §7** (WS3 FP-tune of the WS2 detections, FP sign-off list, per-phase progress
+truth, scan profiles, coverage-matrix re-audit, USB field test; `NEXT_STEPS.md`/`UPGRADE_PLAN.md`
+are historical context).
