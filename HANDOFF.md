@@ -39,9 +39,17 @@
 > 3. **THE open acceptance item is unchanged: the user's browser click-through** — runbook below
 >    ("NEXT SESSION — live GUI end-to-end validation") + the session-5 additions (live ticker/
 >    chips populate DURING the scan, severity-colored log lines + working CRIT/HIGH/POSSIBLE
->    filters, clean box-drawing banners, real completion-modal counts).
-> 4. Next CODING items per BLUEPRINT §7: **scan profiles** (named config presets, JSON sidecar +
->    GUI picker) and **coverage-matrix re-audit (WS0)**; then the USB foreign-box field test.
+>    filters, clean box-drawing banners, real completion-modal counts) + the session-7 addition
+>    (SCAN PROFILES picker: load a builtin, save/delete a custom preset, expect error toasts).
+> 4. ~~scan profiles / coverage-matrix re-audit~~ **both DONE in session 7** (see item 0). Next
+>    CODING items per BLUEPRINT §7 are now **items 7–8 from the WS0 audit**: (7) wire the 15
+>    orphaned signature keys — P67/68/82/89/98 still use inline literals while
+>    `adware_pup_regs`/`infostealer_procs`/`tunneling_tools`/`stego_tools`/`leaked_cert_issuers`/
+>    `cred_dump_tools`/`byovd_cert_tbs_hashes`/… sit unused in `detection_signatures.json`
+>    (cheap, widens coverage, removes AMSI-liability literals); (8) make QUICK a real gate —
+>    `$PhasePlan.Max` is display-only so QUICK runs phases 1–80 while advertising 30 (engine
+>    change: decide the QUICK set, gate per the module-trap rules, keep `phase_total` honest).
+>    Then the USB foreign-box field test (user-driven).
 
 > ## Session 5 header (superseded pointers kept below for context)
 > Session 5 fixed the dead live-finding pipeline + the `$SEV` classify shadow, created
