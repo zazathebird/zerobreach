@@ -190,11 +190,19 @@ the dev machine) per the item below.
 6. **USB portability field test** — extract a `Build-Release.ps1` zip on a **non-dev** box
    (spaced path already proven locally); confirm SmartScreen/Unblock flow, URL-ACL fallback,
    and reports landing beside the extracted copy.
-7. **Wire the 15 orphaned signature keys** (from the WS0 re-audit) — WS1/WS2 data merged into
-   `detection_signatures.json` but never consumed: P67/68/82/89/98 still use inline literals
-   while `adware_pup_regs`/`infostealer_procs`/`tunneling_tools`/`stego_tools`/
-   `leaked_cert_issuers`/`cred_dump_tools`/`byovd_cert_tbs_hashes`/… sit unused. Cheap wiring,
-   instantly widens named-threat coverage (and the inline literals are an AMSI-rule liability).
+7. ~~**Wire the 15 orphaned signature keys**~~ **DONE 2026-07-02** — all 15 now consumed:
+   P67 adware regs / P82 tunneling / P89 stego / P98 leaked certs / P106 cred-dump tools
+   externalized 1:1 (inline AMSI-liability literals removed); P6 gains loader/botnet +
+   banking-trojan process IOCs; P34/36 gain the extra C2 domain families; P55.5 gains a
+   cert-TBS-SHA1 confirm (durable across polymorphic BYOVD variants); P62 a framework-NAME
+   pipe pass; P68 the 14 new infostealer families + loader-drop/C2-config file rules; P100
+   the full 31-path infostealer target list. A Fable review agent caught **2 rule-#1 auto-fire
+   FPs before commit**: broad `known_c2_domains` (github/ngrok/tailscale) must NOT feed the
+   Phase-34 DNS-cache HIGH+RunCmd path (split into `$MALWARE_C2_DOMAINS` for P34 vs
+   `$ALL_C2_DOMAINS` for P36 reverse-DNS only); and generic stealer family words
+   (atomic/aurora/mystic) auto-killing legit procs — P68 now auto-kills only unsigned + in a
+   user-writable path (validated live: `Mystic_Light_Service` correctly downgraded to POSSIBLE,
+   not killed). Parse-clean 5.1+7, BOM intact, full DEEP + FULL headless runs 0 recovered errors.
 8. **Make QUICK a real gate** (from the WS0 re-audit) — `$PhasePlan.Max` is display-only, so
    QUICK runs phases 1–80 exactly like FULL while advertising "30 phases · ~2 min". Decide the
    real QUICK phase set, gate Phases-1/2 on it (mind the module-trap rules), and keep

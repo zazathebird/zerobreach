@@ -114,11 +114,26 @@ try {
                 -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
             $global:RATHits++; $pipeHits++; continue
         }
+        $leafMatched = $false
         foreach ($r in $C2_PIPE_REGEX_ANCHORED) {
             if ($leaf -match $r.Pattern) {
                 Out-ThreatBanner "C2 FRAMEWORK PIPE ($($r.Name))" $pipe
                 Add-Finding -ID "PIPEC2_$($leaf -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "C2 Framework Pipe" `
                     -Severity $pSevMap[$r.Severity] -Description "Named pipe matches $($r.Name) default pattern: $pipe" `
+                    -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
+                $global:RATHits++; $pipeHits++; $leafMatched = $true; break
+            }
+        }
+        if ($leafMatched) { continue }
+        # WS0 wiring: framework-NAME pass (meterpreter/cobaltstrike/havoc/sliver/...). Each name
+        # is bounded by non-alphanumeric edges so short tokens can't substring-match legit pipes
+        # ("msf" must NOT hit the Windows Search pipe MsFteWds). FixAction Info — a pipe name is
+        # triage evidence, not an auto-actionable target.
+        foreach ($pat in $C2_PIPE_PATTERNS) {
+            if ($leaf -match ('(^|[^a-z0-9])' + [regex]::Escape($pat) + '([^a-z0-9]|$)')) {
+                Out-ThreatBanner "C2 FRAMEWORK PIPE NAME" $pipe
+                Add-Finding -ID "PIPENAME_$($leaf -replace '[^a-z0-9]','')" -Phase "PHASE 62" -ThreatType "C2 Framework Pipe" `
+                    -Severity $SEV_HIGH -Description "Named pipe contains C2/RAT framework name '$pat': $pipe" `
                     -Target $pipe -FixAction "Info" -Group "Named Pipe Backdoors"
                 $global:RATHits++; $pipeHits++; break
             }
@@ -301,16 +316,9 @@ if ($shares.Count -eq 0) { Out-Typewriter "  -> [OK] NO NON-STANDARD SHARES FOUN
 Show-PhaseHeader "PHASE 67" "ADWARE / PUP / SPYWARE REGISTRY SCAN" "SPYWARE"
 Out-Typewriter "SCANNING FOR KNOWN ADWARE / PUP REGISTRY KEYS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$adwarePaths = @(
-    "HKCU:\SOFTWARE\Conduit","HKCU:\SOFTWARE\SearchProtect","HKCU:\SOFTWARE\Trovi",
-    "HKCU:\SOFTWARE\BabylonToolbar","HKCU:\SOFTWARE\Delta","HKCU:\SOFTWARE\Iminent",
-    "HKCU:\SOFTWARE\ISearchIQ","HKCU:\SOFTWARE\BrowserDefender","HKCU:\SOFTWARE\Funmoods",
-    "HKCU:\SOFTWARE\VisualBee","HKCU:\SOFTWARE\WebCake","HKCU:\SOFTWARE\Savings Bull",
-    "HKCU:\SOFTWARE\Sweet Page","HKCU:\SOFTWARE\SnapDo","HKCU:\SOFTWARE\V-Bates",
-    "HKCU:\SOFTWARE\YSearchUtil","HKLM:\SOFTWARE\Conduit","HKLM:\SOFTWARE\SearchProtect",
-    "HKLM:\SOFTWARE\BabylonToolbar","HKCU:\SOFTWARE\CrossRider","HKCU:\SOFTWARE\Superfish",
-    "HKLM:\SOFTWARE\Superfish","HKCU:\SOFTWARE\SpeedBit","HKCU:\SOFTWARE\Spigot"
-)
+# WS0 wiring: externalized to data/detection_signatures.json 'adware_pup_regs' (AMSI-safe,
+# same list). These keys never exist on a clean box, so DeleteRegKey stays safe to auto-select.
+$adwarePaths = $ADWARE_PUP_REGS
 $adwareFound = $false
 foreach ($ap in $adwarePaths) {
     if (Test-Path $ap) {
@@ -331,21 +339,40 @@ Show-SectionBanner "ADVANCED MALWARE & PERSISTENCE MODULES"
 Show-PhaseHeader "PHASE 68" "INFO-STEALER ARTIFACT SCAN (REDLINE/RACCOON/VIDAR)" "INFOSTEALER"
 Out-Typewriter "SCANNING FOR INFO-STEALER ARTIFACTS AND DROP PATHS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$stealerPaths = @(
-    "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data",  # stolen creds DB
-    "$env:APPDATA\Mozilla\Firefox\Profiles\*\logins.json",
-    "$env:APPDATA\Mozilla\Firefox\Profiles\*\key4.db"
-)
-$stealerRegex = "redline|raccoon|vidar|azorult|formbook|agent tesla|lokibot|sneaker|negasteal|hawkeye|loki|masslogger"
+# WS0 wiring: stealer-family names externalized to 'infostealer_procs' (was a 12-name inline
+# regex; the JSON list adds Lumma/StealC/Rhadamanthys/... = 14 more families).
+$stealerRegex = @($INFOSTEALER_PROCS | ForEach-Object { [regex]::Escape($_) }) -join '|'
+if (-not $stealerRegex) { $stealerRegex = '(?!)' }
 $stealerProcs = Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name.ToLower() -match $stealerRegex }
 foreach ($sp in $stealerProcs) {
-    Out-ThreatBanner "INFO-STEALER PROCESS IOC" "$($sp.Name) PID:$($sp.Id)"
-    Add-Finding -ID "STEALER_$($sp.Id)" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
-        -Severity $SEV_CRITICAL -Description "Known info-stealer process: $($sp.Name) PID:$($sp.Id)" `
-        -Target "PID:$($sp.Id)" -FixAction "KillProcess" -FixParam $sp.Id -Group "Info-Stealer"
+    # A bare process-NAME substring is weak evidence, and the family list contains generic words
+    # that collide with legit apps ("atomic" = Atomic Wallet, "aurora", "mystic", "loki"). Rule #1:
+    # only AUTO-KILL when the binary is BOTH unsigned AND running from a user-writable path
+    # (AppData/Temp/Downloads/user profile) — the actual staging shape of a real infostealer.
+    # A validly-signed binary, one in Program Files/System, or a path we can't read (protected
+    # process → $sp.Path $null) is downgraded to POSSIBLE + Info: shown for triage, never auto-acted.
+    # Single-file sig call per hit (hits are rare) — no SIG_AUDIT budget needed.
+    $spSignedValid = $false; $spUserPath = $false
+    if ($sp.Path) {
+        $spSignedValid = ((Get-AuthSig $sp.Path).Status -eq 'Valid')
+        $spUserPath    = ($sp.Path -match '\\(AppData|Temp|Downloads)\\' -or $sp.Path -match '(?i)\\Users\\[^\\]+\\')
+    }
+    if (-not $spSignedValid -and $spUserPath) {
+        Out-ThreatBanner "INFO-STEALER PROCESS IOC" "$($sp.Name) PID:$($sp.Id)"
+        Add-Finding -ID "STEALER_$($sp.Id)" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
+            -Severity $SEV_CRITICAL -Description "Unsigned info-stealer-named process from user path: $($sp.Name) PID:$($sp.Id) @ $($sp.Path)" `
+            -Target "PID:$($sp.Id)" -FixAction "KillProcess" -FixParam $sp.Id -Group "Info-Stealer"
+    } else {
+        Out-Typewriter "  -> STEALER-NAMED PROCESS (verify): $($sp.Name) PID:$($sp.Id)" "WARN"
+        $why = if ($spSignedValid) { "binary is validly signed (likely legit app)" } elseif (-not $sp.Path) { "binary path not readable" } else { "binary is outside user-writable paths" }
+        Add-Finding -ID "STEALER_$($sp.Id)" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
+            -Severity $SEV_POSSIBLE -Description "Process name matches info-stealer family but $($why) — verify: $($sp.Name) PID:$($sp.Id)$(if($sp.Path){" @ $($sp.Path)"})" `
+            -Target "PID:$($sp.Id)" -FixAction "Info" -Group "Info-Stealer"
+    }
     $global:SpywareHits++
 }
-$stealerFiles = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped) |
+$p68Files = @((Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped))
+$stealerFiles = $p68Files |
     Where-Object { $_.Name -match "passwords|credentials|wallet|login|autofill|cookie" -and $_.Extension -match "\.(zip|txt|log|db)$" }
 foreach ($sf in $stealerFiles) {
     # Exclude legitimate browser storage + known-benign dictionaries/caches (ZxcvbnData password
@@ -361,7 +388,32 @@ foreach ($sf in $stealerFiles) {
         -Target $sf.FullName -FixAction "DeleteFile" -FixParam $sf.FullName -Group "Info-Stealer"
     $global:SpywareHits++
 }
-if ($stealerProcs.Count -eq 0 -and $stealerFiles.Count -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
+# WS0 wiring: known-family drop-path rules (Latrodectus/Matanbuchus/DarkGate) + C2 framework
+# artifact-name rules (beacon.dll/metsrv/sliverpb/...) matched against file FULL PATHS. Reuses
+# the $p68Files walk above plus ProgramData and the DarkGate staging roots. All FixAction Info —
+# a path/name match is triage evidence (the Matanbuchus/DarkGate patterns CAN match a dev's own
+# files, e.g. C:\temp\*.exe), never auto-actionable.
+$dropRoots = @(@("$env:ProgramData","C:\temp","C:\tmpa") | Where-Object { $_ -and (Test-Path $_) })
+$dropFiles = if ($dropRoots.Count) { @((Get-ScanFiles -Path $dropRoots -TimeScoped)) } else { @() }
+$fileRuleSevMap = @{ "CRITICAL"=$SEV_CRITICAL; "HIGH"=$SEV_HIGH; "POSSIBLE"=$SEV_POSSIBLE }
+$dropRuleHits = 0
+$allFileRules = @(@($LOADER_DROP_PATH_RULES) + @($C2_CONFIG_RULES))
+if ($allFileRules.Count -gt 0) {
+    foreach ($f in @($p68Files + $dropFiles)) {
+        foreach ($r in $allFileRules) {
+            if ($f.FullName -match $r.Pattern) {
+                $ruleTT = if ($r.Family) { "Loader Drop ($($r.Family))" } else { "C2 Framework Artifact" }
+                Out-ThreatBanner "MALWARE DROP-PATH MATCH ($($r.Name))" $f.FullName
+                Add-Finding -ID "DROPRULE_$($f.Name -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 68" -ThreatType $ruleTT `
+                    -Severity $fileRuleSevMap[$r.Severity] -Description "$($r.Name): $($f.FullName)" `
+                    -Target $f.FullName -FixAction "Info" -Group "Loader / C2 Drop Artifacts"
+                $global:TrojanHits++; $dropRuleHits++
+                break   # one finding per file
+            }
+        }
+    }
+}
+if ($stealerProcs.Count -eq 0 -and $stealerFiles.Count -eq 0 -and $dropRuleHits -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
 
 Show-PhaseHeader "PHASE 69" "PROCESS HOLLOWING / INJECTION DETECTION" "INJECTION"
 Out-Typewriter "CHECKING FOR PROCESSES WITH ANOMALOUS MODULE COUNTS..." "HUNT"
@@ -837,7 +889,8 @@ if ($PhasePlan.Universal) {
     if (-not $foundShell) { Out-Typewriter "  -> [OK] NO REVERSE SHELL SOCKETS." "GOOD" }
 
     Show-PhaseHeader "PHASE 82" "NETCAT / SOCAT / CHISEL / PLINK BINARY SCAN" "UNIVERSAL"
-    $tunnelNames = @("nc.exe","ncat.exe","socat.exe","chisel.exe","plink.exe","putty.exe","proxychains*","ligolo*","frpc.exe","frps.exe","bore.exe","rpivot*")
+    # WS0 wiring: externalized to 'tunneling_tools' (AMSI-safe, same list).
+    $tunnelNames = $TUNNELING_TOOLS
     $tunnelRoots = @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE,"$env:WINDIR\Temp")
     # One bounded walk; anchored regex so "nc.exe" doesn't substring-match "sync.exe"
     # (was 4 roots x 12 names = 48 recursions, one over the entire user profile).
@@ -958,7 +1011,8 @@ if ($PhasePlan.Universal) {
                 -Target "PID:$($ec.OwningProcess)" -FixAction "KillProcess" -FixParam $ec.OwningProcess -Group "Data Exfiltration"
         }
     }
-    $stegoTools = @("openstego*","steghide*","outguess*","jphide*","stegosuite*","stepic*","imagesteganography*")
+    # WS0 wiring: externalized to 'stego_tools' (AMSI-safe, same list).
+    $stegoTools = $STEGO_TOOLS
     # One bounded walk + anchored regex (was 3 roots x 7 names = 21 recursions incl. whole profile).
     $stegoRegex = ($stegoTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $stegoHits = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE)) | Where-Object { $_.Name -match $stegoRegex }

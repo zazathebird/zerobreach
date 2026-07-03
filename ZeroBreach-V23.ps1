@@ -948,6 +948,67 @@ $INFOSTEALER_BEHAVIOR_RULES= Get-Sig 'infostealer_behavior_rules'  # Phase 99.5
 $INHIBIT_RECOVERY_RULES    = Get-Sig 'inhibit_recovery_rules'       # Phase 99.5
 $ALL_MALWARE_CMDLINE_RULES = @($LOADER_BEHAVIOR_RULES + $BANKING_BEHAVIOR_RULES + $INFOSTEALER_BEHAVIOR_RULES + $INHIBIT_RECOVERY_RULES)
 
+# WS0 orphan-key wiring (2026-07-02) — the WS1/WS2 keys below were merged into
+# data/detection_signatures.json but never consumed (BLUEPRINT §7 item 7). Wired here;
+# every NEW file/pipe/path/domain check they drive is FixAction Info (CLAUDE.md rule #1);
+# the Phase 6 process-IOC additions mirror that phase's existing KillProcess posture
+# (unambiguous malware family names only). The P67/68/82/89/98/106 keys replace inline
+# literals 1:1 (AMSI-liability removal, same behavior).
+$ADWARE_PUP_REGS           = Get-Sig 'adware_pup_regs'               # Phase 67 (was inline)
+$INFOSTEALER_PROCS         = Get-Sig 'infostealer_procs'             # Phase 68 (was inline, +14 families)
+$TUNNELING_TOOLS           = Get-Sig 'tunneling_tools'               # Phase 82 (was inline)
+$STEGO_TOOLS               = Get-Sig 'stego_tools'                   # Phase 89 (was inline)
+$LEAKED_CERT_ISSUERS       = Get-Sig 'leaked_cert_issuers'           # Phase 98 (was inline)
+$CRED_DUMP_TOOLS           = Get-Sig 'cred_dump_tools'               # Phase 106 (was inline)
+$LOADER_PROCS              = Get-Sig 'loader_procs'                  # Phase 6 (loader/botnet proc IOC)
+$BANKING_TROJAN_PROCS      = Get-Sig 'banking_trojan_procs'          # Phase 6 (banking-trojan proc IOC)
+$C2_PIPE_PATTERNS          = Get-Sig 'c2_pipe_patterns'              # Phase 62 (framework-name pipe pass)
+$C2_CONFIG_RULES           = Get-Sig 'c2_config_rules'               # Phase 68 (C2 artifact filename rules)
+$LOADER_DROP_PATH_RULES    = Get-Sig 'loader_drop_path_rules'        # Phase 68 (family drop-path rules)
+$BYOVD_CERT_TBS_HASHES     = Get-Sig 'byovd_cert_tbs_hashes'         # Phase 55.5 (cert-TBS confirm)
+$INFOSTEALER_TARGET_PATHS  = @((Get-Sig 'infostealer_target_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 100
+# TWO C2 domain sets — kept separate ON PURPOSE (rule #1):
+#  * $MALWARE_C2_DOMAINS = point-in-time loader/infostealer C2 (scifimond.com, polse.us …) —
+#    odd unique strings, ~zero FP surface, SAFE for the Phase 34 DNS-cache HIGH+RunCmd path.
+#  * $ALL_C2_DOMAINS = the above PLUS $KNOWN_C2_DOMAINS, which is deliberately broad LOLBin /
+#    tunneling infra (raw.githubusercontent.com, ngrok, tailscale, trycloudflare, nip.io …).
+#    A healthy dev box resolves those constantly, so this set is used ONLY by Phase 36's
+#    reverse-DNS-of-an-ACTIVE-connection check (a live socket to that infra is a real signal;
+#    a stale DNS-cache entry is not). Never feed $ALL_C2_DOMAINS into a DNS-cache/auto-fire path.
+$MALWARE_C2_DOMAINS        = @(@(Get-Sig 'loader_c2_domains') + @(Get-Sig 'infostealer_c2_domains'))  # Phase 34 (safe HIGH)
+$ALL_C2_DOMAINS            = @(@($KNOWN_C2_DOMAINS) + @($MALWARE_C2_DOMAINS))                          # Phase 36 (reverse-DNS only)
+
+# SHA1 of a certificate's TBS (to-be-signed) DER block — matches LOLDrivers TBS hashes,
+# which stay stable across polymorphic driver variants where the file SHA256 changes.
+# Minimal DER walk: outer SEQUENCE header, then the first child element IS the TBS
+# (tag+length+content). Returns $null on any parse/IO oddity — callers treat that as
+# "no confirmation", never as a finding.
+function Get-CertTbsSha1([System.Security.Cryptography.X509Certificates.X509Certificate2]$Cert) {
+    try {
+        $raw = $Cert.RawData
+        # Skip the outer SEQUENCE tag+length to land on the TBS element.
+        $i = 1
+        $b = $raw[$i]
+        if ($b -band 0x80) { $i += 1 + ($b -band 0x7F) } else { $i += 1 }
+        # TBS element: tag at $i, then its own length field, then content.
+        $j = $i + 1
+        $lb = $raw[$j]
+        if ($lb -band 0x80) {
+            $n = $lb -band 0x7F; $len = 0
+            for ($k = 1; $k -le $n; $k++) { $len = ($len * 256) + $raw[$j + $k] }
+            $hdr = 2 + $n
+        } else { $len = $lb; $hdr = 2 }
+        # Sanity-bound the length: a malformed/hostile cert could encode a multi-GB $len, and
+        # New-Object byte[] would attempt a giant alloc (OutOfMemoryException is not reliably
+        # caught by try/catch in PS 5.1). The TBS can never exceed the cert's own DER length.
+        if ($len -lt 0 -or ($i + $hdr + $len) -gt $raw.Length) { return $null }
+        $tbs = New-Object byte[] ($hdr + $len)
+        [Array]::Copy($raw, $i, $tbs, 0, $tbs.Length)
+        $sha1 = [System.Security.Cryptography.SHA1]::Create()
+        try { (($sha1.ComputeHash($tbs) | ForEach-Object { $_.ToString('X2') }) -join '') } finally { $sha1.Dispose() }
+    } catch { $null }
+}
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  PERMISSION / INTEGRITY BASELINE (V23 — externalized, AMSI-safe)
 #  Drives phases 108-115 (FORENSIC PERMISSION & INTEGRITY AUDIT). Path/key/owner

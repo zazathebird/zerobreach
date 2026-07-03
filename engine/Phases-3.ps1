@@ -320,7 +320,8 @@ if ($PhasePlan.Advanced) {
     Show-PhaseHeader "PHASE 98" "STOLEN / LEAKED CODE-SIGNING CERT DETECTION" "STOLEN CERT"
     Out-Typewriter "AUDITING SIGNED BINARIES IN USER PATHS FOR KNOWN-LEAKED ISSUERS..." "HUNT"
     Invoke-QuantumBar "AUTHENTICODE CHAIN AUDIT" 12 100
-    $leakedCerts = @("Founder Software","Founder Group","CN=NVIDIA","CN=Realtek Semiconductor","D-Link Corporation","Realtek Semiconductor","Foxit Software")
+    # WS0 wiring: externalized to 'leaked_cert_issuers' (AMSI-safe, same list).
+    $leakedCerts = $LEAKED_CERT_ISSUERS
     $stolenHits = 0
     # Bounded loop: Get-AuthSig can block on online cert-revocation checks (CRL/OCSP),
     # so cap total binaries verified AND enforce a wall-clock budget across ALL roots —
@@ -417,20 +418,19 @@ if ($PhasePlan.Advanced) {
     # ── PHASE 100: BROWSER CRED DB ACCESS AUDIT ───────────────────────────────
     Show-PhaseHeader "PHASE 100" "BROWSER PASSWORD/COOKIE DB RECENT ACCESS" "INFO-STEALER"
     Out-Typewriter "CHECKING LAST-ACCESS TIME ON BROWSER CREDENTIAL DATABASES..." "HUNT"
-    $credDbs = @(
-        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Login Data",
-        "$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cookies",
-        "$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Login Data",
-        "$env:APPDATA\Mozilla\Firefox\Profiles"
-    )
+    # WS0 wiring: target list externalized/expanded to 'infostealer_target_paths_raw' (31 paths —
+    # all browsers, Telegram/Discord, FileZilla, crypto wallets; wildcards for multi-profile).
+    # Severity is POSSIBLE across the board: a recent access-time on a store the OWNING app also
+    # touches routinely (browser running -> Login Data always "recent") is indistinguishable from
+    # a stealer read by timestamp alone — triage-visible, never red-flooding (FP round precedent).
+    $credDbs = $INFOSTEALER_TARGET_PATHS
     $credHits = 0
     foreach ($db in $credDbs) {
-        if (Test-Path $db) {
-            $item = Get-Item $db -ErrorAction SilentlyContinue
+        foreach ($item in @(Get-Item $db -ErrorAction SilentlyContinue)) {
             if ($item -and $item.LastAccessTime -gt (Get-Date).AddMinutes(-60)) {
-                Add-Finding -ID "CREDDB_$($db -replace '[^a-z0-9]','')" -Phase "PHASE 100" -ThreatType "Info-Stealer Activity" `
-                    -Severity $SEV_HIGH -Description "Browser credential DB accessed in last 60 min: $db @ $($item.LastAccessTime)" `
-                    -Target $db -FixAction "Info" -Group "Credential DB Access"
+                Add-Finding -ID "CREDDB_$($item.FullName -replace '[^a-z0-9]','')" -Phase "PHASE 100" -ThreatType "Info-Stealer Activity" `
+                    -Severity $SEV_POSSIBLE -Description "Credential/wallet store accessed in last 60 min (may be the owning app itself — verify): $($item.FullName) @ $($item.LastAccessTime)" `
+                    -Target $item.FullName -FixAction "Info" -Group "Credential DB Access"
                 $credHits++
             }
         }
@@ -619,7 +619,8 @@ if ($PhasePlan.Advanced) {
         }
     }
     # Check for PROCDUMP / dumper tool presence
-    $dumpTools = @("procdump*.exe","dumpert*.exe","memdump*.exe","outflank-dumpert*","nanodump*","handlekatz*","lsassy*","pypykatz*")
+    # WS0 wiring: externalized to 'cred_dump_tools' (AMSI-safe, same list).
+    $dumpTools = $CRED_DUMP_TOOLS
     # One bounded walk + anchored regex (was 3 roots x 8 names = 24 recursions incl. whole profile).
     $dumpRegex = ($dumpTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $dumpHits = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE)) | Where-Object { $_.Name -match $dumpRegex }

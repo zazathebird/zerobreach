@@ -134,6 +134,27 @@ foreach ($proc in $runningProcs) {
             $global:KeyloggerHits++; $iocHits = $true
         }
     }
+    # WS0 wiring: loader/botnet + banking-trojan family names (Pikabot/Bumblebee/QBot/DanaBot/...).
+    # Same KillProcess posture as the sibling IOC loops above — these names never occur in
+    # legitimate processes, so a hit on a healthy box is impossible by construction.
+    foreach ($ldr in $LOADER_PROCS) {
+        if ($pn -match [regex]::Escape($ldr)) {
+            Out-ThreatBanner "LOADER/BOTNET PROCESS IOC" "$($proc.Name) PID:$($proc.Id)"
+            Add-Finding -ID "LOADER_PROC_$($proc.Id)" -Phase "PHASE 6" -ThreatType "Loader/Botnet" -Severity $SEV_CRITICAL `
+                -Description "Known malware-loader process: $($proc.Name) (PID $($proc.Id)) matched IOC: $ldr" `
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Processes"
+            $global:TrojanHits++; $iocHits = $true
+        }
+    }
+    foreach ($bt in $BANKING_TROJAN_PROCS) {
+        if ($pn -match [regex]::Escape($bt)) {
+            Out-ThreatBanner "BANKING TROJAN PROCESS IOC" "$($proc.Name) PID:$($proc.Id)"
+            Add-Finding -ID "BANKTROJ_PROC_$($proc.Id)" -Phase "PHASE 6" -ThreatType "Banking Trojan" -Severity $SEV_CRITICAL `
+                -Description "Known banking-trojan process: $($proc.Name) (PID $($proc.Id)) matched IOC: $bt" `
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Processes"
+            $global:TrojanHits++; $iocHits = $true
+        }
+    }
 }
 if (-not $iocHits) { Out-Typewriter "  -> [OK] NO IOC PROCESS MATCHES." "GOOD" }
 
@@ -943,7 +964,12 @@ Show-PhaseHeader "PHASE 34" "DNS CACHE POISONING AUDIT & FLUSH"
 Out-Typewriter "DUMPING DNS RESOLVER CACHE..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
 $dnsCache = Get-DnsClientCache -ErrorAction SilentlyContinue
-$suspectDns = $dnsCache | Where-Object { $entry = $_; $SUSPICIOUS_DNS_DOMAINS | Where-Object { $entry.Entry -match [regex]::Escape($_) } }
+# WS0 wiring: the dyndns-provider list plus ONLY the specific point-in-time malware-C2 families
+# ($MALWARE_C2_DOMAINS — exact odd strings, ~zero FP surface). Deliberately NOT $ALL_C2_DOMAINS:
+# that set carries broad LOLBin/tunneling infra (github/ngrok/tailscale/…) which a healthy dev
+# box resolves routinely, and this phase emits HIGH + an auto-selectable RunCmd — see the loader.
+$allSuspectDns = @($SUSPICIOUS_DNS_DOMAINS) + @($MALWARE_C2_DOMAINS)
+$suspectDns = $dnsCache | Where-Object { $entry = $_; $allSuspectDns | Where-Object { $entry.Entry -match [regex]::Escape($_) } }
 foreach ($entry in $suspectDns) {
     Out-Typewriter "  -> SUSPECT DYNAMIC DNS: $($entry.Entry) -> $($entry.Data)" "CRIT"
     Add-Finding -ID "DNS_$($entry.Entry -replace '[^a-z0-9]','')" -Phase "PHASE 34" -ThreatType "DNS Hijack/C2" `
@@ -993,7 +1019,7 @@ foreach ($conn in $conns) {
 foreach ($conn in ($conns | Select-Object -First 30)) {
     try {
         $rdns = [System.Net.Dns]::GetHostEntry($conn.RemoteAddress).HostName
-        foreach ($c2d in $KNOWN_C2_DOMAINS) {
+        foreach ($c2d in $ALL_C2_DOMAINS) {
             if ($rdns -match [regex]::Escape($c2d)) {
                 $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
                 Out-ThreatBanner "C2 DOMAIN CONNECTION" "$($proc.Name) -> $rdns"
@@ -1501,6 +1527,18 @@ if ($BYOVD_DRIVER_NAMES.Count -gt 0) {
         if (Test-Path $path) {
             $sha = (Get-FileHashSafe $path)
             if ($sha -and $byovdHashSet.ContainsKey($sha.ToLower())) { $hashNote = " [SHA256-confirmed]" }
+            if (-not $hashNote -and @($BYOVD_CERT_TBS_HASHES).Count -gt 0) {
+                # WS0 wiring: polymorphic BYOVD variants (TrueSightKiller-class) defeat file
+                # hashes; the signing cert's TBS SHA1 stays stable across them. Single-file
+                # sig call on an already-matched driver — no SIG_AUDIT budget needed.
+                $drvSig = Get-AuthSig $path
+                if ($drvSig.SignerCertificate) {
+                    $tbs = Get-CertTbsSha1 $drvSig.SignerCertificate
+                    if ($tbs -and @($BYOVD_CERT_TBS_HASHES | Where-Object { "$($_.TBS_SHA1)".ToUpper() -eq $tbs }).Count -gt 0) {
+                        $hashNote = " [cert-TBS-confirmed]"
+                    }
+                }
+            }
         }
         Out-ThreatBanner "VULNERABLE BYOVD DRIVER" "$leaf (loaded=$loaded)$hashNote"
         Add-Finding -ID "BYOVD_$($leaf -replace '[^a-z0-9]','')" -Phase "PHASE 55.5" -ThreatType "BYOVD / Vulnerable Driver" `

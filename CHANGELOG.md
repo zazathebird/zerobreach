@@ -6,6 +6,50 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-02 (late night) — Wire the 15 orphaned signature keys (BLUEPRINT §7.7)
+
+The WS0 coverage re-audit found 15 signature keys merged into `data/detection_signatures.json`
+(WS1/WS2) but consumed by **no** phase — dead data, and the phases that *should* have used them
+still carried inline literal name-lists (an AMSI-rule liability). All 15 are now wired:
+
+- **1:1 externalization (inline literal → JSON key, behavior identical):** P67 `adware_pup_regs`,
+  P82 `tunneling_tools`, P89 `stego_tools`, P98 `leaked_cert_issuers`, P106 `cred_dump_tools`.
+  The engine `.ps1` bodies no longer carry these signature-shaped lists.
+- **New coverage (all FixAction Info except the P6 process-IOC loops, which mirror that phase's
+  existing KillProcess posture on unambiguous malware family names):** P6 `loader_procs` +
+  `banking_trojan_procs` (Pikabot/Bumblebee/QBot/DanaBot/…); P36 reverse-DNS + P34 DNS-cache gain
+  the loader/infostealer C2 domain families; P55.5 `byovd_cert_tbs_hashes` — a new
+  `Get-CertTbsSha1` DER helper computes the signing cert's TBS SHA1, which stays stable across
+  the ~2500 polymorphic TrueSightKiller-class BYOVD variants where the file SHA256 is useless
+  (cross-checked against `System.Formats.Asn1` on 17 real certs, malformed-cert OOM-guarded);
+  P62 `c2_pipe_patterns` framework-NAME pipe pass (bounded `(^|[^a-z0-9])name([^a-z0-9]|$)` so
+  short tokens like `msf` can't hit `MsFteWds`); P68 `infostealer_procs` (+14 families),
+  `loader_drop_path_rules` + `c2_config_rules` (family drop-path / C2-artifact file rules);
+  P100 `infostealer_target_paths_raw` (full 31-path browser/wallet/Telegram/Discord list).
+
+**A Fable review subagent caught two rule-#1 auto-fire FPs before commit:**
+1. **Broad C2 infra in the DNS-cache HIGH path.** `known_c2_domains` is deliberately broad
+   LOLBin/tunneling infrastructure (raw.githubusercontent.com, ngrok, tailscale, trycloudflare,
+   nip.io) — fine for Phase 36's reverse-DNS-of-an-*active-connection* check, but I had also fed
+   it into Phase 34's DNS-**cache** substring match, which emits HIGH + an auto-selectable
+   `RunCmd`. Any dev box that ever resolved GitHub would auto-fire. **Fix:** split into
+   `$MALWARE_C2_DOMAINS` (point-in-time loader/infostealer C2 only — odd unique strings) for
+   P34, vs `$ALL_C2_DOMAINS` (+ the broad set) for P36 reverse-DNS only.
+2. **Generic stealer family words auto-killing legit procs.** The new `infostealer_procs` list
+   adds generic words (atomic → Atomic Wallet, aurora, mystic, meduza) that substring-match
+   legit process names; the first draft auto-killed any non-validly-signed match. **Fix:** P68
+   now auto-kills (CRITICAL + KillProcess) only when the binary is **both** unsigned **and**
+   running from a user-writable path (AppData/Temp/Downloads/user profile — real stealer staging);
+   signed, system-path, or path-unreadable matches downgrade to POSSIBLE + Info. Validated live:
+   the post-fix FULL run flagged `Mystic_Light_Service` (MSI RGB service) as POSSIBLE "verify",
+   not the auto-kill it would have been.
+
+Also OOM-guarded `Get-CertTbsSha1` against a malformed cert encoding a multi-GB length.
+Validation: parse-clean live PS 5.1.26100 + pwsh 7 (all touched files, BOM intact); headless
+DEEP `-Hours 1` (all 121 phases contiguous incl. fractional, 0 recovered errors, exit 0) before
+the fixes, headless FULL `-Hours 1` (phases 1–80, 0 recovered errors, exit 0) after. Committed
+locally — pending push with the rest of the stacked session commits.
+
 ## 2026-07-02 (night) — Scan profiles (BLUEPRINT §7.4) + the bad-JSON client-hang fix
 
 **Scan profiles shipped.** New `GET|POST /api/profiles` on the PS server: 4 read-only built-ins
