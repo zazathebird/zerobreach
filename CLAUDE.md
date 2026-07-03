@@ -268,8 +268,13 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **MITRE ATT&CK tagging** — server loads `data/mitre_mapping.json` into the scan runspace;
   `Resolve-Mitre`/`Resolve-MitreMain` resolve each finding (keyword → threat-type → phase map) and
   attach `mitre {id,name,tactic,url}`. Frontend renders a clickable `.item-mitre` badge.
-- **HTTP routes** (`ZeroBreach-Server.ps1`): `GET /api/export/html|csv` (server-rendered download from
-  current findings); `GET|POST /api/ioc` (IOC Manager — POST writes both the JSON sidecar and
+- **HTTP routes** (`ZeroBreach-Server.ps1`): `GET|POST /api/profiles` (scan profiles — 4 read-only
+  built-ins from `$script:PROFILE_BUILTINS` + user presets in `reports/scan_profiles.json`; save is
+  upsert-by-name with fail-closed validation; built-ins deliberately carry **no `ioc_file` key** so
+  applying one never blanks the IOC Manager's path. **All POST bodies parse via `Read-JsonBody` —
+  never inline `ConvertFrom-Json -EA SilentlyContinue`, which on PS 5.1 throws a terminating error
+  on bad JSON and hangs the client with no response**); `GET /api/export/html|csv` (server-rendered
+  download from current findings); `GET|POST /api/ioc` (IOC Manager — POST writes both the JSON sidecar and
   `reports/custom_iocs.ioc` in the engine's **prefixed** text format `hash:`/`ip:`/`domain:`/`regex:`/
   `file:`, then feeds it to the next scan via `-IocFile`); `GET /api/report?name=<file>` (rich engine
   findings with `FixAction`/`FixParam`, MITRE-enriched; name validated `^(KrakenBaseline_|audit_).*\.json$`);

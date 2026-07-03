@@ -117,6 +117,7 @@ function initApp() {
   initClock();
   initNav();
   initLaunchPad();
+  initProfiles();
   initScanMonitor();
   initFindingsView();
   initIocView();
@@ -390,6 +391,115 @@ function initLaunchPad() {
     t.addEventListener('click', () => ZBSound.play('click'));
     t.addEventListener('mouseenter', () => ZBSound.play('hover'));
   });
+}
+
+// ── Scan Profiles (named config presets — /api/profiles) ─────────────────────
+let SCAN_PROFILES = [];
+
+// Single source of truth for checkbox-id ↔ profile-key pairs; used by both
+// applyProfile and saveProfile so the two field lists can never drift.
+const PROFILE_TOGGLES = [
+  ['opt-html', 'html_report'], ['opt-snapshot', 'snapshot'], ['opt-baseline', 'baseline'],
+  ['opt-paranoid', 'paranoid'], ['opt-csv', 'csv'], ['opt-stealth', 'stealth'],
+];
+
+function initProfiles() {
+  $('profile-select').addEventListener('change', () => {
+    const p = SCAN_PROFILES.find(x => x.name === $('profile-select').value);
+    if (p) applyProfile(p);
+  });
+  $('btn-profile-save').addEventListener('click', saveProfile);
+  $('btn-profile-del').addEventListener('click', deleteProfile);
+  loadProfiles();
+}
+
+function loadProfiles(selectName) {
+  fetch('/api/profiles')
+    .then(r => r.json())
+    .then(j => { SCAN_PROFILES = j.profiles || []; renderProfileOptions(selectName); })
+    .catch(() => {});
+}
+
+function renderProfileOptions(selectName) {
+  const sel = $('profile-select');
+  sel.innerHTML = '<option value="">— LOAD PROFILE —</option>';
+  SCAN_PROFILES.forEach(p => {
+    const o = document.createElement('option');
+    o.value = p.name;
+    const h = parseInt(p.hours) || 0;
+    const scope = h === 0 ? 'ALL TIME' : (h % 24 === 0 ? (h / 24) + 'D' : h + 'H');
+    o.textContent = `${p.builtin ? '◆ ' : ''}${p.name} — ${p.mode} / ${scope}`;
+    sel.appendChild(o);
+  });
+  sel.value = selectName || '';
+}
+
+function applyProfile(p) {
+  ZBSound.play('confirm');
+  STATE.scanMode = p.mode;
+  $$('.mode-tile').forEach(t => t.classList.toggle('active', t.dataset.mode === p.mode));
+
+  const h = parseInt(p.hours) || 0;
+  STATE.scanHours = h;
+  $$('.time-tile').forEach(t => t.classList.remove('active'));
+  const tile = document.querySelector(`.time-tile[data-hours="${h}"]`);
+  if (tile) { tile.classList.add('active'); $('custom-hours').value = ''; }
+  else { document.querySelector('.custom-tile').classList.add('active'); $('custom-hours').value = h; }
+
+  PROFILE_TOGGLES.forEach(([id, k]) => {
+    const el = $(id);
+    if (el && k in p) el.checked = !!p[k];
+  });
+  if ('ioc_file' in p) $('ioc-path').value = p.ioc_file || '';
+  $('profile-name').value = p.builtin ? '' : p.name;
+}
+
+function saveProfile() {
+  const name = $('profile-name').value.trim();
+  if (!name) { ZBSound.play('error'); $('profile-name').focus(); return; }
+  const profile = {
+    name,
+    mode:     STATE.scanMode,
+    hours:    STATE.scanHours,
+    ioc_file: $('ioc-path').value.trim(),
+  };
+  PROFILE_TOGGLES.forEach(([id, k]) => { profile[k] = $(id).checked; });
+  fetch('/api/profiles', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ action: 'save', profile }),
+  })
+    .then(r => r.json().then(j => ({ ok: r.ok, j })))
+    .then(({ ok, j }) => {
+      if (!ok) throw new Error(j.error || 'save failed');
+      ZBSound.play('confirm');
+      showToast(`Profile "${name}" saved`);
+      SCAN_PROFILES = j.profiles || [];
+      renderProfileOptions(name);
+    })
+    .catch(e => { showToast(`Profile save failed: ${e.message}`); ZBSound.play('error'); });
+}
+
+function deleteProfile() {
+  const name = $('profile-select').value;
+  const p = SCAN_PROFILES.find(x => x.name === name);
+  if (!p) { ZBSound.play('error'); return; }
+  if (p.builtin) { showToast('Built-in profiles cannot be deleted'); ZBSound.play('error'); return; }
+  fetch('/api/profiles', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ action: 'delete', name }),
+  })
+    .then(r => r.json().then(j => ({ ok: r.ok, j })))
+    .then(({ ok, j }) => {
+      if (!ok) throw new Error(j.error || 'delete failed');
+      ZBSound.play('close');
+      showToast(`Profile "${name}" deleted`);
+      SCAN_PROFILES = j.profiles || [];
+      renderProfileOptions();
+      $('profile-name').value = '';
+    })
+    .catch(e => { showToast(`Profile delete failed: ${e.message}`); ZBSound.play('error'); });
 }
 
 // ── Settings: theme grid, FX intensity, audio ────────────────────────────────

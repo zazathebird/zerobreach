@@ -142,8 +142,19 @@
       <div class="view active" id="view-launchpad">
         <div class="view-title">MISSION PARAMETERS</div>
 
+        <!-- Scan profiles (named config presets) -->
+        <div class="section-label">SCAN PROFILES</div>
+        <div id="profile-row" class="file-input-row">
+          <select id="profile-select" class="path-input">
+            <option value="">— LOAD PROFILE —</option>
+          </select>
+          <input type="text" id="profile-name" class="path-input" placeholder="Profile name..." maxlength="48">
+          <button class="cyber-btn-sm" id="btn-profile-save">SAVE</button>
+          <button class="cyber-btn-sm" id="btn-profile-del">DELETE</button>
+        </div>
+
         <!-- Mode selector -->
-        <div class="section-label">DEPLOYMENT MODE</div>
+        <div class="section-label" style="margin-top:28px">DEPLOYMENT MODE</div>
         <div id="mode-tiles">
           <div class="mode-tile" data-mode="QUICK">
             <div class="mode-tile-icon">⚡</div>

@@ -6,6 +6,38 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-02 (night) — Scan profiles (BLUEPRINT §7.4) + the bad-JSON client-hang fix
+
+**Scan profiles shipped.** New `GET|POST /api/profiles` on the PS server: 4 read-only built-ins
+(`$script:PROFILE_BUILTINS` — Triage/Standard/Incident/Silent) + user profiles persisted to
+`reports/scan_profiles.json` (UTF-8 no BOM, beside `custom_iocs.json`). Save is upsert-by-name
+(case-insensitive), capped at 50, fail-closed validation: name whitelist `^[A-Za-z0-9][A-Za-z0-9
+(),\-_.]{0,47}$`, mode whitelist, hours must parse as int 0–8760 (400, never coerced — a silent
+0 would turn a 24h triage preset into ALL TIME), flags via `ConvertTo-Flag` (`[bool]'false'` is
+`$true` in PS, so string booleans from API clients are matched strictly). GUI: SCAN PROFILES
+picker at the top of MISSION PARAMETERS (load select + name input + SAVE/DELETE), `applyProfile`
+drives the existing tiles/toggles/IOC path, `PROFILE_TOGGLES` is the single checkbox↔key map for
+apply+save, errors surface via `showToast` (same convention as IOC save). Built-ins deliberately
+carry **no `ioc_file` key** so applying one never blanks an IOC path the IOC Manager just set.
+
+**Found while verifying (pre-existing, server-wide): malformed JSON in any POST body hung the
+browser forever.** On PS 5.1 `ConvertFrom-Json` throws a TERMINATING error that `-ErrorAction
+SilentlyContinue` does NOT suppress; the route aborted with no response and the accept-loop catch
+never closed the context. Fixed at both layers: new `Read-JsonBody` helper (statement try/catch)
+used by remediate/ioc/profiles; `/api/scan/start` now 400s on a non-empty unparseable body
+(previously it silently started a default-scope scan and answered `started` — fail closed now);
+accept-loop catch sends a 500 instead of leaving the client hanging.
+
+**8-angle review of the diff surfaced and fixed before commit:** the PS 5.1 empty-pipeline bug
+(`@(...) | Where-Object` yields `$null`, not `@()` — a save→delete-all→save cycle persisted a
+literal `null` profile that crashed the picker render; outer `@( )` wrap, per the existing
+`Get-ScanFiles` rule family); POST on an unreadable/corrupt `scan_profiles.json` now 500s instead
+of rewriting the file from the empty set (silent wipe of every saved profile); `custom-hours`
+cleared when a preset tile matches. Verified live on PS 5.1: 20+ probes incl. the null-bug repro,
+corrupt-file survival, string-flag coercion, and bad-JSON on all four POST routes → clean 400s.
+
+---
+
 ## 2026-07-02 (evening) — FP-tune round 6 (WS3): the fresh-DEEP healthy-box tail, user-signed-off
 
 Graded the same-day live DEEP baseline (`KrakenBaseline_20260702_143221.json`: 734 findings,

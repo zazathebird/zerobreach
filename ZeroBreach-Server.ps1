@@ -91,6 +91,16 @@ if (Test-Path $mitrePath) {
     catch { $script:MITRE_MAP = $null }
 }
 
+# ── Built-in scan profiles (read-only presets served by /api/profiles) ─────────
+# Deliberately NO ioc_file key: applying a builtin must not blank an IOC path the
+# IOC Manager just set (the GUI only writes fields present on the profile).
+$script:PROFILE_BUILTINS = @(
+    [pscustomobject]@{ name='Triage (QUICK, 24h)';        mode='QUICK';   hours=24; html_report=$true;  snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$false; builtin=$true },
+    [pscustomobject]@{ name='Standard (FULL, all time)';  mode='FULL';    hours=0;  html_report=$true;  snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$false; builtin=$true },
+    [pscustomobject]@{ name='Incident (DEEP, all time)';  mode='DEEP';    hours=0;  html_report=$true;  snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$false; builtin=$true },
+    [pscustomobject]@{ name='Silent (STEALTH, all time)'; mode='STEALTH'; hours=0;  html_report=$false; snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$true;  builtin=$true }
+)
+
 # ── Shared State (synchronized — accessed by multiple runspaces) ───────────────
 $script:State = [hashtable]::Synchronized(@{
     Running      = $false
@@ -411,6 +421,33 @@ function Read-RequestBody {
             $Ctx.Request.InputStream, [System.Text.Encoding]::UTF8)
         return $sr.ReadToEnd()
     } catch { return '{}' }
+}
+
+function Read-JsonBody {
+    # Parse a POST body, $null on bad JSON. The statement try/catch is load-bearing:
+    # on PS 5.1 ConvertFrom-Json throws a TERMINATING error on malformed JSON that
+    # -ErrorAction SilentlyContinue does NOT suppress — inline, that aborts the route
+    # with no response and the client hangs. Never replace callers with the raw form.
+    # NB: consumes the request InputStream — callable once per request.
+    param($Ctx)
+    try { return ((Read-RequestBody $Ctx) | ConvertFrom-Json -ErrorAction Stop) } catch { return $null }
+}
+
+function ConvertTo-Flag {
+    # Strict boolean coercion for JSON-sourced flags. [bool]'false' is $true in
+    # PowerShell (any non-empty string), so API clients sending string booleans
+    # would silently enable stealth/paranoid flags without this.
+    param($v)
+    if ($v -is [bool]) { return $v }
+    return ("$v" -match '^(?i)(true|1|yes)$')
+}
+
+function Write-Utf8Json {
+    # UTF-8 WITHOUT BOM — raw ConvertFrom-Json readers and the engine's file
+    # parsers choke on a BOM'd data file (Set-Content -Encoding UTF8 adds one on 5.1).
+    param([string]$Path, $Obj, [int]$Depth = 4)
+    $u8 = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, ($Obj | ConvertTo-Json -Depth $Depth), $u8)
 }
 
 function Get-SysInfoJson {
@@ -1158,7 +1195,7 @@ function Handle-Request {
             if ($script:State.Running)     { Write-JsonResponse $Ctx '{"error":"scan in progress"}' 400; return }
             if ($script:State.Remediating) { Write-JsonResponse $Ctx '{"error":"remediation already running"}' 400; return }
 
-            $parsed = (Read-RequestBody $Ctx) | ConvertFrom-Json -ErrorAction SilentlyContinue
+            $parsed = Read-JsonBody $Ctx
             if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
 
             # Security: report must be a recognized file inside reports/ (basename only).
@@ -1195,7 +1232,7 @@ function Handle-Request {
             $iocDefault = Join-Path $script:ROOT 'data\ioc_defaults.json'
 
             if ($method -eq 'POST') {
-                $parsed = (Read-RequestBody $Ctx) | ConvertFrom-Json -ErrorAction SilentlyContinue
+                $parsed = Read-JsonBody $Ctx
                 if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
                 $cats = @{
                     hashes  = @($parsed.hashes)  | Where-Object { $_ }
@@ -1249,12 +1286,93 @@ function Handle-Request {
             }
         }
 
+        '^/api/profiles$' {
+            # Scan profiles — named config presets (mode/hours/flags/IOC file), BLUEPRINT §7.4.
+            # Built-ins ($script:PROFILE_BUILTINS) are read-only; user profiles persist in
+            # reports/scan_profiles.json (beside custom_iocs.json — the writable config home).
+            $profPath = Join-Path $script:REPORTS 'scan_profiles.json'
+            $userProfiles = @()
+            $profReadFailed = $false
+            if (Test-Path -LiteralPath $profPath) {
+                try {
+                    $saved = Get-Content -LiteralPath $profPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                    # Outer @( ) is load-bearing: an empty pipeline yields $null, not @(),
+                    # and that $null would serialize as a literal null profile entry.
+                    $userProfiles = @(@($saved.profiles) | Where-Object { $_ -and $_.name })
+                } catch { $userProfiles = @(); $profReadFailed = $true }
+            }
+
+            if ($method -eq 'POST') {
+                # A save against an unreadable (locked/corrupt) file would rewrite it from
+                # the empty set and silently destroy every saved profile — fail instead.
+                if ($profReadFailed) { Write-JsonResponse $Ctx '{"error":"scan_profiles.json exists but is unreadable or corrupt - fix or delete it, then retry"}' 500; return }
+                $parsed = Read-JsonBody $Ctx
+                if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
+                $action = "$($parsed.action)".ToLower()
+
+                if ($action -eq 'save') {
+                    $p = $parsed.profile
+                    $name = "$($p.name)".Trim()
+                    if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9 (),\-_.]{0,47}$') { Write-JsonResponse $Ctx '{"error":"invalid profile name (1-48 chars: letters, digits, space, (),-_.)"}' 400; return }
+                    if ($script:PROFILE_BUILTINS.name -contains $name) { Write-JsonResponse $Ctx '{"error":"name is reserved by a built-in profile"}' 400; return }
+                    $mode = "$($p.mode)".ToUpper()
+                    if (@('QUICK','FULL','DEEP','PARANOID','STEALTH') -notcontains $mode) { Write-JsonResponse $Ctx '{"error":"invalid mode"}' 400; return }
+                    $hours = 0
+                    if (-not [int]::TryParse("$($p.hours)", [ref]$hours) -or $hours -lt 0 -or $hours -gt 8760) {
+                        # Reject rather than coerce: silently rewriting hours to 0 would turn a
+                        # saved 24h triage preset into an ALL-TIME scan with a 200 response.
+                        Write-JsonResponse $Ctx '{"error":"invalid hours (integer 0-8760; 0 = all time)"}' 400; return
+                    }
+                    $clean = [ordered]@{
+                        name        = $name; mode = $mode; hours = $hours
+                        html_report = ConvertTo-Flag $p.html_report; snapshot = ConvertTo-Flag $p.snapshot
+                        baseline    = ConvertTo-Flag $p.baseline;    paranoid = ConvertTo-Flag $p.paranoid
+                        csv         = ConvertTo-Flag $p.csv;         stealth  = ConvertTo-Flag $p.stealth
+                        ioc_file    = "$($p.ioc_file)".Trim()
+                    }
+                    $userProfiles = @($userProfiles | Where-Object { $_ -and $_.name -ne $name })
+                    if (@($userProfiles).Count -ge 50) { Write-JsonResponse $Ctx '{"error":"profile limit reached (50)"}' 400; return }
+                    $userProfiles = @($userProfiles) + @([pscustomobject]$clean)
+                } elseif ($action -eq 'delete') {
+                    $name = "$($parsed.name)".Trim()
+                    if ($script:PROFILE_BUILTINS.name -contains $name) { Write-JsonResponse $Ctx '{"error":"built-in profiles cannot be deleted"}' 400; return }
+                    $before = @($userProfiles).Count
+                    $userProfiles = @($userProfiles | Where-Object { $_ -and $_.name -ne $name })
+                    if (@($userProfiles).Count -eq $before) { Write-JsonResponse $Ctx '{"error":"profile not found"}' 404; return }
+                } else {
+                    Write-JsonResponse $Ctx '{"error":"action must be save or delete"}' 400; return
+                }
+
+                try {
+                    $out = [ordered]@{
+                        version  = 'V23'
+                        updated  = [datetime]::Now.ToString('yyyy-MM-dd HH:mm:ss')
+                        profiles = @($userProfiles)
+                    }
+                    Write-Utf8Json $profPath $out
+                } catch {
+                    Write-JsonResponse $Ctx (@{ error = "$($_.Exception.Message)" } | ConvertTo-Json -Compress) 500; return
+                }
+                Write-JsonResponse $Ctx (@{ status = $action; profiles = (@($script:PROFILE_BUILTINS) + @($userProfiles)) } | ConvertTo-Json -Depth 4)
+                return
+            }
+
+            # GET — built-ins first, then saved user profiles.
+            Write-JsonResponse $Ctx (@{ profiles = (@($script:PROFILE_BUILTINS) + @($userProfiles)) } | ConvertTo-Json -Depth 4)
+        }
+
         '^/api/scan/start$' {
             if ($method -ne 'POST') { Write-JsonResponse $Ctx '{"error":"POST required"}' 405; return }
             if ($script:State.Running) { Write-JsonResponse $Ctx '{"error":"scan already running"}' 400; return }
 
             $body   = Read-RequestBody $Ctx
-            $parsed = $body | ConvertFrom-Json -ErrorAction SilentlyContinue
+            $parsed = $null
+            if ($body -and $body.Trim() -and $body.Trim() -ne '{}') {
+                try { $parsed = $body | ConvertFrom-Json -ErrorAction Stop } catch { $parsed = $null }
+                # Fail closed: a garbled config must NOT silently start a default-scope scan
+                # (wrong mode/hours/no IOC file on an IR box, reported as success).
+                if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
+            }
             $cfg    = @{}
             if ($parsed) {
                 $parsed.PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
@@ -1355,6 +1473,7 @@ if (-not $NoBrowser) {
 try {
     while ($script:State.Listening) {
         try {
+            $ctx = $null
             $ctx = $Listener.GetContext()
             Handle-Request $ctx
         }
@@ -1367,6 +1486,8 @@ try {
         catch {
             $errPath = if ($null -ne $ctx) { $ctx.Request.Url.AbsolutePath } else { 'unknown' }
             Write-Host ('[ZeroBreach] Request error on ' + $errPath + ': ' + $_.Exception.Message) -ForegroundColor Yellow
+            # Never leave the client hanging: if the handler died before answering, send a 500.
+            if ($null -ne $ctx) { try { Write-JsonResponse $ctx '{"error":"internal server error"}' 500 } catch {} }
         }
     }
 }

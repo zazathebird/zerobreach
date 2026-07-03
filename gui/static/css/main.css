@@ -456,6 +456,12 @@ body::after {
 .path-input:focus { border-color: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
 .path-input::placeholder { color: var(--text-dim); }
 
+/* Scan-profile picker (config view) */
+select.path-input { cursor: pointer; }
+select.path-input option { background: var(--bg-raised); color: var(--text); }
+#profile-select { flex: 1.6; min-width: 0; }
+#profile-name { flex: 1; min-width: 0; }
+
 #msp-hint { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; opacity: 0.3; }
 #msp-input-display { color: var(--text-dim); letter-spacing: 2px; }
 

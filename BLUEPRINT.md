@@ -177,8 +177,12 @@ the dev machine) per the item below.
    as real plan steps, findings carry the true fractional phase, and MITRE resolves their
    dedicated `phase_map` keys (previously unreachable). `phase_total` stays the plan
    ceiling per mode (30/80/115, mirroring the loader's `$PhasePlan`).
-4. **Scan profiles** — save/load named config presets (mode/hours/IOC file/flags) via a
-   small JSON sidecar + GUI picker.
+4. ~~**Scan profiles**~~ **DONE 2026-07-02** — `GET|POST /api/profiles` (4 read-only
+   built-ins + user profiles in `reports/scan_profiles.json`, fail-closed validation,
+   upsert-by-name, 50 cap) + SCAN PROFILES picker in the config view. Shipped with a
+   server-wide fix: malformed JSON in any POST body used to hang the client forever
+   (PS 5.1 terminating `ConvertFrom-Json` error) — now `Read-JsonBody` + accept-loop
+   500 net; `/api/scan/start` fails closed on a garbled config. See `CHANGELOG.md`.
 5. **Coverage matrix re-audit (WS0)** — `data/coverage_matrix.json` was generated against
    the work-rig engine; regenerate against `main` and publish the gap list.
 6. **USB portability field test** — extract a `Build-Release.ps1` zip on a **non-dev** box
