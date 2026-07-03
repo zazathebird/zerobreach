@@ -1,6 +1,26 @@
-# RESUME HANDOFF — updated 2026-07-02 (session 6: FP round 6 — WS3 + ALL sign-off FPs cleared)
+# RESUME HANDOFF — updated 2026-07-02 (session 7: scan profiles + WS0 coverage re-audit DONE)
 
 > ## ▶ START HERE after /clear
+> 0. **Session 7 (2026-07-02 night) closed BLUEPRINT §7 items 4+5** (commits `5e21683` + `fea1960`,
+>    local, NOT pushed — now 4 commits ahead of origin):
+>    - **Scan profiles shipped + live-verified**: `GET|POST /api/profiles` (4 read-only builtins +
+>      user presets in `reports/scan_profiles.json`, fail-closed validation) + SCAN PROFILES picker
+>      at the top of MISSION PARAMETERS. An 8-angle agent review before commit caught and fixed: the
+>      PS 5.1 empty-pipeline `$null` (save→delete-all→save persisted a literal null that crashed the
+>      picker), corrupt-file POST wiping all profiles, hours coerce-to-ALL-TIME, `[bool]'false'`
+>      string flags, builtin `ioc_file:''` clobbering the IOC Manager's path, swallowed error toasts.
+>    - **Server-wide bug found while verifying: malformed JSON in ANY POST body hung the browser
+>      forever** (PS 5.1 `ConvertFrom-Json` throws terminating; route died with no response). Fixed:
+>      `Read-JsonBody` helper + accept-loop 500 net; `/api/scan/start` now 400s on a garbled config
+>      instead of silently starting a default-scope scan. New rule in CLAUDE.md → HTTP routes.
+>    - **WS0 coverage re-audit done by agent, validated, committed**: `data/coverage_matrix.json`
+>      regenerated against main (121 phases, +55.5/+99.5). Gap list in `fea1960`'s message. Two
+>      discoveries promoted to BLUEPRINT §7 items 7–8: **15 orphaned signature keys** (P67/68/82/89/98
+>      use inline literals while the JSON keys sit unused) and **QUICK mode is a label, not a gate**
+>      ($PhasePlan.Max is display-only → QUICK runs 1–80 like FULL while advertising 30 phases).
+>    - **Browser click-through additions for the user's run:** exercise the SCAN PROFILES picker
+>      (load a builtin, save/delete a custom one — expect toasts on errors) alongside the session-5
+>      checklist below.
 > 1. Read **`BLUEPRINT.md`** (product map + §7 roadmap) — it supersedes NEXT_STEPS/UPGRADE_PLAN.
 > 2. **Session 6 (2026-07-02 evening, commit `fcb8199`) closed BLUEPRINT §7 items 1+2:** graded the
 >    same-day live DEEP baseline `_143221` (39 auto-destructive vs the 52 reference; WS2 detections

@@ -183,11 +183,22 @@ the dev machine) per the item below.
    server-wide fix: malformed JSON in any POST body used to hang the client forever
    (PS 5.1 terminating `ConvertFrom-Json` error) — now `Read-JsonBody` + accept-loop
    500 net; `/api/scan/start` fails closed on a garbled config. See `CHANGELOG.md`.
-5. **Coverage matrix re-audit (WS0)** — `data/coverage_matrix.json` was generated against
-   the work-rig engine; regenerate against `main` and publish the gap list.
+5. ~~**Coverage matrix re-audit (WS0)**~~ **DONE 2026-07-02** — regenerated against main's
+   split engine (121 phases, +55.5/+99.5, schema extended with module/mode_gate/severities/
+   fix_actions; MITRE cross-checked). Gap list in the commit message (`fea1960`). Two
+   discoveries became items 7–8 below.
 6. **USB portability field test** — extract a `Build-Release.ps1` zip on a **non-dev** box
    (spaced path already proven locally); confirm SmartScreen/Unblock flow, URL-ACL fallback,
    and reports landing beside the extracted copy.
+7. **Wire the 15 orphaned signature keys** (from the WS0 re-audit) — WS1/WS2 data merged into
+   `detection_signatures.json` but never consumed: P67/68/82/89/98 still use inline literals
+   while `adware_pup_regs`/`infostealer_procs`/`tunneling_tools`/`stego_tools`/
+   `leaked_cert_issuers`/`cred_dump_tools`/`byovd_cert_tbs_hashes`/… sit unused. Cheap wiring,
+   instantly widens named-threat coverage (and the inline literals are an AMSI-rule liability).
+8. **Make QUICK a real gate** (from the WS0 re-audit) — `$PhasePlan.Max` is display-only, so
+   QUICK runs phases 1–80 exactly like FULL while advertising "30 phases · ~2 min". Decide the
+   real QUICK phase set, gate Phases-1/2 on it (mind the module-trap rules), and keep
+   `phase_total` honest. Until then the QUICK tile's promise is wrong.
 
 ### Later
 - **WS4 performance**: parallelize independent phases (runspace pools, PS-5.1-safe), cache
