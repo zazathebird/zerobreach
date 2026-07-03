@@ -1323,6 +1323,15 @@ $PhasePlan = switch ($global:ScanMode) {
     "STEALTH"  { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
     default    { @{ Min=1; Max=80;  Universal=$false; Advanced=$false; Integrity=$false } }
 }
+# QUICK is now a REAL gate (BLUEPRINT §7.8). Every mode except QUICK runs the full 1-80 span
+# (DEEP+ add the Universal 81-89 + Advanced 90-115). QUICK runs a reduced 30-phase triage set;
+# the other 54 phases in 1-80 are wrapped `if (-not $global:QUICK_MODE) { ... }` in
+# engine/Phases-1/2.ps1. The KEPT QUICK set (MUST stay exactly $PhasePlan.Max = 30 phases —
+# phase_total honesty; the server mirrors QUICK=30):
+#   1,3,4,5,6,10,20,21,23,27,28,29,30,31,33,35,41,42,45,51,53,54,56,62,64,69,70,72,74.6,75
+# Invariant baked into the wraps: 51 is KEPT because 53 reuses its $ransomScanFiles walk.
+# If you change the wrap set, update Max above AND the server's $MODE_PHASES QUICK entry.
+$global:QUICK_MODE = ($global:ScanMode -eq 'QUICK')
 
 # ── Full console transcript (interactive runs) ────────────────────────────────
 # Captures EVERYTHING printed to the console to reports/KrakenConsole_<stamp>.log so

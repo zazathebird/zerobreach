@@ -6,6 +6,50 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-03 — QUICK is now a real gate (BLUEPRINT §7.8) + a latent Phase-56 rootkit bug
+
+**QUICK was a label, not a gate.** `$PhasePlan.Max` was display-only, so QUICK ran phases 1–80
+exactly like FULL while the GUI tile advertised "30 phases · ~2 min". Now QUICK runs a real
+30-phase triage set:
+`1,3,4,5,6,10,20,21,23,27,28,29,30,31,33,35,41,42,45,51,53,54,56,62,64,69,70,72,74.6,75` —
+chosen for detection value per second (process/IOC matches, run keys, scheduled tasks, services,
+named pipes, live sockets, Defender state), deferring the expensive file-system walks,
+Authenticode sig-audits, and event-log mining to FULL/DEEP.
+
+- **Mechanism (engine):** the loader sets `$global:QUICK_MODE = ($global:ScanMode -eq 'QUICK')`
+  right after the `$PhasePlan` switch (before the modules are dot-sourced). The 54 non-kept
+  phases in the 1–80 span are wrapped `if (-not $global:QUICK_MODE) { trap { Write-RecoveredError
+  $_; continue }; <phase body> }`, grouped into contiguous-run blocks (13 in Phases-1, 7 in
+  Phases-2) each carrying its OWN inner trap so a terminating error resumes at the next phase, not
+  end-of-block (the engine-split module-trap rule). Phases 81–89 (Universal) and 90–115 (Advanced)
+  were already off for QUICK/FULL and are untouched. FULL/DEEP/PARANOID/STEALTH are byte-identical
+  (their `$QUICK_MODE` is `$false`, so every wrapped block runs exactly as before).
+- **phase_total honesty:** `$PhasePlan.Max=30` flows to `$global:TOTAL_PHASES` and Summary's
+  "30 phases" with no further edit. The server keeps `$MODE_PHASES QUICK=30` (the set is exactly
+  30) and now tracks a `PhaseIdx` (count of distinct phase headers seen, clamped to PhaseTotal);
+  in QUICK ONLY, `scan_state`/`sync`/`/api/state` report `PhaseIdx` (1..30) as `phase` instead of
+  the raw number (which is non-contiguous and would overshoot — "62/30"). `finding` events and
+  MITRE keep the TRUE phase. Non-QUICK payloads are value-identical.
+- **Multi-agent (Fable):** a Plan agent produced the phase set + mechanism; a cross-phase
+  variable-leak audit agent confirmed **0 leaks** (every kept phase is self-contained or reads a
+  loader global; the one real dependency, Phase 53 reusing Phase 51's `$ransomScanFiles`, is
+  verified with both phases kept and outside the wraps); a server-side agent implemented the
+  PhaseIdx progress index. All three ran on Fable.
+
+**Latent bug found + fixed (all modes):** the QUICK run surfaced 2 recovered errors in **Phase 56**
+(hidden-process rootkit delta): `foreach ($pid in $hiddenFromPS)` / `$hiddenFromWMI` — `$PID` is a
+READ-ONLY automatic variable (this process's id; PS names are case-insensitive so `$pid` IS
+`$PID`), so the loop threw "Cannot overwrite variable PID" the moment either list was non-empty —
+i.e. exactly when a WMI-vs-PS process discrepancy (the rootkit signal) existed — and the module
+trap silently swallowed the whole phase. It only escaped notice because a healthy box usually has
+no discrepancy (0 errors on prior FULL/DEEP runs). Renamed the loop var to `$rkpid`. Hidden-process
+detection now actually runs when it matters.
+
+Validation: parse-clean live PS 5.1.26100 + pwsh 7 (all engine files + server, BOMs intact, server
+here-strings re-parsed); headless QUICK `-Hours 1` runs **exactly** those 30 phases with **0
+recovered errors**; FULL `-Hours 1` runs the full 1–80 span (QUICK-skipped phases 2/7/55.5/80
+present). Committed locally with the rest of the stack — push when ready.
+
 ## 2026-07-02 (late night) — Wire the 15 orphaned signature keys (BLUEPRINT §7.7)
 
 The WS0 coverage re-audit found 15 signature keys merged into `data/detection_signatures.json`

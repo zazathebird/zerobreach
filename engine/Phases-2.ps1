@@ -4,6 +4,8 @@
 # ══════════════════════════════════════════════════════════════════════════════
 Show-ThreatCategoryHeader "RAT / C2 BEACON" "Beacon Intervals · DNS Tunneling · RAT Config/Registry · Named Pipes"
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 59" "C2 BEACON INTERVAL / HIGH-FREQ DNS DETECTION" "RAT/C2"
 Out-Typewriter "ANALYZING DNS CACHE FOR BEACON PATTERNS..." "HUNT"
 Invoke-QuantumBar "BEACON INTERVAL ANALYSIS" 15 120
@@ -81,6 +83,7 @@ foreach ($rrp in $RAT_REG_PATHS) {
 }
 if (-not $ratFound) { Out-Typewriter "  -> [OK] NO RAT CONFIGURATION ARTIFACTS." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 62" "NAMED PIPE BACKDOOR AUDIT" "RAT/C2"
 Out-Typewriter "ENUMERATING NAMED PIPE ENDPOINTS..." "HUNT"
 try {
@@ -147,6 +150,8 @@ try {
 # ══════════════════════════════════════════════════════════════════════════════
 Show-ThreatCategoryHeader "CRYPTOMINER" "CPU Abuse · Stratum Protocol · Miner Config Files · Task Persistence"
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 63" "CPU ABUSE & MINER PROCESS DETECTION" "CRYPTOMINER"
 Out-Typewriter "SCANNING FOR ABNORMAL CPU UTILIZATION..." "HUNT"
 Invoke-QuantumBar "CPU USAGE ANALYSIS" 10 120
@@ -189,6 +194,7 @@ foreach ($cf in $minerConfigFiles) {
 }
 if (-not $minerFound) { Out-Typewriter "  -> [OK] NO CRYPTOMINER INDICATORS." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 64" "MINER SCHEDULED TASK / SERVICE PERSISTENCE" "CRYPTOMINER"
 Out-Typewriter "CHECKING FOR MINER PERSISTENCE..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -214,6 +220,8 @@ Out-Typewriter "  -> MINER PERSISTENCE AUDIT COMPLETE." "VER"
 # ══════════════════════════════════════════════════════════════════════════════
 Show-ThreatCategoryHeader "WORM / SPYWARE / ADWARE" "AutoRun · USB · Network Shares · Self-Replication · PUPs · Tracking"
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 65" "WORM AUTORUN & USB SPREAD DETECTION" "WORM"
 Out-Typewriter "SCANNING FOR WORM AUTORUN ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -415,6 +423,7 @@ if ($allFileRules.Count -gt 0) {
 }
 if ($stealerProcs.Count -eq 0 -and $stealerFiles.Count -eq 0 -and $dropRuleHits -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 69" "PROCESS HOLLOWING / INJECTION DETECTION" "INJECTION"
 Out-Typewriter "CHECKING FOR PROCESSES WITH ANOMALOUS MODULE COUNTS..." "HUNT"
 Invoke-QuantumBar "PROCESS MEMORY MAP ANALYSIS" 12 120
@@ -485,6 +494,8 @@ foreach ($fp in $filelessPaths) {
 }
 if (-not $filelessFound) { Out-Typewriter "  -> [OK] NO OBVIOUS FILELESS PAYLOADS DETECTED." "GOOD" }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 71" "PHISHING / OVERLAY / FAKE BROWSER UI DETECTION" "PHISHING"
 Out-Typewriter "CHECKING FOR PHISHING OVERLAY / TYPOSQUAT PROCESSES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -499,6 +510,7 @@ foreach ($pp in $phishProcs) {
 }
 if ($phishProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO PHISHING OVERLAY PROCESSES." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 72" "BOTNET C2 IP / IOC BLACKLIST CHECK" "BOTNET"
 Out-Typewriter "CROSS-REFERENCING ACTIVE CONNECTIONS AGAINST C2 IOC LIST..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -524,6 +536,8 @@ foreach ($conn in ($allConns | Select-Object -First 50)) {
 }
 if (-not $botFound) { Out-Typewriter "  -> [OK] NO BOTNET C2 DOMAIN CONNECTIONS." "GOOD" }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 73" "EXPLOIT KIT ARTIFACT & CVE-2021-36934 REMEDIATION" "EXPLOIT"
 Out-Typewriter "CHECKING FOR EXPLOIT KIT INDICATORS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -631,6 +645,7 @@ foreach ($attachPath in $emailAttachPaths) {
 if ($emailHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPICIOUS EMAIL ARTIFACTS." "GOOD" }
 Out-Typewriter "  -> EMAIL ATTACHMENT SCAN COMPLETE." "VER"
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 74.6" "MICROSOFT DEFENDER THREAT HISTORY CORRELATION" "DEFENDER"
 Out-Typewriter "CORRELATING WITH WINDOWS DEFENDER DETECTION HISTORY..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
@@ -671,6 +686,8 @@ try {
 }
 Out-Typewriter "  -> DEFENDER HISTORY CORRELATION COMPLETE." "VER"
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 74.7" "PROACTIVE ANTI-REINFECTION HARDENING" "HARDEN"
 Out-Typewriter "AUDITING ATTACKER-TARGETED FOOTHOLDS FOR PROACTIVE HARDENING..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
@@ -756,6 +773,7 @@ if ($hardenHits -eq 0) { Out-Typewriter "  -> [OK] PROACTIVE HARDENING ALREADY I
 else { Out-Typewriter "  -> $hardenHits PROACTIVE HARDENING RECOMMENDATION(S) ADDED." "DATA" }
 Out-Typewriter "  -> PROACTIVE HARDENING AUDIT COMPLETE." "VER"
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 75" "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT"
 Out-Typewriter "CHECKING DEFENDER EXCLUSION LIST FOR MALWARE HIDING SPOTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -792,6 +810,8 @@ try {
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 16: FINAL HARDENING CHECKS
 # ══════════════════════════════════════════════════════════════════════════════
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-SectionBanner "FINAL HARDENING & LOCKDOWN AUDIT"
 
 Show-PhaseHeader "PHASE 76" "TERMINAL SERVICES / RDP SHADOWING AUDIT"
@@ -858,6 +878,7 @@ if ($tpm) { Out-Typewriter "  -> [OK] TPM PRESENT: $($tpm.ManufacturerIdTxt) v$(
 else { Out-Typewriter "  -> TPM NOT DETECTED." "WARN" }
 Out-Typewriter "  -> PHASE 80 COMPLETE — SECURE BOOT/TPM AUDIT DONE." "VER"
 
+}   # end QUICK-skip block
 # ══════════════════════════════════════════════════════════════════════════════
 #  UNIVERSAL BACKDOOR PHASES 81-89 (mode 2 only)
 # ══════════════════════════════════════════════════════════════════════════════

@@ -130,7 +130,7 @@
       "phase": "PHASE 1",
       "name": "ANTI-FORENSIC EVENT LOG AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Scans Security/System logs for event IDs 104/1102 (log clearing). Flags evidence of tampering.",
       "threat_types": [
         "Anti-Forensic"
@@ -161,7 +161,7 @@
       "phase": "PHASE 2",
       "name": "POWERSHELL SCRIPT BLOCK LOG AUDIT (EVENT 4104)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Examines PS Operational log 4104 for IEX/EncodedCommand/WebClient/reflection/VirtualAlloc patterns; excludes own footprint.",
       "threat_types": [
         "Fileless/PowerShell"
@@ -194,7 +194,7 @@
       "phase": "PHASE 3",
       "name": "PROCESS ANCESTRY & INJECTION AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Queries live Win32_Process command-lines for IEX/EncodedCommand/DownloadString/LOLBIN/injection keywords.",
       "threat_types": [
         "Process Injection/Fileless"
@@ -234,7 +234,7 @@
       "phase": "PHASE 4",
       "name": "LOLBIN ABUSE AUDIT (Living-Off-The-Land Binaries)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Enumerates 46 inline LOLBIN exe names running with suspicious args (http/AppData/Temp/.js/Base64/scrobj/UNC).",
       "threat_types": [
         "LoLBin Abuse"
@@ -266,7 +266,7 @@
       "phase": "PHASE 5",
       "name": "AMSI BYPASS & ETW PATCH DETECTION",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Checks AMSI provider regkey, AmsiEnable flag, ETW autologger Start value for disable/zero.",
       "threat_types": [
         "AMSI Bypass",
@@ -308,7 +308,7 @@
       "phase": "PHASE 6",
       "name": "KNOWN MALWARE PROCESS IOC DATABASE MATCH",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Compares running processes to RAT/miner/keylogger IOC name arrays; kills matches.",
       "threat_types": [
         "RAT",
@@ -360,7 +360,7 @@
       "phase": "PHASE 7",
       "name": "BROWSER CACHE & SERVICE WORKER AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Detects browser cache dirs (Chrome/Edge/FF/Brave/Opera) as INFO artifacts.",
       "threat_types": [
         "Browser Artifact"
@@ -391,7 +391,7 @@
       "phase": "PHASE 8",
       "name": "BROWSER EXTENSION SANITIZATION (HEURISTIC)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Walks Chrome/Edge/Brave extension dirs via Get-ExtensionRisk; flags CRIT/HIGH/POSSIBLE.",
       "threat_types": [
         "Browser Extension/Hijacker"
@@ -424,7 +424,7 @@
       "phase": "PHASE 9",
       "name": "BROWSER HIJACK — SHORTCUT & HOMEPAGE AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Inspects .lnk args (http/--load-extension/javascript:/data:) and Chrome homepage pref.",
       "threat_types": [
         "Browser Hijacker"
@@ -466,7 +466,7 @@
       "phase": "PHASE 10",
       "name": "TEMP / DOWNLOAD DIRECTORY ANOMALY SWEEP",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Time-scoped scan of TEMP/Downloads/INetCache for executable/script files.",
       "threat_types": [
         "Suspicious File"
@@ -505,7 +505,7 @@
       "phase": "PHASE 11",
       "name": "RECENT DOCUMENTS & JUMP LIST SCRUB",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Audits Recent/AutomaticDestinations/CustomDestinations for recent items (INFO).",
       "threat_types": [
         "Browser/File Artifact"
@@ -536,7 +536,7 @@
       "phase": "PHASE 12",
       "name": "PREFETCH & SHIMCACHE ARTIFACT AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Scans Prefetch .pf for script/LOLBIN execution traces (WSCRIPT/MSHTA/CERTUTIL/RUNDLL32+APPDATA/POWERSHELL -ENC).",
       "threat_types": [
         "Execution Trace"
@@ -567,7 +567,7 @@
       "phase": "PHASE 13",
       "name": "CRYPTOGRAPHIC SYSTEM FILE VERIFICATION (SFC)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Runs sfc /scannow; skipped in Auto/GUI/Stealth.",
       "threat_types": [
         "System Integrity"
@@ -599,7 +599,7 @@
       "phase": "PHASE 14",
       "name": "DISM COMPONENT STORE RESTORATION",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flushes wuauserv cache, flags SoftwareDistribution; DISM /RestoreHealth interactive only.",
       "threat_types": [
         "System Integrity"
@@ -631,7 +631,7 @@
       "phase": "PHASE 15",
       "name": "SYSTEM32 UNSIGNED BINARY AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Validates Authenticode on recent System32 exe/dll/sys; flags unsigned/invalid as rootkit.",
       "threat_types": [
         "Rootkit/Trojan"
@@ -672,7 +672,7 @@
       "phase": "PHASE 16",
       "name": "NTFS PERMISSION INTEGRITY — CRITICAL PATHS",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Audits ACLs on System32/SysWOW64/drivers for world-writable ACEs.",
       "threat_types": [
         "Permission Abuse"
@@ -702,7 +702,7 @@
       "phase": "PHASE 17",
       "name": "ALTERNATE DATA STREAM (ADS) PARASITE SCAN",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Scans LOCALAPPDATA/TEMP/Downloads for non-$DATA ADS (excl Zone.Identifier).",
       "threat_types": [
         "ADS Parasite"
@@ -732,7 +732,7 @@
       "phase": "PHASE 18",
       "name": "DEEP CLOAKED PARASITE SCAN (HIDDEN+SYSTEM ATTRIBUTES)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "User-writable paths for Hidden+System exec/script files; capped 200.",
       "threat_types": [
         "Rootkit/Trojan"
@@ -764,7 +764,7 @@
       "phase": "PHASE 19",
       "name": "SCRIPT EXECUTION ASSOCIATION AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Checks .js/.vbs/.hta/.wsf handler bindings for non-txtfile hijacks.",
       "threat_types": [
         "Script Handler Abuse"
@@ -796,7 +796,7 @@
       "phase": "PHASE 20",
       "name": "RUN / RUNONCE HEURISTIC SCRUB",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Audits Run/RunOnce (HKCU/HKLM 64/32) for AppData/Temp/script/LOLBIN/IEX/EncodedCommand values.",
       "threat_types": [
         "Registry Persistence"
@@ -831,7 +831,7 @@
       "phase": "PHASE 21",
       "name": "IMAGE FILE EXECUTION OPTIONS (IFEO) SCRUB",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags IFEO Debugger values and nonzero GlobalFlag (GFlags injection).",
       "threat_types": [
         "IFEO Hijack/Persistence",
@@ -864,7 +864,7 @@
       "phase": "PHASE 22",
       "name": "APPINIT_DLLS KERNEL INJECTION SCRUB",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags non-empty AppInit_DLLs (64/32-bit).",
       "threat_types": [
         "DLL Injection/Rootkit"
@@ -895,7 +895,7 @@
       "phase": "PHASE 23",
       "name": "WINLOGON / USERINIT / SHELL HIJACK DETECTION",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags Winlogon Shell != explorer.exe and non-standard Userinit.",
       "threat_types": [
         "Winlogon Hijack"
@@ -926,7 +926,7 @@
       "phase": "PHASE 24",
       "name": "COM OBJECT HIJACK AUDIT (HKCU CLSID OVERRIDES)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags HKCU CLSID overrides (user COM hijack persistence).",
       "threat_types": [
         "COM Hijack"
@@ -959,7 +959,7 @@
       "phase": "PHASE 25",
       "name": "GPO LOCKDOWN — TASKMGR/REGEDIT/CMD DISABLED",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags DisableTaskMgr/DisableRegistryTools/DisableCMD=1 (anti-forensic).",
       "threat_types": [
         "GPO Lockdown (Malware)"
@@ -989,7 +989,7 @@
       "phase": "PHASE 26",
       "name": "BROWSER HELPER OBJECT (BHO) PURGE",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Time-scoped BHO regkeys (64/32) flagged as hijacker/spyware.",
       "threat_types": [
         "Browser Hijacker/BHO"
@@ -1019,7 +1019,7 @@
       "phase": "PHASE 27",
       "name": "SAFE MODE HIJACK (SAFEBOOT KEY AUDIT)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags unknown non-GUID SafeBoot Minimal/Network entries.",
       "threat_types": [
         "SafeBoot Hijack"
@@ -1050,7 +1050,7 @@
       "phase": "PHASE 28",
       "name": "ROGUE WIN32 SERVICE AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags service ImagePath with AppData/Temp/script/LOLBIN.",
       "threat_types": [
         "Malicious Service"
@@ -1081,7 +1081,7 @@
       "phase": "PHASE 29",
       "name": "TASK SCHEDULER DEEP AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Enumerates non-MS scheduled tasks + walks task XML for malicious Execute/Args.",
       "threat_types": [
         "Task Persistence"
@@ -1117,7 +1117,7 @@
       "phase": "PHASE 30",
       "name": "WMI EVENT FILTER / CONSUMER / BINDING AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags __EventFilter/__EventConsumer/__FilterToConsumerBinding (WMI persistence).",
       "threat_types": [
         "WMI Persistence"
@@ -1148,7 +1148,7 @@
       "phase": "PHASE 31",
       "name": "BITS / POWERSHELL PROFILE / STARTUP PERSISTENCE",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Active BITS jobs; PS profiles w/ IEX/DownloadString; Startup folder unsigned/recent.",
       "threat_types": [
         "BITS Persistence",
@@ -1207,7 +1207,7 @@
       "phase": "PHASE 32",
       "name": "DLL SEARCH ORDER HIJACK — PATH AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Tests PATH dirs for write access; flags unsigned recent .dll in writable dirs.",
       "threat_types": [
         "DLL Hijack"
@@ -1241,7 +1241,7 @@
       "phase": "PHASE 33",
       "name": "HOSTS FILE INTEGRITY AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags non-standard hosts entries.",
       "threat_types": [
         "DNS Hijack"
@@ -1273,7 +1273,7 @@
       "phase": "PHASE 34",
       "name": "DNS CACHE POISONING AUDIT & FLUSH",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags DNS cache entries matching suspicious-domain IOCs; flushes cache.",
       "threat_types": [
         "DNS Hijack/C2"
@@ -1304,7 +1304,7 @@
       "phase": "PHASE 35",
       "name": "PROXY & WINHTTP POISON RESET",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags ProxyEnable=1; resets proxy.",
       "threat_types": [
         "Proxy Hijack"
@@ -1334,7 +1334,7 @@
       "phase": "PHASE 36",
       "name": "LIVE TCP/UDP THREAT SOCKET TERMINATION",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags stratum miner ports, AppData/Temp procs on odd ports, reverse-DNS C2 matches.",
       "threat_types": [
         "Cryptominer",
@@ -1386,7 +1386,7 @@
       "phase": "PHASE 37",
       "name": "IPC NULL SESSION / SMB / PORTPROXY AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags active portproxy forwarding rules (C2 tunneling).",
       "threat_types": [
         "Port Tunneling"
@@ -1424,7 +1424,7 @@
       "phase": "PHASE 38",
       "name": "FIREWALL AUDIT & PERIMETER REVIEW",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags non-MS inbound rules with public/Any exposure.",
       "threat_types": [
         "Firewall Hole",
@@ -1457,7 +1457,7 @@
       "phase": "PHASE 39",
       "name": "ROGUE ROOT CERTIFICATE AUDIT (LM + USER)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags recently-added root CA certs (LM + user stores). FP round 1: known-issuer certs (trusted_root_ca_issuers allowlist) = INFO, unknown = POSSIBLE; RunCmd suggestion only — no longer CRIT/HIGH auto-flag.",
       "threat_types": [
         "Rogue Certificate"
@@ -1490,7 +1490,7 @@
       "phase": "PHASE 40",
       "name": "BCD STORE — DRIVER SIGNING / TESTSIGNING AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags testsigning/nointegritychecks=Yes (unsigned driver loading).",
       "threat_types": [
         "Bootkit/Rootkit Vector"
@@ -1530,7 +1530,7 @@
       "phase": "PHASE 41",
       "name": "LSA / WDIGEST / LSA PROTECTION AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Checks WDigest UseLogonCredential and RunAsPPL hardening.",
       "threat_types": [
         "Credential Theft Vector",
@@ -1563,7 +1563,7 @@
       "phase": "PHASE 42",
       "name": "LOCAL ADMINISTRATOR GHOST ACCOUNT AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags enabled local accounts matching backdoor name patterns; logs admins.",
       "threat_types": [
         "Ghost/Backdoor Account"
@@ -1594,7 +1594,7 @@
       "phase": "PHASE 43",
       "name": "SAM / HIVENIGHTMARE (CVE-2021-36934) AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags world-readable SAM ACL (HiveNightmare); enumerates VSS.",
       "threat_types": [
         "Credential Exposure (HiveNightmare)",
@@ -1629,7 +1629,7 @@
       "phase": "PHASE 44",
       "name": "TOKEN / PRIVILEGE ABUSE — ELEVATED PROCS IN USER SPACE",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags SYSTEM-context procs from user-writable paths via SID check.",
       "threat_types": [
         "Privilege Abuse/Trojan"
@@ -1661,7 +1661,7 @@
       "phase": "PHASE 45",
       "name": "ACCESSIBILITY SHELL BACKDOOR (STICKY KEYS / UTILMAN)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Validates Authenticode on sethc/utilman/osk/magnify/narrator/displayswitch.",
       "threat_types": [
         "Sticky Keys / Accessibility Backdoor"
@@ -1693,7 +1693,7 @@
       "phase": "PHASE 46",
       "name": "NULL SESSION / NTLM LEVEL / FINAL LSA HARDENING",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Audits LmCompatibilityLevel; suggests LSA hardening.",
       "threat_types": [
         "Credential Security",
@@ -1728,7 +1728,7 @@
       "phase": "PHASE 47",
       "name": "WINDOWS HOOK / RAW INPUT KEYLOGGER DETECTION",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags procs with user32/hid module access from user paths (hook keylogger).",
       "threat_types": [
         "Keylogger"
@@ -1761,7 +1761,7 @@
       "phase": "PHASE 48",
       "name": "KEYLOGGER FILE & REGISTRY ARTIFACT SCAN",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Scans for keystroke log files + 7 known keylogger regkeys (Ardamax/Spyrix/Refog/KGB...).",
       "threat_types": [
         "Keylogger"
@@ -1798,7 +1798,7 @@
       "phase": "PHASE 49",
       "name": "CLIPBOARD MONITOR / SCREEN CAPTURE DETECTION",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags procs named snag/screenshot/capture/clip from user paths.",
       "threat_types": [
         "Spyware/Keylogger"
@@ -1838,7 +1838,7 @@
       "phase": "PHASE 50",
       "name": "ACCESSIBILITY API / UIAUTOMATION KEYLOGGER CHECK",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags procs using UIAutomation module from user paths.",
       "threat_types": [
         "Keylogger/Spyware"
@@ -1870,7 +1870,7 @@
       "phase": "PHASE 51",
       "name": "RANSOMWARE EXTENSION VELOCITY DETECTION",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Scans doc folders for known ransomware extensions.",
       "threat_types": [
         "Ransomware"
@@ -1901,7 +1901,7 @@
       "phase": "PHASE 52",
       "name": "HIGH ENTROPY FILE DETECTION (ENCRYPTED PAYLOAD)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Entropy>7.5 sampling of phase-51 files (encrypted/packed).",
       "threat_types": [
         "Ransomware/Packed Malware"
@@ -1940,7 +1940,7 @@
       "phase": "PHASE 53",
       "name": "RANSOM NOTE DETECTION",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Two-tier ransom-note detection over the phase-51 doc walk: strong inline wildcard names + WS2 CISA-sourced known-family filenames (ransom_note_filenames) = CRITICAL/DeleteFile; generic name matches require content confirmation (ransom_note_content_rules via Test-ContentRules) else POSSIBLE/Info; plus a renamed-note content-only pass over small txt/html/hta/rtf files (rule-driven severity, Info).",
       "threat_types": [
         "Ransomware"
@@ -1976,7 +1976,7 @@
       "phase": "PHASE 54",
       "name": "BACKUP PROCESS TAMPERING / BCDEDIT ABUSE",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Flags recoveryenabled=No + backup deletion events 521/527/528.",
       "threat_types": [
         "Ransomware Prep"
@@ -2009,7 +2009,7 @@
       "phase": "PHASE 55",
       "name": "UNSIGNED / ANOMALOUS KERNEL DRIVER AUDIT",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "driverquery for Kernel + IsSigned=FALSE.",
       "threat_types": [
         "Rootkit/Unsigned Driver"
@@ -2048,7 +2048,7 @@
       "phase": "PHASE 55.5",
       "name": "KNOWN-VULNERABLE SIGNED DRIVER AUDIT (BYOVD)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "WS2 (2026-07-01). Cross-references installed kernel drivers (Win32_SystemDriver) against the LOLDrivers BYOVD name list; SHA256-confirms on disk via Get-FileHashSafe. Loaded driver = CRITICAL, present-but-not-loaded = HIGH. FixAction Info only (may be a legitimate utility e.g. MSI Afterburner/CPU-Z; suggests MS Vulnerable Driver Blocklist / WDAC).",
       "threat_types": [
         "BYOVD / Vulnerable Driver",
@@ -2092,7 +2092,7 @@
       "phase": "PHASE 56",
       "name": "HIDDEN PROCESS DISCREPANCY (WMI vs PS vs TASKLIST)",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Cross-correlates 3 process enumerations to find rootkit-hidden procs.",
       "threat_types": [
         "Rootkit"
@@ -2124,7 +2124,7 @@
       "phase": "PHASE 57",
       "name": "SERVICE REGISTRY DELTA — HIDDEN SERVICE OBJECTS",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Registry-vs-SCM delta for hidden service objects.",
       "threat_types": [
         "Rootkit/Hidden Service"
@@ -2163,7 +2163,7 @@
       "phase": "PHASE 58",
       "name": "BOOTKIT / MBR INDICATORS",
       "module": "engine/Phases-1.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags winpe/safeboot AlternateShell BCD entries.",
       "threat_types": [
         "Bootkit"
@@ -2195,7 +2195,7 @@
       "phase": "PHASE 59",
       "name": "C2 BEACON INTERVAL / HIGH-FREQ DNS DETECTION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags >10 DNS queries to same domain + odd established connections from non-system procs.",
       "threat_types": [
         "C2 Beacon"
@@ -2237,7 +2237,7 @@
       "phase": "PHASE 60",
       "name": "DNS TUNNELING DETECTION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags long DNS labels (>40) and high subdomain depth (>6).",
       "threat_types": [
         "DNS Tunneling"
@@ -2277,7 +2277,7 @@
       "phase": "PHASE 61",
       "name": "RAT CONFIGURATION FILE & REGISTRY SCAN",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Tests known RAT config file paths + regkeys from signatures.",
       "threat_types": [
         "RAT"
@@ -2308,7 +2308,7 @@
       "phase": "PHASE 62",
       "name": "NAMED PIPE BACKDOOR AUDIT",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Enumerates live named pipes: first pass vs externalized c2_named_pipe_regex; WS2 second pass matches the bare pipe LEAF against anchored CS/Havoc/Covenant/PoshC2 default-pipe patterns (c2_pipe_regex_anchored) and TrickBot-class banking pipes (banking_named_pipes). All FixAction Info. The broad [a-f0-9]{8,} catch-all was removed in FP round 4.",
       "threat_types": [
         "RAT/Backdoor Pipe"
@@ -2345,7 +2345,7 @@
       "phase": "PHASE 63",
       "name": "CPU ABUSE & MINER PROCESS DETECTION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "High-CPU procs matching miner names + miner config files (pool/stratum/xmr).",
       "threat_types": [
         "Cryptominer"
@@ -2382,7 +2382,7 @@
       "phase": "PHASE 64",
       "name": "MINER SCHEDULED TASK / SERVICE PERSISTENCE",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Scheduled tasks with miner exe/keywords (xmr/stratum/pool/mining/coin).",
       "threat_types": [
         "Cryptominer"
@@ -2424,7 +2424,7 @@
       "phase": "PHASE 65",
       "name": "WORM AUTORUN & USB SPREAD DETECTION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "autorun.inf + hidden exe on removable drives.",
       "threat_types": [
         "Worm/USB Spread",
@@ -2460,7 +2460,7 @@
       "phase": "PHASE 66",
       "name": "NETWORK SHARE WORM PROPAGATION SCAN",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Unsigned exe/script in open network shares — now excludes drive-letter admin shares (C$/D$) plus ADMIN$/IPC$/print$ so the worm scan cannot walk the whole drive; sig-loop carries the SIG_AUDIT budget; unsigned PE in a foreign share = HIGH/DeleteFile, own-profile shares downgraded.",
       "threat_types": [
         "Worm/Network Share"
@@ -2502,7 +2502,7 @@
       "phase": "PHASE 67",
       "name": "ADWARE / PUP / SPYWARE REGISTRY SCAN",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Scans hardcoded adware/PUP regkeys (Conduit/SearchProtect/Trovi/Babylon/Delta...).",
       "threat_types": [
         "Adware/PUP"
@@ -2534,7 +2534,7 @@
       "phase": "PHASE 68",
       "name": "INFO-STEALER ARTIFACT SCAN (REDLINE/RACCOON/VIDAR)",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Procs matching stealer names + credential/wallet files in user paths.",
       "threat_types": [
         "Info-Stealer"
@@ -2576,7 +2576,7 @@
       "phase": "PHASE 69",
       "name": "PROCESS HOLLOWING / INJECTION DETECTION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Two passes: (1) hollow-process heuristic — processes with <3 loaded modules, unsigned, running from AppData/Temp (HIGH/KillProcess, system procs excluded); (2) WS2 known-malware single-instance mutex probe — attempts OpenExisting on Pikabot/Amadey-class mutex names (known_malware_mutexes); presence = CRITICAL/Info (active or residual infection).",
       "threat_types": [
         "Process Hollowing"
@@ -2612,7 +2612,7 @@
       "phase": "PHASE 70",
       "name": "FILELESS REGISTRY PAYLOAD DETECTION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Run/Environment/IFEO/CLSID values with base64 blobs (>100 chars).",
       "threat_types": [
         "Fileless Malware"
@@ -2643,7 +2643,7 @@
       "phase": "PHASE 71",
       "name": "PHISHING / OVERLAY / FAKE BROWSER UI DETECTION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Procs named fakescreen/overlay/phish/credential-harvest.",
       "threat_types": [
         "Phishing/Overlay"
@@ -2684,7 +2684,7 @@
       "phase": "PHASE 72",
       "name": "BOTNET C2 IP / IOC BLACKLIST CHECK",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "TCP connections reverse-DNS matching botnet dynamic-DNS (.onion/duckdns/zapto/myftp...).",
       "threat_types": [
         "Botnet/C2"
@@ -2724,7 +2724,7 @@
       "phase": "PHASE 73",
       "name": "EXPLOIT KIT ARTIFACT & CVE-2021-36934 REMEDIATION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "TEMP/LOCALAPPDATA files named shellcode/exploit/payload/cobalt/beacon.",
       "threat_types": [
         "Exploit Kit"
@@ -2755,7 +2755,7 @@
       "phase": "PHASE 74",
       "name": "MACRO / OFFICE / OUTLOOK PERSISTENCE AUDIT",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags VBAWarnings=1 + Outlook WebView HTML auto-exec regkey.",
       "threat_types": [
         "Macro Abuse",
@@ -2796,7 +2796,7 @@
       "phase": "PHASE 74.5",
       "name": "EMAIL ATTACHMENT MALWARE SCAN (OUTLOOK CACHE)",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Outlook attachment caches: hash match, content rules, exec/script ext, lure filenames. Wires Quarantine.",
       "threat_types": [
         "Phishing / Email Trojan"
@@ -2844,7 +2844,7 @@
       "phase": "PHASE 74.6",
       "name": "MICROSOFT DEFENDER THREAT HISTORY CORRELATION",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Get-MpThreat/Detection; flags Defender-caught resources still on disk (CRIT+Quarantine) else INFO.",
       "threat_types": [
         "Defender-Flagged Residual",
@@ -2886,7 +2886,7 @@
       "phase": "PHASE 74.7",
       "name": "PROACTIVE ANTI-REINFECTION HARDENING",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Office/Outlook macro+attachment security, WSH disable, Defender PUA + 6 ASR rules. INFO/opt-in.",
       "threat_types": [
         "Macro/Attachment Exposure",
@@ -2947,7 +2947,7 @@
       "phase": "PHASE 75",
       "name": "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "all modes (incl. QUICK)",
       "detects": "Enumerates Defender path/process exclusions as hiding spots.",
       "threat_types": [
         "Defender Tampering"
@@ -2977,7 +2977,7 @@
       "phase": "PHASE 76",
       "name": "TERMINAL SERVICES / RDP SHADOWING AUDIT",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags RDP Shadow policy allowing no-consent session view/control.",
       "threat_types": [
         "RDP Surveillance"
@@ -3007,7 +3007,7 @@
       "phase": "PHASE 77",
       "name": "SSH & WINRM REMOTE MANAGEMENT AUDIT",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags running WinRM/sshd as remote-access vector.",
       "threat_types": [
         "Remote Management"
@@ -3045,7 +3045,7 @@
       "phase": "PHASE 78",
       "name": "SYSMON / LAPS / APPLOCKER STATUS AUDIT",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Audits Sysmon + AppLocker policy presence (visibility gaps).",
       "threat_types": [
         "Hardening Gap"
@@ -3077,7 +3077,7 @@
       "phase": "PHASE 79",
       "name": "WINDOWS DEFENDER KICKSTART & EXCLUSION PURGE",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Recommends purge exclusions + signature update + quick scan.",
       "threat_types": [
         "Hardening"
@@ -3108,7 +3108,7 @@
       "phase": "PHASE 80",
       "name": "SECURE BOOT / TPM / BITLOCKER STATUS AUDIT",
       "module": "engine/Phases-2.ps1",
-      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
       "detects": "Flags Secure Boot disabled; reports TPM presence.",
       "threat_types": [
         "Boot Security"

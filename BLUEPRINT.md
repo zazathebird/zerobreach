@@ -203,10 +203,23 @@ the dev machine) per the item below.
    (atomic/aurora/mystic) auto-killing legit procs — P68 now auto-kills only unsigned + in a
    user-writable path (validated live: `Mystic_Light_Service` correctly downgraded to POSSIBLE,
    not killed). Parse-clean 5.1+7, BOM intact, full DEEP + FULL headless runs 0 recovered errors.
-8. **Make QUICK a real gate** (from the WS0 re-audit) — `$PhasePlan.Max` is display-only, so
-   QUICK runs phases 1–80 exactly like FULL while advertising "30 phases · ~2 min". Decide the
-   real QUICK phase set, gate Phases-1/2 on it (mind the module-trap rules), and keep
-   `phase_total` honest. Until then the QUICK tile's promise is wrong.
+8. ~~**Make QUICK a real gate**~~ **DONE 2026-07-03** — QUICK now runs exactly 30 phases
+   (`1,3,4,5,6,10,20,21,23,27,28,29,30,31,33,35,41,42,45,51,53,54,56,62,64,69,70,72,74.6,75` —
+   cheap high-signal triage: process/IOC/run-key/task/service/pipe/net/Defender, deferring the
+   expensive file-walks, sig-audits, and event-log mining). Mechanism: loader sets
+   `$global:QUICK_MODE`; the other 54 phases in 1–80 are wrapped
+   `if (-not $global:QUICK_MODE) { trap {…}; <body> }` (contiguous-run blocks, each with its own
+   inner trap per the module-trap rule). `$PhasePlan.Max=30` flows to `TOTAL_PHASES`/Summary;
+   server keeps `QUICK=30` and now reports a 1..30 `PhaseIdx` (count of distinct headers seen)
+   as the `scan_state`/`sync`/`/api/state` `phase` in QUICK only — findings keep the true phase.
+   Two Fable agents assisted: a cross-phase variable-leak audit (**0 leaks** — every kept phase
+   self-contained or on loader globals; 51→53 `$ransomScanFiles` verified outside the wraps) and
+   the server progress-index implementation. Validated live: headless QUICK runs exactly those 30
+   phases, 0 recovered errors; FULL still runs the full 1–80 span. **Also fixed a latent
+   pre-existing bug surfaced by the QUICK run:** Phase 56's rootkit loop used `foreach ($pid …)`
+   — `$PID` is a read-only automatic, so the loop threw whenever a WMI/PS process discrepancy
+   existed (exactly when it matters), silently killing hidden-process detection in every mode.
+   Renamed to `$rkpid`.
 
 ### Later
 - **WS4 performance**: parallelize independent phases (runspace pools, PS-5.1-safe), cache

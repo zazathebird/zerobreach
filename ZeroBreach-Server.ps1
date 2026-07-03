@@ -106,6 +106,7 @@ $script:State = [hashtable]::Synchronized(@{
     Running      = $false
     ScanComplete = $false
     Phase        = 0
+    PhaseIdx     = 0      # count of distinct PHASE headers seen this scan; QUICK's display counter
     PhaseTotal   = 115
     PhaseName    = ''
     Section      = ''
@@ -522,12 +523,15 @@ function Ping {
     $stream.Flush()
 }
 
-# Send initial sync so page-reload during a scan gets full state
+# Send initial sync so page-reload during a scan gets full state.
+# QUICK runs a non-contiguous 30-phase subset (raw numbers reach 75), so the GUI
+# counter gets the 1..30 progress INDEX there; every other mode reports the raw phase.
+$syncPhase = if ($SseState.Mode -eq 'QUICK') { $SseState.PhaseIdx } else { $SseState.Phase }
 $syncObj = [ordered]@{
     type          = 'sync'
     running       = $SseState.Running
     scan_complete = $SseState.ScanComplete
-    phase         = $SseState.Phase
+    phase         = $syncPhase
     phase_total   = $SseState.PhaseTotal
     phase_name    = $SseState.PhaseName
     elapsed       = $SseState.Elapsed
@@ -603,8 +607,11 @@ $TKW = @{
 $PREX = [regex]'PHASE\s+(\d+(?:\.\d+)?)[^\d]'
 
 # Plan-derived ceilings — must mirror the engine loader's $PhasePlan switch
-# (QUICK 1-30, FULL 1-80, DEEP/PARANOID/STEALTH 1-115). Fractional phases
-# interpolate within these bounds rather than adding to the total.
+# (FULL 1-80, DEEP/PARANOID/STEALTH 1-115). QUICK is a real gate: exactly 30
+# phases run, but they are a NON-CONTIGUOUS subset (raw numbers climb to 75),
+# so QUICK progress is reported as $ScanState.PhaseIdx (1..30 count of distinct
+# headers) rather than the raw phase number. Fractional phases interpolate
+# within these bounds rather than adding to the total.
 $MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115 }
 
 function Classify {
@@ -681,6 +688,7 @@ $iocFile  = "$($ScanConfig.ioc_file)"
 $ScanState.Mode         = $mode
 $ScanState.PhaseTotal   = if ($MODE_PHASES[$mode]) { $MODE_PHASES[$mode] } else { 115 }
 $ScanState.Phase        = 0
+$ScanState.PhaseIdx     = 0
 $ScanState.PhaseName    = ''
 $ScanState.Section      = ''
 $ScanState.Elapsed      = 0
@@ -796,7 +804,15 @@ try {
             # integer phase and looking like a stall.
             $pv = $pm.Groups[1].Value
             $newPhase = if ($pv.Contains('.')) { [double]$pv } else { [int]$pv }
-            if ($newPhase -ne $ScanState.Phase) { $ScanState.Phase = $newPhase; $phaseChanged = $true }
+            if ($newPhase -ne $ScanState.Phase) {
+                $ScanState.Phase = $newPhase
+                # Progress index: count of distinct phase headers this scan. QUICK's
+                # phase set is non-contiguous, so this (not the raw number) drives its
+                # GUI counter. Clamped so an unexpected extra header can't push the
+                # progress bar past 100%.
+                if ($ScanState.PhaseIdx -lt $ScanState.PhaseTotal) { $ScanState.PhaseIdx++ }
+                $phaseChanged = $true
+            }
         }
 
         # Phase name from banner lines like  "──── PHASE 5 ── Description ────"
@@ -810,10 +826,13 @@ try {
         # Force an immediate scan_state on every phase change so the UI counter can't
         # "skip" fast (sub-second) phases — the periodic %12 broadcast below alone lets
         # several phases pass between emits, making the counter jump (e.g. 94 -> 97).
+        # QUICK reports the 1..30 progress index (its phase set is non-contiguous —
+        # raw numbers would overshoot phase_total=30); findings keep the true phase.
+        $dispPhase = if ($ScanState.Mode -eq 'QUICK') { $ScanState.PhaseIdx } else { $ScanState.Phase }
         if ($phaseChanged) {
             Enqueue @{
                 type          = 'scan_state'
-                phase         = $ScanState.Phase
+                phase         = $dispPhase
                 phase_total   = $ScanState.PhaseTotal
                 phase_name    = $ScanState.PhaseName
                 section       = $ScanState.Section
@@ -843,7 +862,7 @@ try {
         if ($ScanState.LineCount % 12 -eq 0) {
             Enqueue @{
                 type          = 'scan_state'
-                phase         = $ScanState.Phase
+                phase         = $dispPhase
                 phase_total   = $ScanState.PhaseTotal
                 phase_name    = $ScanState.PhaseName
                 section       = $ScanState.Section
@@ -904,7 +923,8 @@ try {
                         Enqueue $f
                     }
                 }
-                $ScanState.Phase = $ScanState.PhaseTotal
+                $ScanState.Phase    = $ScanState.PhaseTotal
+                $ScanState.PhaseIdx = $ScanState.PhaseTotal   # stealth buffers stdout, so no headers incremented it
             } catch {
                 Enqueue @{ type='log_line'; text="[SCAN ERROR] STEALTH JSON parse failed: $($_.Exception.Message)"; severity='CRITICAL'; phase=0; elapsed=$ScanState.Elapsed }
             }
@@ -954,10 +974,11 @@ try {
     } catch {}
     $ScanState.EngineReport = $engineReport
 
-    # Final state broadcast
+    # Final state broadcast (same QUICK index rule as the in-loop emits)
+    $finPhase = if ($ScanState.Mode -eq 'QUICK') { $ScanState.PhaseIdx } else { $ScanState.Phase }
     Enqueue @{
         type          = 'scan_state'
-        phase         = $ScanState.Phase
+        phase         = $finPhase
         phase_total   = $ScanState.PhaseTotal
         phase_name    = $ScanState.PhaseName
         section       = $ScanState.Section
@@ -1163,9 +1184,12 @@ function Handle-Request {
         }
 
         '^/api/state$' {
+            # Same QUICK rule as the SSE sync/scan_state events: report the 1..30
+            # progress index, not the raw (non-contiguous) phase number.
+            $statePhase = if ($script:State.Mode -eq 'QUICK') { $script:State.PhaseIdx } else { $script:State.Phase }
             $s = [ordered]@{
                 running       = $script:State.Running
-                phase         = $script:State.Phase
+                phase         = $statePhase
                 phase_total   = $script:State.PhaseTotal
                 phase_name    = $script:State.PhaseName
                 elapsed       = $script:State.Elapsed

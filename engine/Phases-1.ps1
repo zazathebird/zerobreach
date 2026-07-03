@@ -18,6 +18,8 @@ if ($logClears) {
     }
 } else { Out-Typewriter "  -> [OK] NO LOG CLEARING ANOMALIES." "GOOD" }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 2" "POWERSHELL SCRIPT BLOCK LOG AUDIT (EVENT 4104)"
 Invoke-QuantumBar "SCANNING POWERSHELL OPERATIONAL LOGS" 8 120
 $psLogs = Get-WinEventSafe @{LogName='Microsoft-Windows-PowerShell/Operational'; ID=4104} |
@@ -41,6 +43,7 @@ if ($psHits) {
     }
 } else { Out-Typewriter "  -> [OK] NO OBFUSCATED/DOWNLOAD CRADLES IN PS LOGS." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 3" "PROCESS ANCESTRY & INJECTION AUDIT"
 Invoke-QuantumBar "MAPPING LIVE PROCESS TREE" 8 120
 $suspectProcs = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue | Where-Object {
@@ -163,6 +166,8 @@ if (-not $iocHits) { Out-Typewriter "  -> [OK] NO IOC PROCESS MATCHES." "GOOD" }
 # ══════════════════════════════════════════════════════════════════════════════
 Show-SectionBanner "BROWSER & TEMPORARY ARTIFACT AUDIT"
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 7" "BROWSER CACHE & SERVICE WORKER AUDIT"
 $browserCachePaths = @(
     @{P="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache\Cache_Data"; L="Chrome Cache"},
@@ -250,6 +255,7 @@ if (Test-Path $chromePrefs) {
 }
 Out-Typewriter "  -> BROWSER HIJACK AUDIT COMPLETE." "VER"
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 10" "TEMP / DOWNLOAD DIRECTORY ANOMALY SWEEP"
 $targetDirs = @(
     @{P=$env:TEMP; L="User TEMP"},
@@ -303,6 +309,8 @@ if ($sigBudgetHit) {
     Out-Typewriter ("  -> [INFO] TEMP-EXE SIG BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
 }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 11" "RECENT DOCUMENTS & JUMP LIST SCRUB"
 $recentPaths = @(
     "$env:APPDATA\Microsoft\Windows\Recent",
@@ -531,6 +539,7 @@ Out-Typewriter "  -> SCRIPT HANDLER AUDIT COMPLETE." "VER"
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 4: REGISTRY PERSISTENCE
 # ══════════════════════════════════════════════════════════════════════════════
+}   # end QUICK-skip block
 Show-SectionBanner "REGISTRY PERSISTENCE SCRUB"
 
 Show-PhaseHeader "PHASE 20" "RUN / RUNONCE HEURISTIC SCRUB"
@@ -599,6 +608,8 @@ if (Test-Path $ifeoPath) {
     Out-Typewriter "  -> IFEO AUDIT COMPLETE." "VER"
 } else { Out-Typewriter "  -> [OK] IFEO HIVE ABSENT." "GOOD" }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 22" "APPINIT_DLLS KERNEL INJECTION SCRUB"
 foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Windows")) {
     $ai = Get-RegVal -Path $p -Name "AppInit_DLLs"
@@ -610,6 +621,7 @@ foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows","H
     } else { Out-Typewriter "  -> [OK] APPINIT_DLLS EMPTY." "GOOD" }
 }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 23" "WINLOGON / USERINIT / SHELL HIJACK DETECTION"
 $wlPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 $wlKeys = Get-ItemProperty -Path $wlPath -ErrorAction SilentlyContinue
@@ -626,6 +638,8 @@ if ($wlKeys.Userinit -and $wlKeys.Userinit -notmatch "^C:\\Windows\\system32\\us
         -Target "$wlPath|Userinit" -FixAction "RunCmd" -FixParam "Set-ItemProperty -Path '$wlPath' -Name Userinit -Value 'C:\Windows\system32\userinit.exe,' -Force" -Group "Winlogon Hijack"
 } else { Out-Typewriter "  -> [OK] USERINIT VERIFIED." "GOOD" }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 24" "COM OBJECT HIJACK AUDIT (HKCU CLSID OVERRIDES)"
 Out-Typewriter "SCANNING HKCU COM OVERRIDES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -707,6 +721,7 @@ foreach ($bho in $bhoPaths) {
     }
 }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 27" "SAFE MODE HIJACK (SAFEBOOT KEY AUDIT)"
 foreach ($sm in @("Minimal","Network")) {
     $safePath = "HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\$sm"
@@ -887,6 +902,8 @@ foreach ($sp in @("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup","
     }
 }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 32" "DLL SEARCH ORDER HIJACK — PATH AUDIT"
 Out-Typewriter "AUDITING WRITABLE PATH ENTRIES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -934,6 +951,7 @@ Out-Typewriter "  -> DLL PATH AUDIT COMPLETE." "VER"
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 6: NETWORK & C2
 # ══════════════════════════════════════════════════════════════════════════════
+}   # end QUICK-skip block
 Show-SectionBanner "NETWORK & C2 INDICATOR SWEEP"
 
 Show-PhaseHeader "PHASE 33" "HOSTS FILE INTEGRITY AUDIT"
@@ -960,6 +978,8 @@ if (Test-Path $hostsPath) {
     } else { Out-Typewriter "  -> [OK] HOSTS FILE CLEAN." "GOOD" }
 }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 34" "DNS CACHE POISONING AUDIT & FLUSH"
 Out-Typewriter "DUMPING DNS RESOLVER CACHE..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -979,6 +999,7 @@ foreach ($entry in $suspectDns) {
 Clear-DnsClientCache -ErrorAction SilentlyContinue
 Out-Typewriter "  -> [OK] DNS CACHE FLUSHED." "GOOD"
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 35" "PROXY & WINHTTP POISON RESET"
 Out-Typewriter "AUDITING PROXY SETTINGS..." "INFO"
 $proxyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
@@ -992,6 +1013,8 @@ if ($ps.ProxyEnable -eq 1) {
         -Group "Proxy / Network Hijack"
 } else { Out-Typewriter "  -> [OK] NO ROGUE PROXY." "GOOD" }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 36" "LIVE TCP/UDP THREAT SOCKET TERMINATION"
 Out-Typewriter "SCANNING OPEN TCP SOCKETS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
@@ -1112,6 +1135,7 @@ if ($bcd -match "testsigning\s+Yes" -or $bcd -match "nointegritychecks\s+Yes") {
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 8: CREDENTIAL & USER ABUSE
 # ══════════════════════════════════════════════════════════════════════════════
+}   # end QUICK-skip block
 Show-SectionBanner "CREDENTIAL & USER ABUSE DETECTION"
 
 Show-PhaseHeader "PHASE 41" "LSA / WDIGEST / LSA PROTECTION AUDIT"
@@ -1156,6 +1180,8 @@ foreach ($admin in $admins) {
 }
 Out-Typewriter "  -> LOCAL ADMIN GROUP LOGGED TO REPORT." "VER"
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 43" "SAM / HIVENIGHTMARE (CVE-2021-36934) AUDIT"
 Out-Typewriter "VERIFYING SAM HIVE PERMISSIONS + HIVENIGHTMARE CHECK..." "INFO"
 $samPerms = cmd.exe /c "icacls %WINDIR%\System32\config\SAM 2>&1"
@@ -1221,6 +1247,7 @@ foreach ($proc in $elevatedInUS) {
 }
 Out-Typewriter "  -> TOKEN AUDIT COMPLETE." "VER"
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 45" "ACCESSIBILITY SHELL BACKDOOR (STICKY KEYS / UTILMAN)"
 $accessFiles = @(
     "$env:WINDIR\System32\sethc.exe","$env:WINDIR\System32\utilman.exe",
@@ -1240,6 +1267,8 @@ foreach ($af in $accessFiles) {
     }
 }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 46" "NULL SESSION / NTLM LEVEL / FINAL LSA HARDENING"
 Out-Typewriter "AUDITING LSA SECURITY SETTINGS..." "INFO"
 $lsaPath = "HKLM:\System\CurrentControlSet\Control\Lsa"
@@ -1355,6 +1384,7 @@ if ($uiaProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO UIAUTOMATION ABUSE DET
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 10: RANSOMWARE DETECTION
 # ══════════════════════════════════════════════════════════════════════════════
+}   # end QUICK-skip block
 Show-ThreatCategoryHeader "RANSOMWARE" "Extension Velocity · High Entropy · Ransom Notes · Shadow Deletion · Backup Tampering"
 
 Show-PhaseHeader "PHASE 51" "RANSOMWARE EXTENSION VELOCITY DETECTION" "RANSOMWARE"
@@ -1382,6 +1412,8 @@ foreach ($rf in $ransomScanFiles) {
 }
 if (-not $encFound) { Out-Typewriter "  -> [OK] NO RANSOMWARE EXTENSION PATTERNS." "GOOD" }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 52" "HIGH ENTROPY FILE DETECTION (ENCRYPTED PAYLOAD)" "RANSOMWARE"
 Out-Typewriter "SAMPLING FILES FOR HIGH ENTROPY (ENCRYPTION/PACKING)..." "HUNT"
 Invoke-QuantumBar "ENTROPY ANALYSIS" 15 120
@@ -1402,6 +1434,7 @@ foreach ($cf in $candidates) {
 }
 if (-not $entropyHits) { Out-Typewriter "  -> [OK] NO SUSPICIOUSLY HIGH ENTROPY FILES FOUND." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 53" "RANSOM NOTE DETECTION" "RANSOMWARE"
 Out-Typewriter "SCANNING FOR RANSOM NOTE ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -1490,6 +1523,8 @@ if ($wbadminLog.Count -gt 0) {
 # ══════════════════════════════════════════════════════════════════════════════
 Show-ThreatCategoryHeader "ROOTKIT" "Kernel Drivers · Process Discrepancy · Service Delta · Bootkit Indicators"
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 55" "UNSIGNED / ANOMALOUS KERNEL DRIVER AUDIT" "ROOTKIT"
 Out-Typewriter "ENUMERATING LOADED KERNEL MODULES..." "HUNT"
 Invoke-QuantumBar "KERNEL DRIVER ANALYSIS" 15 130
@@ -1549,6 +1584,7 @@ if ($BYOVD_DRIVER_NAMES.Count -gt 0) {
 }
 if (-not $byovdFound) { Out-Typewriter "  -> [OK] NO KNOWN-VULNERABLE BYOVD DRIVERS." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 56" "HIDDEN PROCESS DISCREPANCY (WMI vs PS vs TASKLIST)" "ROOTKIT"
 Out-Typewriter "CROSS-CORRELATING PROCESS ENUMERATION METHODS..." "HUNT"
 Invoke-QuantumBar "PROCESS TABLE DELTA ANALYSIS" 12 130
@@ -1559,22 +1595,28 @@ $hiddenFromPS   = $wmiPIDs | Where-Object { $_ -notin $psPIDs   -and $_ -gt 4 }
 $hiddenFromWMI  = $psPIDs  | Where-Object { $_ -notin $wmiPIDs  -and $_ -gt 4 }
 $hiddenFromTask = $wmiPIDs | Where-Object { $_ -notin $taskPIDs -and $_ -gt 4 }
 $rkSuspect = $false
-foreach ($pid in $hiddenFromPS) {
-    Out-ThreatBanner "PROCESS HIDDEN FROM GET-PROCESS" "PID: $pid — ROOTKIT INDICATOR"
-    Add-Finding -ID "RKHIDE_PS_$pid" -Phase "PHASE 56" -ThreatType "Rootkit" -Severity $SEV_CRITICAL `
-        -Description "PID $pid visible in WMI but hidden from Get-Process — rootkit indicator" `
-        -Target "PID: $pid" -FixAction "Info" -Group "Hidden Process Delta (Rootkit)"
+# NB: loop var is $rkpid, NOT $pid — $PID is a READ-ONLY automatic variable (this process's
+# id); `foreach ($pid ...)` throws "Cannot overwrite variable PID" the moment the list is
+# non-empty, which is exactly when a rootkit discrepancy exists — silently killing this phase
+# via the module trap. (PS variable names are case-insensitive, so $pid IS $PID.)
+foreach ($rkpid in $hiddenFromPS) {
+    Out-ThreatBanner "PROCESS HIDDEN FROM GET-PROCESS" "PID: $rkpid — ROOTKIT INDICATOR"
+    Add-Finding -ID "RKHIDE_PS_$rkpid" -Phase "PHASE 56" -ThreatType "Rootkit" -Severity $SEV_CRITICAL `
+        -Description "PID $rkpid visible in WMI but hidden from Get-Process — rootkit indicator" `
+        -Target "PID: $rkpid" -FixAction "Info" -Group "Hidden Process Delta (Rootkit)"
     $global:RootkitHits++; $rkSuspect = $true
 }
-foreach ($pid in $hiddenFromWMI) {
-    Out-ThreatBanner "PROCESS HIDDEN FROM WMI" "PID: $pid — ROOTKIT INDICATOR"
-    Add-Finding -ID "RKHIDE_WMI_$pid" -Phase "PHASE 56" -ThreatType "Rootkit" -Severity $SEV_CRITICAL `
-        -Description "PID $pid visible in PS but hidden from WMI — rootkit indicator" `
-        -Target "PID: $pid" -FixAction "Info" -Group "Hidden Process Delta (Rootkit)"
+foreach ($rkpid in $hiddenFromWMI) {
+    Out-ThreatBanner "PROCESS HIDDEN FROM WMI" "PID: $rkpid — ROOTKIT INDICATOR"
+    Add-Finding -ID "RKHIDE_WMI_$rkpid" -Phase "PHASE 56" -ThreatType "Rootkit" -Severity $SEV_CRITICAL `
+        -Description "PID $rkpid visible in PS but hidden from WMI — rootkit indicator" `
+        -Target "PID: $rkpid" -FixAction "Info" -Group "Hidden Process Delta (Rootkit)"
     $global:RootkitHits++; $rkSuspect = $true
 }
 if (-not $rkSuspect) { Out-Typewriter "  -> [OK] NO PROCESS ENUMERATION DISCREPANCIES." "GOOD" }
 
+if (-not $global:QUICK_MODE) {
+    trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 57" "SERVICE REGISTRY DELTA — HIDDEN SERVICE OBJECTS" "ROOTKIT"
 Out-Typewriter "COMPARING SERVICE ENUMERATION METHODS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
@@ -1605,3 +1647,4 @@ if ($bcdedit2 -match "winpe|safeboot.*minimal.*AlternateShell") {
     $global:RootkitHits++
 } else { Out-Typewriter "  -> [OK] BCD BOOT ENTRIES APPEAR CLEAN." "GOOD" }
 
+}   # end QUICK-skip block
