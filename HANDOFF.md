@@ -17,22 +17,27 @@
 >   errors) pre-fix + FULL -Hours 1 (1-80, 0 err) post-fix; TBS helper vs System.Formats.Asn1
 >   on 17 certs + malformed-cert OOM guard. See `CHANGELOG.md` (2026-07-02 late night).
 >
-> **NEXT CODING ITEM → §7 item 8: make QUICK a real gate. FULLY DESIGNED, not implemented.**
-> A Fable Plan agent produced the complete spec (30-phase set, `Test-PhaseGate` mechanism, 54
-> per-phase wraps, server progress-index fix) — it lives verbatim in the memory file
-> `session8-orphan-keys-quick-design-2026-07-02.md`. QUICK set (exactly 30):
-> `1,3,4,5,6,10,20,21,23,27,28,29,30,31,33,35,41,42,45,51,53,54,56,62,64,69,70,72,74.6,75`.
-> Loader: QUICK arm of `$PhasePlan` switch gets `QuickSet=<array>` + `Max=30`; add
-> `Test-PhaseGate` helper after the switch; non-QUICK modes have no QuickSet key → byte-identical.
-> Wrap each of the 54 skipped phases `if (Test-PhaseGate 'N') { trap {Write-RecoveredError $_;
-> continue}; ...body... }` (inner trap MANDATORY). Server QUICK=30 stays; add `$ScanState.PhaseIdx`
-> counting distinct headers so the GUI counter goes 1..30 without jumping. **Hard invariant:
-> keep P51 whenever 52/53 present** (they reuse `$ransomScanFiles`). **Do item 8 fresh** — big
-> delicate diff. Then USB field test.
+> **§7 item 8 (make QUICK a real gate) is ALSO DONE + committed** — `e3c4998` on main, local/
+> unpushed. QUICK now runs exactly 30 triage phases
+> (`1,3,4,5,6,10,20,21,23,27,28,29,30,31,33,35,41,42,45,51,53,54,56,62,64,69,70,72,74.6,75`);
+> the other 54 in 1–80 are wrapped `if (-not $global:QUICK_MODE) { trap {…}; body }`
+> (contiguous-run blocks, inner trap each). Server reports a 1..30 `PhaseIdx` as `phase` in
+> QUICK only (findings keep the true phase). FULL/DEEP/etc byte-identical. **Also fixed a latent
+> Phase-56 rootkit bug** (`foreach ($pid …)` clobbered read-only `$PID` → hidden-process
+> detection silently died whenever a discrepancy existed; renamed `$rkpid`). Three Fable agents
+> assisted (design, cross-phase leak audit = 0 leaks, server progress-index). Validated: QUICK
+> = exactly 30 phases / 0 recovered errors; FULL = all 84 steps / 0 errors; **live headless
+> server QUICK scan → /api/state counter 1..30, ends 30/30, never overshoots**; parse-clean
+> 5.1+7, BOMs intact. coverage_matrix mode_gate corrected. See CHANGELOG 2026-07-03.
 >
-> **Also still open (pre-existing, needs YOUR sign-off — do not auto-change):** P82
-> `tunneling_tools` flags putty.exe/plink.exe CRITICAL+DeleteFile (would auto-delete a legit
-> admin's SSH client). Was externalized 1:1 this session, not introduced by it.
+> **NEXT: the roadmap's remaining items are the USER-driven ones** — (§7.6) USB portability
+> field test on a non-dev box, and the browser click-through (destructive PURGE + protected
+> HARD-block, exports, IOC save→rescan, STEALTH, the SCAN PROFILES picker, and now a QUICK
+> scan showing the 1..30 counter). All engine/server coding items in §7 are DONE.
+>
+> **Still open (pre-existing, needs YOUR sign-off — do not auto-change):** P82 `tunneling_tools`
+> flags putty.exe/plink.exe CRITICAL+DeleteFile (would auto-delete a legit admin's SSH client).
+> Pre-existing; externalized 1:1 in session 8, not introduced by it. Downgrade only on your OK.
 
 > ## ▶ (session 7) START HERE reference
 > 0. **Session 7 (2026-07-02 night) closed BLUEPRINT §7 items 4+5** (commits `5e21683` + `fea1960`,
