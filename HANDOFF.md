@@ -1,6 +1,40 @@
-# RESUME HANDOFF — updated 2026-07-02 (session 7: scan profiles + WS0 coverage re-audit DONE)
+# RESUME HANDOFF — updated 2026-07-02 (session 8: orphan keys WIRED; QUICK gate DESIGNED)
 
-> ## ▶ START HERE after /clear
+> ## ▶ START HERE after /clear — SESSION 8 (2026-07-02 late night)
+> **§7 item 7 (wire 15 orphaned signature keys) is DONE + committed** — `bbc2d9d` on main,
+> LOCAL/unpushed (now stacked on the session-5/6/7 commits; push the whole stack when you say).
+> - All 15 keys wired: P67/82/89/98/106 externalize inline literal lists 1:1 (AMSI-liability
+>   removal); P6 loader/banking proc IOCs; P34/36 C2 domain families; P55.5 cert-TBS confirm
+>   (new `Get-CertTbsSha1` DER helper); P62 framework-name pipe pass; P68 +14 stealer families
+>   + loader-drop/C2-config file rules; P100 full 31-path infostealer targets.
+> - **A Fable review agent caught 2 rule-#1 auto-fire FPs before commit** (both fixed +
+>   live-validated): broad `known_c2_domains` (github/ngrok/tailscale) was feeding P34's
+>   DNS-cache HIGH+RunCmd path → split `$MALWARE_C2_DOMAINS` (P34) vs `$ALL_C2_DOMAINS` (P36
+>   reverse-DNS only); generic stealer words (atomic/aurora/mystic) auto-killing legit procs →
+>   P68 now auto-kills only unsigned + user-writable-path. Post-fix FULL run proved it:
+>   `Mystic_Light_Service` (MSI RGB) correctly downgraded to POSSIBLE, not killed.
+> - Validated: parse-clean 5.1.26100+7 (BOM intact); DEEP -Hours 1 (121 phases, 0 recovered
+>   errors) pre-fix + FULL -Hours 1 (1-80, 0 err) post-fix; TBS helper vs System.Formats.Asn1
+>   on 17 certs + malformed-cert OOM guard. See `CHANGELOG.md` (2026-07-02 late night).
+>
+> **NEXT CODING ITEM → §7 item 8: make QUICK a real gate. FULLY DESIGNED, not implemented.**
+> A Fable Plan agent produced the complete spec (30-phase set, `Test-PhaseGate` mechanism, 54
+> per-phase wraps, server progress-index fix) — it lives verbatim in the memory file
+> `session8-orphan-keys-quick-design-2026-07-02.md`. QUICK set (exactly 30):
+> `1,3,4,5,6,10,20,21,23,27,28,29,30,31,33,35,41,42,45,51,53,54,56,62,64,69,70,72,74.6,75`.
+> Loader: QUICK arm of `$PhasePlan` switch gets `QuickSet=<array>` + `Max=30`; add
+> `Test-PhaseGate` helper after the switch; non-QUICK modes have no QuickSet key → byte-identical.
+> Wrap each of the 54 skipped phases `if (Test-PhaseGate 'N') { trap {Write-RecoveredError $_;
+> continue}; ...body... }` (inner trap MANDATORY). Server QUICK=30 stays; add `$ScanState.PhaseIdx`
+> counting distinct headers so the GUI counter goes 1..30 without jumping. **Hard invariant:
+> keep P51 whenever 52/53 present** (they reuse `$ransomScanFiles`). **Do item 8 fresh** — big
+> delicate diff. Then USB field test.
+>
+> **Also still open (pre-existing, needs YOUR sign-off — do not auto-change):** P82
+> `tunneling_tools` flags putty.exe/plink.exe CRITICAL+DeleteFile (would auto-delete a legit
+> admin's SSH client). Was externalized 1:1 this session, not introduced by it.
+
+> ## ▶ (session 7) START HERE reference
 > 0. **Session 7 (2026-07-02 night) closed BLUEPRINT §7 items 4+5** (commits `5e21683` + `fea1960`,
 >    local, NOT pushed — now 4 commits ahead of origin):
 >    - **Scan profiles shipped + live-verified**: `GET|POST /api/profiles` (4 read-only builtins +
