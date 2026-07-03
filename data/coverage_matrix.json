@@ -1,8 +1,8 @@
 {
-  "_comment": "WS0 coverage matrix: ZeroBreach-V23.ps1 phase -> MITRE ATT&CK technique -> data source. Generated 2026-06-29. signature_source: externalized=data/*.json only; partial=mixed data+inline literals; inline=signature literals live in the .ps1 (AMSI/portability risk, externalize per WS1/WS2); n/a=behavioral/registry/cmdlet, no signature strings.",
-  "generated": "2026-06-29",
-  "engine": "ZeroBreach-V23.ps1",
-  "phase_count": 119,
+  "_comment": "WS0 coverage matrix (re-audited 2026-07-02 against the split engine on main): phase -> MITRE ATT&CK technique -> data source. Engine = ZeroBreach-V23.ps1 thin loader + dot-sourced engine/Phases-1.ps1 (phases 1-58 incl. 55.5), Phases-2.ps1 (59-89 incl. 74.5/.6/.7), Phases-3.ps1 (90-107 incl. 99.5 + integrity 108-115). Added per-phase fields vs the 2026-06-29 matrix: module, mode_gate, severities, fix_actions; data_source now also lists allow:<key> FP-allowlist consumption. mode_gate truth: phases 1-80 run in EVERY mode (the engine has no QUICK gate — QUICK Max=30 is a plan label only); 81-89 gated by $PhasePlan.Universal, 90-107 by .Advanced, 108-115 by .Integrity (all true only in DEEP/PARANOID/STEALTH). signature_source: externalized=data/*.json only; partial=mixed data+inline literals; inline=signature literals live in the .ps1; n/a=behavioral/registry/cmdlet, no signature strings. Orphaned detection_signatures.json keys (present but consumed by NO phase): adware_pup_regs, banking_trojan_procs, byovd_cert_tbs_hashes, c2_config_rules, c2_pipe_patterns, cred_dump_tools, infostealer_c2_domains, infostealer_procs, infostealer_target_paths_raw, leaked_cert_issuers, loader_c2_domains, loader_drop_path_rules, loader_procs, stego_tools, tunneling_tools; loaded-but-unused loader vars: trojan_file_patterns, auto_elevate_bins, email_phishing_trojans, proactive_persistence_regs, proactive_lure_extensions.",
+  "generated": "2026-07-02",
+  "engine": "ZeroBreach-V23.ps1 (thin loader) + engine/Phases-1.ps1 + engine/Phases-2.ps1 + engine/Phases-3.ps1",
+  "phase_count": 121,
   "techniques_referenced": [
     "T1003.001",
     "T1003.002",
@@ -27,6 +27,7 @@
     "T1056.001",
     "T1056.002",
     "T1057",
+    "T1059",
     "T1059.001",
     "T1059.003",
     "T1059.005",
@@ -115,7 +116,7 @@
     "Persistence": 31,
     "Privilege Escalation": 30,
     "Credential Access": 9,
-    "Execution": 8,
+    "Execution": 9,
     "Collection": 7,
     "Command and Control": 7,
     "Lateral Movement": 6,
@@ -128,9 +129,17 @@
     {
       "phase": "PHASE 1",
       "name": "ANTI-FORENSIC EVENT LOG AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Scans Security/System logs for event IDs 104/1102 (log clearing). Flags evidence of tampering.",
       "threat_types": [
         "Anti-Forensic"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -151,9 +160,17 @@
     {
       "phase": "PHASE 2",
       "name": "POWERSHELL SCRIPT BLOCK LOG AUDIT (EVENT 4104)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Examines PS Operational log 4104 for IEX/EncodedCommand/WebClient/reflection/VirtualAlloc patterns; excludes own footprint.",
       "threat_types": [
         "Fileless/PowerShell"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -176,9 +193,17 @@
     {
       "phase": "PHASE 3",
       "name": "PROCESS ANCESTRY & INJECTION AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Queries live Win32_Process command-lines for IEX/EncodedCommand/DownloadString/LOLBIN/injection keywords.",
       "threat_types": [
         "Process Injection/Fileless"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -207,10 +232,18 @@
     },
     {
       "phase": "PHASE 4",
-      "name": "LOLBIN ABUSE AUDIT",
+      "name": "LOLBIN ABUSE AUDIT (Living-Off-The-Land Binaries)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Enumerates 46 inline LOLBIN exe names running with suspicious args (http/AppData/Temp/.js/Base64/scrobj/UNC).",
       "threat_types": [
         "LoLBin Abuse"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -232,10 +265,21 @@
     {
       "phase": "PHASE 5",
       "name": "AMSI BYPASS & ETW PATCH DETECTION",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Checks AMSI provider regkey, AmsiEnable flag, ETW autologger Start value for disable/zero.",
       "threat_types": [
         "AMSI Bypass",
         "ETW Bypass"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "DeleteReg",
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -263,11 +307,19 @@
     {
       "phase": "PHASE 6",
       "name": "KNOWN MALWARE PROCESS IOC DATABASE MATCH",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Compares running processes to RAT/miner/keylogger IOC name arrays; kills matches.",
       "threat_types": [
         "RAT",
         "Cryptominer",
         "Keylogger"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -307,9 +359,17 @@
     {
       "phase": "PHASE 7",
       "name": "BROWSER CACHE & SERVICE WORKER AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Detects browser cache dirs (Chrome/Edge/FF/Brave/Opera) as INFO artifacts.",
       "threat_types": [
         "Browser Artifact"
+      ],
+      "severities": [
+        "INFO"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -330,9 +390,19 @@
     {
       "phase": "PHASE 8",
       "name": "BROWSER EXTENSION SANITIZATION (HEURISTIC)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Walks Chrome/Edge/Brave extension dirs via Get-ExtensionRisk; flags CRIT/HIGH/POSSIBLE.",
       "threat_types": [
         "Browser Extension/Hijacker"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -353,9 +423,19 @@
     {
       "phase": "PHASE 9",
       "name": "BROWSER HIJACK — SHORTCUT & HOMEPAGE AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Inspects .lnk args (http/--load-extension/javascript:/data:) and Chrome homepage pref.",
       "threat_types": [
         "Browser Hijacker"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -385,9 +465,18 @@
     {
       "phase": "PHASE 10",
       "name": "TEMP / DOWNLOAD DIRECTORY ANOMALY SWEEP",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Time-scoped scan of TEMP/Downloads/INetCache for executable/script files.",
       "threat_types": [
         "Suspicious File"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -415,9 +504,17 @@
     {
       "phase": "PHASE 11",
       "name": "RECENT DOCUMENTS & JUMP LIST SCRUB",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Audits Recent/AutomaticDestinations/CustomDestinations for recent items (INFO).",
       "threat_types": [
         "Browser/File Artifact"
+      ],
+      "severities": [
+        "INFO"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -438,9 +535,17 @@
     {
       "phase": "PHASE 12",
       "name": "PREFETCH & SHIMCACHE ARTIFACT AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Scans Prefetch .pf for script/LOLBIN execution traces (WSCRIPT/MSHTA/CERTUTIL/RUNDLL32+APPDATA/POWERSHELL -ENC).",
       "threat_types": [
         "Execution Trace"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -461,9 +566,18 @@
     {
       "phase": "PHASE 13",
       "name": "CRYPTOGRAPHIC SYSTEM FILE VERIFICATION (SFC)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Runs sfc /scannow; skipped in Auto/GUI/Stealth.",
       "threat_types": [
         "System Integrity"
+      ],
+      "severities": [
+        "INFO"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -484,9 +598,18 @@
     {
       "phase": "PHASE 14",
       "name": "DISM COMPONENT STORE RESTORATION",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flushes wuauserv cache, flags SoftwareDistribution; DISM /RestoreHealth interactive only.",
       "threat_types": [
         "System Integrity"
+      ],
+      "severities": [
+        "INFO"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -507,9 +630,19 @@
     {
       "phase": "PHASE 15",
       "name": "SYSTEM32 UNSIGNED BINARY AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Validates Authenticode on recent System32 exe/dll/sys; flags unsigned/invalid as rootkit.",
       "threat_types": [
         "Rootkit/Trojan"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -538,9 +671,17 @@
     {
       "phase": "PHASE 16",
       "name": "NTFS PERMISSION INTEGRITY — CRITICAL PATHS",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Audits ACLs on System32/SysWOW64/drivers for world-writable ACEs.",
       "threat_types": [
         "Permission Abuse"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -560,9 +701,17 @@
     {
       "phase": "PHASE 17",
       "name": "ALTERNATE DATA STREAM (ADS) PARASITE SCAN",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Scans LOCALAPPDATA/TEMP/Downloads for non-$DATA ADS (excl Zone.Identifier).",
       "threat_types": [
         "ADS Parasite"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -582,9 +731,18 @@
     {
       "phase": "PHASE 18",
       "name": "DEEP CLOAKED PARASITE SCAN (HIDDEN+SYSTEM ATTRIBUTES)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "User-writable paths for Hidden+System exec/script files; capped 200.",
       "threat_types": [
         "Rootkit/Trojan"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -597,16 +755,25 @@
         }
       ],
       "data_source": [
-        "filewalk"
+        "filewalk",
+        "allow:cloaked_benign_names"
       ],
       "signature_source": "n/a"
     },
     {
       "phase": "PHASE 19",
       "name": "SCRIPT EXECUTION ASSOCIATION AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Checks .js/.vbs/.hta/.wsf handler bindings for non-txtfile hijacks.",
       "threat_types": [
         "Script Handler Abuse"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -628,9 +795,19 @@
     {
       "phase": "PHASE 20",
       "name": "RUN / RUNONCE HEURISTIC SCRUB",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Audits Run/RunOnce (HKCU/HKLM 64/32) for AppData/Temp/script/LOLBIN/IEX/EncodedCommand values.",
       "threat_types": [
         "Registry Persistence"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteReg",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -645,17 +822,27 @@
       ],
       "data_source": [
         "registry",
-        "inline-regex"
+        "inline-regex",
+        "allow:runkey_benign_values"
       ],
       "signature_source": "inline"
     },
     {
       "phase": "PHASE 21",
       "name": "IMAGE FILE EXECUTION OPTIONS (IFEO) SCRUB",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags IFEO Debugger values and nonzero GlobalFlag (GFlags injection).",
       "threat_types": [
         "IFEO Hijack/Persistence",
         "IFEO/GFlags Injection"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "DeleteReg"
       ],
       "mitre_techniques": [
         {
@@ -676,9 +863,17 @@
     {
       "phase": "PHASE 22",
       "name": "APPINIT_DLLS KERNEL INJECTION SCRUB",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags non-empty AppInit_DLLs (64/32-bit).",
       "threat_types": [
         "DLL Injection/Rootkit"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "DeleteReg"
       ],
       "mitre_techniques": [
         {
@@ -699,9 +894,17 @@
     {
       "phase": "PHASE 23",
       "name": "WINLOGON / USERINIT / SHELL HIJACK DETECTION",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags Winlogon Shell != explorer.exe and non-standard Userinit.",
       "threat_types": [
         "Winlogon Hijack"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -722,9 +925,19 @@
     {
       "phase": "PHASE 24",
       "name": "COM OBJECT HIJACK AUDIT (HKCU CLSID OVERRIDES)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags HKCU CLSID overrides (user COM hijack persistence).",
       "threat_types": [
         "COM Hijack"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteRegKey",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -745,9 +958,17 @@
     {
       "phase": "PHASE 25",
       "name": "GPO LOCKDOWN — TASKMGR/REGEDIT/CMD DISABLED",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags DisableTaskMgr/DisableRegistryTools/DisableCMD=1 (anti-forensic).",
       "threat_types": [
         "GPO Lockdown (Malware)"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "DeleteReg"
       ],
       "mitre_techniques": [
         {
@@ -767,9 +988,17 @@
     {
       "phase": "PHASE 26",
       "name": "BROWSER HELPER OBJECT (BHO) PURGE",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Time-scoped BHO regkeys (64/32) flagged as hijacker/spyware.",
       "threat_types": [
         "Browser Hijacker/BHO"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -789,9 +1018,17 @@
     {
       "phase": "PHASE 27",
       "name": "SAFE MODE HIJACK (SAFEBOOT KEY AUDIT)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags unknown non-GUID SafeBoot Minimal/Network entries.",
       "threat_types": [
         "SafeBoot Hijack"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteRegKey"
       ],
       "mitre_techniques": [
         {
@@ -804,16 +1041,25 @@
         }
       ],
       "data_source": [
-        "registry"
+        "registry",
+        "allow:safeboot_default_entries"
       ],
       "signature_source": "n/a"
     },
     {
       "phase": "PHASE 28",
       "name": "ROGUE WIN32 SERVICE AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags service ImagePath with AppData/Temp/script/LOLBIN.",
       "threat_types": [
         "Malicious Service"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -834,9 +1080,19 @@
     {
       "phase": "PHASE 29",
       "name": "TASK SCHEDULER DEEP AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Enumerates non-MS scheduled tasks + walks task XML for malicious Execute/Args.",
       "threat_types": [
         "Task Persistence"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -860,9 +1116,17 @@
     {
       "phase": "PHASE 30",
       "name": "WMI EVENT FILTER / CONSUMER / BINDING AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags __EventFilter/__EventConsumer/__FilterToConsumerBinding (WMI persistence).",
       "threat_types": [
         "WMI Persistence"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -883,11 +1147,23 @@
     {
       "phase": "PHASE 31",
       "name": "BITS / POWERSHELL PROFILE / STARTUP PERSISTENCE",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Active BITS jobs; PS profiles w/ IEX/DownloadString; Startup folder unsigned/recent.",
       "threat_types": [
         "BITS Persistence",
         "PS Profile Persistence",
         "Startup Persistence"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -921,16 +1197,27 @@
       "data_source": [
         "cmdlet:Get-BitsTransfer",
         "filewalk",
-        "inline-regex"
+        "inline-regex",
+        "sig:bits_suspicious_local_regex",
+        "sig:bits_suspicious_remote_regex"
       ],
-      "signature_source": "inline"
+      "signature_source": "partial"
     },
     {
       "phase": "PHASE 32",
       "name": "DLL SEARCH ORDER HIJACK — PATH AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Tests PATH dirs for write access; flags unsigned recent .dll in writable dirs.",
       "threat_types": [
         "DLL Hijack"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -953,9 +1240,18 @@
     {
       "phase": "PHASE 33",
       "name": "HOSTS FILE INTEGRITY AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags non-standard hosts entries.",
       "threat_types": [
         "DNS Hijack"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -976,9 +1272,17 @@
     {
       "phase": "PHASE 34",
       "name": "DNS CACHE POISONING AUDIT & FLUSH",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags DNS cache entries matching suspicious-domain IOCs; flushes cache.",
       "threat_types": [
         "DNS Hijack/C2"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -999,9 +1303,17 @@
     {
       "phase": "PHASE 35",
       "name": "PROXY & WINHTTP POISON RESET",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags ProxyEnable=1; resets proxy.",
       "threat_types": [
         "Proxy Hijack"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1021,11 +1333,20 @@
     {
       "phase": "PHASE 36",
       "name": "LIVE TCP/UDP THREAT SOCKET TERMINATION",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags stratum miner ports, AppData/Temp procs on odd ports, reverse-DNS C2 matches.",
       "threat_types": [
         "Cryptominer",
         "Suspicious Connection",
         "C2 Beacon/RAT"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1064,9 +1385,17 @@
     {
       "phase": "PHASE 37",
       "name": "IPC NULL SESSION / SMB / PORTPROXY AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags active portproxy forwarding rules (C2 tunneling).",
       "threat_types": [
         "Port Tunneling"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1094,10 +1423,19 @@
     {
       "phase": "PHASE 38",
       "name": "FIREWALL AUDIT & PERIMETER REVIEW",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags non-MS inbound rules with public/Any exposure.",
       "threat_types": [
         "Firewall Hole",
         "Hardening"
+      ],
+      "severities": [
+        "INFO",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1118,9 +1456,18 @@
     {
       "phase": "PHASE 39",
       "name": "ROGUE ROOT CERTIFICATE AUDIT (LM + USER)",
-      "detects": "Flags recently-added root CA certs (LM=CRIT, user=HIGH).",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "detects": "Flags recently-added root CA certs (LM + user stores). FP round 1: known-issuer certs (trusted_root_ca_issuers allowlist) = INFO, unknown = POSSIBLE; RunCmd suggestion only — no longer CRIT/HIGH auto-flag.",
       "threat_types": [
         "Rogue Certificate"
+      ],
+      "severities": [
+        "INFO",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1133,16 +1480,26 @@
         }
       ],
       "data_source": [
-        "certstore"
+        "certstore",
+        "allow:trusted_root_ca_issuers"
       ],
-      "signature_source": "n/a"
+      "signature_source": "n/a",
+      "notes": "FP round 1: severity floor INFO/POSSIBLE via trusted_root_ca_issuers allowlist"
     },
     {
       "phase": "PHASE 40",
       "name": "BCD STORE — DRIVER SIGNING / TESTSIGNING AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags testsigning/nointegritychecks=Yes (unsigned driver loading).",
       "threat_types": [
         "Bootkit/Rootkit Vector"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1172,10 +1529,19 @@
     {
       "phase": "PHASE 41",
       "name": "LSA / WDIGEST / LSA PROTECTION AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Checks WDigest UseLogonCredential and RunAsPPL hardening.",
       "threat_types": [
         "Credential Theft Vector",
         "LSA Hardening"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1196,9 +1562,17 @@
     {
       "phase": "PHASE 42",
       "name": "LOCAL ADMINISTRATOR GHOST ACCOUNT AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags enabled local accounts matching backdoor name patterns; logs admins.",
       "threat_types": [
         "Ghost/Backdoor Account"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1219,10 +1593,20 @@
     {
       "phase": "PHASE 43",
       "name": "SAM / HIVENIGHTMARE (CVE-2021-36934) AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags world-readable SAM ACL (HiveNightmare); enumerates VSS.",
       "threat_types": [
         "Credential Exposure (HiveNightmare)",
         "Ransomware Recovery Vector"
+      ],
+      "severities": [
+        "CRITICAL",
+        "INFO"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1244,9 +1628,17 @@
     {
       "phase": "PHASE 44",
       "name": "TOKEN / PRIVILEGE ABUSE — ELEVATED PROCS IN USER SPACE",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags SYSTEM-context procs from user-writable paths via SID check.",
       "threat_types": [
         "Privilege Abuse/Trojan"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1268,9 +1660,17 @@
     {
       "phase": "PHASE 45",
       "name": "ACCESSIBILITY SHELL BACKDOOR (STICKY KEYS / UTILMAN)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Validates Authenticode on sethc/utilman/osk/magnify/narrator/displayswitch.",
       "threat_types": [
         "Sticky Keys / Accessibility Backdoor"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1292,10 +1692,19 @@
     {
       "phase": "PHASE 46",
       "name": "NULL SESSION / NTLM LEVEL / FINAL LSA HARDENING",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Audits LmCompatibilityLevel; suggests LSA hardening.",
       "threat_types": [
         "Credential Security",
         "Hardening"
+      ],
+      "severities": [
+        "HIGH",
+        "INFO"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1318,9 +1727,17 @@
     {
       "phase": "PHASE 47",
       "name": "WINDOWS HOOK / RAW INPUT KEYLOGGER DETECTION",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags procs with user32/hid module access from user paths (hook keylogger).",
       "threat_types": [
         "Keylogger"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1337,14 +1754,26 @@
         "cmdlet:Get-Process",
         "inline-regex"
       ],
-      "signature_source": "inline"
+      "signature_source": "inline",
+      "notes": "FP fix 2026-07-02: folder-name tests anchored to path COMPONENTS — WindowsApps store packages (WhatsAppDesktop etc.) no longer auto-KillProcess'd"
     },
     {
       "phase": "PHASE 48",
       "name": "KEYLOGGER FILE & REGISTRY ARTIFACT SCAN",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Scans for keystroke log files + 7 known keylogger regkeys (Ardamax/Spyrix/Refog/KGB...).",
       "threat_types": [
         "Keylogger"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "DeleteRegKey",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1360,16 +1789,25 @@
       "data_source": [
         "filewalk",
         "registry",
-        "inline-regex"
+        "inline-regex",
+        "allow:keylogger_benign_paths"
       ],
       "signature_source": "inline"
     },
     {
       "phase": "PHASE 49",
       "name": "CLIPBOARD MONITOR / SCREEN CAPTURE DETECTION",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags procs named snag/screenshot/capture/clip from user paths.",
       "threat_types": [
         "Spyware/Keylogger"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1399,9 +1837,17 @@
     {
       "phase": "PHASE 50",
       "name": "ACCESSIBILITY API / UIAUTOMATION KEYLOGGER CHECK",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags procs using UIAutomation module from user paths.",
       "threat_types": [
         "Keylogger/Spyware"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1423,9 +1869,17 @@
     {
       "phase": "PHASE 51",
       "name": "RANSOMWARE EXTENSION VELOCITY DETECTION",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Scans doc folders for known ransomware extensions.",
       "threat_types": [
         "Ransomware"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1446,9 +1900,17 @@
     {
       "phase": "PHASE 52",
       "name": "HIGH ENTROPY FILE DETECTION (ENCRYPTED PAYLOAD)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Entropy>7.5 sampling of phase-51 files (encrypted/packed).",
       "threat_types": [
         "Ransomware/Packed Malware"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1477,9 +1939,20 @@
     {
       "phase": "PHASE 53",
       "name": "RANSOM NOTE DETECTION",
-      "detects": "11 ransom-note filename patterns over phase-51 walk (anchored regex).",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "detects": "Two-tier ransom-note detection over the phase-51 doc walk: strong inline wildcard names + WS2 CISA-sourced known-family filenames (ransom_note_filenames) = CRITICAL/DeleteFile; generic name matches require content confirmation (ransom_note_content_rules via Test-ContentRules) else POSSIBLE/Info; plus a renamed-note content-only pass over small txt/html/hta/rtf files (rule-driven severity, Info).",
       "threat_types": [
         "Ransomware"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1493,16 +1966,28 @@
       ],
       "data_source": [
         "filewalk",
-        "inline-regex"
+        "inline-regex",
+        "sig:ransom_note_content_rules",
+        "sig:ransom_note_filenames"
       ],
-      "signature_source": "inline"
+      "signature_source": "partial"
     },
     {
       "phase": "PHASE 54",
       "name": "BACKUP PROCESS TAMPERING / BCDEDIT ABUSE",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags recoveryenabled=No + backup deletion events 521/527/528.",
       "threat_types": [
         "Ransomware Prep"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1523,9 +2008,17 @@
     {
       "phase": "PHASE 55",
       "name": "UNSIGNED / ANOMALOUS KERNEL DRIVER AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "driverquery for Kernel + IsSigned=FALSE.",
       "threat_types": [
         "Rootkit/Unsigned Driver"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1552,11 +2045,63 @@
       "signature_source": "n/a"
     },
     {
+      "phase": "PHASE 55.5",
+      "name": "KNOWN-VULNERABLE SIGNED DRIVER AUDIT (BYOVD)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "detects": "WS2 (2026-07-01). Cross-references installed kernel drivers (Win32_SystemDriver) against the LOLDrivers BYOVD name list; SHA256-confirms on disk via Get-FileHashSafe. Loaded driver = CRITICAL, present-but-not-loaded = HIGH. FixAction Info only (may be a legitimate utility e.g. MSI Afterburner/CPU-Z; suggests MS Vulnerable Driver Blocklist / WDAC).",
+      "threat_types": [
+        "BYOVD / Vulnerable Driver",
+        "Rootkit Vector"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1068",
+          "name": "Exploitation for Privilege Escalation",
+          "tactics": [
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1068/"
+        },
+        {
+          "id": "T1014",
+          "name": "Rootkit",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1014/"
+        }
+      ],
+      "data_source": [
+        "cim:Win32_SystemDriver",
+        "sig:byovd_driver_names",
+        "sig:byovd_driver_sha256",
+        "func:Get-FileHashSafe"
+      ],
+      "signature_source": "externalized",
+      "notes": "byovd_cert_tbs_hashes exists in detection_signatures.json but is not yet consumed"
+    },
+    {
       "phase": "PHASE 56",
       "name": "HIDDEN PROCESS DISCREPANCY (WMI vs PS vs TASKLIST)",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Cross-correlates 3 process enumerations to find rootkit-hidden procs.",
       "threat_types": [
         "Rootkit"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1578,9 +2123,17 @@
     {
       "phase": "PHASE 57",
       "name": "SERVICE REGISTRY DELTA — HIDDEN SERVICE OBJECTS",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Registry-vs-SCM delta for hidden service objects.",
       "threat_types": [
         "Rootkit/Hidden Service"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1609,9 +2162,17 @@
     {
       "phase": "PHASE 58",
       "name": "BOOTKIT / MBR INDICATORS",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags winpe/safeboot AlternateShell BCD entries.",
       "threat_types": [
         "Bootkit"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1633,9 +2194,19 @@
     {
       "phase": "PHASE 59",
       "name": "C2 BEACON INTERVAL / HIGH-FREQ DNS DETECTION",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags >10 DNS queries to same domain + odd established connections from non-system procs.",
       "threat_types": [
         "C2 Beacon"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info",
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1665,9 +2236,18 @@
     {
       "phase": "PHASE 60",
       "name": "DNS TUNNELING DETECTION",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags long DNS labels (>40) and high subdomain depth (>6).",
       "threat_types": [
         "DNS Tunneling"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1696,9 +2276,17 @@
     {
       "phase": "PHASE 61",
       "name": "RAT CONFIGURATION FILE & REGISTRY SCAN",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Tests known RAT config file paths + regkeys from signatures.",
       "threat_types": [
         "RAT"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "DeleteRegKey"
       ],
       "mitre_techniques": [
         {
@@ -1719,9 +2307,19 @@
     {
       "phase": "PHASE 62",
       "name": "NAMED PIPE BACKDOOR AUDIT",
-      "detects": "Enumerates named pipes matching RAT/C2 framework patterns (meterpreter/cobaltstrike/njrat/havoc/sliver...).",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "detects": "Enumerates live named pipes: first pass vs externalized c2_named_pipe_regex; WS2 second pass matches the bare pipe LEAF against anchored CS/Havoc/Covenant/PoshC2 default-pipe patterns (c2_pipe_regex_anchored) and TrickBot-class banking pipes (banking_named_pipes). All FixAction Info. The broad [a-f0-9]{8,} catch-all was removed in FP round 4.",
       "threat_types": [
         "RAT/Backdoor Pipe"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1735,17 +2333,31 @@
       ],
       "data_source": [
         "filesystem:pipes",
-        "inline-regex"
+        "inline-regex",
+        "sig:banking_named_pipes",
+        "sig:c2_named_pipe_regex",
+        "sig:c2_pipe_regex_anchored"
       ],
-      "signature_source": "inline",
-      "notes": "inline C2 framework names SHOULD externalize"
+      "signature_source": "externalized",
+      "notes": "externalized (WS2): anchored framework + banking pipes matched on the pipe leaf; broad hex catch-all removed in FP round 4"
     },
     {
       "phase": "PHASE 63",
       "name": "CPU ABUSE & MINER PROCESS DETECTION",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "High-CPU procs matching miner names + miner config files (pool/stratum/xmr).",
       "threat_types": [
         "Cryptominer"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1761,16 +2373,25 @@
         "wmi:perf",
         "sig:known_miner_procs",
         "filewalk",
-        "inline-regex"
+        "inline-regex",
+        "allow:miner_config_benign_paths"
       ],
       "signature_source": "partial"
     },
     {
       "phase": "PHASE 64",
       "name": "MINER SCHEDULED TASK / SERVICE PERSISTENCE",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Scheduled tasks with miner exe/keywords (xmr/stratum/pool/mining/coin).",
       "threat_types": [
         "Cryptominer"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1802,10 +2423,20 @@
     {
       "phase": "PHASE 65",
       "name": "WORM AUTORUN & USB SPREAD DETECTION",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "autorun.inf + hidden exe on removable drives.",
       "threat_types": [
         "Worm/USB Spread",
         "Hardening"
+      ],
+      "severities": [
+        "CRITICAL",
+        "INFO"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -1828,9 +2459,19 @@
     {
       "phase": "PHASE 66",
       "name": "NETWORK SHARE WORM PROPAGATION SCAN",
-      "detects": "Unsigned exe/script in open network shares (excl ADMIN/IPC/print).",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "detects": "Unsigned exe/script in open network shares — now excludes drive-letter admin shares (C$/D$) plus ADMIN$/IPC$/print$ so the worm scan cannot walk the whole drive; sig-loop carries the SIG_AUDIT budget; unsigned PE in a foreign share = HIGH/DeleteFile, own-profile shares downgraded.",
       "threat_types": [
         "Worm/Network Share"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -1860,9 +2501,17 @@
     {
       "phase": "PHASE 67",
       "name": "ADWARE / PUP / SPYWARE REGISTRY SCAN",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Scans hardcoded adware/PUP regkeys (Conduit/SearchProtect/Trovi/Babylon/Delta...).",
       "threat_types": [
         "Adware/PUP"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "DeleteRegKey"
       ],
       "mitre_techniques": [
         {
@@ -1879,14 +2528,23 @@
         "inline-list"
       ],
       "signature_source": "inline",
-      "notes": "inline adware names SHOULD externalize"
+      "notes": "adware names still inline; adware_pup_regs exists in detection_signatures.json but is NOT consumed (WS1 wiring pending)"
     },
     {
       "phase": "PHASE 68",
       "name": "INFO-STEALER ARTIFACT SCAN (REDLINE/RACCOON/VIDAR)",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Procs matching stealer names + credential/wallet files in user paths.",
       "threat_types": [
         "Info-Stealer"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1908,17 +2566,28 @@
       ],
       "data_source": [
         "inline-regex",
-        "filewalk"
+        "filewalk",
+        "allow:infostealer_benign_paths"
       ],
       "signature_source": "inline",
-      "notes": "inline stealer names SHOULD externalize"
+      "notes": "stealer names still inline; infostealer_procs / infostealer_c2_domains / infostealer_target_paths_raw in JSON are NOT consumed (WS1/WS2 wiring pending)"
     },
     {
       "phase": "PHASE 69",
       "name": "PROCESS HOLLOWING / INJECTION DETECTION",
-      "detects": "Procs with <3 modules, unsigned, in AppData/Temp (hollowing).",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
+      "detects": "Two passes: (1) hollow-process heuristic — processes with <3 loaded modules, unsigned, running from AppData/Temp (HIGH/KillProcess, system procs excluded); (2) WS2 known-malware single-instance mutex probe — attempts OpenExisting on Pikabot/Amadey-class mutex names (known_malware_mutexes); presence = CRITICAL/Info (active or residual infection).",
       "threat_types": [
         "Process Hollowing"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info",
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1933,16 +2602,26 @@
       ],
       "data_source": [
         "cmdlet:Get-Process",
-        "authenticode"
+        "authenticode",
+        "sig:known_malware_mutexes"
       ],
-      "signature_source": "n/a"
+      "signature_source": "partial",
+      "notes": "hollowing heuristic is behavioral (n/a); mutex names externalized (known_malware_mutexes)"
     },
     {
       "phase": "PHASE 70",
       "name": "FILELESS REGISTRY PAYLOAD DETECTION",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Run/Environment/IFEO/CLSID values with base64 blobs (>100 chars).",
       "threat_types": [
         "Fileless Malware"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "DeleteReg"
       ],
       "mitre_techniques": [
         {
@@ -1963,9 +2642,17 @@
     {
       "phase": "PHASE 71",
       "name": "PHISHING / OVERLAY / FAKE BROWSER UI DETECTION",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Procs named fakescreen/overlay/phish/credential-harvest.",
       "threat_types": [
         "Phishing/Overlay"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -1996,9 +2683,17 @@
     {
       "phase": "PHASE 72",
       "name": "BOTNET C2 IP / IOC BLACKLIST CHECK",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "TCP connections reverse-DNS matching botnet dynamic-DNS (.onion/duckdns/zapto/myftp...).",
       "threat_types": [
         "Botnet/C2"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -2028,9 +2723,17 @@
     {
       "phase": "PHASE 73",
       "name": "EXPLOIT KIT ARTIFACT & CVE-2021-36934 REMEDIATION",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "TEMP/LOCALAPPDATA files named shellcode/exploit/payload/cobalt/beacon.",
       "threat_types": [
         "Exploit Kit"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -2051,10 +2754,20 @@
     {
       "phase": "PHASE 74",
       "name": "MACRO / OFFICE / OUTLOOK PERSISTENCE AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags VBAWarnings=1 + Outlook WebView HTML auto-exec regkey.",
       "threat_types": [
         "Macro Abuse",
         "Outlook Persistence"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -2082,9 +2795,20 @@
     {
       "phase": "PHASE 74.5",
       "name": "EMAIL ATTACHMENT MALWARE SCAN (OUTLOOK CACHE)",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Outlook attachment caches: hash match, content rules, exec/script ext, lure filenames. Wires Quarantine.",
       "threat_types": [
         "Phishing / Email Trojan"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Quarantine",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2119,10 +2843,20 @@
     {
       "phase": "PHASE 74.6",
       "name": "MICROSOFT DEFENDER THREAT HISTORY CORRELATION",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Get-MpThreat/Detection; flags Defender-caught resources still on disk (CRIT+Quarantine) else INFO.",
       "threat_types": [
         "Defender-Flagged Residual",
         "Defender Detection (handled)"
+      ],
+      "severities": [
+        "CRITICAL",
+        "INFO"
+      ],
+      "fix_actions": [
+        "Info",
+        "Quarantine"
       ],
       "mitre_techniques": [
         {
@@ -2151,12 +2885,21 @@
     {
       "phase": "PHASE 74.7",
       "name": "PROACTIVE ANTI-REINFECTION HARDENING",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Office/Outlook macro+attachment security, WSH disable, Defender PUA + 6 ASR rules. INFO/opt-in.",
       "threat_types": [
         "Macro/Attachment Exposure",
         "Script Host Exposure",
         "Defender Posture",
         "ASR Rule Not Enabled"
+      ],
+      "severities": [
+        "INFO",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -2203,9 +2946,17 @@
     {
       "phase": "PHASE 75",
       "name": "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Enumerates Defender path/process exclusions as hiding spots.",
       "threat_types": [
         "Defender Tampering"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -2225,9 +2976,17 @@
     {
       "phase": "PHASE 76",
       "name": "TERMINAL SERVICES / RDP SHADOWING AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags RDP Shadow policy allowing no-consent session view/control.",
       "threat_types": [
         "RDP Surveillance"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "DeleteReg"
       ],
       "mitre_techniques": [
         {
@@ -2247,9 +3006,17 @@
     {
       "phase": "PHASE 77",
       "name": "SSH & WINRM REMOTE MANAGEMENT AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags running WinRM/sshd as remote-access vector.",
       "threat_types": [
         "Remote Management"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -2277,9 +3044,17 @@
     {
       "phase": "PHASE 78",
       "name": "SYSMON / LAPS / APPLOCKER STATUS AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Audits Sysmon + AppLocker policy presence (visibility gaps).",
       "threat_types": [
         "Hardening Gap"
+      ],
+      "severities": [
+        "INFO"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2301,9 +3076,17 @@
     {
       "phase": "PHASE 79",
       "name": "WINDOWS DEFENDER KICKSTART & EXCLUSION PURGE",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Recommends purge exclusions + signature update + quick scan.",
       "threat_types": [
         "Hardening"
+      ],
+      "severities": [
+        "INFO"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -2324,9 +3107,17 @@
     {
       "phase": "PHASE 80",
       "name": "SECURE BOOT / TPM / BITLOCKER STATUS AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "all modes (engine has no QUICK gate; QUICK Max=30 is a plan label only)",
       "detects": "Flags Secure Boot disabled; reports TPM presence.",
       "threat_types": [
         "Boot Security"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2348,9 +3139,17 @@
     {
       "phase": "PHASE 81",
       "name": "NETSTAT HIGH-PORT REVERSE SHELL AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "Established high-port TCP owned by shell/scripting tool (reverse shell).",
       "threat_types": [
         "Reverse Shell"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -2379,9 +3178,17 @@
     {
       "phase": "PHASE 82",
       "name": "NETCAT / SOCAT / CHISEL / PLINK BINARY SCAN",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "User-path walk for tunneling tools (nc/ncat/socat/chisel/plink/ligolo/frpc...).",
       "threat_types": [
         "Tunneling Tool"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -2405,14 +3212,23 @@
         "filewalk",
         "inline-regex"
       ],
-      "signature_source": "inline"
+      "signature_source": "inline",
+      "notes": "tool names still inline; tunneling_tools in JSON is NOT consumed (WS1 wiring pending)"
     },
     {
       "phase": "PHASE 83",
       "name": "HOLLOW PROCESS DEEP SCAN (EXTENDED)",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "Unsigned low-module procs from AppData/Temp (extended hollowing).",
       "threat_types": [
         "Process Hollowing"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -2434,9 +3250,17 @@
     {
       "phase": "PHASE 84",
       "name": "APPLOCKER / GPO POLICY BYPASS AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "Flags DisallowRun policy active (AppLocker bypass review).",
       "threat_types": [
         "Policy Bypass"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2464,9 +3288,17 @@
     {
       "phase": "PHASE 85",
       "name": "LOLBIN PERSISTENCE (INSTALLUTIL / MSIEXEC)",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "Recently-modified InstallShield/Installer regkeys (LOLBin persistence).",
       "threat_types": [
         "LoLBin Persistence"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2494,9 +3326,17 @@
     {
       "phase": "PHASE 86",
       "name": "RECYCLE BIN STAGING AREA SCAN",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "Exec/script files in $Recycle.Bin (staging).",
       "threat_types": [
         "Malware Staging"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -2524,9 +3364,17 @@
     {
       "phase": "PHASE 87",
       "name": "GPO SCRIPT DIRECTORY AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "Recently-modified scripts in GroupPolicy Machine/User Scripts.",
       "threat_types": [
         "GPO Persistence"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2547,10 +3395,18 @@
     {
       "phase": "PHASE 88",
       "name": "ACTIVE DIRECTORY / DOMAIN TRUST INDICATORS",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "Event 4662 DCSync GUIDs from non-DC; 4769 KRBTGT RC4 Golden Ticket.",
       "threat_types": [
         "DCSync / Domain Attack",
         "Golden Ticket / Kerberos Attack"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2587,10 +3443,19 @@
     {
       "phase": "PHASE 89",
       "name": "FINAL SWEEP — EXFIL CHANNELS & STEGO TOOLS",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
       "detects": "Mail/FTP-port connections from non-email procs + stego tools (steghide/outguess...).",
       "threat_types": [
         "Data Exfiltration",
         "Steganography/Exfil Tool"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -2615,16 +3480,28 @@
         "filewalk",
         "inline-regex"
       ],
-      "signature_source": "inline"
+      "signature_source": "inline",
+      "notes": "tool names still inline; stego_tools / cred_dump_tools in JSON are NOT consumed (WS1 wiring pending)"
     },
     {
       "phase": "PHASE 90",
       "name": "YARA-LITE BINARY STRING SCAN & CUSTOM IOC HASHES",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "User-path binaries: YARA-lite strings, content rules, SHA256 vs known+custom IOC hashes.",
       "threat_types": [
         "YARA-Lite Match",
         "Phishing / Smuggling Content",
         "Known-Malware Hash"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "Info",
+        "Quarantine"
       ],
       "mitre_techniques": [
         {
@@ -2658,16 +3535,25 @@
         "sig:known_malware_hashes",
         "cmdlet:Get-FileHash",
         "func:Test-ContentRules",
-        "filewalk"
+        "filewalk",
+        "allow:yara_benign_paths"
       ],
       "signature_source": "externalized"
     },
     {
       "phase": "PHASE 91",
       "name": "MARK-OF-THE-WEB (MOTW) ZONE.IDENTIFIER STRIP",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Downloads/Desktop exec/scripts >8KB missing Zone.Identifier (MOTW stripped).",
       "threat_types": [
         "MoTW Abuse"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2689,10 +3575,20 @@
     {
       "phase": "PHASE 92",
       "name": "UAC AUTO-ELEVATE BYPASS REGISTRY STAGING",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "UAC bypass regkeys (fodhelper/computerdefaults) + EnableLUA=0.",
       "threat_types": [
         "UAC Bypass",
         "UAC Disabled"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "DeleteRegKey",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -2714,9 +3610,17 @@
     {
       "phase": "PHASE 93",
       "name": "DEEP PROCESS MODULE / DLL INJECTION AUDIT",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Unsigned DLLs loaded from user-writable paths in 60 non-system procs.",
       "threat_types": [
         "DLL Injection"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -2738,9 +3642,21 @@
     {
       "phase": "PHASE 94",
       "name": "COM SCRIPTLET (.SCT/.WSC) ABUSE & SQUIBLYDOO",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": ".sct/.wsc/.xsl files + regsvr32 /i: URL (Squiblydoo) in Run keys.",
       "threat_types": [
         "COM Scriptlet/Squiblydoo"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "DeleteReg",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2755,16 +3671,26 @@
       "data_source": [
         "filewalk",
         "registry",
-        "inline-regex"
+        "inline-regex",
+        "allow:sct_benign_paths"
       ],
       "signature_source": "inline"
     },
     {
       "phase": "PHASE 95",
       "name": "APPDOMAINMANAGER .NET LOADER HIJACK",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "APPDOMAIN_MANAGER_ASM/TYPE env vars + System32 .exe.config appDomainManager entries.",
       "threat_types": [
         ".NET AppDomainManager Hijack"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -2788,10 +3714,23 @@
     {
       "phase": "PHASE 96",
       "name": "PRINT SPOOLER / PRINTNIGHTMARE (CVE-2021-34527)",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Point-and-Print NoWarningNoElevation=1 + unsigned spooler driver DLLs.",
       "threat_types": [
         "PrintNightmare (CVE-2021-34527)",
         "Print Spooler Hijack"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "INFO",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -2815,16 +3754,25 @@
       "data_source": [
         "registry",
         "filewalk",
-        "authenticode"
+        "authenticode",
+        "allow:spooler_benign_dlls"
       ],
       "signature_source": "n/a"
     },
     {
       "phase": "PHASE 97",
       "name": "CLICKONCE / .APPLICATION DEPLOYMENT ABUSE",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "ClickOnce artifacts (.application/.manifest/.deploy) in user paths.",
       "threat_types": [
         "ClickOnce Abuse"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -2846,9 +3794,17 @@
     {
       "phase": "PHASE 98",
       "name": "STOLEN / LEAKED CODE-SIGNING CERT DETECTION",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Signed binaries matching known-leaked cert issuers (NVIDIA/Realtek/D-Link/Foxit...).",
       "threat_types": [
         "Stolen Code-Sign Cert"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "DeleteFile"
       ],
       "mitre_techniques": [
         {
@@ -2866,14 +3822,22 @@
         "inline-list"
       ],
       "signature_source": "inline",
-      "notes": "inline leaked-cert list SHOULD externalize"
+      "notes": "leaked-cert list still inline; leaked_cert_issuers in JSON is NOT consumed (WS1 wiring pending)"
     },
     {
       "phase": "PHASE 99",
       "name": "LOLBAS EXPANDED PROCESS ABUSE AUDIT",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Running procs vs LOLBAS list w/ suspicious args (http/Base64/IEX/scrobj).",
       "threat_types": [
         "LOLBAS Abuse"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -2893,11 +3857,63 @@
       "signature_source": "partial"
     },
     {
+      "phase": "PHASE 99.5",
+      "name": "MALWARE COMMAND-LINE HEURISTICS (LOADER/BANKING/STEALER/RECOVERY)",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
+      "detects": "WS2 (2026-07-01), DEEP+ only. Matches every live process command line (Win32_Process) against externalized behavior rules: loader, banking-trojan, infostealer, and inhibit-recovery (vssadmin delete shadows / bcdedit recoveryenabled No / wbadmin delete...). Rule-driven severity, one finding per process, all FixAction Info.",
+      "threat_types": [
+        "Malware Behavior (Loader/Banking/Infostealer/Ransomware-prep)"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1059",
+          "name": "Command and Scripting Interpreter",
+          "tactics": [
+            "Execution"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1059/"
+        },
+        {
+          "id": "T1490",
+          "name": "Inhibit System Recovery",
+          "tactics": [
+            "Impact"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1490/"
+        }
+      ],
+      "data_source": [
+        "wmi",
+        "sig:loader_behavior_rules",
+        "sig:banking_behavior_rules",
+        "sig:infostealer_behavior_rules",
+        "sig:inhibit_recovery_rules"
+      ],
+      "signature_source": "externalized"
+    },
+    {
       "phase": "PHASE 100",
       "name": "BROWSER PASSWORD/COOKIE DB RECENT ACCESS",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Chrome/Edge/FF credential DB accessed in last 60min (stealer behavior).",
       "threat_types": [
         "Info-Stealer Activity"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2918,9 +3934,17 @@
     {
       "phase": "PHASE 101",
       "name": "WSL / DOCKER CONTAINER ESCAPE SURFACE",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Enumerates WSL distros + Docker presence (lateral surface).",
       "threat_types": [
         "Container Surface"
+      ],
+      "severities": [
+        "INFO"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2942,9 +3966,17 @@
     {
       "phase": "PHASE 102",
       "name": "SVCHOST PARENT-CHILD MASQUERADE VALIDATION",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Validates svchost parent=services.exe and path in System32/SysWOW64.",
       "threat_types": [
         "Process Masquerade"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "KillProcess"
       ],
       "mitre_techniques": [
         {
@@ -2965,9 +3997,17 @@
     {
       "phase": "PHASE 103",
       "name": "SUSPICIOUS COMPRESSED ARCHIVE PAYLOAD AUDIT",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Recent (<7d) archives (.zip/.7z/.rar/.iso/.img) in Downloads/Desktop/Temp.",
       "threat_types": [
         "Suspicious Archive"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -2996,10 +4036,18 @@
     {
       "phase": "PHASE 104",
       "name": "SCHEDULED TASK XML DEEP PARSE / HIDDEN TASKS",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "System32\\Tasks XML for Hidden=true + SDDL D:P ACL locks (anti-forensic).",
       "threat_types": [
         "Hidden Scheduled Task",
         "SDDL-Locked Task"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3015,16 +4063,25 @@
       ],
       "data_source": [
         "filewalk",
-        "inline-regex"
+        "inline-regex",
+        "allow:hidden_task_benign_paths"
       ],
       "signature_source": "inline"
     },
     {
       "phase": "PHASE 105",
       "name": "PERSISTENCE HEATMAP & CROSS-VECTOR CORRELATION",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "Aggregates findings by ThreatType; flags >=3 persistence vectors as multi-vector CRIT.",
       "threat_types": [
         "Multi-Vector Persistence"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3065,10 +4122,14 @@
     {
       "phase": "PHASE 105+",
       "name": "BASELINE DIFF — New Findings Since Snapshot",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced) + -Baseline",
       "detects": "Compares current findings to baseline JSON; flags new findings since snapshot.",
       "threat_types": [
         "Baseline Diff"
       ],
+      "severities": [],
+      "fix_actions": [],
       "mitre_techniques": [],
       "data_source": [
         "baseline-json"
@@ -3079,10 +4140,19 @@
     {
       "phase": "PHASE 106",
       "name": "MEMORY DUMP ARTIFACT SCAN (MINIDUMP / CRASHDUMPS)",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": ".dmp files in dump dirs + credential dumper tools (procdump/nanodump/pypykatz/lsassy...).",
       "threat_types": [
         "Memory Dump Artifact",
         "Credential Dumping Tool"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "DeleteFile",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3103,11 +4173,19 @@
     {
       "phase": "PHASE 107",
       "name": "EVENT LOG THREAT HUNTING (4624/4688/7045)",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
       "detects": "4624 anomalous logons; 4688 suspicious process creation; 7045 rogue service installs.",
       "threat_types": [
         "Anomalous Logon",
         "Suspicious Process Creation",
         "Rogue Service Install"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3148,10 +4226,19 @@
     {
       "phase": "PHASE 108",
       "name": "NTFS ACL & OWNERSHIP INTEGRITY (CRITICAL PATHS)",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Integrity)",
       "detects": "Weak-write ACEs on critical paths + untrusted ownership of protected system files.",
       "threat_types": [
         "Permission Abuse / Privesc",
         "Ownership Tamper / Privesc"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3180,15 +4267,27 @@
         "perm:trusted_file_owners",
         "cmdlet:Get-Acl"
       ],
-      "signature_source": "externalized"
+      "signature_source": "externalized",
+      "notes": "FP round 5: FixAction Info ONLY — the healthy-box icacls C:\\ /reset /T catastrophe was removed; suggested commands live in the finding description"
     },
     {
       "phase": "PHASE 109",
       "name": "SYSTEM BINARY INTEGRITY & SIGNATURE VERIFICATION",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Integrity)",
       "detects": "Authenticode/catalog verify on protected + accessibility binaries; IFEO Debugger on accessibility.",
       "threat_types": [
         "Binary Tamper / Integrity",
         "Accessibility Backdoor / IFEO"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info",
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -3220,9 +4319,17 @@
     {
       "phase": "PHASE 110",
       "name": "REGISTRY KEY ACL / WEAK-PERMISSION AUDIT",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Integrity)",
       "detects": "Weak ACLs on critical persistence/privesc regkeys allowing non-admin write.",
       "threat_types": [
         "Registry Permission Abuse"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3255,10 +4362,19 @@
     {
       "phase": "PHASE 111",
       "name": "SERVICE PRIVESC — UNQUOTED PATHS & WRITABLE BINARIES",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Integrity)",
       "detects": "Unquoted service paths w/ spaces + weak-ACL service binaries.",
       "threat_types": [
         "Unquoted Service Path / Privesc",
         "Writable Service Binary / Privesc"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3293,9 +4409,17 @@
     {
       "phase": "PHASE 112",
       "name": "PATH / DLL-HIJACK SURFACE — WRITABLE DIRECTORIES",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Integrity)",
       "detects": "System PATH + extra dirs writable by non-admins (DLL planting).",
       "threat_types": [
         "DLL Hijack / PATH Privesc"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3330,9 +4454,19 @@
     {
       "phase": "PHASE 113",
       "name": "RECENTLY MODIFIED / UNSIGNED FILES IN SYSTEM32 & DRIVERS",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Integrity)",
       "detects": "Recent unsigned exe/dll/sys in System32 & drivers (driver drop/patch).",
       "threat_types": [
         "System File Tamper"
+      ],
+      "severities": [
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -3362,11 +4496,20 @@
     {
       "phase": "PHASE 114",
       "name": "SECURITY CONTROL HEALTH & TAMPER CONSOLIDATION",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Integrity)",
       "detects": "Expected security services running; Defender tamper regkeys; RTP enabled; sig age >7d.",
       "threat_types": [
         "Security Control Tamper",
         "Defender Tamper",
         "Defender Health"
+      ],
+      "severities": [
+        "CRITICAL",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "RunCmd"
       ],
       "mitre_techniques": [
         {
@@ -3398,9 +4541,17 @@
     {
       "phase": "PHASE 115",
       "name": "AUTORUN TARGET WRITABLE-PATH AUDIT (HIJACKABLE PERSISTENCE)",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Integrity)",
       "detects": "HKLM autorun targets writable by non-admins (privesc via binary replace).",
       "threat_types": [
         "Hijackable Autorun / Privesc"
+      ],
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
       ],
       "mitre_techniques": [
         {
