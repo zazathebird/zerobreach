@@ -6,6 +6,52 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-04 — WS4 (partial): `Get-ScanFiles` per-scan enumeration memo
+
+**The engine re-walked the filesystem on every one of the 18 `Get-ScanFiles` call sites with
+zero caching.** Since the engine is audit-only in `-Auto` (the filesystem is static for a run)
+and spawns as a fresh subprocess per scan, byte-identical `(roots, filter, timescope, caps,
+prune)` calls are guaranteed to return identical results. Added a script-scope memo in
+`Get-ScanFiles` keyed on that full param tuple (`$global:SCAN_FILE_CACHE`), plus
+`$global:SCAN_FILE_CACHE_ON` (a `ZB_NOCACHE` env kill-switch for the field / A-B validation)
+and a `ZB_CACHE_DEBUG`-gated stats line in `Summary.ps1`. The cached array is never mutated by
+callers (they filter into new collections); return shape kept as `,$arr` per the CLAUDE rule.
+
+**Explicitly NOT done: true phase parallelism** — the architecture shares variables across
+phases in one dot-sourced scope (`$ransomScanFiles`, `$p68Files`, …), so concurrent phases
+would race that shared state. Caching is the safe win; parallelism stays a non-goal.
+
+Validated (A/B, live PS 5.1.26100, DEEP `-Hours 1`): parse-clean 5.1 + 7, BOMs intact; both
+runs exit 0, 120 phase headers contiguous, 0 recovered errors. **Cache fires: 18 of 41 walks
+(44%) served from memo.** Correctness — cache-on vs `ZB_NOCACHE=1`: **CRITICAL 5=5, HIGH 8=8
+identical** (auto-destructive set unchanged); the only total delta (257 vs 254) is entirely in
+the POSSIBLE/INFO tail and is environmental drift over the ~7-min gap + moving `-Hours 1`
+window (DNS cache, prefetch files, one licensing task + a Firefox `prefs.js` crossing the
+window boundary) — no cache-coherence failure. Performance: **DEEP wall-clock 503s → 397s
+(~21% faster)**, and the cache-on run went *first* (cold OS cache), so that's a conservative
+floor.
+
+---
+
+## 2026-07-04 — P82 putty/plink dual-use downgrade (user sign-off)
+
+The last open FP sign-off: Phase 82's `tunneling_tools` scan graded **putty.exe/plink.exe
+CRITICAL + DeleteFile**, so a legit admin's SSH client in a user path was auto-selected for
+deletion on a healthy box (pre-existing; externalized 1:1 in session 8). With user sign-off
+(2026-07-04): new `tunneling_tools_dualuse` key in `data/detection_signatures.json`
+(`putty.exe`, `plink.exe`) → those two now register **POSSIBLE** (shown, operator can still
+act manually, never auto-selected). All other tunneling tools (nc/ncat/socat/chisel/frp/
+ligolo/…) keep CRITICAL + DeleteFile. Anchored per-name regex (same escape/`*`-expansion as
+the main list) with an empty-key guard so a blank JSON key suppresses the split, never the
+detection. Validated: JSON valid; parse-clean live 5.1.26100 + 7 (BOMs intact); live 5.1
+regex matrix (putty/plink → POSSIBLE; nc/chisel/sync.exe/putty.exe.bak unaffected;
+single-element unwrap + empty-key edge cases); headless DEEP run (Phase 82 is DEEP-scope —
+phases 81–89 don't run in FULL) with a benign `putty.exe` decoy in TEMP confirming the
+`[FINDING]` line carries `sev: POSSIBLE` while Phase 10 still grades the same file
+HIGH+DeleteFile as a TEMP executable (by design, unchanged).
+
+---
+
 ## 2026-07-03 — QUICK is now a real gate (BLUEPRINT §7.8) + a latent Phase-56 rootkit bug
 
 **QUICK was a label, not a gate.** `$PhasePlan.Max` was display-only, so QUICK ran phases 1–80

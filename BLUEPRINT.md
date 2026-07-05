@@ -222,8 +222,14 @@ the dev machine) per the item below.
    Renamed to `$rkpid`.
 
 ### Later
-- **WS4 performance**: parallelize independent phases (runspace pools, PS-5.1-safe), cache
-  CIM/signature lookups; target a sub-2-minute QUICK.
+- **WS4 performance** (in progress): **`Get-ScanFiles` per-scan enumeration memo DONE
+  2026-07-04** — the 18 call sites re-walked the filesystem with no caching; a full-param-tuple
+  memo (`$global:SCAN_FILE_CACHE`, `ZB_NOCACHE` kill-switch) collapsed 18/41 walks and cut DEEP
+  wall-clock ~21% with the CRITICAL/HIGH set byte-identical (see CHANGELOG). **True phase
+  parallelism is ruled out** — phases share variables across a single dot-sourced scope, so
+  concurrent execution would race that state; not safe here. Remaining WS4: cache the repeated
+  CIM/`Get-CimInstance` process & service lookups (next-biggest redundant cost) and per-file
+  signature lookups; target a sub-2-minute QUICK.
 - **WS5 reporting**: richer executive summary, per-tactic MITRE rollup, trend/diff view
   across baselines (`-Baseline` is already wired).
 - **Scheduled scans productized**: `-Schedule` + SMTP delivery hardening, plus a GUI panel.

@@ -916,13 +916,17 @@ if ($PhasePlan.Universal) {
     # One bounded walk; anchored regex so "nc.exe" doesn't substring-match "sync.exe"
     # (was 4 roots x 12 names = 48 recursions, one over the entire user profile).
     $tunnelRegex = ($tunnelNames | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
+    # Dual-use subset (putty/plink — legit admin SSH clients): POSSIBLE, so never auto-selected
+    # for the DeleteFile; operator can still act manually. User sign-off 2026-07-04.
+    $tunnelDualRegex = (@($TUNNELING_TOOLS_DUALUSE) | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $tunnelFound = $false
     $tunnelHits = (Get-ScanFiles -Path $tunnelRoots) | Where-Object { $_.Name -match $tunnelRegex }
     foreach ($hit in $tunnelHits) {
         $tunnelFound = $true
         Out-Decrypt -Text $hit.FullName -Prefix "  [TUNNEL TOOL] "
+        $tunnelSev = if ($tunnelDualRegex -and $hit.Name -match $tunnelDualRegex) { $SEV_POSSIBLE } else { $SEV_CRITICAL }
         Add-Finding -ID "TUNNEL_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 82" -ThreatType "Tunneling Tool" `
-            -Severity $SEV_CRITICAL -Description "Tunneling/pivoting tool found: $($hit.FullName)" `
+            -Severity $tunnelSev -Description "Tunneling/pivoting tool found: $($hit.FullName)" `
             -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Tunneling / Pivoting Tools"
     }
     if (-not $tunnelFound) { Out-Typewriter "  -> [OK] NO TUNNELING TOOLS FOUND." "GOOD" }

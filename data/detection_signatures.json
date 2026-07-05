@@ -1182,6 +1182,10 @@
     "bore.exe",
     "rpivot*"
   ],
+  "tunneling_tools_dualuse": [
+    "putty.exe",
+    "plink.exe"
+  ],
   "stego_tools": [
     "openstego*",
     "steghide*",

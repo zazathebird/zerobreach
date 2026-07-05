@@ -1,6 +1,25 @@
-# RESUME HANDOFF — updated 2026-07-02 (session 8: orphan keys WIRED; QUICK gate DESIGNED)
+# RESUME HANDOFF — updated 2026-07-04 (session 9: WS4 file-enum caching + P82 committed & pushed)
 
-> ## ▶ START HERE after /clear — SESSION 8 (2026-07-02 late night)
+> ## ▶ START HERE after /clear — SESSION 9 (2026-07-04)
+> **All working-tree work is now COMMITTED + PUSHED to origin/main** (P82 dual-use downgrade
+> from 2026-07-04 + the WS4 `Get-ScanFiles` memo below + the TIME_LOG reports). `git status`
+> should be clean; HEAD == origin/main.
+>
+> **WS4 (partial) — `Get-ScanFiles` per-scan enumeration memo (DONE, validated live):** the 18
+> call sites re-walked the filesystem with zero caching. Added a full-param-tuple memo
+> (`$global:SCAN_FILE_CACHE`, `ZB_NOCACHE` env kill-switch, `ZB_CACHE_DEBUG` stats line). A/B on
+> live 5.1 DEEP `-Hours 1`: **18/41 walks served from cache, DEEP ~21% faster (503s→397s),
+> CRITICAL 5=5 / HIGH 8=8 identical** cache-on vs -off (auto-destructive set unchanged; the small
+> POSSIBLE/INFO delta is time-window drift, not a cache bug). **True phase parallelism ruled out**
+> (phases share one dot-sourced scope → would race). See CHANGELOG 2026-07-04. **Next WS4:** cache
+> the repeated `Get-CimInstance` process/service lookups + per-file sig lookups → sub-2-min QUICK.
+>
+> **Still the only USER-driven items:** the browser click-through (BLUEPRINT §7 "Now") and the
+> USB foreign-box field test (§7.6). All engine/server coding items in §7 remain DONE.
+
+> ## ▶ (session 8) START HERE reference
+> **§7 item 7 (wire 15 orphaned signature keys) is DONE + committed** — `bbc2d9d` on main,
+> LOCAL/unpushed (now stacked on the session-5/6/7 commits; push the whole stack when you say).
 > **§7 item 7 (wire 15 orphaned signature keys) is DONE + committed** — `bbc2d9d` on main,
 > LOCAL/unpushed (now stacked on the session-5/6/7 commits; push the whole stack when you say).
 > - All 15 keys wired: P67/82/89/98/106 externalize inline literal lists 1:1 (AMSI-liability
@@ -35,9 +54,11 @@
 > HARD-block, exports, IOC save→rescan, STEALTH, the SCAN PROFILES picker, and now a QUICK
 > scan showing the 1..30 counter). All engine/server coding items in §7 are DONE.
 >
-> **Still open (pre-existing, needs YOUR sign-off — do not auto-change):** P82 `tunneling_tools`
-> flags putty.exe/plink.exe CRITICAL+DeleteFile (would auto-delete a legit admin's SSH client).
-> Pre-existing; externalized 1:1 in session 8, not introduced by it. Downgrade only on your OK.
+> ~~**Still open:** P82 putty/plink CRITICAL+DeleteFile~~ **SIGNED OFF + FIXED 2026-07-04:**
+> user approved the downgrade — putty.exe/plink.exe now grade POSSIBLE via the new
+> `tunneling_tools_dualuse` JSON key (shown, never auto-selected; other tunneling tools keep
+> CRITICAL). Validated live 5.1 + decoy FULL run. See CHANGELOG 2026-07-04. **No FP sign-offs
+> remain open.**
 
 > ## ▶ (session 7) START HERE reference
 > 0. **Session 7 (2026-07-02 night) closed BLUEPRINT §7 items 4+5** (commits `5e21683` + `fea1960`,

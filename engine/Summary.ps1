@@ -300,6 +300,10 @@ if ($global:STEALTH_MODE) {
 # console stdin, so every interactive fix-mode prompt below (fix entry, finding selector,
 # final confirm, "press any key") would block forever. Remediation is driven by the GUI.
 if ($Auto) {
+    if ($env:ZB_CACHE_DEBUG) {
+        Write-Host ("[CACHE] ScanFiles memo: {0} distinct walks, {1} cache hits (on={2})" -f `
+            $global:SCAN_FILE_CACHE.Count, $global:SCAN_FILE_CACHE_HITS, $global:SCAN_FILE_CACHE_ON)
+    }
     Out-Typewriter "AUDIT COMPLETE. $findingCount FINDINGS. REPORTS WRITTEN. (auto mode — fix handled by GUI)" "GOOD"
     [Environment]::Exit(0)   # dot-sourced: plain exit would fall through to FixMode
 }

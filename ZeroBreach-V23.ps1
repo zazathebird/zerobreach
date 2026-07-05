@@ -773,6 +773,15 @@ function Test-ContentRules {
 # keep using .FullName/.Name/.Extension/.Length/.LastWriteTime/.DirectoryName.
 $global:SCAN_MAX_FILES   = 20000   # hard cap on files examined per call
 $global:SCAN_DEADLINE_S  = 20      # wall-clock budget (seconds) per call
+# Per-scan enumeration memo (WS4): many phases re-walk identical root sets
+# (e.g. dump/stego both walk TEMP+LOCALAPPDATA+USERPROFILE; the Phases-3 foreach-$root
+# loops re-walk trees Phases-1/2 already walked). The engine is audit-only in -Auto so the
+# filesystem is static for a run, and it spawns fresh per scan, so this script-scope memo is
+# naturally scan-scoped. Keyed on the FULL param tuple → only byte-identical calls share a
+# result; the cached array is never mutated by callers (they filter into new collections).
+$global:SCAN_FILE_CACHE      = @{}
+$global:SCAN_FILE_CACHE_HITS = 0
+$global:SCAN_FILE_CACHE_ON   = -not $env:ZB_NOCACHE   # field kill-switch / A-B validation toggle
 # Authenticode signature audits (Get-AuthSig) build the full cert chain, which by
 # default does ONLINE revocation checks (CRL/OCSP). On a box where those servers are
 # slow/unreachable each call blocks for the network timeout, and the blocking native
@@ -796,6 +805,11 @@ function Get-ScanFiles {
         [int]$DeadlineSecs  = $global:SCAN_DEADLINE_S,
         [string[]]$PruneDirs = $global:SCAN_PRUNE_DIRS
     )
+    # Per-scan memo: only byte-identical (roots, filter, timescope, caps, prune) calls share.
+    $ck = ((@($Path) | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object) -join '|') +
+          "|F=$Filter|T=$([bool]$TimeScoped)|M=$MaxFiles|D=$DeadlineSecs|P=" +
+          ((@($PruneDirs) | Sort-Object) -join ',')
+    if ($global:SCAN_FILE_CACHE_ON -and $global:SCAN_FILE_CACHE.ContainsKey($ck)) { $global:SCAN_FILE_CACHE_HITS++; return ,$global:SCAN_FILE_CACHE[$ck] }
     $results  = New-Object System.Collections.Generic.List[System.IO.FileInfo]
     $deadline = [datetime]::UtcNow.AddSeconds($DeadlineSecs)
     $prune    = @{}; foreach ($d in $PruneDirs) { $prune[$d.ToLower()] = $true }
@@ -805,7 +819,7 @@ function Get-ScanFiles {
         $stack = New-Object System.Collections.Generic.Stack[string]
         try { $stack.Push((Convert-Path -LiteralPath $root)) } catch { continue }
         while ($stack.Count -gt 0) {
-            if ([datetime]::UtcNow -ge $deadline -or $results.Count -ge $MaxFiles) { return ,$results.ToArray() }
+            if ([datetime]::UtcNow -ge $deadline -or $results.Count -ge $MaxFiles) { $global:SCAN_FILE_CACHE[$ck] = $results.ToArray(); return ,$global:SCAN_FILE_CACHE[$ck] }
             $dir = $stack.Pop()
             try {
                 foreach ($f in [System.IO.Directory]::EnumerateFiles($dir, $Filter)) {
@@ -833,7 +847,8 @@ function Get-ScanFiles {
             } catch {}
         }
     }
-    return ,$results.ToArray()
+    $global:SCAN_FILE_CACHE[$ck] = $results.ToArray()
+    return ,$global:SCAN_FILE_CACHE[$ck]
 }
 
 function Get-ExtensionRisk {
@@ -957,6 +972,7 @@ $ALL_MALWARE_CMDLINE_RULES = @($LOADER_BEHAVIOR_RULES + $BANKING_BEHAVIOR_RULES 
 $ADWARE_PUP_REGS           = Get-Sig 'adware_pup_regs'               # Phase 67 (was inline)
 $INFOSTEALER_PROCS         = Get-Sig 'infostealer_procs'             # Phase 68 (was inline, +14 families)
 $TUNNELING_TOOLS           = Get-Sig 'tunneling_tools'               # Phase 82 (was inline)
+$TUNNELING_TOOLS_DUALUSE   = Get-Sig 'tunneling_tools_dualuse'       # Phase 82 dual-use subset -> POSSIBLE (user sign-off 2026-07-04)
 $STEGO_TOOLS               = Get-Sig 'stego_tools'                   # Phase 89 (was inline)
 $LEAKED_CERT_ISSUERS       = Get-Sig 'leaked_cert_issuers'           # Phase 98 (was inline)
 $CRED_DUMP_TOOLS           = Get-Sig 'cred_dump_tools'               # Phase 106 (was inline)
