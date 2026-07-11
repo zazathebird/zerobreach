@@ -3210,10 +3210,10 @@
       ],
       "data_source": [
         "filewalk",
-        "inline-regex"
+        "json-signatures"
       ],
-      "signature_source": "inline",
-      "notes": "tool names still inline; tunneling_tools in JSON is NOT consumed (WS1 wiring pending)"
+      "signature_source": "data/detection_signatures.json:tunneling_tools",
+      "notes": "wired 2026-07-02 (bbc2d9d); dual-use PuTTY-suite subset (tunneling_tools_dualuse) grades POSSIBLE since 2026-07-04/11"
     },
     {
       "phase": "PHASE 83",

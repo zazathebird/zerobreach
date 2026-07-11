@@ -6,6 +6,40 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-11 — Review hardening of the 2026-07-04 session (WS4 cache + P82)
+
+Full review of the session-9 work (`37cd39b`/`075d52d`): two agent audits (all 18 `Get-ScanFiles`
+call sites for mutation/order/staleness/TimeScoped hazards; P82 + stealth + kill-switch edges)
+found **no shipped bug that changes findings** — every call site consumes read-only, `FixMode`
+never touches the cache, `Test-InScope`'s cutoff is constant per run, and the stealth path exits
+before the `[CACHE]` debug line can print. Three latent cache hazards hardened anyway:
+
+1. **Deadline-truncated walks are no longer cached.** A walk cut short by the 20s wall-clock
+   budget is load-dependent (disk contention on the first pass), so caching it poisoned every
+   later identical call with a nondeterministic partial file set. Now only *complete* walks and
+   *MaxFiles-capped* walks (deterministic on a static tree) enter the memo; a deadline-hit call
+   returns its partial result uncached so the next identical call gets a fresh budgeted walk.
+2. **Cache writes are gated on `$global:SCAN_FILE_CACHE_ON`** — a `ZB_NOCACHE` run previously
+   still populated the hashtable (never read); A/B runs are now truly cache-free. Also documented
+   that the kill-switch is PRESENCE-based: any value, including `"0"`, disables it.
+3. **The cache key keeps caller root order (no more `Sort-Object`).** Under truncation the walk
+   order decides *which* files make the cut, so same-set-different-order calls must not share an
+   entry. The audit confirmed all current multi-root aliases pass identical order (Phase 89 ↔ 106),
+   so this loses zero hits today — it guards future call sites.
+
+**P82 follow-up — PuTTY-suite coverage gap closed:** `pscp.exe`/`psftp.exe`/`pageant.exe` were in
+no signature list at all (undetected). Added to both `tunneling_tools` and
+`tunneling_tools_dualuse`, so the whole suite now surfaces at **POSSIBLE** (shown, never
+auto-selected — same grade the user signed off for putty/plink; no new auto-destructive
+exposure). Also corrected the stale Phase-82 row in `data/coverage_matrix.json` (still claimed
+`tunneling_tools` was unconsumed — it was wired in `bbc2d9d`).
+
+Validated: parse-clean live 5.1.26100 + 7 (BOMs intact), JSON valid; headless FULL + DEEP
+`-Hours 1` runs (cache-on with stats, decoy PuTTY-suite files in TEMP → POSSIBLE) + a
+`ZB_NOCACHE` run proving the memo stays empty. Details in the runs below this entry's date.
+
+---
+
 ## 2026-07-04 — WS4 (partial): `Get-ScanFiles` per-scan enumeration memo
 
 **The engine re-walked the filesystem on every one of the 18 `Get-ScanFiles` call sites with

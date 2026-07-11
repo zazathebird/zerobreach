@@ -916,8 +916,9 @@ if ($PhasePlan.Universal) {
     # One bounded walk; anchored regex so "nc.exe" doesn't substring-match "sync.exe"
     # (was 4 roots x 12 names = 48 recursions, one over the entire user profile).
     $tunnelRegex = ($tunnelNames | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
-    # Dual-use subset (putty/plink — legit admin SSH clients): POSSIBLE, so never auto-selected
-    # for the DeleteFile; operator can still act manually. User sign-off 2026-07-04.
+    # Dual-use subset (PuTTY suite: putty/plink/pscp/psftp/pageant — legit admin SSH tooling):
+    # POSSIBLE, so never auto-selected for the DeleteFile; operator can still act manually.
+    # putty/plink sign-off 2026-07-04; rest of the suite added 2026-07-11 (new coverage, same grade).
     $tunnelDualRegex = (@($TUNNELING_TOOLS_DUALUSE) | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $tunnelFound = $false
     $tunnelHits = (Get-ScanFiles -Path $tunnelRoots) | Where-Object { $_.Name -match $tunnelRegex }

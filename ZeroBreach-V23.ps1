@@ -781,7 +781,7 @@ $global:SCAN_DEADLINE_S  = 20      # wall-clock budget (seconds) per call
 # result; the cached array is never mutated by callers (they filter into new collections).
 $global:SCAN_FILE_CACHE      = @{}
 $global:SCAN_FILE_CACHE_HITS = 0
-$global:SCAN_FILE_CACHE_ON   = -not $env:ZB_NOCACHE   # field kill-switch / A-B validation toggle
+$global:SCAN_FILE_CACHE_ON   = -not $env:ZB_NOCACHE   # kill-switch: PRESENCE-based — any value (even "0") disables; unset = on
 # Authenticode signature audits (Get-AuthSig) build the full cert chain, which by
 # default does ONLINE revocation checks (CRL/OCSP). On a box where those servers are
 # slow/unreachable each call blocks for the network timeout, and the blocking native
@@ -806,7 +806,10 @@ function Get-ScanFiles {
         [string[]]$PruneDirs = $global:SCAN_PRUNE_DIRS
     )
     # Per-scan memo: only byte-identical (roots, filter, timescope, caps, prune) calls share.
-    $ck = ((@($Path) | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object) -join '|') +
+    # Roots keep CALLER ORDER in the key (no sort): under the MaxFiles/deadline truncation the
+    # walk order decides WHICH files make the cut, so same-set-different-order calls must not
+    # alias. (All current multi-root aliases pass identical order — this guards future sites.)
+    $ck = ((@($Path) | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }) -join '|') +
           "|F=$Filter|T=$([bool]$TimeScoped)|M=$MaxFiles|D=$DeadlineSecs|P=" +
           ((@($PruneDirs) | Sort-Object) -join ',')
     if ($global:SCAN_FILE_CACHE_ON -and $global:SCAN_FILE_CACHE.ContainsKey($ck)) { $global:SCAN_FILE_CACHE_HITS++; return ,$global:SCAN_FILE_CACHE[$ck] }
@@ -819,7 +822,14 @@ function Get-ScanFiles {
         $stack = New-Object System.Collections.Generic.Stack[string]
         try { $stack.Push((Convert-Path -LiteralPath $root)) } catch { continue }
         while ($stack.Count -gt 0) {
-            if ([datetime]::UtcNow -ge $deadline -or $results.Count -ge $MaxFiles) { $global:SCAN_FILE_CACHE[$ck] = $results.ToArray(); return ,$global:SCAN_FILE_CACHE[$ck] }
+            if ([datetime]::UtcNow -ge $deadline -or $results.Count -ge $MaxFiles) {
+                $arr = $results.ToArray()
+                # Cache only DETERMINISTIC truncations: a MaxFiles cap cuts at the same file every
+                # time on a static tree, but a deadline hit is load-dependent — caching it would
+                # poison every later identical call with a partial set a fresh budgeted walk may beat.
+                if ($global:SCAN_FILE_CACHE_ON -and $results.Count -ge $MaxFiles) { $global:SCAN_FILE_CACHE[$ck] = $arr }
+                return ,$arr
+            }
             $dir = $stack.Pop()
             try {
                 foreach ($f in [System.IO.Directory]::EnumerateFiles($dir, $Filter)) {
@@ -847,8 +857,9 @@ function Get-ScanFiles {
             } catch {}
         }
     }
-    $global:SCAN_FILE_CACHE[$ck] = $results.ToArray()
-    return ,$global:SCAN_FILE_CACHE[$ck]
+    $arr = $results.ToArray()
+    if ($global:SCAN_FILE_CACHE_ON) { $global:SCAN_FILE_CACHE[$ck] = $arr }   # ZB_NOCACHE runs stay truly cache-free
+    return ,$arr
 }
 
 function Get-ExtensionRisk {

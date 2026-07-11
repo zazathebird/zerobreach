@@ -1180,11 +1180,17 @@
     "frpc.exe",
     "frps.exe",
     "bore.exe",
-    "rpivot*"
+    "rpivot*",
+    "pscp.exe",
+    "psftp.exe",
+    "pageant.exe"
   ],
   "tunneling_tools_dualuse": [
     "putty.exe",
-    "plink.exe"
+    "plink.exe",
+    "pscp.exe",
+    "psftp.exe",
+    "pageant.exe"
   ],
   "stego_tools": [
     "openstego*",

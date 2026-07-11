@@ -1,6 +1,22 @@
-# RESUME HANDOFF — updated 2026-07-04 (session 9: WS4 file-enum caching + P82 committed & pushed)
+# RESUME HANDOFF — updated 2026-07-11 (session 10: review hardening of session-9 work)
 
-> ## ▶ START HERE after /clear — SESSION 9 (2026-07-04)
+> ## ▶ START HERE after /clear — SESSION 10 (2026-07-11)
+> **Session 10 = full review of the session-9 (Opus) work + hardening.** Two agent audits found
+> **no shipped bug** in the WS4 cache or P82 (all 18 call sites read-only, stealth safe,
+> TimeScoped cutoff constant). Hardened 3 latent cache hazards anyway: (1) deadline-truncated
+> walks are NOT cached anymore (load-dependent partial sets no longer poison later identical
+> calls; MaxFiles-capped walks still cache — deterministic); (2) cache writes gated on the
+> `ZB_NOCACHE` kill-switch (A/B runs truly cache-free; switch is PRESENCE-based — any value,
+> even "0", disables); (3) cache key keeps caller root ORDER (truncation makes order decide
+> which files make the cut — guards future call sites, zero hits lost today). **Also closed the
+> PuTTY-suite gap:** pscp/psftp/pageant added to `tunneling_tools` + `tunneling_tools_dualuse`
+> → whole suite surfaces at POSSIBLE (never auto-selected; same grade as the signed-off
+> putty/plink). Fixed the stale Phase-82 row in `coverage_matrix.json`. See CHANGELOG 2026-07-11.
+>
+> **Still the only USER-driven items:** the browser click-through (BLUEPRINT §7 "Now") and the
+> USB foreign-box field test (§7.6).
+
+> ## ▶ (session 9) START HERE reference
 > **All working-tree work is now COMMITTED + PUSHED to origin/main** (P82 dual-use downgrade
 > from 2026-07-04 + the WS4 `Get-ScanFiles` memo below + the TIME_LOG reports). `git status`
 > should be clean; HEAD == origin/main.
