@@ -227,9 +227,13 @@ the dev machine) per the item below.
   memo (`$global:SCAN_FILE_CACHE`, `ZB_NOCACHE` kill-switch) collapsed 18/41 walks and cut DEEP
   wall-clock ~21% with the CRITICAL/HIGH set byte-identical (see CHANGELOG). **True phase
   parallelism is ruled out** — phases share variables across a single dot-sourced scope, so
-  concurrent execution would race that state; not safe here. Remaining WS4: cache the repeated
-  CIM/`Get-CimInstance` process & service lookups (next-biggest redundant cost) and per-file
-  signature lookups; target a sub-2-minute QUICK.
+  concurrent execution would race that state; not safe here. **`Win32_Process` snapshot memo DONE
+  2026-07-21** — `Get-ProcSnapshot` (loader helper, 90s TTL because the process table is NOT
+  static, shared `ZB_NOCACHE` kill-switch) collapsed 6 of the 7 full per-phase WMI process
+  enumerations (Phases 3/4/44/99/99.5/102); Phase 56's WMI-vs-Get-Process rootkit delta stays on
+  raw same-instant enumerations by design. Service lookups audited: only one full `Win32_Service`
+  enum per scan (Phase 111 unquoted-path privesc) + cheap name-filtered `Get-Service` calls —
+  nothing left to cache there. Remaining WS4: per-file signature lookups; target a sub-2-minute QUICK.
 - **WS5 reporting**: richer executive summary, per-tactic MITRE rollup, trend/diff view
   across baselines (`-Baseline` is already wired).
 - **Scheduled scans productized**: `-Schedule` + SMTP delivery hardening, plus a GUI panel.

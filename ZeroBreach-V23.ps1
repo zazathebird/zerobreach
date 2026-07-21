@@ -862,6 +862,30 @@ function Get-ScanFiles {
     return ,$arr
 }
 
+# Per-scan Win32_Process snapshot memo (WS4): 7 phases each ran their own full
+# Win32_Process WMI enumeration. Unlike the filesystem (static in audit mode) the process
+# table DOES change during a run, so entries expire after PROC_SNAP_TTL_S: adjacent phase
+# clusters (3+4; 99+99.5+102) share one enumeration, while phases minutes apart still see
+# fresh data. Shares the ZB_NOCACHE kill-switch via SCAN_FILE_CACHE_ON. Same `return ,$arr`
+# single-item pipe trap as Get-ScanFiles — callers must wrap in parens: `(Get-ProcSnapshot) |
+# Where-Object …`, never `Get-ProcSnapshot | …`. Phase 56 (WMI-vs-Get-Process rootkit delta)
+# deliberately does NOT use this: its two enumerations must be captured at the same instant,
+# or a snapshot even seconds stale fabricates CRITICAL rootkit discrepancy findings.
+$global:PROC_SNAP_CACHE = $null
+$global:PROC_SNAP_AT    = [datetime]::MinValue
+$global:PROC_SNAP_TTL_S = 90
+$global:PROC_SNAP_HITS  = 0
+function Get-ProcSnapshot {
+    if ($global:SCAN_FILE_CACHE_ON -and $null -ne $global:PROC_SNAP_CACHE -and
+        ([datetime]::UtcNow - $global:PROC_SNAP_AT).TotalSeconds -lt $global:PROC_SNAP_TTL_S) {
+        $global:PROC_SNAP_HITS++
+        return ,$global:PROC_SNAP_CACHE
+    }
+    $snap = @(Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)
+    if ($global:SCAN_FILE_CACHE_ON) { $global:PROC_SNAP_CACHE = $snap; $global:PROC_SNAP_AT = [datetime]::UtcNow }
+    return ,$snap
+}
+
 function Get-ExtensionRisk {
     param([string]$ExtPath)
     # Returns: CRITICAL, HIGH, POSSIBLE, or CLEAN

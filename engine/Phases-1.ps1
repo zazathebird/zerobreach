@@ -46,7 +46,7 @@ if ($psHits) {
 }   # end QUICK-skip block
 Show-PhaseHeader "PHASE 3" "PROCESS ANCESTRY & INJECTION AUDIT"
 Invoke-QuantumBar "MAPPING LIVE PROCESS TREE" 8 120
-$suspectProcs = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+$suspectProcs = (Get-ProcSnapshot) | Where-Object {
     $_.CommandLine -match "IEX|EncodedCommand|DownloadString|mshta|wscript|cscript|regsvr32.*http|rundll32.*http|certutil.*decode|VirtualAlloc|CreateRemoteThread"
 }
 if ($suspectProcs) {
@@ -67,7 +67,7 @@ $lolHits = $false
 # One WMI enumeration + case-insensitive name lookup instead of one filtered
 # Get-WmiObject query per LOLBIN name (was ~46 WMI round-trips per scan).
 $lolSet = @{}; foreach ($lb in $lolbins) { $lolSet["$lb.exe"] = $true }
-foreach ($p in (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)) {
+foreach ($p in (Get-ProcSnapshot)) {
     if (-not $lolSet.ContainsKey($p.Name)) { continue }
     if ($p.CommandLine -match "http|AppData|Temp|\.js|Base64|scrobj|unc|\\\\") {
         $lolHits = $true
@@ -1227,7 +1227,7 @@ if ($shadowCount -gt 0) {
 Show-PhaseHeader "PHASE 44" "TOKEN / PRIVILEGE ABUSE — ELEVATED PROCS IN USER SPACE"
 Out-Typewriter "CHECKING FOR SYSTEM-LEVEL PROCESSES IN USER PATHS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
-$elevatedInUS = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+$elevatedInUS = (Get-ProcSnapshot) | Where-Object {
     # NB: try/catch is only valid as a *statement* in PS 5.1 — `(try{}catch{})` as a
     # sub-expression silently fails to parse and matches nothing. Keep it a statement.
     if ($_.Path -notmatch "AppData|Temp|Downloads|Desktop") { return $false }
@@ -1588,6 +1588,9 @@ if (-not $byovdFound) { Out-Typewriter "  -> [OK] NO KNOWN-VULNERABLE BYOVD DRIV
 Show-PhaseHeader "PHASE 56" "HIDDEN PROCESS DISCREPANCY (WMI vs PS vs TASKLIST)" "ROOTKIT"
 Out-Typewriter "CROSS-CORRELATING PROCESS ENUMERATION METHODS..." "HUNT"
 Invoke-QuantumBar "PROCESS TABLE DELTA ANALYSIS" 12 130
+# Raw enumeration ON PURPOSE — never switch to Get-ProcSnapshot here: this phase diffs the
+# WMI process table against Get-Process captured at the same instant, and a cached snapshot
+# even seconds stale would fabricate CRITICAL rootkit discrepancy findings.
 $wmiPIDs  = (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue).ProcessId
 $psPIDs   = (Get-Process -ErrorAction SilentlyContinue).Id
 $taskPIDs = (tasklist /FO CSV /NH 2>$null | ConvertFrom-Csv -Header @("Img","PID","Ses","Num","Mem") 2>$null).PID | ForEach-Object { [int]$_ }

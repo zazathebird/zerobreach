@@ -6,6 +6,37 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-21 — WS4: Win32_Process snapshot memo (`Get-ProcSnapshot`)
+
+Second WS4 caching step (after the `Get-ScanFiles` memo): **7 phases each ran their own full
+`Win32_Process` WMI enumeration** per scan. New loader helper `Get-ProcSnapshot` memoizes the
+snapshot with a **90-second TTL** — unlike the filesystem (static in audit mode) the process
+table changes during a run, so adjacent phase clusters share one enumeration while phases
+minutes apart still see fresh data. Shares the WS4 `ZB_NOCACHE` kill-switch
+(`$global:SCAN_FILE_CACHE_ON`); `ZB_CACHE_DEBUG` now also prints a `[CACHE] ProcSnapshot`
+stats line.
+
+- **Converted (6 sites):** Phase 3 (ancestry/injection), 4 (LOLBIN), 44 (elevated procs in
+  user paths), 99 (LOLBAS expanded), 99.5 (cmdline heuristics), 102 (svchost parent map).
+  Phases 3→4 and 99→99.5→102 each collapse to one enumeration; Phase 44 sits alone mid-scan
+  and always refreshes (TTL long expired).
+- **Deliberately NOT converted:** Phase 56's rootkit delta diffs the WMI table against
+  `Get-Process` captured at the same instant — a cached snapshot even seconds stale would
+  fabricate CRITICAL discrepancy findings. Raw call kept with a warning comment at the site
+  and in the helper.
+- Same `return ,$arr` single-item pipe trap as `Get-ScanFiles` — call sites wrap in parens.
+- **Service lookups audited, nothing to cache:** one full `Win32_Service` enum per scan
+  (Phase 111) + cheap name-filtered `Get-Service` calls. Remaining WS4: per-file signature
+  lookup caching.
+
+Validated live on 5.1.26100 (BOMs intact, parse-clean 5.1+7): headless QUICK (exactly 30
+phases, 0 recovered errors), DEEP `-Hours 1` (**115 phases contiguous, 0 recovered errors,
+~8.9 min**), and a `ZB_CACHE_DEBUG` QUICK confirming 1 snapshot hit (Phase 4 reusing
+Phase 3's enumeration). Noted for a future FP round: Phase 56 flagged 3 transient-process
+discrepancies during the DEEP run (its two enums are ~1s apart, so short-lived processes land
+in one list only) — pre-existing behavior, Info-only/never auto-acted, but a re-check that the
+discrepant PID still exists would quiet it.
+
 ## 2026-07-11 — Review hardening of the 2026-07-04 session (WS4 cache + P82)
 
 Full review of the session-9 work (`37cd39b`/`075d52d`): two agent audits (all 18 `Get-ScanFiles`

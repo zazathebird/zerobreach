@@ -303,6 +303,8 @@ if ($Auto) {
     if ($env:ZB_CACHE_DEBUG) {
         Write-Host ("[CACHE] ScanFiles memo: {0} distinct walks, {1} cache hits (on={2})" -f `
             $global:SCAN_FILE_CACHE.Count, $global:SCAN_FILE_CACHE_HITS, $global:SCAN_FILE_CACHE_ON)
+        Write-Host ("[CACHE] ProcSnapshot memo: {0} cache hits, TTL {1}s (on={2})" -f `
+            $global:PROC_SNAP_HITS, $global:PROC_SNAP_TTL_S, $global:SCAN_FILE_CACHE_ON)
     }
     Out-Typewriter "AUDIT COMPLETE. $findingCount FINDINGS. REPORTS WRITTEN. (auto mode — fix handled by GUI)" "GOOD"
     [Environment]::Exit(0)   # dot-sourced: plain exit would fall through to FixMode

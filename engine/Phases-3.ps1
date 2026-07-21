@@ -373,7 +373,7 @@ if ($PhasePlan.Advanced) {
     # LOLBAS name. Map name -> original token so the finding ID keeps the $lb tag.
     $lolbasSet = @{}; foreach ($lb in $LOLBAS_EXPANDED) { $lolbasSet["$lb.exe"] = $lb }
     if ($lolbasSet.Count -gt 0) {
-        foreach ($p in (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)) {
+        foreach ($p in (Get-ProcSnapshot)) {
             $lb = $lolbasSet[$p.Name]
             if (-not $lb) { continue }
             if ($p.CommandLine -match "http|https|ftp|AppData|Temp|Base64|EncodedCommand|IEX|DownloadString|/i:|scrobj|Net\.WebClient") {
@@ -397,7 +397,7 @@ if ($PhasePlan.Advanced) {
     $cmdRuleSevMap = @{ "CRITICAL"=$SEV_CRITICAL; "HIGH"=$SEV_HIGH; "POSSIBLE"=$SEV_POSSIBLE }
     $cmdRuleHits = 0
     if ($ALL_MALWARE_CMDLINE_RULES.Count -gt 0) {
-        foreach ($p in (Get-WmiObject Win32_Process -ErrorAction SilentlyContinue)) {
+        foreach ($p in (Get-ProcSnapshot)) {
             $cl = $p.CommandLine
             if (-not $cl) { continue }
             foreach ($r in $ALL_MALWARE_CMDLINE_RULES) {
@@ -462,7 +462,7 @@ if ($PhasePlan.Advanced) {
     Out-Typewriter "VERIFYING ALL SVCHOST.EXE PARENT == SERVICES.EXE..." "HUNT"
     Invoke-QuantumBar "PROCESS PARENT MAP" 10 80
     $svcHits = 0
-    $allW = Get-WmiObject Win32_Process -ErrorAction SilentlyContinue
+    $allW = Get-ProcSnapshot
     foreach ($sp in ($allW | Where-Object { $_.Name -eq "svchost.exe" })) {
         $par = $allW | Where-Object { $_.ProcessId -eq $sp.ParentProcessId }
         if ($par -and $par.Name -ne "services.exe") {
