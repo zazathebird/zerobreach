@@ -16,6 +16,7 @@ if ($PhasePlan.Advanced) {
     $yaraRoots = @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop")
     $yaraExt   = @(".exe",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
     $yaraHits  = 0
+    $trojSigSeen = 0; $trojSigSw = [System.Diagnostics.Stopwatch]::StartNew()   # SIG_AUDIT budget (P90 name loop)
     # Single bounded walk across all roots (was per-root recursion x5, -First 200 each).
     $candidates = (Get-ScanFiles -Path $yaraRoots -TimeScoped) |
         Where-Object { ($yaraExt -contains $_.Extension.ToLower()) -and $_.Length -lt 10MB } |
@@ -81,15 +82,20 @@ if ($PhasePlan.Advanced) {
                 # reversible, never DeleteFile (rule #1 / CLAUDE.md's Quarantine preference).
                 foreach ($tfp in $TROJAN_FILE_PATTERNS) {
                     if (-not $tfp -or $cand.Name -notlike $tfp) { continue }
+                    # SIG_AUDIT budget: patterns like agent*.exe / *invoice*.exe match freely and
+                    # Authenticode blocks ~15s per file on CRL/OCSP.
+                    if ($trojSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+                        $trojSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) { break }
+                    $trojSigSeen++
                     $tsig = Get-AuthSig $cand.FullName
                     if ($tsig -and $tsig.Status -eq 'Valid') {
-                        Add-Finding -ID "TROJNAME_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                        Add-Finding -ID "TROJNAME_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                             -ThreatType "Suspicious Filename" -Severity $SEV_POSSIBLE `
                             -Description "Filename matches a known malware/tooling naming pattern ('$tfp') but the binary is validly signed (review only, never auto-acted): $($cand.FullName)" `
                             -Target $cand.FullName -FixAction "Info" -Group "Suspicious Filenames"
                     } else {
                         Out-Decrypt -Text "trojan-pattern filename: $($cand.FullName)" -Prefix "  [NAME HIT] "
-                        Add-Finding -ID "TROJNAME_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                        Add-Finding -ID "TROJNAME_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                             -ThreatType "Suspicious Filename" -Severity $SEV_HIGH `
                             -Description "Unsigned file whose name matches a known malware/tooling naming pattern ('$tfp'): $($cand.FullName)" `
                             -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
@@ -105,7 +111,7 @@ if ($PhasePlan.Advanced) {
                 if ($global:CustomIocFileNames.Count -gt 0 -and
                     $global:CustomIocFileNames -contains $cand.Name.ToLower()) {
                     Out-Decrypt -Text "IOC filename match: $($cand.FullName)" -Prefix "  [IOC HIT] "
-                    Add-Finding -ID "IOC_FILE_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                    Add-Finding -ID "IOC_FILE_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                         -ThreatType "Custom IOC" -Severity $SEV_HIGH `
                         -Description "File matches an operator-supplied IOC filename: $($cand.FullName)" `
                         -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
@@ -177,7 +183,11 @@ if ($PhasePlan.Advanced) {
         $pname = "$($p.Name)"
         if (-not $pname -or $AUTO_ELEVATE_BINS -notcontains $pname) { continue }
         $pexe = "$($p.ExecutablePath)"
-        if ($pexe -and $pexe -match '(?i)^[A-Za-z]:\\Windows\\(System32|SysWOW64)\\') { continue }   # the real one
+        # FAIL CLOSED: when ExecutablePath is unavailable we cannot prove the process is NOT the
+        # genuine System32 binary, and this branch ends in an auto-selected KillProcess against
+        # names that include taskmgr.exe, mmc.exe and msconfig.exe. No path => no finding.
+        if (-not $pexe) { continue }
+        if ($pexe -match '(?i)^[A-Za-z]:\\Windows\\(System32|SysWOW64)\\') { continue }   # the real one
         Out-ThreatBanner "AUTO-ELEVATING BINARY FROM NON-SYSTEM PATH" "$pname (PID $($p.ProcessId)) @ $pexe"
         Add-Finding -ID "AUTOELEV_$($p.ProcessId)_$($pname -replace '[^a-z0-9]','')" -Phase "PHASE 92" `
             -ThreatType "UAC Bypass" -Severity $SEV_HIGH `
@@ -534,11 +544,17 @@ if ($PhasePlan.Advanced) {
         # Package-manager and app trees legitimately contain token*.json library fixtures.
         if (Test-BenignPath $tf.FullName $YARA_BENIGN_RE) { continue }
         $tokHits++
+        # Name-only match => review-only. yt-dlp writes Downloads\cookies.txt, countless apps
+        # write <app>\token.json, and quarantining either on a healthy box breaks the app. Only
+        # the unambiguous loot names (exfil/loot/stealer-log) keep an actionable grade, and even
+        # then Quarantine, which is reversible.
+        $tokBlatant = ($tf.Name -match '(?i)(exfil|loot|stealer.?log)')
         Out-Decrypt -Text $tf.FullName -Prefix "  [TOKEN STAGING] "
         Add-Finding -ID "TOKENSTAGE_$(Get-StableId $tf.FullName)" -Phase "PHASE 100.5" `
-            -ThreatType "Info-Stealer / Token Theft" -Severity $SEV_HIGH `
-            -Description "File named like credential/token exfil loot in a staging directory: $($tf.FullName) — infostealers collect browser cookies, wallets and cloud tokens into an archive here before upload. Revoke cloud sessions if confirmed." `
-            -Target $tf.FullName -FixAction "Quarantine" -FixParam $tf.FullName -Group "Cloud Credential Exposure"
+            -ThreatType "Info-Stealer / Token Theft" -Severity $(if ($tokBlatant) { $SEV_HIGH } else { $SEV_POSSIBLE }) `
+            -Description "File named like credential/token exfil loot in a staging directory: $($tf.FullName) — infostealers collect browser cookies, wallets and cloud tokens into an archive here before upload.$(if (-not $tokBlatant) { ' The name alone is weak evidence (yt-dlp cookie exports and ordinary app token caches collide with it) — review, not auto-acted.' }) Revoke cloud sessions if confirmed." `
+            -Target $tf.FullName -FixAction $(if ($tokBlatant) { "Quarantine" } else { "Info" }) -FixParam $tf.FullName `
+            -Group "Cloud Credential Exposure"
         $global:SpywareHits++
     }
     if ($tokHits -eq 0) { Out-Typewriter "  -> [OK] NO TOKEN-THEFT STAGING ARTIFACTS." "GOOD" }

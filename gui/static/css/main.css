@@ -1186,3 +1186,28 @@ textarea:focus-visible,
     scroll-behavior: auto !important;
   }
 }
+
+/* Per-item removal from the remediation queue (was emitted by JS with no rule at all,
+   so it rendered as default light-grey UA chrome inside the dark queue row). */
+.queue-item .queue-remove {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  line-height: 1;
+  padding: 3px 6px;
+  margin-left: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition);
+}
+.queue-item .queue-remove:hover {
+  border-color: var(--threat-critical);
+  color: var(--threat-critical);
+  background: rgba(255,0,51,0.08);
+}
+
+/* The HARDENING pill: operator-only actions, so it reads as neutral rather than a threat. */
+.sev-pill.info { color: var(--text-mid); border-color: var(--border-bright); }

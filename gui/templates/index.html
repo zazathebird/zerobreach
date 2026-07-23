@@ -319,6 +319,9 @@
             <button type="button" class="sev-pill high active"     id="pill-high"     aria-pressed="true">🟠 HIGH <span id="count-high">0</span></button>
             <button type="button" class="sev-pill possible active" id="pill-possible" aria-pressed="true">🟡 POSSIBLE <span id="count-possible">0</span></button>
             <button type="button" class="sev-pill clean active"    id="pill-clean"    aria-pressed="true">🟢 CLEAN <span id="count-clean">0</span></button>
+            <!-- INFO carries the operator-only hardening set (ASR rules, WSH, posture items).
+                 It is never auto-selected; SELECT HARDENING is the opt-in. -->
+            <button type="button" class="sev-pill info active"    id="pill-info"    aria-pressed="true">&#128737; HARDENING <span id="count-info">0</span></button>
           </div>
           <div id="findings-search-row">
             <input type="search" id="findings-search" class="path-input" placeholder="Search findings (path, description, MITRE ID)..."

@@ -220,6 +220,98 @@ numbers still pointed into the pre-split monolith. `BLUEPRINT.md` §4's regressi
 where CHANGELOG's own round-6 entry establishes 39. `coverage_matrix.json`'s `_comment` still
 claimed "the engine has no QUICK gate" and listed 15 keys as orphaned, both fixed in July.
 
+### Round 2 — three independent audit agents, same day
+
+Three read-only audit agents (engine, server/security, GUI) were run against the commit above.
+They found **real defects, including several introduced by that commit**. Everything below is
+fixed and re-validated. This is the second time in this project's history that an independent
+review caught a rule-#1 violation before it shipped, and it is worth the token cost every time.
+
+**Two auto-destructive levers the commit itself introduced.**
+
+- **A malformed operator CIDR matched every connection.** In the new custom-IOC IP check the hit
+  flag was raised *before* the mask comparison and only cleared on a mismatch, so a prefix that
+  parsed to zero — a typo like `10.0.0.0/abc`, or an explicit `/0` — broke out of the loop on the
+  first iteration with the flag still set and matched **every established connection**, emitting
+  `CRITICAL + KillProcess` for every connected process from one bad line in an IOC file. The flag
+  is now raised only after a full successful comparison, and an unparseable or `/0` prefix is
+  rejected outright. The original unit test missed this because it only covered a CIDR whose *IP*
+  failed to parse; the matcher now has 18 cases including malformed prefixes and IPv6.
+- **`/api/scan/abort` was reachable by GET and therefore skipped the whole CSRF gate**, which
+  keyed on `$method -eq 'POST'`. A cross-origin `<img src="http://localhost:PORT/api/scan/abort">`
+  needs no preflight and no token, and aborting mid-scan makes the scan runspace fall into its
+  `finally`, write `audit_<ts>.json` and emit `scan_complete` — so an attacker could silently
+  **truncate an incident-response scan and have the console report it as complete**. The gate now
+  covers every non-GET/HEAD method and the route self-guards as well.
+
+**WS6 gradings walked back after the audit modelled real-world inputs.** Timestomp detection no
+longer auto-quarantines: the DOS/ZIP epoch is 1980-01-01, so *every* file extracted from such an
+archive — portable tools in Downloads, all of `C:\ProgramData\chocolatey`, wheels built with
+`SOURCE_DATE_EPOCH` — carries a pre-2000 stamp on a healthy box. Token-staging name matches
+(`*token*.json`, `*cookies*.txt` — yt-dlp's standard export) are review-only unless the name is
+unambiguous loot. RMM agents in a staging path are POSSIBLE + Info, not HIGH + KillProcess:
+running AnyDesk/TeamViewer QuickSupport portable from Downloads is one of the most common MSP
+workflows there is, and an auto-selected kill would have **severed the technician's own remote
+session**. Phase 92's auto-elevate check now fails *closed* when `ExecutablePath` is unavailable
+(it previously skipped its System32 guard and could KillProcess `taskmgr.exe`/`mmc.exe`).
+
+**Checks that could never have fired.** `AppCertDlls` is a *subkey* whose values name the DLLs,
+not a value on `Session Manager`, so that check always read `$null`; it now walks the subkey.
+Phase 39's install-recency escalation — described in the code as "the signal an attacker cannot
+fake" — depends on a registry key's `LastWriteTime`, which PowerShell's provider does not expose
+(`Microsoft.Win32.RegistryKey` has no such property); the branch is left correct but is
+documented as **inert** until a `RegQueryInfoKey` P/Invoke is added, and the phase no longer
+claims a guarantee it cannot deliver. The two `AppInit_DLLs` entries in `injection_dll_reg_points`
+duplicated Phase 22 one-for-one and were removed.
+
+**The QUICK gate was broken by the new phases.** 22.5, 44.5 and 68.5 were each inserted
+immediately *after* their enclosing block's `}   # end QUICK-skip block`, so they ran in QUICK
+and pushed it from 30 to **33** phase headers — breaking the documented ceiling and the server's
+hardcoded `QUICK=30` progress index. All three moved inside; QUICK is verifiably 30 again.
+
+**The HTML report was broken for any finding containing an apostrophe.** The JS escape used
+`-replace "'","\\'"`, and PowerShell does not treat backslash as an escape inside a double-quoted
+string — so it emitted `\\'`, which in the JS literal reads as an escaped backslash followed by
+an unescaped quote, terminating the string and throwing a `SyntaxError` that killed the whole
+inline `<script>` (CSV export, severity filter and column sort all dead). Pre-existing, missed on
+the first pass despite touching that exact line.
+
+**`/api/schedule` — every one of its problems.** `Start-Process -ArgumentList` does **not** quote
+array elements, it joins them with spaces, so the route failed on any install path containing a
+space (the portable zip is explicitly validated for spaced paths) with a bare
+`exit code -196608`; the SMTP values were unvalidated free text that could smuggle extra engine
+parameters such as `-IocFile \\attacker\share\evil.ioc` into the SYSTEM task; `-Wait` on the
+single-threaded accept loop froze the entire console until the child exited; and the GET branch
+double-encoded its JSON so the settings never repopulated. All fixed, with a 90s timeout.
+
+**`DeleteReg` still lied in its most likely failure mode.** The new post-condition check used a
+helper that returns `$null` on *any* failure, so when the read failed for the same reason the
+write failed — malware setting a DENY ACE for Administrators on its Run key, a standard
+persistence-hardening trick — the verification *passed*. It now distinguishes gone / present /
+unverifiable and reports the third as a failure. Also switched to `-LiteralPath`, since a value
+name containing `[` or `*` was being treated as a wildcard pattern.
+
+**Frontend.** The rewritten SSE pump advanced its head index *after* dispatch with no `try`, so
+one throwing handler replayed the entire in-flight batch forever — duplicating log lines,
+findings and queued remediation actions while the scan appeared frozen. `SELECT HARDENING` was
+missing the `vendor_trusted` exclusion every other bulk selector has, and could not reach the
+INFO-severity hardening set at all (the ASR rules — the actual point of the feature) because the
+findings loader dropped INFO; there is now a `HARDENING` pill and a single shared
+`isHardeningFinding` predicate. `SELECT ALL` ignored the active filter and *replaced* the
+selection, so filtering to 3 POSSIBLEs and clicking it queued ~200 findings including destructive
+CRITICALs; it is now scoped to what is visible, additive, and says how many are hidden — and the
+filter status line now reports selected-but-hidden findings. A stale filter also silently
+narrowed the one-time severity auto-select while still burning its one-shot flag. The PURGE
+preview read `Target`/`FixParam`, keys the server never emits, so it showed descriptions instead
+of the `fix_param` command that will actually execute. `notifyBackground` could capture its own
+flashing text as the "original" title and restore that permanently. Plus the small ones: the
+`.queue-remove` button had no CSS rule at all, `.threat-chip` was announced as a button with no
+handler, and theme cards lost their `tabindex` whenever the grid rebuilt.
+
+Re-validated after all of the above: 7 `.ps1` parse-clean on live 5.1 **and** pwsh 7 with BOMs
+intact, JSON/JS/Python clean, the CSRF matrix re-run live (GET abort → 405, cross-origin POST →
+403, PUT → 403, token POST → 200, SMTP injection → 400), and a fresh DEEP scan.
+
 ### Validation
 
 All 7 `.ps1` files parse-clean on live `powershell.exe` 5.1.26100.8875 **and** `pwsh` 7, BOMs

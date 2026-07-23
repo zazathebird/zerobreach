@@ -30,7 +30,7 @@ const STATE = {
   logQuery: '',          // free-text filter over the log view (paired with the severity chips)
   // Findings triage filter model (UX pass): the severity pills are real toggles, the
   // search box matches free text across the finding, and groupBy re-buckets the tree.
-  findingsSevFilter: new Set(['CRITICAL', 'HIGH', 'POSSIBLE', 'CLEAN']),
+  findingsSevFilter: new Set(['CRITICAL', 'HIGH', 'POSSIBLE', 'CLEAN', 'INFO']),
   findingsQuery: '',
   findingsGroupBy: 'threat_type',
   autoScroll: true,
@@ -44,6 +44,7 @@ const STATE = {
   sseWasDown: false,     // so a reconnect is announced once, not on every retry tick
   lastRemediation: null, // persisted PURGE outcome, rendered on the Report view
   bgTitleTimer: 0,       // flashes document.title when a scan finishes in a background tab
+  origTitle: '',         // captured once, so repeated flashes cannot restore the flash text
 };
 
 // ── CSRF token ────────────────────────────────────────────────────────────────
@@ -253,7 +254,20 @@ function pumpEvents() {
   // exact cost this batching exists to avoid. The consumed prefix is dropped in one
   // splice once it gets large, which keeps memory flat without paying per event.
   const n = Math.min(EV_QUEUE.length - evQueueHead, EV_MAX_PER_FRAME);
-  for (let i = 0; i < n; i++) handleServerEvent(EV_QUEUE[evQueueHead + i]);
+  for (let i = 0; i < n; i++) {
+    // Advance the head BEFORE dispatching, and swallow a throwing handler. The old
+    // shift()-based pump removed the event before dispatch, so a bad event cost exactly one
+    // event. With a head index, an exception escaping here left evQueueHead unchanged and
+    // evPumpScheduled false — the next SSE event rescheduled the pump, which replayed the
+    // identical prefix and hit the same bad event again, forever: duplicated log lines,
+    // inflated threat counts, and findings duplicated into the tree and the PURGE queue.
+    const ev = EV_QUEUE[evQueueHead + i];
+    try {
+      handleServerEvent(ev);
+    } catch (err) {
+      console.error('[ZeroBreach] event handler failed; skipping event', err, ev);
+    }
+  }
   evQueueHead += n;
   if (evQueueHead > 4096 || evQueueHead === EV_QUEUE.length) {
     EV_QUEUE.splice(0, evQueueHead);
@@ -303,6 +317,7 @@ function handleServerEvent(data) {
     case 'remediation_complete':
       STATE.lastRemediation = {
         applied: data.applied, failed: data.failed, skipped: data.skipped, blocked: data.blocked,
+        snapshot: data.snapshot || '',   // rollback .reg path, surfaced on the Report view
         when: new Date().toLocaleString(),
       };
       onRemediationComplete(data);
@@ -586,13 +601,15 @@ function initKeyboardActivation() {
     if (e.key !== 'Enter' && e.key !== ' ') return;
     const el = e.target;
     if (!el || !el.matches) return;
-    if (el.matches('.nav-item, .ioc-tab, .log-filter, .theme-card, .threat-chip')) {
+    if (el.matches('.nav-item, .ioc-tab, .log-filter, .theme-card')) {
       e.preventDefault();
       el.click();
     }
   });
   // Make the remaining click-only controls reachable in the first place.
-  $$('.log-filter, .theme-card, .threat-chip').forEach(el => {
+  // .threat-chip is intentionally excluded: it is a pure counter with no click handler, so
+  // announcing it as a button just adds dead tab stops for a screen-reader user.
+  $$('.log-filter, .theme-card').forEach(el => {
     if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
     if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
   });
@@ -681,10 +698,14 @@ function buildThemeGrid() {
   const grid = $('theme-grid');
   if (!grid) return;
   grid.innerHTML = '';
+  // NB: cards are re-created here on the KRAKEN unlock and on MSP activation, so the
+  // role/tabindex are set per-card below rather than once in initKeyboardActivation.
   const cur = ZBThemes.current().id;
   ZBThemes.visible().forEach(t => {
     const card = document.createElement('div');
     card.className = 'theme-card' + (t.id === cur ? ' active' : '') + (t.secret ? ' secret' : '');
+    card.setAttribute('role', 'button');
+    card.setAttribute('tabindex', '0');
     card.style.setProperty('--c', t.vars['--accent']);
     card.innerHTML = `<div class="theme-card-name">${t.name}</div><div class="theme-card-tag">${t.tagline}</div>`;
     card.addEventListener('click', () => {
@@ -1130,6 +1151,16 @@ function onScanComplete(data) {
 }
 
 // Replace the live SSE findings with the engine's authoritative report findings.
+// One definition of "this is a hardening action", used by both the findings loader and the
+// SELECT HARDENING button. Keyed on the engine's Group, which is exact, with a threat_type
+// fallback for the older group names.
+function isHardeningFinding(f) {
+  const g = String(f.group || '');
+  if (/^(Proactive|Operator|System) Hardening$/i.test(g)) return true;
+  return /hardening opportunity|macro\/attachment exposure|script (host exposure|lure association)|defender posture|remote access exposure/i
+    .test(String(f.threat_type || ''));
+}
+
 function loadEngineFindings(name) {
   fetch('/api/report?name=' + encodeURIComponent(name))
     .then(r => r.json())
@@ -1137,12 +1168,27 @@ function loadEngineFindings(name) {
       if (!Array.isArray(list)) return;
       // Keep the findings view focused on notable severities (matches the live view),
       // but each now carries fix_action/fix_param for real remediation.
-      const notable = list.filter(f => ['CRITICAL', 'HIGH', 'POSSIBLE'].includes(f.severity));
+      // Notable severities, PLUS the INFO-level hardening actions. Most of the hardening set
+      // (WSH disable, the six ASR rules, the HARDEN6_* posture items, the script-lure
+      // associations) is deliberately INFO so it can never be auto-selected — but filtering it
+      // out here meant SELECT HARDENING had almost nothing to select and the ASR set, the actual
+      // point of the feature, was unreachable from the GUI entirely. INFO findings are still
+      // never auto-selected: autoEligible only ever matches CRITICAL/HIGH.
+      const notable = list.filter(f =>
+        ['CRITICAL', 'HIGH', 'POSSIBLE'].includes(f.severity) ||
+        (f.severity === 'INFO' && isHardeningFinding(f)));
       if (notable.length === 0) return;          // nothing actionable — keep SSE findings
       STATE.engineReport = name;
       STATE.findings = notable;
       STATE.selectedFindings.clear();
       STATE.findingsAutoSelected = false;   // fresh report → allow the one-time severity auto-select
+      // Reset the view filters too. The auto-select only walks the VISIBLE findings and then
+      // burns the one-shot flag, so a filter left over from the previous scan (a deselected
+      // CRITICAL pill, or text still in the search box) would silently leave the new scan's
+      // CRITICALs unselected with no way to re-run the auto-select.
+      STATE.findingsSevFilter = new Set(['CRITICAL', 'HIGH', 'POSSIBLE', 'CLEAN', 'INFO']);
+      STATE.findingsQuery = '';
+      if ($('findings-search')) $('findings-search').value = '';
       updateBadge();
       // Correct the completion modal: the live SSE count is ~0 in GUI mode (engine emits clean
       // output); the engine report is the real total. notable = actionable, list = all severities.
@@ -1183,10 +1229,17 @@ function initFindingsView() {
   $('btn-select-all').addEventListener('click', () => {
     // SAFETY: "select all" never selects protected (disabled) or trusted-vendor findings.
     // (Trusted RMM tooling stays individually tickable, but bulk-select skips it.)
-    const allowed = STATE.findings.filter(f => !f.protected && !f.vendor_trusted);
-    STATE.selectedFindings = new Set(allowed.map(f => f.id));          // native id type (str|num)
+    // Scoped to what is CURRENTLY VISIBLE, and additive. Operating on the whole result set
+    // while the tree showed a filtered subset meant "select all" could queue ~200 findings —
+    // including destructive CRITICALs — when the operator was looking at 3 POSSIBLEs. SELECT
+    // GROUP was already scoped to its group; these two now agree about what "all" means.
+    const allowed = visibleFindings().filter(f => !f.protected && !f.vendor_trusted);
+    allowed.forEach(f => STATE.selectedFindings.add(f.id));            // native id type (str|num)
     const allowedStr = new Set(allowed.map(f => String(f.id)));         // dataset.id is always a string
-    $$('#findings-tree input[type=checkbox]').forEach(cb => { cb.checked = allowedStr.has(cb.dataset.id); });
+    $$('#findings-tree input[type=checkbox]').forEach(cb => { if (allowedStr.has(cb.dataset.id)) cb.checked = true; });
+    if (allowed.length < STATE.findings.length) {
+      showToast(`Selected ${allowed.length} visible finding(s) — ${STATE.findings.length - allowed.length} are hidden by the current filter`);
+    }
     updateRemediationBtn();
   });
 
@@ -1208,7 +1261,8 @@ function initFindingsView() {
 
   // Severity pills as filters. They were static counters with no handlers despite looking
   // clickable — the log view's .log-filter chips already proved the pattern.
-  [['pill-critical', 'CRITICAL'], ['pill-high', 'HIGH'], ['pill-possible', 'POSSIBLE'], ['pill-clean', 'CLEAN']]
+  [['pill-critical', 'CRITICAL'], ['pill-high', 'HIGH'], ['pill-possible', 'POSSIBLE'],
+   ['pill-clean', 'CLEAN'], ['pill-info', 'INFO']]
     .forEach(([id, sev]) => {
       const el = $(id);
       if (!el) return;
@@ -1217,7 +1271,7 @@ function initFindingsView() {
         else STATE.findingsSevFilter.add(sev);
         // Never let the operator filter everything away with no way back.
         if (STATE.findingsSevFilter.size === 0) {
-          ['CRITICAL', 'HIGH', 'POSSIBLE', 'CLEAN'].forEach(x => STATE.findingsSevFilter.add(x));
+          ['CRITICAL', 'HIGH', 'POSSIBLE', 'CLEAN', 'INFO'].forEach(x => STATE.findingsSevFilter.add(x));
         }
         ZBSound.play('tick');
         renderFindingsTree();
@@ -1245,11 +1299,10 @@ function initFindingsView() {
   const hardenBtn = $('btn-select-hardening');
   if (hardenBtn) {
     hardenBtn.addEventListener('click', () => {
-      const isHardening = f =>
-        /hardening|proactive/i.test(f.threat_type || '') ||
-        /hardening|proactive/i.test(f.group || '') ||
-        /operator hardening|proactive hardening/i.test(f.line || '');
-      const picks = STATE.findings.filter(f => isHardening(f) && !f.protected);
+      // !vendor_trusted like every other bulk selector: Test-VendorTrusted is a SOFT signal
+      // that must never be bulk-selected (it stays individually tickable). Omitting it here
+      // let one click bypass the vendor guard for exactly this button.
+      const picks = STATE.findings.filter(f => isHardeningFinding(f) && !f.protected && !f.vendor_trusted);
       if (!picks.length) {
         showToast('No hardening actions in this scan — posture already good');
         ZBSound.play('error');
@@ -1280,6 +1333,20 @@ function initFindingsView() {
   });
 }
 
+// Single source of truth for "what is currently on screen" — used by the renderer and by
+// SELECT ALL so the button can never disagree with the view.
+function visibleFindings() {
+  const q = STATE.findingsQuery;
+  return STATE.findings.filter(f => {
+    if (!STATE.findingsSevFilter.has(f.severity)) return false;
+    if (!q) return true;
+    const hay = [f.line, f.threat_type, f.mitre_id, f.mitre && f.mitre.name,
+                 f.mitre && f.mitre.tactic, f.phase, f.severity]
+      .filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+}
+
 function renderFindingsTree() {
   const container = $('findings-tree');
   container.innerHTML = '';
@@ -1292,7 +1359,7 @@ function renderFindingsTree() {
 
   // Counts always reflect the WHOLE result set, not the filtered view — the pills double as
   // the filter control, so a count that shrank when you clicked it would be circular.
-  const counts = { CRITICAL: 0, HIGH: 0, POSSIBLE: 0, CLEAN: 0 };
+  const counts = { CRITICAL: 0, HIGH: 0, POSSIBLE: 0, CLEAN: 0, INFO: 0 };
   STATE.findings.forEach(f => { if (counts[f.severity] !== undefined) counts[f.severity]++; });
   Object.entries(counts).forEach(([k, v]) => {
     const el = $(`count-${k.toLowerCase()}`);
@@ -1308,21 +1375,16 @@ function renderFindingsTree() {
 
   // Apply severity filter + free-text search. Search covers everything the technician can
   // see on the row plus the MITRE id, so pasting a path or a T-number just works.
-  const q = STATE.findingsQuery;
-  const visible = STATE.findings.filter(f => {
-    if (!STATE.findingsSevFilter.has(f.severity)) return false;
-    if (!q) return true;
-    const hay = [f.line, f.threat_type, f.mitre_id, f.mitre && f.mitre.name,
-                 f.mitre && f.mitre.tactic, f.phase, f.severity]
-      .filter(Boolean).join(' ').toLowerCase();
-    return hay.includes(q);
-  });
+  const visible = visibleFindings();
 
   const filterStatus = $('findings-filter-status');
   if (filterStatus) {
     const hidden = STATE.findings.length - visible.length;
+    const visibleIds = new Set(visible.map(f => f.id));
+    const hiddenSelected = [...STATE.selectedFindings].filter(id => !visibleIds.has(id)).length;
     filterStatus.textContent = hidden > 0
-      ? `Showing ${visible.length} of ${STATE.findings.length} findings (${hidden} hidden by filter/search)`
+      ? `Showing ${visible.length} of ${STATE.findings.length} findings (${hidden} hidden by filter/search`
+        + (hiddenSelected ? `, ${hiddenSelected} of them SELECTED and still queued)` : ')')
       : `Showing all ${STATE.findings.length} findings`;
   }
 
@@ -1335,6 +1397,7 @@ function renderFindingsTree() {
   }
   if (visible.length === 0) {
     container.innerHTML = '<div class="findings-empty" role="status">NO FINDINGS MATCH THE CURRENT FILTER/SEARCH<br><span>Adjust the severity pills or clear the search box.</span></div>';
+    updateRemediationBtn();   // this early return used to leave the button state stale
     return;
   }
 
@@ -1524,9 +1587,14 @@ function renderRemediationView() {
 // prompt on page load, which browsers rightly punish; Settings offers the opt-in).
 function notifyBackground(text) {
   if (!document.hidden) return;
-  const original = document.title.replace(/^\(.\)\s*/, '');
-  let on = false;
+  // Stop any in-flight flash BEFORE reading the title, and remember the true original once —
+  // otherwise a second notification (scan_complete then remediation_complete) captured the
+  // flashing text as "original" and restored that permanently.
   clearInterval(STATE.bgTitleTimer);
+  if (!STATE.origTitle) STATE.origTitle = document.title.replace(/^\(!\)\s*/, '');
+  const original = STATE.origTitle;
+  document.title = original;
+  let on = false;
   STATE.bgTitleTimer = setInterval(() => {
     on = !on;
     document.title = on ? `(!) ${text}` : original;
@@ -1558,7 +1626,9 @@ function showDangerConfirm(word, message, onConfirm, previewItems) {
   if (items.length) {
     const byAction = {};
     items.forEach(f => {
-      const a = f.FixAction || f.fix_action || 'Unknown';
+      // fix_action (snake_case) is what Get-EngineReportFindings actually emits; the
+      // PascalCase key never exists on this path.
+      const a = f.fix_action || f.FixAction || 'Unknown';
       (byAction[a] = byAction[a] || []).push(f);
     });
     // Most-destructive first: what an operator most needs to see before typing the word.
@@ -1575,7 +1645,10 @@ function showDangerConfirm(word, message, onConfirm, previewItems) {
       .sort((a, b) => (rank[a[0]] ?? 9) - (rank[b[0]] ?? 9))
       .map(([action, fs]) => {
         const rows = fs.map(f => {
-          const target = f.Target || f.target || f.FixParam || f.line || '';
+          // fix_param is THE string that will execute — for the RunCmd group especially, the
+          // operator must see the command, not its description. The PascalCase/`target` keys
+          // are absent from the engine-report shape, so the preview always fell back to `line`.
+          const target = f.fix_param || f.target || f.line || '';
           return `<li title="${escapeHtml(String(target))}">${escapeHtml(String(target).substring(0, 110))}</li>`;
         }).join('');
         return `<div class="danger-preview-group">

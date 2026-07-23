@@ -264,6 +264,23 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   must be *re-declared inside* `$script:SCAN_SCRIPT` / `$script:REMEDIATE_SCRIPT`. A parent-only
   helper referenced from a runspace silently resolves to nothing.
 
+### Fail closed, always
+- **A match flag guarding a destructive action must be raised only AFTER the full check passes,
+  never set optimistically and cleared on mismatch.** The custom-IOC CIDR matcher set "hit" up
+  front, so a prefix that parsed to 0 (`10.0.0.0/abc`, or `/0`) exited the compare loop with the
+  flag still set and matched EVERY connection — CRITICAL + KillProcess on every connected process
+  from one typo in an IOC file (caught in review 2026-07-22, never shipped).
+- **When a guard's input is missing, skip the finding — do not fall through into the action.**
+  Phase 92 skipped its "is this the real System32 binary?" test when `ExecutablePath` was empty
+  and went straight to KillProcess on names like `taskmgr.exe`.
+- **Verifying a remediation must distinguish "gone" from "couldn't read it".** A helper that
+  returns `$null` on any failure makes the verification PASS in exactly the case that matters:
+  malware sets a DENY ACE on its own Run key, the delete fails silently, the read fails the same
+  way, and the operator is told the persistence was removed. Report unverifiable as failure.
+- **Test malformed input, not just wrong-but-well-formed input.** The CIDR unit test passed 15
+  cases and still missed the bug, because every "bad" case had an unparseable *IP* — none had a
+  valid IP with a bad *prefix*.
+
 ### Findings, IDs and new phases
 - **Build finding IDs from `Get-StableId`, never `.GetHashCode()`.** `[string]::GetHashCode()` is
   randomised per process on .NET 5+/pwsh 7, so IDs derived from it change every run and the
@@ -273,6 +290,14 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   the plan ceilings (QUICK 30 / FULL 80 / DEEP+ 115) are wired into both servers — a fractional
   phase in the non-QUICK path changes none of that. Add the `phase_map` entry in
   `data/mitre_mapping.json` at the same time.
+  **Verify the placement, don't assume it**: inserting "just before the next phase header" put
+  three new phases immediately AFTER a `}   # end QUICK-skip block` line, so they ran in QUICK and
+  pushed it to 33 (2026-07-22). Count it afterwards — the QUICK set must be exactly 30 headers.
+- **A new detection is not done until it has been graded against a fresh DEEP baseline on a
+  healthy box.** WS6's first cut pushed auto-destructive from 41 to 136: a GUID-filename DPAPI
+  heuristic matched 99 benign cache files, "created-after-write" timestomping is simply what
+  copying does, Teams registers a per-user COM TypeLib, and Chromium ships
+  `ZxcvbnData\passwords.txt`. Static reasoning found none of these.
 - **Hardening / lockdown / posture actions are OPERATOR-ONLY: `Info` or `POSSIBLE` + `RunCmd`.**
   Never `CRITICAL`/`HIGH` with a destructive action — that is the auto-select path and would fire
   on a healthy box (rule #1). The GUI's **SELECT HARDENING** button is the deliberate opt-in.

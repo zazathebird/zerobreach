@@ -138,7 +138,13 @@ function Write-HtmlReport {
     # syntax error inside a string literal), and finally '<' -> \x3C so a finding whose
     # Description/Target contains "</script>" cannot break out and inject HTML/JS into a
     # report the technician opens and forwards to a client.
-    $csvDataJs = $csvData -replace '\\','\\' -replace "'","\\'" `
+    # NOTE the quote replacement is "\'" (backslash + quote), NOT "\\'". PowerShell does not
+    # treat backslash as an escape inside a double-quoted string, so "\\'" emits TWO backslashes
+    # followed by the quote — in the JS literal that reads as an escaped backslash and then an
+    # unescaped quote, which TERMINATES the string and throws a SyntaxError that kills the whole
+    # inline <script> (exportCSV, filterSev and sortTable all stop working). Dozens of finding
+    # descriptions contain an apostrophe, so this broke essentially every HTML report.
+    $csvDataJs = $csvData -replace '\\','\\' -replace "'","\'" `
                           -replace "`r",'\r' -replace "`n",'\n' -replace '<','\x3C'
     $tallyHtml = ""
     foreach ($k in @("RAT","Rootkit","Ransomware","Keylogger","Miner","Worm","Spyware","Trojan","Backdoor","UACBypass")) {

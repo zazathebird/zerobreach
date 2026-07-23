@@ -323,6 +323,15 @@ def sysinfo():
 
 @app.route("/api/scan/start", methods=["POST"])
 def start_scan():
+    # Parse the body BEFORE taking the lock. request.json raises on a wrong Content-Type or a
+    # malformed body; doing it after setting running=True meant the exception propagated before
+    # thread.start(), so run_scan's finally — the only place that clears the flag — never ran and
+    # scan_state["running"] stayed True for the life of the process. One malformed POST bricked
+    # the server: every later scan returned "Scan already running" forever.
+    try:
+        config = request.get_json(silent=True) or {}
+    except Exception:
+        config = {}
     # Check AND set the flag under the same lock. run_scan sets running=True inside the worker
     # thread, so two near-simultaneous POSTs both passed the bare check and spawned two
     # concurrent elevated PowerShell scans over the same reports directory.
@@ -330,13 +339,28 @@ def start_scan():
         if scan_state["running"]:
             return jsonify({"error": "Scan already running"}), 400
         scan_state["running"] = True
-    config = request.json or {}
-    thread = threading.Thread(target=run_scan, args=(config,), daemon=True)
-    thread.start()
+    try:
+        thread = threading.Thread(target=run_scan, args=(config,), daemon=True)
+        thread.start()
+    except Exception as e:
+        # Never leave the flag set if the worker could not be started.
+        with scan_lock:
+            scan_state["running"] = False
+        return jsonify({"error": f"could not start scan: {e}"}), 500
     return jsonify({"status": "started"})
 
 @app.route("/api/scan/abort", methods=["POST"])
 def abort_scan():
+    # Origin-checked like the PS server's gate. The SocketIO CORS lock-down does not cover Flask
+    # HTTP routes, and abort_scan never reads the body — so a cross-origin SIMPLE post
+    # (Content-Type: text/plain, no preflight) could reach it and truncate a running incident
+    # scan, which then writes its audit JSON and reports itself COMPLETE.
+    origin = request.headers.get("Origin") or ""
+    referer = request.headers.get("Referer") or ""
+    if origin and origin not in ALLOWED_ORIGINS:
+        return jsonify({"error": "cross-origin request rejected"}), 403
+    if not origin and referer and not any(referer.startswith(o + "/") for o in ALLOWED_ORIGINS):
+        return jsonify({"error": "cross-origin request rejected"}), 403
     global scan_process
     scan_state["running"] = False
     if scan_process:
@@ -356,7 +380,9 @@ def list_reports():
     files = sorted(REPORTS_DIR.glob("*.json"), reverse=True)
     return jsonify([{"name": f.name, "path": str(f), "size": f.stat().st_size} for f in files[:20]])
 
-REPORT_NAME_RE = re.compile(r"^(KrakenBaseline_|audit_)[A-Za-z0-9_\-]*\.json$")
+# \Z, not $: in Python `$` also matches just before a trailing newline, so "audit_x.json\n"
+# would pass. Not escapable to traversal here (the class excludes . / \ and :), but be exact.
+REPORT_NAME_RE = re.compile(r"^(KrakenBaseline_|audit_)[A-Za-z0-9_\-]*\.json\Z")
 
 @app.route("/api/reports/<filename>")
 def get_report(filename):

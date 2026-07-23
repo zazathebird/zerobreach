@@ -910,7 +910,7 @@
   "miner_config_benign_paths": [
     "\\\\appdata\\\\local\\\\lghub\\\\",
     "\\\\node_modules\\\\[^\\\\]+\\\\",
-    "\\\\lib\\\\site-packages\\\\"
+    "\\\\(lib\\\\)?site-packages\\\\"
   ],
   "_comment_spooler_benign_dlls": "Phase 96: Microsoft printer RESOURCE DLLs in spool\\drivers are catalog-signed (invisible to Get-AuthSig, which only sees embedded Authenticode) and grade as UNSIGNED on every box with a PCL/PS driver. Known resource-DLL names downgrade to POSSIBLE/Info.",
   "spooler_benign_dlls": [
@@ -923,7 +923,7 @@
   "_comment_keylogger_benign_paths": "Phase 48: keystroke-log *name* heuristics (*typed*, *capture*log*, …) inside package-manager trees are library files (e.g. py.typed markers), not keylogger output. Downgraded to POSSIBLE/Info.",
   "keylogger_benign_paths": [
     "\\\\packages\\\\pythonsoftwarefoundation\\.python[^\\\\]*\\\\localcache\\\\",
-    "\\\\lib\\\\site-packages\\\\",
+    "\\\\(lib\\\\)?site-packages\\\\",
     "\\\\node_modules\\\\[^\\\\]+\\\\"
   ],
   "_comment_yara_benign_paths": "Phase 90: JIT/renderer runtime DLLs legitimately contain VirtualAllocEx/WriteProcessMemory-class API strings (SwiftShader et al. compile shaders at runtime); package-manager trees ship API-name-bearing sources. Rule hits here downgrade to POSSIBLE/Info instead of HIGH/DeleteFile.",
@@ -934,13 +934,13 @@
     "\\\\libglesv2\\.dll$",
     "\\\\d3dcompiler_4[67]\\.dll$",
     "\\\\vulkan-1\\.dll$",
-    "\\\\lib\\\\site-packages\\\\",
+    "\\\\(lib\\\\)?site-packages\\\\",
     "\\\\node_modules\\\\[^\\\\]+\\\\",
     "\\\\appdata\\\\local\\\\temp\\\\claude\\\\"
   ],
   "_comment_sct_benign_paths": "Phase 94: .sct/.wsc scriptlets inside package-manager trees are library test fixtures (e.g. pywin32's Testpys.sct), not Squiblydoo staging. Downgraded to POSSIBLE/Info.",
   "sct_benign_paths": [
-    "\\\\lib\\\\site-packages\\\\",
+    "\\\\(lib\\\\)?site-packages\\\\",
     "\\\\node_modules\\\\[^\\\\]+\\\\"
   ],
   "safeboot_default_entries": [
@@ -1880,24 +1880,8 @@
     "autoruns.exe",
     "autorunsc.exe"
   ],
-  "_comment_injection_dll_points": "Registry values that make Windows load a DLL into OTHER processes. All are legacy/rare on a modern box: AppInit_DLLs is disabled by default and blocked under Secure Boot, AppCertDlls has no legitimate modern use, and a Winsock LSP / netsh helper DLL outside System32 is a classic injection foothold.",
-  "injection_dll_reg_points": [
-    {
-      "Path": "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
-      "Name": "AppInit_DLLs",
-      "Why": "AppInit_DLLs loads the named DLL into every process that links user32.dll"
-    },
-    {
-      "Path": "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
-      "Name": "AppInit_DLLs",
-      "Why": "32-bit AppInit_DLLs — same injection surface for WOW64 processes"
-    },
-    {
-      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
-      "Name": "AppCertDlls",
-      "Why": "AppCertDlls loads into every process that calls CreateProcess; no legitimate modern use"
-    }
-  ],
+  "_comment_injection_dll_points": "Phase 22.5. EMPTIED 2026-07-22 after review: the AppInit_DLLs entries duplicated Phase 22 one-for-one (same target, same CRITICAL + DeleteReg), and AppCertDlls is a SUBKEY whose values name the DLLs — reading it as a value on Session Manager always returned null, so that check never fired. Phase 22.5 now walks the AppCertDlls subkey directly and covers netsh helper DLLs and Winsock LSPs. Kept as a key so a future genuinely-value-shaped injection point can be added here without touching the engine.",
+  "injection_dll_reg_points": [],
   "netsh_helper_reg_root": "HKLM:\\SOFTWARE\\Microsoft\\Netsh",
   "_comment_cred_access": "Credential-theft staging. The dump-FILE patterns are what a technician actually finds after the fact (the tool itself is usually long gone), so they matter more than the tool names. Matched case-insensitively against a filename.",
   "credential_dump_artifacts": [
@@ -2215,5 +2199,6 @@
       "Why": "prompt-on-secure-desktop defeats the fodhelper-class silent auto-elevation bypasses",
       "Fix": "Set-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' ConsentPromptBehaviorAdmin 2 -Type DWord -Force"
     }
-  ]
+  ],
+  "_comment_sitepackages": "site-packages allowlist shape (fixed 2026-07-22 round 2): the tightening to '\\\\lib\\\\site-packages\\\\' broke Windows `pip install --user`, which lands in %APPDATA%\\\\Python\\\\Python3xx\\\\site-packages with NO Lib component — that re-armed Phase 48's CRITICAL+DeleteFile on py.typed marker files. The 'lib\\\\' segment is therefore optional. Note Test-BenignPath still vetoes a match found in a staging dir, so the looser form does not reopen the self-allowlisting hole it was tightened for."
 }

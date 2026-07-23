@@ -52,9 +52,35 @@
 > both servers. And `rerenderLog()` called `appendLogLine()`, which also *pushes* into the buffer,
 > so every log filter change duplicated the entire log.
 >
+> **ROUND 2 — three independent audit agents were run against that commit and found real defects,
+> several introduced by it.** All fixed and re-validated; see the "Round 2" section of the
+> 2026-07-22 CHANGELOG entry. The ones worth carrying forward:
+> - A **malformed operator CIDR matched every connection** → CRITICAL + KillProcess on every
+>   connected process from one typo in an IOC file. The hit flag was raised before the compare
+>   loop instead of after it. New rule in CLAUDE.md: fail closed, and test malformed input.
+> - **`/api/scan/abort` was reachable by GET**, so it skipped the CSRF gate entirely — a
+>   cross-origin `<img>` could truncate a running IR scan and make the console report it complete.
+>   The gate now covers every non-GET/HEAD method.
+> - **The new phases broke the QUICK gate** (30 → 33) by landing just after the enclosing
+>   `}   # end QUICK-skip block`. Always re-count after inserting a phase.
+> - **The HTML report was broken for any finding containing an apostrophe** — `-replace "'","\\'"`
+>   emits `\\'`, which terminates the JS string. Pre-existing; missed on the first pass.
+> - **`/api/schedule`** failed on spaced install paths, was argument-injectable via SMTP fields,
+>   blocked the single-threaded accept loop, and double-encoded its GET response.
+> - Frontend: the SSE pump **replayed its whole batch forever** if any handler threw; SELECT ALL
+>   ignored the active filter and replaced the selection; SELECT HARDENING skipped the
+>   `vendor_trusted` exclusion and could not reach the INFO-severity ASR set at all.
+>
+> **KNOWN LIMITATION, deliberately left in:** Phase 39's "installed in the last 30 days" escalation
+> is **inert**. It needs a registry key's `LastWriteTime`, which PowerShell's provider does not
+> expose (`Microsoft.Win32.RegistryKey` has no such property) — it wants a `RegQueryInfoKey`
+> P/Invoke. The branch is correct and will switch on when that is added. Until then Phase 39
+> cannot catch a rogue root CA that names itself after a well-known CA, and the code says so.
+>
 > **Still the only USER-driven items** (unchanged): the browser click-through (BLUEPRINT §7 "Now")
 > and the USB foreign-box field test (§7.6). The click-through should now also exercise the CSRF
-> handshake, the three previously-inert launchpad toggles, and the new findings filters.
+> handshake, the three previously-inert launchpad toggles, the new findings filters, and the new
+> HARDENING pill + SELECT HARDENING button.
 
 > ## ▶ (session 11) START HERE reference
 > **WS4 `Get-ProcSnapshot` — Win32_Process snapshot memo (DONE, pushed as `22e582a`).** Seven

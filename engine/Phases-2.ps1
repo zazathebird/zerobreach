@@ -430,7 +430,6 @@ if ($allFileRules.Count -gt 0) {
 }
 if ($stealerProcs.Count -eq 0 -and $stealerFiles.Count -eq 0 -and $dropRuleHits -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
 
-}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 68.5" "CLICKFIX / FAKE-CAPTCHA CLIPBOARD LURE RESIDUE" "SOCIAL ENG"
 Out-Typewriter "READING THE RUN-DIALOG HISTORY THE VICTIM ACTUALLY TYPED..." "HUNT"
 # ClickFix / "paste this to prove you are human" is currently one of the highest-volume initial
@@ -466,6 +465,7 @@ if ($RUNMRU_REG_PATH -and (Test-Path -LiteralPath $RUNMRU_REG_PATH)) {
 }
 if ($clickHits -eq 0) { Out-Typewriter "  -> [OK] NO CLICKFIX LURE RESIDUE IN RUN HISTORY." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 69" "PROCESS HOLLOWING / INJECTION DETECTION" "INJECTION"
 Out-Typewriter "CHECKING FOR PROCESSES WITH ANOMALOUS MODULE COUNTS..." "HUNT"
 Invoke-QuantumBar "PROCESS MEMORY MAP ANALYSIS" 12 120
@@ -1047,14 +1047,18 @@ if ($PhasePlan.Universal) {
         # Vendor-trusted partner tooling is protected by Test-VendorTrusted downstream too.
         if ($rSuspPath) {
             Out-ThreatBanner "RMM AGENT FROM A STAGING PATH" "$($rp.Name) @ $rpath"
+            # POSSIBLE + Info, NOT HIGH + KillProcess. Running AnyDesk/TeamViewer QuickSupport
+            # portable straight out of Downloads is one of the most common MSP workflows there
+            # is — an auto-selected kill here would sever the very remote session the technician
+            # is working in. Test-VendorTrusted covers only the Datto/CentraStage/Kaseya family,
+            # so there is no downstream guard for these vendors either. Operator decides.
             Add-Finding -ID "RMMABUSE_$($rp.ProcessId)_$($rname -replace '[^a-z0-9]','')" -Phase "PHASE 82.5" `
-                -ThreatType "Unauthorised Remote Access" -Severity $SEV_HIGH `
-                -Description "Remote-access agent '$($rp.Name)' (PID $($rp.ProcessId)) is running from a user-writable staging path: $rpath — legitimate RMM installs into Program Files, so this is the shape of an attacker-deployed remote-access foothold. Confirm against your own RMM inventory before acting." `
-                -Target "PID:$($rp.ProcessId)" -FixAction "KillProcess" -FixParam $rp.ProcessId `
+                -ThreatType "Unauthorised Remote Access" -Severity $SEV_POSSIBLE `
+                -Description "Remote-access agent '$($rp.Name)' (PID $($rp.ProcessId)) is running from a user-writable staging path: $rpath — an attacker-deployed foothold looks exactly like this, but so does a technician's own portable QuickSupport session. Confirm against your RMM inventory; if unauthorized: Stop-Process -Id $($rp.ProcessId) -Force" `
+                -Target "PID:$($rp.ProcessId)" -FixAction "Info" `
                 -Group "Remote Access Tooling"
-            $global:BackdoorHits++
         } else {
-            Add-Finding -ID "RMMPRESENT_$($rname -replace '[^a-z0-9]','')" -Phase "PHASE 82.5" `
+            Add-Finding -ID "RMMPRESENT_$($rp.ProcessId)_$($rname -replace '[^a-z0-9]','')" -Phase "PHASE 82.5" `
                 -ThreatType "Remote Access Tooling (inventory)" -Severity $SEV_INFO `
                 -Description "Remote-access/RMM agent present and running: $($rp.Name)$(if ($rpath) { " ($rpath)" }) — expected on a managed endpoint. Verify it is YOURS: an unexpected second remote-access product is a common intruder persistence method." `
                 -Target "PID:$($rp.ProcessId)" -FixAction "Info" -Group "Remote Access Tooling"

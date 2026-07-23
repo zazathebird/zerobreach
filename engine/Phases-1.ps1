@@ -533,11 +533,19 @@ foreach ($tf in $tsCandidates) {
     $tsSigSeen++
     $tsig = Get-AuthSig $tf.FullName
     $tsSigned = ($tsig -and $tsig.Status -eq 'Valid')
-    if ($tsStrong -and -not $tsSigned) {
+    # REVIEW 2026-07-22 (round 2): even the zeroed-timestamp case is NOT auto-actionable.
+    # The DOS/ZIP epoch is 1980-01-01, so every file extracted from a zip built with a zeroed
+    # date stamp — portable tools in Downloads, the whole of C:\ProgramData\chocolatey, Python
+    # wheels built with SOURCE_DATE_EPOCH — carries a pre-2000 stamp on a perfectly healthy box.
+    # A timestamp is corroborating evidence, never proof: this phase is now review-only in every
+    # branch, and the HIGH grade is reserved for a zeroed stamp on a file sitting in a staging
+    # dir, which still only asks the operator to look.
+    $tsStaging = ($tf.FullName -match '\\(Temp|Downloads|Public)\\')
+    if ($tsStrong -and -not $tsSigned -and $tsStaging) {
         Out-Decrypt -Text $tf.FullName -Prefix "  [TIMESTOMP] "
         Add-Finding -ID "TIMESTOMP_$(Get-StableId $tf.FullName)" -Phase "PHASE 17.5" -ThreatType "Timestomp / Anti-Forensics" `
-            -Severity $SEV_HIGH -Description "UNSIGNED executable content with a deliberately zeroed timestamp ($why): $($tf.FullName)" `
-            -Target $tf.FullName -FixAction "Quarantine" -FixParam $tf.FullName -Group "Anti-Forensic Timestamps"
+            -Severity $SEV_HIGH -Description "Unsigned executable in a staging directory with a zeroed timestamp ($why) — corroborating evidence only; archive extraction also produces 1980 stamps, so verify before acting: $($tf.FullName)" `
+            -Target $tf.FullName -FixAction "Info" -Group "Anti-Forensic Timestamps"
     } else {
         Add-Finding -ID "TIMESTOMP_$(Get-StableId $tf.FullName)" -Phase "PHASE 17.5" -ThreatType "Timestomp / Anti-Forensics" `
             -Severity $SEV_POSSIBLE -Description "$(if ($tsSigned) { 'Signed' } else { 'Unsigned' }) executable with inconsistent timestamps ($why) — normally archive extraction, a copy or a restore; review only, never auto-acted: $($tf.FullName)" `
@@ -685,7 +693,9 @@ foreach ($ifr in $IFEO_REG_ROOTS) {
         $rep  = Get-RegVal -Path $k.PSPath -Name "ReportingMode"
         $dbg  = Get-RegVal -Path $k.PSPath -Name "Debugger"
         $isSecTool = ($SECURITY_TOOL_PROCS -contains $leaf)
-        if ($isSilentExit -and ($mon -or $rep)) {
+        # $mon (MonitorProcess) is what actually launches something on exit; a ReportingMode-only
+        # entry has nothing to launch, and the description below would read "launches ''".
+        if ($isSilentExit -and $mon) {
             $ifeoExtra++
             Out-Decrypt -Text "$leaf -> MonitorProcess = $mon" -Prefix "  [SILENT-EXIT] "
             Add-Finding -ID "SILENTEXIT_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 21.5" `
@@ -697,10 +707,14 @@ foreach ($ifr in $IFEO_REG_ROOTS) {
         if ($isSecTool -and ($dbg -or $mon)) {
             $ifeoExtra++
             Out-ThreatBanner "EDR BLINDING VIA IFEO" "$leaf"
+            # FixAction Info, not DeleteRegKey: the IFEO hive is matched by Test-ProtectedTarget as
+            # "core OS registry", so a DeleteRegKey here is HARD-blocked on all three layers and
+            # could never execute. Ship the command in the description instead (rule #1's own
+            # prescription for an action the operator must run by hand).
             Add-Finding -ID "EDRBLIND_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 21.5" `
                 -ThreatType "Security Tool Tampering" -Severity $SEV_CRITICAL `
-                -Description "An IFEO/SilentProcessExit entry targets the SECURITY PRODUCT '$($k.PSChildName)' — this is not persistence, it is deliberate defence evasion (the product is hijacked or prevented from running). Debugger='$dbg' Monitor='$mon'." `
-                -Target "$($k.PSPath)" -FixAction "DeleteRegKey" -FixParam "$($k.PSPath)" `
+                -Description "An IFEO/SilentProcessExit entry targets the SECURITY PRODUCT '$($k.PSChildName)' — this is not persistence, it is deliberate defence evasion (the product is hijacked or prevented from running). Debugger='$dbg' Monitor='$mon'. Remove by hand after confirming: Remove-Item -LiteralPath '$($k.PSPath)' -Recurse -Force" `
+                -Target "$($k.PSPath)" -FixAction "Info" `
                 -Group "Security Tool Tampering"
             $global:RootkitHits++
         }
@@ -761,13 +775,31 @@ foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows","H
     } else { Out-Typewriter "  -> [OK] APPINIT_DLLS EMPTY." "GOOD" }
 }
 
-}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 22.5" "PROCESS-WIDE DLL LOAD POINTS (APPCERT / NETSH / WINSOCK LSP)"
 Out-Typewriter "AUDITING THE REMAINING SYSTEM-WIDE DLL INJECTION REGISTRATIONS..." "HUNT"
 # Phase 22 covers AppInit_DLLs. These are its siblings — every one of them makes Windows load
 # an attacker DLL into OTHER processes, and all are effectively unused on a modern endpoint,
 # so any value here is high-signal.
 $injHits = 0
+# AppCertDlls is a SUBKEY whose VALUES name the DLLs, not a value on Session Manager —
+# reading it as a value returns $null unconditionally, so the check never fired.
+$appCertKey = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls'
+if (Test-Path -LiteralPath $appCertKey) {
+    $acProps = Get-ItemProperty -LiteralPath $appCertKey -ErrorAction SilentlyContinue
+    if ($acProps) {
+        foreach ($ac in $acProps.PSObject.Properties) {
+            if ($ac.Name -like 'PS*') { continue }
+            $injHits++
+            Out-ThreatBanner "APPCERTDLLS INJECTION POINT" "$($ac.Name) = $($ac.Value)"
+            Add-Finding -ID "APPCERT_$($ac.Name -replace '[^a-z0-9]','')" -Phase "PHASE 22.5" `
+                -ThreatType "DLL Injection/Rootkit" -Severity $SEV_CRITICAL `
+                -Description "AppCertDlls entry '$($ac.Name)' loads $($ac.Value) into every process that calls CreateProcess. There is no legitimate modern use of this key." `
+                -Target "$appCertKey|$($ac.Name)" -FixAction "DeleteReg" -FixParam "$appCertKey|$($ac.Name)" `
+                -Group "DLL Injection Persistence"
+            $global:RootkitHits++
+        }
+    }
+}
 foreach ($ip in $INJECTION_DLL_POINTS) {
     $iv = Get-RegVal -Path $ip.Path -Name $ip.Name
     if (-not $iv -or "$iv".Trim() -eq '') { continue }
@@ -819,6 +851,7 @@ try {
 } catch {}
 if ($injHits -eq 0) { Out-Typewriter "  -> [OK] NO SYSTEM-WIDE DLL LOAD POINTS SET." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 23" "WINLOGON / USERINIT / SHELL HIJACK DETECTION"
 $wlPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 $wlKeys = Get-ItemProperty -Path $wlPath -ErrorAction SilentlyContinue
@@ -1016,10 +1049,12 @@ foreach ($task in $tasks) {
         $taskNameEsc = $task.TaskName -replace "'","''"
         $taskFix     = "Unregister-ScheduledTask -TaskName '$taskNameEsc' -Confirm:`$false -ErrorAction SilentlyContinue"
         $taskSigned  = $false
+        $taskBinFound = $false
         if (-not $taskStrong -and $exe) {
             # Single sig call on an already-matched task — no SIG_AUDIT budget needed.
             $taskBin = [Environment]::ExpandEnvironmentVariables("$exe").Trim('"')
             if ($taskBin -and (Test-Path -LiteralPath $taskBin)) {
+                $taskBinFound = $true
                 $tsig = Get-AuthSig $taskBin
                 $taskSigned = ($tsig -and $tsig.Status -eq 'Valid')
             }
@@ -1030,9 +1065,12 @@ foreach ($task in $tasks) {
                 -Severity $SEV_CRITICAL -Description "Malicious scheduled task (obfuscated / remote-payload action): $($task.TaskName) | Exe: $taskAction" `
                 -Target "Task: $($task.TaskName)" -FixAction "RunCmd" -FixParam $taskFix `
                 -Group "Scheduled Task Persistence"
-        } elseif ($taskSigned) {
+        } elseif ($taskSigned -or -not $taskBinFound) {
+            # "binary not resolvable" is NOT evidence of anything: a bare `cmd.exe` with no path
+            # and a stale task left by an uninstalled program both land here on a healthy box,
+            # and auto-unregistering them is a destructive action on a clean machine.
             Add-Finding -ID "TASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 29" -ThreatType "Task Persistence" `
-                -Severity $SEV_POSSIBLE -Description "Scheduled task runs from a user path / via cmd.exe but its binary is validly signed (normal for third-party updaters — review only, never auto-unregistered): $($task.TaskName) | Exe: $taskAction" `
+                -Severity $SEV_POSSIBLE -Description "Scheduled task runs from a user path / via cmd.exe and is $(if ($taskSigned) { 'validly signed' } else { 'pointing at a binary that could not be resolved' }) — normal for third-party updaters and for stale tasks left by uninstalled software; review only, never auto-unregistered: $($task.TaskName) | Exe: $taskAction" `
                 -Target "Task: $($task.TaskName)" -FixAction "Info" -Group "Scheduled Task Persistence"
         } else {
             Out-Decrypt -Text $task.TaskName -Prefix "  [UNSIGNED TASK] "
@@ -1307,21 +1345,30 @@ foreach ($conn in $conns) {
     foreach ($cip in @($global:CustomIocs.IPs)) {
         $cipHit = $false
         if ($cip -like '*/*') {
+            # FAIL CLOSED. The first cut set $cipHit = $true up front and cleared it only when a
+            # byte mismatched — so a prefix that parsed to 0 (a typo like "10.0.0.0/abc", or an
+            # explicit /0) broke out of the mask loop on the first iteration with the flag still
+            # TRUE and matched EVERY established connection, emitting CRITICAL + KillProcess for
+            # every connected process from one bad line in an IOC file. The flag is now only ever
+            # raised after a full successful comparison, and a /0 or unparseable prefix is rejected
+            # outright: an IOC that matches the entire internet is a typo, never an intention.
             $cipParts = $cip -split '/'
-            $cipBits  = 0; [void][int]::TryParse($cipParts[1], [ref]$cipBits)
+            $cipBits  = 0
+            if (-not [int]::TryParse($cipParts[1], [ref]$cipBits)) { continue }
             try {
                 $a = ([Net.IPAddress]::Parse($cipParts[0])).GetAddressBytes()
                 $b = ([Net.IPAddress]::Parse("$($conn.RemoteAddress)")).GetAddressBytes()
-                if ($a.Length -eq $b.Length -and $cipBits -ge 0 -and $cipBits -le ($a.Length * 8)) {
-                    $cipHit = $true
+                if ($a.Length -eq $b.Length -and $cipBits -ge 1 -and $cipBits -le ($a.Length * 8)) {
+                    $cipOk = $true
                     for ($bi = 0; $bi -lt $a.Length; $bi++) {
                         $take = [Math]::Min(8, [Math]::Max(0, $cipBits - ($bi * 8)))
                         if ($take -eq 0) { break }
                         # -band 0xFF before the cast: 0xFF -shl 7 is 32640, and [byte] of that
                         # overflows — which silently broke every prefix that is not a /8 multiple.
                         $mask = [byte](((0xFF -shl (8 - $take)) -band 0xFF))
-                        if (($a[$bi] -band $mask) -ne ($b[$bi] -band $mask)) { $cipHit = $false; break }
+                        if (($a[$bi] -band $mask) -ne ($b[$bi] -band $mask)) { $cipOk = $false; break }
                     }
+                    $cipHit = $cipOk
                 }
             } catch { $cipHit = $false }
         } elseif ("$($conn.RemoteAddress)" -eq "$cip") { $cipHit = $true }
@@ -1451,12 +1498,15 @@ foreach ($arKey in @(
         }
     } catch {}
 }
-# Install time of the store entry (registry key LastWriteTime) — a root planted during the
-# incident window is far more interesting than one that shipped with the image. Not spoofable
-# from the certificate itself the way NotBefore is.
-# NOTE the fixed 30-day window below rather than Test-InScope: an all-time scan (-Hours 0, the
-# default for GUI runs) makes Test-InScope return $true for everything, which would grade every
-# root HIGH. A fixed recency window keeps this signal meaningful in every mode.
+# KNOWN LIMITATION (verified 2026-07-22): we wanted the store entry's INSTALL TIME as the
+# signal an attacker cannot fake, but PowerShell's registry provider returns a
+# Microsoft.Win32.RegistryKey, which exposes no LastWriteTime — reading it needs a P/Invoke to
+# RegQueryInfoKey. Get-CertStoreInstallTime therefore always returns $null today and the
+# escalation branch below never fires. It is left in place, correct and inert, so that adding
+# the P/Invoke later switches it on with no other change. UNTIL THEN, be honest about what this
+# phase does: it distinguishes roots Windows manages from roots added locally, and it CANNOT by
+# itself catch a rogue root that names itself after a well-known CA. Name-based root-CA trust is
+# not made non-evadable by anything in this phase.
 $CERT_RECENT_DAYS = 30
 function Get-CertStoreInstallTime {
     param([string]$StoreRegPath, [string]$Thumbprint)
@@ -1582,7 +1632,11 @@ if ($HIDDEN_ACCOUNT_REG -and (Test-Path -LiteralPath $HIDDEN_ACCOUNT_REG)) {
     if ($hidProps) {
         foreach ($hp in $hidProps.PSObject.Properties) {
             if ($hp.Name -like 'PS*') { continue }
-            if ([int]"$($hp.Value)" -ne 0) { continue }   # 0 = hidden from the logon UI
+            # TryParse, not a cast: a non-numeric value threw a terminating error that the module
+            # trap swallowed by skipping every remaining check in this phase.
+            $hidVal = 0
+            if (-not [int]::TryParse("$($hp.Value)", [ref]$hidVal)) { continue }
+            if ($hidVal -ne 0) { continue }   # 0 = hidden from the logon UI
             $shadowHits++
             $hidUser = Get-LocalUser -Name $hp.Name -ErrorAction SilentlyContinue
             $hidIsAdmin = $false
@@ -1687,7 +1741,6 @@ foreach ($proc in $elevatedInUS) {
 }
 Out-Typewriter "  -> TOKEN AUDIT COMPLETE." "VER"
 
-}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 44.5" "CREDENTIAL ACCESS ARTIFACTS (LSASS DUMPS / HIVES / DPAPI)"
 Out-Typewriter "HUNTING FOR CREDENTIAL-THEFT RESIDUE..." "HUNT"
 # The dumping TOOL is usually long gone by the time anyone looks; the OUTPUT is what remains.
@@ -1776,6 +1829,7 @@ foreach ($cp in (Get-ProcSnapshot)) {
 }
 if ($credHits -eq 0) { Out-Typewriter "  -> [OK] NO CREDENTIAL-ACCESS ARTIFACTS." "GOOD" }
 
+}   # end QUICK-skip block
 Show-PhaseHeader "PHASE 45" "ACCESSIBILITY SHELL BACKDOOR (STICKY KEYS / UTILMAN)"
 $accessFiles = @(
     "$env:WINDIR\System32\sethc.exe","$env:WINDIR\System32\utilman.exe",
