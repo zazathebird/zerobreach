@@ -268,6 +268,17 @@ const ZBKraken = (() => {
   let events = [];
   function release() {
     if (running) return;
+    // Accessibility: this cinematic is a full-screen flashbang with rapid glitch frames
+    // and hard screen shakes — exactly what prefers-reduced-motion exists to prevent, and
+    // a genuine vestibular/photosensitivity hazard. Honour the OS setting by granting the
+    // unlock (and its theme + badge) immediately, skipping only the animation.
+    let reduce = false;
+    try { reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) {}
+    if (reduce) {
+      unlock();
+      if (window.showToast) showToast('🐙 ABYSSAL PROTOCOL ENGAGED — cinematic skipped (reduced motion)');
+      return;
+    }
     running = true; finished = false;
     window.ZBSound && ZBSound.unlock();
     build();

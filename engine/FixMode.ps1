@@ -1,4 +1,5 @@
-﻿# ══════════════════════════════════════════════════════════════════════════════
+﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: this is the LAST dot-sourced module, so without this a terminating error ends the whole script silently (see CLAUDE.md engine-split rule)
+# ══════════════════════════════════════════════════════════════════════════════
 #  FIX MODE ENTRY PROMPT
 # ══════════════════════════════════════════════════════════════════════════════
 Write-Host ""
@@ -37,10 +38,20 @@ try {
         reg export "$($re.H)\$($re.K)" $re.F /y 2>$null | Out-Null
         if (Test-Path $re.F) { $snapshotFiles += $re.F }
     }
-    # Bundle into single snapshot file
-    $snapshotContent = @("ZEROBREACH V22 SNAPSHOT | $(Get-Date) | Host: $HOST_NAME", "="*80)
+    # Bundle into single snapshot file. A .reg file MUST open with the version magic or
+    # `regedit /S` silently imports nothing — the rollback net would look fine and do nothing.
+    # Each `reg export` chunk carries its own copy of that header, so keep only the first,
+    # and demote our provenance banner to `;` comments (the only comment form regedit accepts).
+    $snapshotContent = @(
+        "Windows Registry Editor Version 5.00",
+        "",
+        "; ZEROBREACH V22 SNAPSHOT | $(Get-Date) | Host: $HOST_NAME",
+        "; " + ("=" * 78),
+        ""
+    )
     foreach ($sf in $snapshotFiles) {
-        $snapshotContent += Get-Content $sf -Raw -ErrorAction SilentlyContinue
+        $raw = Get-Content $sf -Raw -ErrorAction SilentlyContinue
+        if ($raw) { $snapshotContent += ($raw -replace '^\s*Windows Registry Editor Version 5\.00\s*', '') }
         Remove-Item $sf -Force -ErrorAction SilentlyContinue
     }
     $snapshotContent | Out-File -FilePath $SNAPSHOT_PATH -Encoding Unicode -ErrorAction Stop

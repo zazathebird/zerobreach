@@ -234,9 +234,13 @@ foreach ($dir in $shortcutDirs) {
             $sc = $shell.CreateShortcut($lnk.FullName)
             if ($sc.Arguments -match "http|--load-extension|--disable-extensions|javascript:|data:") {
                 Out-ThreatBanner "BROWSER SHORTCUT HIJACK" "$($lnk.Name) | Args: $($sc.Arguments)"
+                # A Windows filename may legally contain a single quote, and whoever planted the
+                # hijacked shortcut chose this filename — double it so the path cannot break out
+                # of the single-quoted string in the generated fix command.
+                $lnkPathEsc = "$($lnk.FullName)" -replace "'","''"
                 Add-Finding -ID "LNK_HIJACK_$($lnk.Name -replace '[^a-z0-9]','')" -Phase "PHASE 9" -ThreatType "Browser Hijacker" `
                     -Severity $SEV_CRITICAL -Description "Hijacked browser shortcut: $($lnk.Name) | $($sc.Arguments)" `
-                    -Target $lnk.FullName -FixAction "RunCmd" -FixParam "`$_sh=New-Object -ComObject WScript.Shell;`$_sc=`$_sh.CreateShortcut('$($lnk.FullName)');`$_sc.Arguments='';`$_sc.Save()" -Group "Browser Hijacks"
+                    -Target $lnk.FullName -FixAction "RunCmd" -FixParam "`$_sh=New-Object -ComObject WScript.Shell;`$_sc=`$_sh.CreateShortcut('$lnkPathEsc');`$_sc.Arguments='';`$_sc.Save()" -Group "Browser Hijacks"
                 $global:SpywareHits++
             }
         } catch {}
@@ -291,8 +295,8 @@ foreach ($td in $targetDirs) {
                 $sigBudgetHit = $true; break
             }
             $sigSeen++
-            $sig = Get-AuthSig $f.FullName
-            $isMalicious = ($sig.Status -ne "Valid") -and ($td.P -match "Temp|INetCache")
+            $asig = Get-AuthSig $f.FullName
+            $isMalicious = ($asig.Status -ne "Valid") -and ($td.P -match "Temp|INetCache")
             $sev = if ($isMalicious) { $SEV_HIGH } else { $SEV_POSSIBLE }
             Add-Finding -ID "TEMPEXE_$($f.Name -replace '[^a-z0-9]','')" -Phase "PHASE 10" -ThreatType "Suspicious File" `
                 -Severity $sev -Description "$(if($isMalicious){'Unsigned executable'} else {'Executable'}) in $($td.L): $($f.Name)" `
@@ -414,8 +418,8 @@ foreach ($sf in $recentSysFiles) {
         $sigBudgetHit = $true; break
     }
     $sigSeen++
-    $sig = Get-AuthSig $sf.FullName
-    $sigStatus = "$($sig.Status)"
+    $asig = Get-AuthSig $sf.FullName
+    $sigStatus = "$($asig.Status)"
     # Most System32 DLLs are CATALOG-signed (SignatureType=Catalog, Status=Valid) — those pass.
     # Of the remaining states, only an actual tamper signal (HashMismatch / NotTrusted publisher)
     # is a real rootkit indicator. An UnknownError/Incompatible/unverifiable status is what a
@@ -479,7 +483,7 @@ foreach ($adsDir in @("$env:LOCALAPPDATA","$env:TEMP","$env:USERPROFILE\Download
             $adsFile   = $s.FileName -replace "'","''"
             $adsStream = $s.Stream   -replace "'","''"
             Out-Decrypt -Text "$($s.FileName):$($s.Stream)" -Prefix "  [ADS HIT] "
-            Add-Finding -ID "ADS_$($s.FileName.GetHashCode())" -Phase "PHASE 17" -ThreatType "ADS Parasite" `
+            Add-Finding -ID "ADS_$(Get-StableId $s.FileName)" -Phase "PHASE 17" -ThreatType "ADS Parasite" `
                 -Severity $SEV_POSSIBLE -Description "Alternate Data Stream (review — most ADS are benign app/OS metadata; an ADS hiding executable content is the real signal): $($s.FileName):$($s.Stream)" `
                 -Target "$($s.FileName):$($s.Stream)" -FixAction "RunCmd" -FixParam "Remove-Item -LiteralPath '$adsFile' -Stream '$adsStream' -Force -ErrorAction SilentlyContinue" `
                 -Group "Alternate Data Streams"
@@ -487,6 +491,60 @@ foreach ($adsDir in @("$env:LOCALAPPDATA","$env:TEMP","$env:USERPROFILE\Download
         if ($streams.Count -eq 0) { Out-Typewriter "  -> [OK] NO HIDDEN DATA STREAMS." "GOOD" }
     }
 }
+
+Show-PhaseHeader "PHASE 17.5" "TIMESTOMP DETECTION — BACKDATED EXECUTABLE CONTENT"
+Out-Typewriter "COMPARING CREATION vs WRITE TIMESTAMPS ON USER-PATH EXECUTABLES..." "HUNT"
+# Time-stomping backdates a dropped file so it blends into the system image AND slips past
+# every time-scoped phase in this engine. Detected structurally, so there is nothing to
+# signature: a file whose CREATION time is far NEWER than its LAST-WRITE time was copied in
+# with a forged write time, and a zeroed/epoch timestamp is a crude stomp. Deliberately NOT
+# time-scoped (Test-InScope would filter out the very files whose timestamps are forged).
+$tsHits = 0
+$tsSigSeen = 0; $tsBudgetHit = $false; $tsSigSw = [System.Diagnostics.Stopwatch]::StartNew()
+$tsRoots = @($env:TEMP, $env:LOCALAPPDATA, $env:APPDATA, "$env:USERPROFILE\Downloads", "$env:ProgramData")
+$tsCandidates = (Get-ScanFiles -Path $tsRoots)
+foreach ($tf in $tsCandidates) {
+    if ($TIMESTOMP_EXTENSIONS -notcontains $tf.Extension.ToLower()) { continue }
+    $ct = $tf.CreationTimeUtc; $wt = $tf.LastWriteTimeUtc
+    if ($null -eq $ct -or $null -eq $wt) { continue }
+    $why = ''; $tsStrong = $false
+    # LIVE-TUNED 2026-07-22: "created after last-write" is NOT a strong signal on its own —
+    # it is the normal result of copying, extracting an archive, or restoring a backup, and it
+    # fired on 9 files in one Chromium temp profile. It stays a POSSIBLE hint only. A zeroed /
+    # pre-2000 timestamp is different: nothing legitimate on a modern box writes one, so that
+    # is the case allowed to be auto-actionable.
+    if ($wt.Year -lt 2000)      { $why = "last-write year $($wt.Year) — zeroed/epoch timestamp"; $tsStrong = $true }
+    elseif ($ct.Year -lt 2000)  { $why = "creation year $($ct.Year) — zeroed/epoch timestamp"; $tsStrong = $true }
+    elseif ($ct -gt $wt.AddDays(1)) { $why = "created $([int]($ct - $wt).TotalDays)d AFTER its last-write time (content predates the file)" }
+    if (-not $why) { continue }
+    $tsHits++
+    # Timestamps alone are weak evidence (backup/restore, archive extraction and some
+    # installers all reproduce this), so a validly signed file is review-only.
+    # SIG_AUDIT budget: extracting one big archive can produce hundreds of timestamp
+    # anomalies at once, and Authenticode blocks ~15s per file on CRL/OCSP.
+    if ($tsSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+        $tsSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+        if (-not $tsBudgetHit) {
+            $tsBudgetHit = $true
+            Out-Typewriter "  -> SIGNATURE BUDGET REACHED — remaining timestamp anomalies not signature-verified." "WARN"
+        }
+        break
+    }
+    $tsSigSeen++
+    $tsig = Get-AuthSig $tf.FullName
+    $tsSigned = ($tsig -and $tsig.Status -eq 'Valid')
+    if ($tsStrong -and -not $tsSigned) {
+        Out-Decrypt -Text $tf.FullName -Prefix "  [TIMESTOMP] "
+        Add-Finding -ID "TIMESTOMP_$(Get-StableId $tf.FullName)" -Phase "PHASE 17.5" -ThreatType "Timestomp / Anti-Forensics" `
+            -Severity $SEV_HIGH -Description "UNSIGNED executable content with a deliberately zeroed timestamp ($why): $($tf.FullName)" `
+            -Target $tf.FullName -FixAction "Quarantine" -FixParam $tf.FullName -Group "Anti-Forensic Timestamps"
+    } else {
+        Add-Finding -ID "TIMESTOMP_$(Get-StableId $tf.FullName)" -Phase "PHASE 17.5" -ThreatType "Timestomp / Anti-Forensics" `
+            -Severity $SEV_POSSIBLE -Description "$(if ($tsSigned) { 'Signed' } else { 'Unsigned' }) executable with inconsistent timestamps ($why) — normally archive extraction, a copy or a restore; review only, never auto-acted: $($tf.FullName)" `
+            -Target $tf.FullName -FixAction "Info" -Group "Anti-Forensic Timestamps"
+    }
+}
+if ($tsHits -eq 0) { Out-Typewriter "  -> [OK] NO TIMESTAMP ANOMALIES." "GOOD" }
 
 Show-PhaseHeader "PHASE 18" "DEEP CLOAKED PARASITE SCAN (HIDDEN+SYSTEM ATTRIBUTES)"
 foreach ($ht in @($env:PUBLIC,$env:LOCALAPPDATA,$env:TEMP,"$env:USERPROFILE\AppData\Roaming")) {
@@ -610,6 +668,88 @@ if (Test-Path $ifeoPath) {
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+Show-PhaseHeader "PHASE 21.5" "SILENT-PROCESS-EXIT / EDR-BLINDING IFEO / COM TYPELIB HIJACK"
+Out-Typewriter "AUDITING DEBUG-HOOK PERSISTENCE THE IFEO SCRUB DOES NOT COVER..." "HUNT"
+# Phase 21 audits the classic IFEO Debugger/GlobalFlag values. This phase covers the three
+# sibling techniques it does not: (a) SilentProcessExit, a separate hive with the same
+# launch-on-exit power; (b) an IFEO entry aimed at a SECURITY product, which is not
+# persistence at all but EDR blinding and deserves its own severity; (c) COM TypeLib
+# hijacking, which Phase 24 misses because that phase only walks CLSID.
+$ifeoExtra = 0
+foreach ($ifr in $IFEO_REG_ROOTS) {
+    if (-not (Test-Path -LiteralPath $ifr)) { continue }
+    $isSilentExit = ($ifr -match 'SilentProcessExit')
+    foreach ($k in (Get-ChildItem -Path $ifr -ErrorAction SilentlyContinue)) {
+        $leaf = "$($k.PSChildName)".ToLower()
+        $mon  = Get-RegVal -Path $k.PSPath -Name "MonitorProcess"
+        $rep  = Get-RegVal -Path $k.PSPath -Name "ReportingMode"
+        $dbg  = Get-RegVal -Path $k.PSPath -Name "Debugger"
+        $isSecTool = ($SECURITY_TOOL_PROCS -contains $leaf)
+        if ($isSilentExit -and ($mon -or $rep)) {
+            $ifeoExtra++
+            Out-Decrypt -Text "$leaf -> MonitorProcess = $mon" -Prefix "  [SILENT-EXIT] "
+            Add-Finding -ID "SILENTEXIT_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 21.5" `
+                -ThreatType "SilentProcessExit Persistence" -Severity $SEV_CRITICAL `
+                -Description "SilentProcessExit hook on '$($k.PSChildName)' launches '$mon' whenever that process exits — a launch-on-exit backdoor that the standard IFEO audit does not see." `
+                -Target "$($k.PSPath)|MonitorProcess" -FixAction "DeleteRegKey" -FixParam "$($k.PSPath)" `
+                -Group "IFEO / SilentProcessExit Persistence"
+        }
+        if ($isSecTool -and ($dbg -or $mon)) {
+            $ifeoExtra++
+            Out-ThreatBanner "EDR BLINDING VIA IFEO" "$leaf"
+            Add-Finding -ID "EDRBLIND_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 21.5" `
+                -ThreatType "Security Tool Tampering" -Severity $SEV_CRITICAL `
+                -Description "An IFEO/SilentProcessExit entry targets the SECURITY PRODUCT '$($k.PSChildName)' — this is not persistence, it is deliberate defence evasion (the product is hijacked or prevented from running). Debugger='$dbg' Monitor='$mon'." `
+                -Target "$($k.PSPath)" -FixAction "DeleteRegKey" -FixParam "$($k.PSPath)" `
+                -Group "Security Tool Tampering"
+            $global:RootkitHits++
+        }
+    }
+}
+# COM TypeLib hijack: a per-user TypeLib entry shadowing a machine-wide one causes the
+# referenced script/DLL to load whenever the COM object is instantiated. A win32-path
+# TypeLib pointing at a script host or a user-writable path is the give-away.
+foreach ($tlRoot in $COM_TYPELIB_ROOTS) {
+    if ($tlRoot -notmatch 'TypeLib$') { continue }   # only the TypeLib hive holds win32/win64 leaves
+    $tlPath = $tlRoot
+    if (-not (Test-Path -LiteralPath $tlPath)) { continue }
+    # Depth 4, not 3: the path is TypeLib\{GUID}\<ver>\<lcid>\win32 — a depth of 3 stops one level
+    # short and finds nothing. Scoped to HKCU deliberately: the per-user hive holds only overrides,
+    # so it stays small, and a per-user TypeLib shadowing a machine-wide one IS the hijack.
+    foreach ($tl in (Get-ChildItem -Path $tlPath -Recurse -Depth 4 -ErrorAction SilentlyContinue)) {
+        if ("$($tl.PSChildName)" -notmatch '^win(32|64)$') { continue }
+        $tlVal = Get-RegVal -Path $tl.PSPath -Name '(default)'
+        if (-not $tlVal) { continue }
+        # LIVE-TUNED 2026-07-22: "resolves to a user-writable path" alone flagged the Microsoft
+        # Teams Meeting Add-in, which legitimately registers a per-user TypeLib under AppData.
+        # A SCRIPT target is the real hijack shape; a binary target only counts when it is not
+        # validly signed. Everything else is review-only.
+        $tlIsScript = ($tlVal -match '(?i)\.(js|jse|vbs|vbe|wsf|wsh|hta|sct|ps1)(\b|$)')
+        if (-not $tlIsScript -and $tlVal -notmatch $global:USER_PATH_RE) { continue }
+        $tlResolved = [Environment]::ExpandEnvironmentVariables("$tlVal").Trim('"')
+        $tlSigned = $false
+        if (-not $tlIsScript -and $tlResolved -and (Test-Path -LiteralPath $tlResolved)) {
+            $tlSig = Get-AuthSig $tlResolved
+            $tlSigned = ($tlSig -and $tlSig.Status -eq 'Valid')
+        }
+        $ifeoExtra++
+        if ($tlSigned) {
+            Add-Finding -ID "TYPELIB_$(Get-StableId "$($tl.PSPath)")" -Phase "PHASE 21.5" `
+                -ThreatType "COM TypeLib Hijack" -Severity $SEV_POSSIBLE `
+                -Description "Per-user COM TypeLib entry points into a user-writable path but the target is validly signed (normal for per-user Office/Teams add-ins) — review only: $tlVal" `
+                -Target "$($tl.PSPath)" -FixAction "Info" -Group "COM Hijack Persistence"
+            continue
+        }
+        Out-Decrypt -Text "$($tl.PSPath) -> $tlVal" -Prefix "  [TYPELIB HIJACK] "
+        Add-Finding -ID "TYPELIB_$(Get-StableId "$($tl.PSPath)")" -Phase "PHASE 21.5" `
+            -ThreatType "COM TypeLib Hijack" -Severity $SEV_HIGH `
+            -Description "Per-user COM TypeLib entry resolves to $(if ($tlIsScript) { 'a SCRIPT' } else { 'an unsigned binary' }) — loads on every instantiation of the COM object: $tlVal" `
+            -Target "$($tl.PSPath)" -FixAction "DeleteRegKey" -FixParam "$($tl.PSPath)" `
+            -Group "COM Hijack Persistence"
+    }
+}
+if ($ifeoExtra -eq 0) { Out-Typewriter "  -> [OK] NO SILENT-EXIT / EDR-BLINDING / TYPELIB HIJACKS." "GOOD" }
+
 Show-PhaseHeader "PHASE 22" "APPINIT_DLLS KERNEL INJECTION SCRUB"
 foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Windows")) {
     $ai = Get-RegVal -Path $p -Name "AppInit_DLLs"
@@ -622,6 +762,63 @@ foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows","H
 }
 
 }   # end QUICK-skip block
+Show-PhaseHeader "PHASE 22.5" "PROCESS-WIDE DLL LOAD POINTS (APPCERT / NETSH / WINSOCK LSP)"
+Out-Typewriter "AUDITING THE REMAINING SYSTEM-WIDE DLL INJECTION REGISTRATIONS..." "HUNT"
+# Phase 22 covers AppInit_DLLs. These are its siblings — every one of them makes Windows load
+# an attacker DLL into OTHER processes, and all are effectively unused on a modern endpoint,
+# so any value here is high-signal.
+$injHits = 0
+foreach ($ip in $INJECTION_DLL_POINTS) {
+    $iv = Get-RegVal -Path $ip.Path -Name $ip.Name
+    if (-not $iv -or "$iv".Trim() -eq '') { continue }
+    $injHits++
+    Out-ThreatBanner "SYSTEM-WIDE DLL INJECTION POINT" "$($ip.Name) = $iv"
+    Add-Finding -ID "INJDLL_$($ip.Name -replace '[^a-z0-9]','')_$(Get-StableId $ip.Path)" -Phase "PHASE 22.5" `
+        -ThreatType "DLL Injection/Rootkit" -Severity $SEV_CRITICAL `
+        -Description "$($ip.Why). Current value: $iv" `
+        -Target "$($ip.Path)|$($ip.Name)" -FixAction "DeleteReg" -FixParam "$($ip.Path)|$($ip.Name)" `
+        -Group "DLL Injection Persistence"
+    $global:RootkitHits++
+}
+# netsh helper DLLs load into netsh.exe on every invocation — a quiet, long-lived foothold.
+if ($NETSH_HELPER_ROOT -and (Test-Path -LiteralPath $NETSH_HELPER_ROOT)) {
+    $nsProps = Get-ItemProperty -LiteralPath $NETSH_HELPER_ROOT -ErrorAction SilentlyContinue
+    if ($nsProps) {
+        foreach ($np in $nsProps.PSObject.Properties) {
+            if ($np.Name -like 'PS*') { continue }
+            $nsDll = "$($np.Value)"
+            if (-not $nsDll) { continue }
+            # Microsoft's own helpers live in System32 and are catalog-signed; anything else is notable.
+            $nsResolved = [Environment]::ExpandEnvironmentVariables($nsDll)
+            if ($nsResolved -match '(?i)^[A-Za-z]:\\Windows\\System32\\[^\\]+$' -or $nsResolved -notmatch '\\') { continue }
+            $injHits++
+            Add-Finding -ID "NETSHHELPER_$($np.Name -replace '[^a-z0-9]','')" -Phase "PHASE 22.5" `
+                -ThreatType "Netsh Helper DLL Persistence" -Severity $SEV_HIGH `
+                -Description "Non-System32 netsh helper DLL '$($np.Name)' = $nsDll — loads into netsh.exe every time it runs." `
+                -Target "$NETSH_HELPER_ROOT|$($np.Name)" -FixAction "DeleteReg" -FixParam "$NETSH_HELPER_ROOT|$($np.Name)" `
+                -Group "DLL Injection Persistence"
+        }
+    }
+}
+# Winsock LSPs are loaded into every network-capable process. A non-Microsoft LSP is rare
+# enough on a modern box to be worth eyes, but legitimate VPN/AV products still ship them —
+# review-only, never auto-acted (removing an LSP incorrectly breaks all networking).
+try {
+    $lspRoot = "HKLM:\SYSTEM\CurrentControlSet\Services\WinSock2\Parameters\Protocol_Catalog9\Catalog_Entries"
+    foreach ($lsp in (Get-ChildItem -Path $lspRoot -ErrorAction SilentlyContinue)) {
+        $lspDll = Get-RegVal -Path $lsp.PSPath -Name 'PackedCatalogItem'
+        if (-not $lspDll) { continue }
+        $lspStr = -join ([char[]]$lspDll | Where-Object { [int]$_ -gt 31 -and [int]$_ -lt 127 })
+        if (-not $lspStr -or $lspStr -match '(?i)\\system32\\(mswsock|rsvpsp|nlaapi|winrnr|napinsp|pnrpnsp|wshbth)\.dll') { continue }
+        $injHits++
+        Add-Finding -ID "LSP_$(Get-StableId $lspStr)" -Phase "PHASE 22.5" `
+            -ThreatType "Winsock LSP" -Severity $SEV_POSSIBLE `
+            -Description "Third-party Winsock LSP loaded into every networked process (often a legitimate VPN/AV, occasionally traffic-hijacking malware — verify, do NOT remove blindly: an incorrect LSP removal breaks all networking): $lspStr" `
+            -Target "$($lsp.PSPath)" -FixAction "Info" -Group "DLL Injection Persistence"
+    }
+} catch {}
+if ($injHits -eq 0) { Out-Typewriter "  -> [OK] NO SYSTEM-WIDE DLL LOAD POINTS SET." "GOOD" }
+
 Show-PhaseHeader "PHASE 23" "WINLOGON / USERINIT / SHELL HIJACK DETECTION"
 $wlPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 $wlKeys = Get-ItemProperty -Path $wlPath -ErrorAction SilentlyContinue
@@ -751,15 +948,47 @@ Show-SectionBanner "SERVICE / TASK / WMI / BITS PERSISTENCE"
 Show-PhaseHeader "PHASE 28" "ROGUE WIN32 SERVICE AUDIT"
 Out-Typewriter "QUERYING SERVICE CONTROL MANAGER..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
-$rogueServices = Get-ItemProperty "HKLM:\System\CurrentControlSet\Services\*" -ErrorAction SilentlyContinue |
-    Where-Object { $_.ImagePath -match "AppData|Temp|cmd\.exe|powershell|wscript|mshta|\.js|rundll32|regsvr32|certutil" }
+# Path test anchored to COMPONENTS (was a bare "AppData|Temp" substring, which also matched
+# "C:\Program Files\Temperature Monitor\...", anything under a "Templates" folder, etc.), and
+# `\.js` anchored so it no longer matches a ".json" config in an ImagePath. The two signals are
+# now graded separately, because only one of them is safe to auto-fire a permanent service
+# delete on (rule #1 — a legitimate signed backup/VPN helper installed under AppData must not
+# be `sc.exe delete`d by an auto-select on a healthy box):
+#   LOLBin / script-host ImagePath -> genuinely abnormal for a Win32 service -> CRITICAL + RunCmd
+#   user-path ImagePath only       -> Authenticode decides: signed = POSSIBLE + Info (review only)
+$svcLolbinRe   = 'cmd\.exe|powershell|wscript|cscript|mshta|\.js\b|\.vbs\b|rundll32|regsvr32|certutil'
+$allServices   = Get-ItemProperty "HKLM:\System\CurrentControlSet\Services\*" -ErrorAction SilentlyContinue
+$rogueServices = @($allServices | Where-Object { $_.ImagePath -match $svcLolbinRe -or $_.ImagePath -match $global:USER_PATH_RE })
 if ($rogueServices.Count -eq 0) { Out-Typewriter "  -> [OK] NO ANOMALOUS SERVICES." "GOOD" }
 foreach ($svc in $rogueServices) {
+    $svcLolbin = ($svc.ImagePath -match $svcLolbinRe)
+    $svcSigned = $false
+    if (-not $svcLolbin) {
+        # Pull the bare binary out of the ImagePath (may be quoted and carry arguments).
+        # Single call on an already-matched service — no SIG_AUDIT budget needed.
+        $svcBin = ''
+        if ("$($svc.ImagePath)" -match '([a-zA-Z]:\\[^"]+?\.(?:exe|sys|dll|com|scr))') { $svcBin = $Matches[1] }
+        if ($svcBin -and (Test-Path -LiteralPath $svcBin)) {
+            $ssig = Get-AuthSig $svcBin
+            $svcSigned = ($ssig -and $ssig.Status -eq 'Valid')
+        }
+    }
+    if ($svcSigned) {
+        Out-Decrypt -Text "$($svc.PSChildName) = $($svc.ImagePath)" -Prefix "  [USER-PATH SERVICE] "
+        Add-Finding -ID "SVC_$($svc.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 28" -ThreatType "Malicious Service" `
+            -Severity $SEV_POSSIBLE -Description "Service runs from a user-writable path but its binary is validly signed (common for third-party helper services — review only, never auto-deleted): $($svc.PSChildName) | ImagePath: $($svc.ImagePath)" `
+            -Target "Service: $($svc.PSChildName)" -FixAction "Info" -Group "Rogue Services"
+        continue
+    }
     Out-Decrypt -Text "$($svc.PSChildName) = $($svc.ImagePath)" -Prefix "  [ROGUE SERVICE] "
+    # Double any embedded single quote before interpolating into the single-quoted PS
+    # strings of the fix command — a registry key name is attacker-controllable text and
+    # would otherwise break out of the string (same class as the Phase 26 .lnk fix).
+    $svcNameEsc = "$($svc.PSChildName)" -replace "'","''"
     Add-Finding -ID "SVC_$($svc.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 28" -ThreatType "Malicious Service" `
         -Severity $SEV_CRITICAL -Description "Rogue service: $($svc.PSChildName) | ImagePath: $($svc.ImagePath)" `
         -Target "Service: $($svc.PSChildName)" -FixAction "RunCmd" `
-        -FixParam "Stop-Service '$($svc.PSChildName)' -Force; Set-Service '$($svc.PSChildName)' -StartupType Disabled; sc.exe delete '$($svc.PSChildName)'" `
+        -FixParam "Stop-Service '$svcNameEsc' -Force; Set-Service '$svcNameEsc' -StartupType Disabled; sc.exe delete '$svcNameEsc'" `
         -Group "Rogue Services"
 }
 
@@ -769,13 +998,49 @@ if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseco
 $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskPath -notmatch "\\Microsoft\\" }
 foreach ($task in $tasks) {
     $exe = $task.Actions[0].Execute; $args = $task.Actions[0].Arguments
-    if (($exe + " " + $args) -match "wscript|cscript|mshta|powershell.*-enc|powershell.*-nop|cmd|AppData|Temp|\.js|\.vbs|\.hta|regsvr32|rundll32|certutil|IEX|DownloadString|EncodedCommand") {
+    $taskAction = "$exe $args"
+    # Split into STRONG and WEAK indicators. The old single regex matched a bare "cmd"
+    # (hits any path containing those three letters), a bare "AppData|Temp" substring, and
+    # an unanchored "\.js" (matches ".json") — and every match auto-fired an
+    # Unregister-ScheduledTask at CRITICAL. Practically every third-party auto-updater
+    # executes from AppData or shells through cmd.exe, so that is a healthy-box auto-action
+    # (rule #1). The sibling task-XML content check below was already downgraded for this
+    # exact reason; this brings the action check in line.
+    #   STRONG = obfuscation / remote-payload / scriptlet execution — malicious in a task
+    #   WEAK   = merely runs from a user path or shells via cmd.exe -> Authenticode decides
+    $taskStrongRe = 'mshta|wscript|cscript|regsvr32|certutil|powershell[^;]*-enc|powershell[^;]*\benc\w*\b|powershell[^;]*-nop|\bIEX\b|DownloadString|DownloadFile|EncodedCommand|FromBase64String|\brundll32\b[^,]*,|scrobj|\.hta\b|\.vbs\b|\.jse\b|\.wsf\b'
+    $taskWeakRe   = '\bcmd\.exe\b|\.js\b|' + $global:USER_PATH_RE
+    $taskStrong   = ($taskAction -match $taskStrongRe)
+    $taskWeak     = ($taskAction -match $taskWeakRe)
+    if ($taskStrong -or $taskWeak) {
         $taskNameEsc = $task.TaskName -replace "'","''"
-        Out-Decrypt -Text $task.TaskName -Prefix "  [ROGUE TASK] "
-        Add-Finding -ID "TASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 29" -ThreatType "Task Persistence" `
-            -Severity $SEV_CRITICAL -Description "Malicious scheduled task: $($task.TaskName) | Exe: $exe $args" `
-            -Target "Task: $($task.TaskName)" -FixAction "RunCmd" -FixParam "Unregister-ScheduledTask -TaskName '$taskNameEsc' -Confirm:`$false -ErrorAction SilentlyContinue" `
-            -Group "Scheduled Task Persistence"
+        $taskFix     = "Unregister-ScheduledTask -TaskName '$taskNameEsc' -Confirm:`$false -ErrorAction SilentlyContinue"
+        $taskSigned  = $false
+        if (-not $taskStrong -and $exe) {
+            # Single sig call on an already-matched task — no SIG_AUDIT budget needed.
+            $taskBin = [Environment]::ExpandEnvironmentVariables("$exe").Trim('"')
+            if ($taskBin -and (Test-Path -LiteralPath $taskBin)) {
+                $tsig = Get-AuthSig $taskBin
+                $taskSigned = ($tsig -and $tsig.Status -eq 'Valid')
+            }
+        }
+        if ($taskStrong) {
+            Out-Decrypt -Text $task.TaskName -Prefix "  [ROGUE TASK] "
+            Add-Finding -ID "TASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 29" -ThreatType "Task Persistence" `
+                -Severity $SEV_CRITICAL -Description "Malicious scheduled task (obfuscated / remote-payload action): $($task.TaskName) | Exe: $taskAction" `
+                -Target "Task: $($task.TaskName)" -FixAction "RunCmd" -FixParam $taskFix `
+                -Group "Scheduled Task Persistence"
+        } elseif ($taskSigned) {
+            Add-Finding -ID "TASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 29" -ThreatType "Task Persistence" `
+                -Severity $SEV_POSSIBLE -Description "Scheduled task runs from a user path / via cmd.exe but its binary is validly signed (normal for third-party updaters — review only, never auto-unregistered): $($task.TaskName) | Exe: $taskAction" `
+                -Target "Task: $($task.TaskName)" -FixAction "Info" -Group "Scheduled Task Persistence"
+        } else {
+            Out-Decrypt -Text $task.TaskName -Prefix "  [UNSIGNED TASK] "
+            Add-Finding -ID "TASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 29" -ThreatType "Task Persistence" `
+                -Severity $SEV_HIGH -Description "Scheduled task with an unsigned binary running from a user path / via cmd.exe: $($task.TaskName) | Exe: $taskAction" `
+                -Target "Task: $($task.TaskName)" -FixAction "RunCmd" -FixParam $taskFix `
+                -Group "Scheduled Task Persistence"
+        }
     }
 }
 foreach ($td in @("$env:WINDIR\System32\Tasks","$env:WINDIR\SysWOW64\Tasks")) {
@@ -883,20 +1148,20 @@ foreach ($sp in @("$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup","
                         -Target $si.FullName -FixAction "Info" -Group "Startup Folder Persistence"
                     continue
                 }
-                $sig = Get-AuthSig $tgt
+                $asig = Get-AuthSig $tgt
                 $tgtSusp = ($tgt -match '\\(AppData|Temp|Downloads|Desktop|Public|ProgramData)\\.*\.(exe|scr|com|pif)$') -or ($tgt -match '\.(js|vbs|bat|cmd|ps1|hta|wsf)$')
                 # Unsigned target only stays HIGH when the target itself is in a drop location or is
                 # a script — an unsigned app in Program Files is common and stays review-only.
-                $sev = if ($sig.Status -ne 'Valid' -and $tgtSusp) { $SEV_HIGH } else { $SEV_POSSIBLE }
+                $sev = if ($asig.Status -ne 'Valid' -and $tgtSusp) { $SEV_HIGH } else { $SEV_POSSIBLE }
                 Add-Finding -ID "STARTUP_$($si.Name -replace '[^a-z0-9]','')" -Phase "PHASE 31" -ThreatType "Startup Persistence" `
-                    -Severity $sev -Description "Startup shortcut: $($si.Name) -> $tgt (target $(if ($sig.Status -ne 'Valid') {'UNSIGNED'} else {'signed'}))$(if ($sev -ne $SEV_HIGH) { ' — POSSIBLE = review-only; select manually to remove the shortcut' })" `
+                    -Severity $sev -Description "Startup shortcut: $($si.Name) -> $tgt (target $(if ($asig.Status -ne 'Valid') {'UNSIGNED'} else {'signed'}))$(if ($sev -ne $SEV_HIGH) { ' — POSSIBLE = review-only; select manually to remove the shortcut' })" `
                     -Target $si.FullName -FixAction "DeleteFile" -FixParam $si.FullName -Group "Startup Folder Persistence"
                 continue
             }
-            $sig = Get-AuthSig $si.FullName
-            $sev = if ($sig.Status -ne "Valid") { $SEV_HIGH } else { $SEV_POSSIBLE }
+            $asig = Get-AuthSig $si.FullName
+            $sev = if ($asig.Status -ne "Valid") { $SEV_HIGH } else { $SEV_POSSIBLE }
             Add-Finding -ID "STARTUP_$($si.Name -replace '[^a-z0-9]','')" -Phase "PHASE 31" -ThreatType "Startup Persistence" `
-                -Severity $sev -Description "Startup folder item: $($si.Name) ($(if ($sig.Status -ne 'Valid') {'UNSIGNED'} else {'signed'}))" `
+                -Severity $sev -Description "Startup folder item: $($si.Name) ($(if ($asig.Status -ne 'Valid') {'UNSIGNED'} else {'signed'}))" `
                 -Target $si.FullName -FixAction "DeleteFile" -FixParam $si.FullName -Group "Startup Folder Persistence"
         }
     }
@@ -908,7 +1173,14 @@ Show-PhaseHeader "PHASE 32" "DLL SEARCH ORDER HIJACK — PATH AUDIT"
 Out-Typewriter "AUDITING WRITABLE PATH ENTRIES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
 $pathDirs = $env:PATH -split ";"
+# SIG_AUDIT budget (CLAUDE.md: any loop calling Get-AuthSig over many files must carry it).
+# Every writable PATH dir x every recent .dll is unbounded, and Authenticode performs online
+# CRL/OCSP revocation checks that block ~15s each — a dev box with Git/Python/Node on PATH
+# could stall this phase for many minutes. Mirrors the Phase 10/15 budget pattern.
+$dllSigSeen = 0; $dllSigBudgetHit = $false
+$dllSigSw   = [System.Diagnostics.Stopwatch]::StartNew()
 foreach ($pd in $pathDirs) {
+    if ($dllSigBudgetHit) { break }
     if (-not (Test-Path $pd)) { continue }
     # Skip OS system directories (System32/SysWOW64/WinSxS, all under %WINDIR%). They are admin-
     # writable by design and packed with catalog-signed DLLs — NOT the DLL-search-order hijack
@@ -922,8 +1194,13 @@ foreach ($pd in $pathDirs) {
         Out-Typewriter "  -> WRITABLE PATH ENTRY: $pd" "WARN"
         $recentDlls = Get-ChildItem -Path $pd -Filter "*.dll" -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
         foreach ($dll in $recentDlls) {
-            $sig = Get-AuthSig $dll.FullName
-            if ($sig.Status -ne "Valid") {
+            if ($dllSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+                $dllSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+                $dllSigBudgetHit = $true; break
+            }
+            $dllSigSeen++
+            $asig = Get-AuthSig $dll.FullName
+            if ($asig.Status -ne "Valid") {
                 # An unsigned DLL in a writable PATH dir is corroborating evidence, NOT a standalone
                 # auto-delete: legit dev tools (Git's mingw64\bin, Python, Node, Ruby) ship piles of
                 # unsigned DLLs in their own install dirs that sit on PATH — auto-deleting them breaks
@@ -946,6 +1223,7 @@ foreach ($pd in $pathDirs) {
         }
     } catch { }
 }
+if ($dllSigBudgetHit) { Out-Typewriter "  -> SIGNATURE BUDGET REACHED — remaining PATH DLLs not signature-verified." "WARN" }
 Out-Typewriter "  -> DLL PATH AUDIT COMPLETE." "VER"
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -967,7 +1245,7 @@ if (Test-Path $hostsPath) {
     if ($badHosts) {
         foreach ($bh in $badHosts) {
             Out-Decrypt -Text $bh -Prefix "  [HOSTS HIJACK] "
-            Add-Finding -ID "HOSTS_$($bh.GetHashCode())" -Phase "PHASE 33" -ThreatType "DNS Hijack" -Severity $SEV_HIGH `
+            Add-Finding -ID "HOSTS_$(Get-StableId $bh)" -Phase "PHASE 33" -ThreatType "DNS Hijack" -Severity $SEV_HIGH `
                 -Description "Suspicious hosts entry: $bh" -Target $hostsPath -FixAction "Info" -Group "Hosts File Hijack"
         }
         Add-Finding -ID "HOSTS_PURGE" -Phase "PHASE 33" -ThreatType "DNS Hijack" -Severity $SEV_HIGH `
@@ -1020,8 +1298,45 @@ Out-Typewriter "SCANNING OPEN TCP SOCKETS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
 $conns = Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue
 $foundConn = $false
+$connSigSeen = 0; $connSigBudgetHit = $false; $connSigSw = [System.Diagnostics.Stopwatch]::StartNew()
 foreach ($conn in $conns) {
     $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue
+    # Custom IOC: operator-supplied IPs/CIDRs (review #17 — this bucket was parsed and
+    # counted but never consulted by any phase). Exact-IP match, plus a /N prefix compare
+    # so a CIDR entry works without pulling in a subnet library.
+    foreach ($cip in @($global:CustomIocs.IPs)) {
+        $cipHit = $false
+        if ($cip -like '*/*') {
+            $cipParts = $cip -split '/'
+            $cipBits  = 0; [void][int]::TryParse($cipParts[1], [ref]$cipBits)
+            try {
+                $a = ([Net.IPAddress]::Parse($cipParts[0])).GetAddressBytes()
+                $b = ([Net.IPAddress]::Parse("$($conn.RemoteAddress)")).GetAddressBytes()
+                if ($a.Length -eq $b.Length -and $cipBits -ge 0 -and $cipBits -le ($a.Length * 8)) {
+                    $cipHit = $true
+                    for ($bi = 0; $bi -lt $a.Length; $bi++) {
+                        $take = [Math]::Min(8, [Math]::Max(0, $cipBits - ($bi * 8)))
+                        if ($take -eq 0) { break }
+                        # -band 0xFF before the cast: 0xFF -shl 7 is 32640, and [byte] of that
+                        # overflows — which silently broke every prefix that is not a /8 multiple.
+                        $mask = [byte](((0xFF -shl (8 - $take)) -band 0xFF))
+                        if (($a[$bi] -band $mask) -ne ($b[$bi] -band $mask)) { $cipHit = $false; break }
+                    }
+                }
+            } catch { $cipHit = $false }
+        } elseif ("$($conn.RemoteAddress)" -eq "$cip") { $cipHit = $true }
+        if ($cipHit) {
+            $foundConn = $true
+            Out-ThreatBanner "CUSTOM IOC IP CONNECTION" "$($proc.Name) -> $($conn.RemoteAddress):$($conn.RemotePort)"
+            Add-Finding -ID "IOC_IP_$(Get-StableId ("$($conn.RemoteAddress)|$($conn.OwningProcess)"))" -Phase "PHASE 36" `
+                -ThreatType "Custom IOC" -Severity $SEV_CRITICAL `
+                -Description "Established connection to an operator-supplied IOC address ($cip): $($proc.Name) PID:$($conn.OwningProcess) -> $($conn.RemoteAddress):$($conn.RemotePort)" `
+                -Target "PID:$($conn.OwningProcess)" -FixAction "KillProcess" -FixParam $conn.OwningProcess `
+                -Group "Live Malicious Connections"
+            $global:RATHits++
+            break
+        }
+    }
     if ($STRATUM_PORTS -contains $conn.RemotePort -and $proc.Name -notmatch "^(svchost|chrome|msedge|firefox)$") {
         $foundConn = $true
         Out-ThreatBanner "CRYPTOMINER STRATUM CONNECTION" "$($proc.Name) PID:$($proc.Id) -> $($conn.RemoteAddress):$($conn.RemotePort)"
@@ -1030,14 +1345,38 @@ foreach ($conn in $conns) {
             -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Connections"
         $global:MinerHits++
     }
-    if ($proc.Path -match "AppData|Temp" -and $conn.RemotePort -notin @(80,443,8080,8443)) {
+    # Anchored to path COMPONENTS + WindowsApps excluded (was a bare "AppData|Temp"
+    # substring). A user-path process holding a non-web socket is normal on a healthy box —
+    # every Electron/updater app (Discord, Slack, Teams, Spotify) installs into
+    # %LocalAppData% and talks on non-{80,443,8080,8443} ports — so the Authenticode
+    # verdict, not the path, decides whether this is auto-actionable:
+    #   validly signed -> POSSIBLE + Info  (shown, never auto-killed)
+    #   unsigned/bad   -> HIGH + KillProcess
+    if ($proc.Path -match $global:USER_PATH_RE -and $proc.Path -notmatch $global:WINDOWSAPPS_RE `
+        -and $conn.RemotePort -notin @(80,443,8080,8443)) {
         $foundConn = $true
-        Out-Typewriter "  -> SUSPECT SOCKET (AppData/Temp proc): $($proc.Name) -> $($conn.RemoteAddress):$($conn.RemotePort)" "CRIT"
-        Add-Finding -ID "CONN_$($proc.Id)_$($conn.RemotePort)" -Phase "PHASE 36" -ThreatType "Suspicious Connection" `
-            -Severity $SEV_HIGH -Description "$($proc.Name) from AppData/Temp connecting to $($conn.RemoteAddress):$($conn.RemotePort)" `
-            -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Connections"
+        # Budgeted: Authenticode does online CRL/OCSP checks that can block ~15s each, and
+        # this loop walks every established connection.
+        if ($connSigSeen -lt $global:SIG_AUDIT_MAX_FILES -and
+            $connSigSw.Elapsed.TotalSeconds -lt $global:SIG_AUDIT_DEADLINE_S) {
+            $connSigSeen++
+            $csig = Get-AuthSig $proc.Path
+        } else { $csig = $null; $connSigBudgetHit = $true }
+        $connTrusted = ($csig -and $csig.Status -eq 'Valid')
+        if ($connTrusted) {
+            Out-Typewriter "  -> user-path proc w/ non-web socket (SIGNED — review only): $($proc.Name) -> $($conn.RemoteAddress):$($conn.RemotePort)" "WARN"
+            Add-Finding -ID "CONN_$($proc.Id)_$($conn.RemotePort)" -Phase "PHASE 36" -ThreatType "Suspicious Connection" `
+                -Severity $SEV_POSSIBLE -Description "Signed process in a user path holding a non-web connection: $($proc.Name) -> $($conn.RemoteAddress):$($conn.RemotePort) (normal for Electron/updater apps — review only, never auto-killed)" `
+                -Target "PID:$($proc.Id)" -FixAction "Info" -Group "Live Malicious Connections"
+        } else {
+            Out-Typewriter "  -> SUSPECT SOCKET (unsigned user-path proc): $($proc.Name) -> $($conn.RemoteAddress):$($conn.RemotePort)" "CRIT"
+            Add-Finding -ID "CONN_$($proc.Id)_$($conn.RemotePort)" -Phase "PHASE 36" -ThreatType "Suspicious Connection" `
+                -Severity $SEV_HIGH -Description "Unsigned process in a user path connecting to $($conn.RemoteAddress):$($conn.RemotePort): $($proc.Name)" `
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Connections"
+        }
     }
 }
+if ($connSigBudgetHit) { Out-Typewriter "  -> SIGNATURE BUDGET REACHED — remaining sockets graded without an Authenticode check." "WARN" }
 # Reverse DNS check for C2 domains
 foreach ($conn in ($conns | Select-Object -First 30)) {
     try {
@@ -1094,31 +1433,80 @@ Invoke-QuantumBar "AUDITING CERTIFICATE STORES" 10 130
 # driver roots. Flagging them all as "rogue/CRITICAL" buries the one that actually matters and would
 # (absent the safety guard) offer to nuke the entire trust store. Allowlist well-known CA/vendor
 # issuers -> INFO; only an *unrecognized* root is surfaced for review (POSSIBLE, not CRITICAL).
-$lmCerts = Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.NotBefore }
-foreach ($cert in $lmCerts) {
-    $certKnown = ("$($cert.Subject) $($cert.Issuer)" -match $TRUSTED_ROOT_CA_RE)
-    $certSev   = if ($certKnown) { $SEV_INFO } else { $SEV_POSSIBLE }
-    $certDesc  = if ($certKnown) { "Trusted root CA in LocalMachine store: $($cert.Subject)" } else { "UNRECOGNIZED root CA in LocalMachine store (verify before removing): $($cert.Subject)" }
-    Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROOT CERT] "
-    Add-Finding -ID "CERT_LM_$($cert.Thumbprint.Substring(0,8))" -Phase "PHASE 39" -ThreatType "Rogue Certificate" `
-        -Severity $certSev -Description $certDesc `
-        -Target "Cert:\LocalMachine\Root\$($cert.Thumbprint)" -FixAction "RunCmd" `
-        -FixParam "Remove-Item 'Cert:\LocalMachine\Root\$($cert.Thumbprint)' -Force" -Group "Rogue Certificates"
+# TRUST DECISION IS NO LONGER NAME-BASED (2026-07-22 review #16). The Subject/Issuer text of a
+# planted root is entirely attacker-controlled, so a bare-word allowlist ("microsoft", "windows",
+# "amazon", ...) let a MITM root self-clear to INFO just by calling itself "CN=Microsoft Update CA".
+# The authoritative local signal is membership of the Microsoft-managed AuthRoot store, which an
+# attacker cannot join: Windows caches the Trusted Root Program's thumbprints under
+# ...\SystemCertificates\AuthRoot\Certificates. Anything trusted as a root but absent from that
+# cache was added locally (enterprise GPO, a vendor installer, or an adversary) and is worth eyes.
+# The name list survives only to word the finding, never to clear it.
+$authRootThumbs = @{}
+foreach ($arKey in @(
+    'HKLM:\SOFTWARE\Microsoft\SystemCertificates\AuthRoot\Certificates',
+    'HKLM:\SOFTWARE\Microsoft\EnterpriseCertificates\AuthRoot\Certificates')) {
+    try {
+        foreach ($k in (Get-ChildItem -Path $arKey -ErrorAction SilentlyContinue)) {
+            $authRootThumbs[$k.PSChildName.ToUpper()] = $true
+        }
+    } catch {}
 }
-$userCerts = Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.NotBefore }
-foreach ($cert in $userCerts) {
-    $certKnown = ("$($cert.Subject) $($cert.Issuer)" -match $TRUSTED_ROOT_CA_RE)
-    # A user-store root added outside the OS program is the classic adversary trick, so an
-    # unrecognized one here is slightly more notable than in LM, but still POSSIBLE (not auto-acted).
-    $certSev   = if ($certKnown) { $SEV_INFO } else { $SEV_POSSIBLE }
-    $certDesc  = if ($certKnown) { "Trusted root CA in CurrentUser store: $($cert.Subject)" } else { "UNRECOGNIZED root CA in CurrentUser store (verify before removing): $($cert.Subject)" }
-    Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROOT CERT] "
-    Add-Finding -ID "CERT_USER_$($cert.Thumbprint.Substring(0,8))" -Phase "PHASE 39" -ThreatType "Rogue Certificate" `
-        -Severity $certSev -Description $certDesc `
-        -Target "Cert:\CurrentUser\Root\$($cert.Thumbprint)" -FixAction "RunCmd" `
-        -FixParam "Remove-Item 'Cert:\CurrentUser\Root\$($cert.Thumbprint)' -Force" -Group "Rogue Certificates"
+# Install time of the store entry (registry key LastWriteTime) — a root planted during the
+# incident window is far more interesting than one that shipped with the image. Not spoofable
+# from the certificate itself the way NotBefore is.
+# NOTE the fixed 30-day window below rather than Test-InScope: an all-time scan (-Hours 0, the
+# default for GUI runs) makes Test-InScope return $true for everything, which would grade every
+# root HIGH. A fixed recency window keeps this signal meaningful in every mode.
+$CERT_RECENT_DAYS = 30
+function Get-CertStoreInstallTime {
+    param([string]$StoreRegPath, [string]$Thumbprint)
+    try {
+        $ik = Get-Item -Path (Join-Path $StoreRegPath $Thumbprint) -ErrorAction SilentlyContinue
+        if ($ik) { return $ik.LastWriteTime }
+    } catch {}
+    return $null
 }
-if ($lmCerts.Count -eq 0 -and $userCerts.Count -eq 0) { Out-Typewriter "  -> [OK] CERTIFICATE STORES CLEAN." "GOOD" }
+$certStores = @(
+    @{ Cert='Cert:\LocalMachine\Root'; Reg='HKLM:\SOFTWARE\Microsoft\SystemCertificates\Root\Certificates'; Label='LocalMachine'; Id='LM'   },
+    @{ Cert='Cert:\CurrentUser\Root';  Reg='HKCU:\SOFTWARE\Microsoft\SystemCertificates\Root\Certificates'; Label='CurrentUser'; Id='USER' }
+)
+$certSeen = 0
+foreach ($cs in $certStores) {
+    $stCerts = Get-ChildItem $cs.Cert -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.NotBefore }
+    $certSeen += @($stCerts).Count
+    foreach ($cert in $stCerts) {
+        $msManaged  = $authRootThumbs.ContainsKey("$($cert.Thumbprint)".ToUpper())
+        $nameHint   = ("$($cert.Subject) $($cert.Issuer)" -match $TRUSTED_ROOT_CA_RE)
+        $instTime   = Get-CertStoreInstallTime -StoreRegPath $cs.Reg -Thumbprint $cert.Thumbprint
+        $freshInst  = ($instTime -and $instTime -gt (Get-Date).AddDays(-$CERT_RECENT_DAYS))
+        # Windows' OS-BUILT-IN roots are not in the AuthRoot auto-update cache (that cache holds
+        # the third-party program members), so AuthRoot membership alone graded ~40 perfectly
+        # legitimate shipped roots as "not in the trust program" — a POSSIBLE flood on every
+        # healthy box. Either signal clears a root; what an attacker CANNOT fake is the store
+        # entry's install time, so that is what escalates, name allowlist or not.
+        if (($msManaged -or $nameHint) -and -not $freshInst) {
+            $certSev  = $SEV_INFO
+            $certDesc = "Recognised root CA in the $($cs.Label) trust store: $($cert.Subject)"
+        } elseif ($freshInst) {
+            # Added/rewritten inside the scan window — the shape of an active MITM plant.
+            # A matching vendor name does NOT clear this; that is exactly the evasion.
+            $certSev  = $SEV_HIGH
+            $certDesc = "Root CA trust entry INSTALLED/MODIFIED in the last $CERT_RECENT_DAYS days ($instTime) in the $($cs.Label) store — verify provenance before trusting$(if ($nameHint) { ' (the name resembles a well-known CA, but an attacker chooses that name freely — NOT proof)' }): $($cert.Subject)"
+        } else {
+            $certSev  = $SEV_POSSIBLE
+            $certDesc = "Root CA trusted locally but not recognised (absent from the Microsoft AuthRoot cache and from the known-CA name list) in the $($cs.Label) store — normal for an enterprise/GPO or vendor root, but verify before trusting: $($cert.Subject)"
+        }
+        Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROOT CERT] "
+        # FixAction Info, with the removal command in the description: the certificate trust
+        # store is a Test-ProtectedTarget HARD block on all three layers anyway, so a RunCmd
+        # here could never execute — this way the operator at least gets the exact command.
+        Add-Finding -ID "CERT_$($cs.Id)_$($cert.Thumbprint.Substring(0,8))" -Phase "PHASE 39" -ThreatType "Rogue Certificate" `
+            -Severity $certSev -Description "$certDesc || To remove by hand after verifying: Remove-Item '$($cs.Cert)\$($cert.Thumbprint)' -Force" `
+            -Target "$($cs.Cert)\$($cert.Thumbprint)" -FixAction "Info" `
+            -Group "Rogue Certificates"
+    }
+}
+if ($certSeen -eq 0) { Out-Typewriter "  -> [OK] CERTIFICATE STORES CLEAN." "GOOD" }
 
 Show-PhaseHeader "PHASE 40" "BCD STORE — DRIVER SIGNING / TESTSIGNING AUDIT"
 Out-Typewriter "AUDITING BCD STORE FOR SIGNING BYPASS..." "INFO"
@@ -1182,6 +1570,58 @@ Out-Typewriter "  -> LOCAL ADMIN GROUP LOGGED TO REPORT." "VER"
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+Show-PhaseHeader "PHASE 42.5" "HIDDEN & SHADOW ADMIN ACCOUNTS"
+Out-Typewriter "CHECKING FOR ACCOUNTS HIDDEN FROM THE LOGON SCREEN..." "HUNT"
+# Phase 42 flags suspiciously-NAMED enabled accounts. This phase covers what a careful
+# intruder does instead: keep an ordinary-looking name and HIDE the account from the logon
+# screen and Settings via SpecialAccounts\UserList, and/or hold Administrators membership
+# through an entry that is not a local user at all.
+$shadowHits = 0
+if ($HIDDEN_ACCOUNT_REG -and (Test-Path -LiteralPath $HIDDEN_ACCOUNT_REG)) {
+    $hidProps = Get-ItemProperty -LiteralPath $HIDDEN_ACCOUNT_REG -ErrorAction SilentlyContinue
+    if ($hidProps) {
+        foreach ($hp in $hidProps.PSObject.Properties) {
+            if ($hp.Name -like 'PS*') { continue }
+            if ([int]"$($hp.Value)" -ne 0) { continue }   # 0 = hidden from the logon UI
+            $shadowHits++
+            $hidUser = Get-LocalUser -Name $hp.Name -ErrorAction SilentlyContinue
+            $hidIsAdmin = $false
+            foreach ($am in (Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue)) {
+                if ("$($am.Name)" -match "\\$([regex]::Escape($hp.Name))$") { $hidIsAdmin = $true; break }
+            }
+            Out-ThreatBanner "HIDDEN ACCOUNT" "$($hp.Name)$(if ($hidIsAdmin) { ' (ADMINISTRATOR)' })"
+            Add-Finding -ID "HIDDENACCT_$($hp.Name -replace '[^a-z0-9]','')" -Phase "PHASE 42.5" `
+                -ThreatType "Hidden / Shadow Admin Account" -Severity $(if ($hidIsAdmin) { $SEV_CRITICAL } else { $SEV_HIGH }) `
+                -Description "Account '$($hp.Name)' is hidden from the logon screen and Settings via SpecialAccounts\UserList$(if ($hidIsAdmin) { ' AND is a member of Administrators' })$(if ($hidUser) { " (enabled=$($hidUser.Enabled), last logon $($hidUser.LastLogon))" } else { ' (no matching local user — stale entry or domain account)' }). Unhide with: Remove-ItemProperty '$HIDDEN_ACCOUNT_REG' -Name '$($hp.Name)'" `
+                -Target "$HIDDEN_ACCOUNT_REG|$($hp.Name)" -FixAction "DeleteReg" -FixParam "$HIDDEN_ACCOUNT_REG|$($hp.Name)" `
+                -Group "Suspicious Accounts"
+        }
+    }
+}
+# Accounts whose NAME matches the shadow-admin conventions (trailing $ to mimic a machine
+# account, support_/healthcheck/backupadmin style service names). Review-only, exactly like
+# Phase 42 — a name pattern must never disable a real user (rule #1).
+foreach ($lu in (Get-LocalUser -ErrorAction SilentlyContinue)) {
+    if (-not $lu.Enabled) { continue }
+    if ("$($lu.Name)" -notmatch $SUSPICIOUS_ACCOUNT_RE) { continue }
+    $shadowHits++
+    Add-Finding -ID "SHADOWACCT_$($lu.Name -replace '[^a-z0-9]','')" -Phase "PHASE 42.5" `
+        -ThreatType "Hidden / Shadow Admin Account" -Severity $SEV_POSSIBLE `
+        -Description "Enabled local account '$($lu.Name)' matches a shadow-admin naming convention (machine-account-style trailing '$', or a generic service/support name intruders favour). Verify with the owner; if unauthorized: Disable-LocalUser -Name '$($lu.Name)'" `
+        -Target "LocalUser: $($lu.Name)" -FixAction "Info" -Group "Suspicious Accounts"
+}
+# Administrators members that resolve to no local user AND no recognisable domain principal.
+foreach ($am in (Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue)) {
+    if ("$($am.ObjectClass)" -ne 'User') { continue }
+    if ("$($am.PrincipalSource)" -in @('Local','ActiveDirectory','MicrosoftAccount','AzureAD')) { continue }
+    $shadowHits++
+    Add-Finding -ID "ORPHANADMIN_$(Get-StableId "$($am.Name)")" -Phase "PHASE 42.5" `
+        -ThreatType "Hidden / Shadow Admin Account" -Severity $SEV_HIGH `
+        -Description "Administrators contains '$($am.Name)' whose principal source is unresolvable ($($am.PrincipalSource)) — an orphaned SID retains admin rights and is a known persistence trick." `
+        -Target "Administrators: $($am.Name)" -FixAction "Info" -Group "Suspicious Accounts"
+}
+if ($shadowHits -eq 0) { Out-Typewriter "  -> [OK] NO HIDDEN OR SHADOW ADMIN ACCOUNTS." "GOOD" }
+
 Show-PhaseHeader "PHASE 43" "SAM / HIVENIGHTMARE (CVE-2021-36934) AUDIT"
 Out-Typewriter "VERIFYING SAM HIVE PERMISSIONS + HIVENIGHTMARE CHECK..." "INFO"
 $samPerms = cmd.exe /c "icacls %WINDIR%\System32\config\SAM 2>&1"
@@ -1248,6 +1688,94 @@ foreach ($proc in $elevatedInUS) {
 Out-Typewriter "  -> TOKEN AUDIT COMPLETE." "VER"
 
 }   # end QUICK-skip block
+Show-PhaseHeader "PHASE 44.5" "CREDENTIAL ACCESS ARTIFACTS (LSASS DUMPS / HIVES / DPAPI)"
+Out-Typewriter "HUNTING FOR CREDENTIAL-THEFT RESIDUE..." "HUNT"
+# The dumping TOOL is usually long gone by the time anyone looks; the OUTPUT is what remains.
+# An LSASS minidump or an exported SAM/SECURITY/SYSTEM hive on disk means credentials for this
+# machine (and anything it can reach) must be considered compromised.
+$credHits = 0
+$credRoots = @($env:TEMP, "$env:WINDIR\Temp", $env:LOCALAPPDATA, $env:APPDATA,
+               "$env:USERPROFILE\Downloads", "$env:USERPROFILE\Desktop", "$env:ProgramData", "$env:PUBLIC")
+$credRe = ($CRED_DUMP_ARTIFACTS | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
+$credFiles = (Get-ScanFiles -Path $credRoots)
+# LIVE-TUNED 2026-07-22: the generic wordlist-style names below matched Chromium's own
+# ZxcvbnData\passwords.txt (a password-STRENGTH dictionary). Those names are guesses, not
+# evidence, so they are review-only; the specific artifact names (lsass dumps, exported hives,
+# NTDS, kerberos tickets) keep their CRITICAL grade.
+$credGenericRe = '^(hashes|hashdump.*|secretsdump.*|creds|passwords|wce)\.txt$'
+foreach ($cf in $credFiles) {
+    if ($cf.Name -notmatch $credRe) { continue }
+    if (Test-BenignPath $cf.FullName $YARA_BENIGN_RE) { continue }   # package/library trees
+    $credHits++
+    if ($cf.Name -match $credGenericRe) {
+        Add-Finding -ID "CREDART_$(Get-StableId $cf.FullName)" -Phase "PHASE 44.5" `
+            -ThreatType "Credential Access" -Severity $SEV_POSSIBLE `
+            -Description "File name matches a credential-dump output convention, but the name alone is weak evidence (password dictionaries and app data collide with it) — review, never auto-acted: $($cf.FullName)" `
+            -Target $cf.FullName -FixAction "Info" -Group "Credential Access"
+        continue
+    }
+    Out-ThreatBanner "CREDENTIAL DUMP ARTIFACT" $cf.FullName
+    Add-Finding -ID "CREDART_$(Get-StableId $cf.FullName)" -Phase "PHASE 44.5" `
+        -ThreatType "Credential Access" -Severity $SEV_CRITICAL `
+        -Description "Credential-theft artifact on disk ($([Math]::Round($cf.Length/1KB)) KB): $($cf.FullName) — treat every credential used on this machine as compromised and force a reset." `
+        -Target $cf.FullName -FixAction "Quarantine" -FixParam $cf.FullName -Group "Credential Access"
+    $global:BackdoorHits++
+}
+# DPAPI master keys / Credential Manager blobs copied OUT of their protected home directory.
+# The originals are normal; a copy anywhere else is theft staging.
+foreach ($dp in $DPAPI_THEFT_PATHS) {
+    if (-not (Test-Path -LiteralPath $dp)) { continue }
+    Write-Log "DPAPI store present (normal): $dp"
+}
+# LIVE-TUNED 2026-07-22: the first cut flagged any GUID-named file under 64 KB in these roots
+# and produced 99 HIGH+Quarantine findings on a healthy box — GUID filenames are ubiquitous
+# (browser profiles, installer and package caches). Filename shape is now only the cheap
+# PRE-FILTER; the finding requires the file to actually BE a DPAPI blob, confirmed by its magic
+# header (version DWORD 0x02000000 followed by the provider GUID as UTF-16LE). That is not
+# something a benign cache file collides with.
+$dpapiStaged = (Get-ScanFiles -Path @($env:TEMP, "$env:USERPROFILE\Downloads", "$env:PUBLIC", "$env:ProgramData"))
+foreach ($ds in $dpapiStaged) {
+    if ($ds.Name -notmatch '^\{?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}?$' -and
+        $ds.Name -notmatch '^[0-9A-F]{32,}$') { continue }
+    if ($ds.Length -gt 64KB -or $ds.Length -lt 24) { continue }
+    $isDpapi = $false
+    try {
+        $fsD = [System.IO.File]::OpenRead($ds.FullName)
+        try {
+            $hdr = New-Object byte[] 24
+            $readD = $fsD.Read($hdr, 0, 24)
+            # 02 00 00 00 = DPAPI master-key/blob version, then a UTF-16LE GUID (ASCII hex + NULs).
+            if ($readD -ge 24 -and $hdr[0] -eq 2 -and $hdr[1] -eq 0 -and $hdr[2] -eq 0 -and $hdr[3] -eq 0 -and
+                $hdr[5] -eq 0 -and $hdr[7] -eq 0 -and $hdr[9] -eq 0) { $isDpapi = $true }
+        } finally { $fsD.Dispose() }
+    } catch { $isDpapi = $false }
+    if (-not $isDpapi) { continue }
+    $credHits++
+    Add-Finding -ID "DPAPISTAGE_$(Get-StableId $ds.FullName)" -Phase "PHASE 44.5" `
+        -ThreatType "Credential Access" -Severity $SEV_HIGH `
+        -Description "A file with the DPAPI blob header is sitting outside its protected store — the staging step for offline credential decryption: $($ds.FullName)" `
+        -Target $ds.FullName -FixAction "Quarantine" -FixParam $ds.FullName -Group "Credential Access"
+}
+# Live command lines performing credential access (comsvcs MiniDump, reg save of the hives,
+# ntdsutil IFM, shadow-copy-for-hive-theft). Uses the shared process snapshot.
+foreach ($cp in (Get-ProcSnapshot)) {
+    $cl = "$($cp.CommandLine)"
+    if (-not $cl) { continue }
+    foreach ($cr in $CRED_THEFT_CMD_RULES) {
+        if ($cl -notmatch $cr.Pattern) { continue }
+        $credHits++
+        $csev = switch ("$($cr.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
+        Out-ThreatBanner "CREDENTIAL ACCESS COMMAND" "$($cp.Name) (PID $($cp.ProcessId))"
+        Add-Finding -ID "CREDCMD_$($cp.ProcessId)_$($cr.Name -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 44.5" `
+            -ThreatType "Credential Access" -Severity $csev `
+            -Description "$($cr.Why) — PID $($cp.ProcessId) ($($cp.Name)): $($cl.Substring(0, [Math]::Min(220, $cl.Length)))" `
+            -Target "PID:$($cp.ProcessId)" -FixAction $(if ($csev -eq $SEV_POSSIBLE) { "Info" } else { "KillProcess" }) `
+            -FixParam $cp.ProcessId -Group "Credential Access"
+        break
+    }
+}
+if ($credHits -eq 0) { Out-Typewriter "  -> [OK] NO CREDENTIAL-ACCESS ARTIFACTS." "GOOD" }
+
 Show-PhaseHeader "PHASE 45" "ACCESSIBILITY SHELL BACKDOOR (STICKY KEYS / UTILMAN)"
 $accessFiles = @(
     "$env:WINDIR\System32\sethc.exe","$env:WINDIR\System32\utilman.exe",
@@ -1256,8 +1784,8 @@ $accessFiles = @(
 )
 foreach ($af in $accessFiles) {
     if (Test-Path $af) {
-        $sig = Get-AuthSig $af
-        if ($sig.Status -ne "Valid") {
+        $asig = Get-AuthSig $af
+        if ($asig.Status -ne "Valid") {
             Out-Typewriter "  -> UNSIGNED ACCESSIBILITY BINARY: $af" "CRIT"
             Add-Finding -ID "STICKY_$([IO.Path]::GetFileNameWithoutExtension($af))" -Phase "PHASE 45" `
                 -ThreatType "Sticky Keys / Accessibility Backdoor" -Severity $SEV_CRITICAL `
@@ -1269,6 +1797,46 @@ foreach ($af in $accessFiles) {
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+Show-PhaseHeader "PHASE 45.5" "RDP EXPOSURE & OPERATOR HARDENING SET"
+Out-Typewriter "AUDITING REMOTE-ACCESS EXPOSURE AND ANTI-REINFECTION POSTURE..." "INFO"
+# Everything this phase emits is OPERATOR-ONLY by design (user decision 2026-07-22): Info or
+# POSSIBLE severity with a RunCmd, so the CRITICAL/HIGH auto-select can never fire any of it
+# on a healthy box (rule #1). The GUI's APPLY HARDENING button selects them as a group.
+$hardenExtra = 0
+foreach ($rc in $RDP_HARDENING_CHECKS) {
+    if (-not (Test-Path -LiteralPath $rc.Path)) { continue }
+    $cur = Get-RegVal -Path $rc.Path -Name $rc.Name
+    $needs = $false
+    if ($rc.Compare -eq 'eq') { $needs = ("$cur" -ne "$($rc.SafeValue)") }
+    else                      { $needs = ($null -eq $cur -or [int]$cur -lt [int]$rc.SafeValue) }
+    if (-not $needs) { continue }
+    $hardenExtra++
+    Add-Finding -ID "RDPHARDEN_$($rc.Name -replace '[^a-z0-9]','')" -Phase "PHASE 45.5" `
+        -ThreatType "Remote Access Exposure" -Severity $SEV_POSSIBLE `
+        -Description "$($rc.Why). Current=$(if ($null -eq $cur) { '<unset>' } else { $cur }), hardened=$($rc.SafeValue). Operator-applied only." `
+        -Target "$($rc.Path)|$($rc.Name)" -FixAction "RunCmd" `
+        -FixParam "New-Item -Path '$($rc.Path)' -Force | Out-Null; Set-ItemProperty -Path '$($rc.Path)' -Name '$($rc.Name)' -Value $($rc.SafeValue) -Type DWord -Force" `
+        -Group "Operator Hardening"
+}
+# The shared hardening set (LSA PPL, WDigest, SMB1, AutoRun, script-block logging, LLMNR, UAC).
+foreach ($ha in $WS6_HARDENING_ACTIONS) {
+    $curH = Get-RegVal -Path $ha.Path -Name $ha.Name
+    # NoDriveTypeAutoRun and ConsentPromptBehaviorAdmin want an exact value; the rest are "at least".
+    $needH = if ($ha.Id -in @('AUTORUN_OFF','UAC_ADMIN_PROMPT','WDIGEST_OFF','SMB1_OFF','LLMNR_OFF')) {
+        ("$curH" -ne "$($ha.SafeValue)")
+    } else {
+        ($null -eq $curH -or [int]$curH -lt [int]$ha.SafeValue)
+    }
+    if (-not $needH) { continue }
+    $hardenExtra++
+    Add-Finding -ID "HARDEN6_$($ha.Id)" -Phase "PHASE 45.5" `
+        -ThreatType "Hardening Opportunity" -Severity $SEV_INFO `
+        -Description "$($ha.Why). Current=$(if ($null -eq $curH) { '<unset>' } else { $curH }), hardened=$($ha.SafeValue). Operator-applied only — reversible." `
+        -Target "$($ha.Path)|$($ha.Name)" -FixAction "RunCmd" -FixParam "$($ha.Fix)" `
+        -Group "Operator Hardening"
+}
+if ($hardenExtra -eq 0) { Out-Typewriter "  -> [OK] REMOTE-ACCESS AND HARDENING POSTURE ALREADY GOOD." "GOOD" }
+
 Show-PhaseHeader "PHASE 46" "NULL SESSION / NTLM LEVEL / FINAL LSA HARDENING"
 Out-Typewriter "AUDITING LSA SECURITY SETTINGS..." "INFO"
 $lsaPath = "HKLM:\System\CurrentControlSet\Control\Lsa"
@@ -1317,7 +1885,7 @@ if (-not $hookHits) { Out-Typewriter "  -> [OK] NO OBVIOUS HOOK KEYLOGGER PROCES
 Show-PhaseHeader "PHASE 48" "KEYLOGGER FILE & REGISTRY ARTIFACT SCAN" "KEYLOGGER"
 Out-Typewriter "SCANNING FOR KEYSTROKE LOG FILES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$klFilePatterns = @("*keystroke*","*keylog*","*keypress*","*kgb*","*.klg","*.kl","*typed*","*capture*log*","*hook.log*")
+$klFilePatterns = $KEYLOGGER_FILE_PATTERNS   # DATA (WS5) — see data\detection_signatures.json
 $klSearchPaths  = @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Documents")
 # One bounded walk, anchored regex over all patterns (was 4 roots x 9 patterns = 36 recursions).
 $klRegex = ($klFilePatterns | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
@@ -1326,7 +1894,7 @@ $klHits = (Get-ScanFiles -Path $klSearchPaths -TimeScoped) | Where-Object { $_.N
 foreach ($hit in $klHits) {
     # Name heuristics (*typed*, *capture*log*) hit library marker files inside package-manager
     # trees (py.typed in site-packages et al.) — allowlisted paths are review-only.
-    if ($hit.FullName -match $KEYLOG_BENIGN_RE) {
+    if (Test-BenignPath $hit.FullName $KEYLOG_BENIGN_RE) {
         Add-Finding -ID "KLFILE_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 48" -ThreatType "Keylogger" `
             -Severity $SEV_POSSIBLE -Description "File name resembles a keystroke log but sits in a package/library tree (likely a library file — review, not auto-deleted): $($hit.FullName)" `
             -Target $hit.FullName -FixAction "Info" -Group "Keylogger Artifacts"
@@ -1339,7 +1907,7 @@ foreach ($hit in $klHits) {
         -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Keylogger Artifacts"
     $global:KeyloggerHits++; $klFound = $true
 }
-$klRegPaths = @("HKCU:\SOFTWARE\Ardamax","HKCU:\SOFTWARE\Spyrix","HKCU:\SOFTWARE\Refog","HKCU:\SOFTWARE\KGB Spy","HKCU:\SOFTWARE\Revealer Keylogger","HKCU:\SOFTWARE\Elite Keylogger","HKCU:\SOFTWARE\Actual Keylogger")
+$klRegPaths = $KEYLOGGER_REG_PATHS   # DATA (WS5) — commercial-keylogger vendor keys, see data\detection_signatures.json
 foreach ($kr in $klRegPaths) {
     if (Test-Path $kr) {
         Out-ThreatBanner "KEYLOGGER REGISTRY KEY" $kr

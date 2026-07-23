@@ -104,8 +104,9 @@ so the live stream drives the in-scan experience and the report drives triage/re
    `PURGE` confirmation.
 
 Regression metric: **auto-destructive count from a full `-Hours 0` DEEP baseline** — currently
-**52**, all by-design (tripwires + posture items + known 1-off FPs awaiting user sign-off).
-Re-grade after any severity/FixAction change.
+**39**, all by-design (tripwires + posture items + genuine unsigned-script signal). The older
+**52** figure was the *pre*-round-6 reference; FP round 6 (2026-07-02, `CHANGELOG.md`) cleared the
+remaining healthy-box tail and re-based it at 39. Re-grade after any severity/FixAction change.
 
 ## 5. Quality gates (all must pass before a change ships)
 
@@ -149,7 +150,32 @@ now also eyeballing the live finding ticker/chips + clean banner glyphs. Runbook
 ### Now (current/next session)
 - **Live GUI click-through** (user-driven; runbook in `HANDOFF.md`) — closes the last
   acceptance gap and visually confirms the new live-finding stream + UTF-8 banners.
-- Push the unpushed local commits on `main`.
+  Now also needs to confirm the CSRF-token handshake (the GUI fetches `/api/csrf` at boot;
+  a 403 on any POST means the token or the origin lock is misbehaving) and the three
+  previously-inert launchpad toggles (snapshot / baseline diff / CSV export).
+- **USB field test on a real foreign box** — the only other open acceptance item.
+
+### Done 2026-07-22 — full review remediation + WS6 detections + UX pass
+`REVIEW_FINDINGS_2026-07-22.md` applied in full (all 56 findings) — see `CHANGELOG.md` for the
+narrative. Load-bearing outcomes: the two missing engine-module `trap`s restored; the server's
+wildcard-CORS **cross-origin remediation hole** closed with an origin lock + per-process CSRF
+token (verified live against a 6-case matrix); the anchored-path cluster (P28/29/36/69/83) fixed
+so no auto-selected destructive action is gated on a bare `"AppData|Temp"` substring; the
+rollback snapshot made a *valid* `.reg` file (it imported nothing before) and extended to
+GUI-driven remediation, which previously took no snapshot at all.
+
+**WS6 — 9 new fractional phases** (17.5 timestomp · 21.5 SilentProcessExit/EDR-blinding IFEO/COM
+TypeLib · 22.5 AppCert/netsh/Winsock LSP · 42.5 hidden & shadow admin · 44.5 credential-access
+artifacts · 45.5 RDP exposure + hardening set · 68.5 ClickFix/fake-CAPTCHA RunMRU residue ·
+82.5 RMM abuse · 100.5 cloud/session token theft), 31 new AMSI-safe signature keys, all
+MITRE-mapped. **Every hardening/lockdown action is operator-only** (Info/POSSIBLE + RunCmd, never
+auto-selected — rule #1); the GUI's **SELECT HARDENING** button is the opt-in.
+
+Live-validated: DEEP 115 phases, 0 recovered errors, **WS6 contributes 0 auto-destructive
+findings**. Two WS6 FP floods were caught by that validation and tuned before shipping (a
+GUID-filename DPAPI heuristic that hit 99 benign cache files — now requires the actual DPAPI
+blob magic; and "created-after-write" timestomping, which is just what copying does — now
+POSSIBLE-only, with the auto-actionable grade reserved for zeroed/epoch timestamps).
 
 ### Done 2026-07-02 — portable distribution
 `tools/Build-Release.ps1` builds the transferable artifact: validates every script

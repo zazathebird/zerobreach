@@ -6,6 +6,231 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-22 — full-repo review remediation (all 56 findings) + WS6 detections + UX pass
+
+Applied `REVIEW_FINDINGS_2026-07-22.md` in full — every CRITICAL/HIGH/MEDIUM/LOW finding, the
+10 GUI/UX proposals, and a new detection expansion on top. The review document is now closed.
+
+### CRITICAL
+
+**Two engine modules were missing their mandatory top-level `trap`.** `engine/Summary.ps1` and
+`engine/FixMode.ps1` — the two files CLAUDE.md names *explicitly* — had none, so any terminating
+error in `Summary.ps1` fell straight through into `FixMode.ps1`'s interactive prompts: the exact
+"hung `-Auto` run" the engine-split rules exist to prevent, reintroduced in the files the rule was
+written for. Both now open with `trap { Write-RecoveredError $_; continue }`.
+
+**Cross-origin remediation (CSRF).** Every response carried `Access-Control-Allow-Origin: *` and
+the OPTIONS preflight answered `GET, POST, OPTIONS` for any origin, so **any page in the
+operator's browser — an ad, a compromised vendor site — could `POST /api/remediate` and drive
+real file deletes, registry deletes and process kills, completely bypassing the typed-`PURGE`
+modal.** "Locally bound" never meant "only the GUI can reach it". Fixed with two independent
+locks, both enforced *ahead of the route table* so a future POST route cannot forget them:
+Origin/Referer must match this server's own address, and a per-process random token
+(`GET /api/csrf` → `X-ZB-Token`) must be echoed. No ACAO header is sent at all now, so a foreign
+page cannot read the token even if it reaches the route. A request with **neither** Origin nor
+Referer is treated as a non-browser client (curl / the headless harness) and allowed without a
+token — unreachable from a web page, which is the whole threat model here.
+Verified live: cross-origin POST → 403, missing token → 403, wrong token → 403, same-origin +
+token → 200, no-Origin client → 200, cross-origin `Referer` → 403.
+
+### The anchored-path cluster (#4/#5/#6/#7) — the same bug class, four more times
+
+CLAUDE.md already documents "anchor folder-name tests to path COMPONENTS" (the WhatsAppDesktop
+auto-kill). Four sites had never had it applied, and every one of them gated an **auto-selected
+destructive action** on a bare `"AppData|Temp"` substring:
+
+- **Phase 36** — HIGH + `KillProcess` on any process whose path merely contained those letters
+  and held a non-web socket. Every Electron/updater app (Discord, Slack, Teams, Spotify) matches.
+  Now anchored, WindowsApps excluded, and the Authenticode verdict decides: signed → POSSIBLE +
+  Info (shown, never killed), unsigned → HIGH + KillProcess. Carries a `SIG_AUDIT` budget.
+- **Phase 28** — CRITICAL + `RunCmd` running `Stop-Service; Set-Service -Disabled; sc.exe delete`.
+  A legitimate signed helper service under AppData was permanently deleted. Split: LOLBin/script-
+  host ImagePath → CRITICAL + RunCmd; user-path only → signed = POSSIBLE + Info. Also anchored
+  `\.js` (was matching `.json`) and escaped the service name in the generated command.
+- **Phase 29** — CRITICAL + task unregister on a bare `cmd` / `AppData` / `Temp` match. Practically
+  every third-party auto-updater matched. Split into STRONG (obfuscation/remote-payload/scriptlet
+  → CRITICAL) vs WEAK (`\bcmd\.exe\b` or user path → Authenticode decides). The sibling task-XML
+  check had already been downgraded for this exact reason years earlier; the action check never was.
+- **Phases 69 / 83** — already required an invalid signature, so only the anchoring was missing.
+
+Live DEEP on this box: Phase 29 went from 3 × CRITICAL+RunCmd to 2 POSSIBLE/Info + 1 HIGH/RunCmd.
+
+### Remediation correctness
+
+- **The rollback snapshot was not a valid `.reg` file.** It was built by concatenating `reg export`
+  output after a plain-text banner, with no `Windows Registry Editor Version 5.00` magic — so the
+  `regedit /S` restore the tool prints to the operator imported *nothing*. The safety net was
+  decorative. Now emits the magic header, comments the provenance banner with `;`, and strips the
+  duplicate header from each chunk.
+- **GUI-driven remediation took no snapshot at all** (only the console fix mode did), so a
+  mistaken PURGE had nothing to roll back. The remediation runspace now exports one first,
+  honouring the launchpad's previously-inert "Create Rollback Snapshot" checkbox.
+- **`DeleteReg` reported success without verifying.** Every sibling action checks its
+  post-condition; `DeleteReg` alone called `Remove-ItemProperty -EA SilentlyContinue` and reported
+  `applied` unconditionally — telling the operator a persistence value was gone while it was still
+  armed. Now verified.
+- **Raw `Get-ItemPropertyValue` in the reboot-queue fallback** (a call CLAUDE.md bans outright)
+  threw whenever `PendingFileRenameOperations` did not already exist — i.e. on any never-rebooted
+  box, on the code path that handles a *locked malware file*. Added a runspace-local `RGet-RegVal`.
+
+### Self-allowlisting evasions closed
+
+- `cloaked_benign_names` matched bare substrings against an attacker-chosen filename — a
+  hidden+system payload evaded Phase 18 entirely by calling itself `iconcache_x.exe`. Anchored.
+- `trusted_root_ca_issuers` downgraded a rogue root CA to INFO if its Subject contained
+  "microsoft" — so a MITM root named `CN=Microsoft Update CA` cleared itself. The trust decision
+  is no longer name-based: it now keys on membership of the Microsoft-managed **AuthRoot** cache
+  (which an attacker cannot join) plus the store registry key's **install time**, and a root
+  installed in the last 30 days is HIGH *regardless of its name*.
+  **Tuning note:** the first cut keyed on AuthRoot membership *alone* and produced a 42-finding
+  POSSIBLE flood on a healthy box — Windows' OS-built-in roots are not in that cache (it holds the
+  third-party program members). Corrected to "AuthRoot **or** name list clears it; install
+  recency escalates regardless", which on this box gives 62 INFO / 1 POSSIBLE / 0 HIGH.
+- `yara_benign_paths` / `sct_benign_paths` / `keylogger_benign_paths` / `miner_config_benign_paths`
+  keyed on `\node_modules\` and `\site-packages\`, folder names an attacker can simply create.
+  Tightened to `\lib\site-packages\` and `\node_modules\<pkg>\`, and gated behind a new
+  `Test-BenignPath` **veto**: a benign-path match is ignored outright when the file sits in a
+  staging dir (`\Downloads\`, `\Public\`, `\Temp\` — with pip's genuine temp build dirs carved back out).
+
+### Dead code, dead data, dead UI — all either wired up or removed
+
+- **Deleted 5 unreachable destructive helpers** from the loader (`Invoke-VerifiedAnnihilation`,
+  `Invoke-VerifiedRegScrub`, `Invoke-SectorScan`, `Invoke-RegSectorScan`, `Reset-FilePermissions`).
+  Zero call sites anywhere; one ran an unscoped `icacls /reset /T` on a caller-supplied path —
+  precisely the whole-drive catastrophe FP round 5 removed from Phase 108.
+- **Custom IOCs were 80% inert.** `Import-CustomIocs` filled Hashes/Domains/IPs/Regex/Files but
+  **only `.Hashes` was ever read** — an operator adding a known-bad domain or IP via the IOC
+  Manager got a counter that went up and no coverage. All five buckets are now consumed: domains
+  join the narrow malware-C2 list (Phase 34/36), IPs get an exact + CIDR match in Phase 36
+  (unit-tested, incl. IPv6 and non-byte-aligned prefixes), filenames and regex in Phase 90.
+- **Five signature keys** (`trojan_file_patterns`, `auto_elevate_bins`, `email_phishing_trojans`,
+  `proactive_persistence_regs`, `proactive_lure_extensions`) were loaded into globals and never
+  read. All wired. `permission_baseline.json`'s `unquoted_path_whitelist` — documented and
+  referenced by the coverage matrix as Phase 111's suppression source — was likewise never read.
+- **Three launchpad checkboxes did nothing.** snapshot / baseline-diff / CSV-export round-tripped
+  through scan profiles but were never sent to the server. Now sent *and* implemented: baseline
+  passes the newest prior `KrakenBaseline_*.json` as `-Baseline`, CSV writes an export alongside
+  the JSON report, snapshot drives the new pre-remediation rollback.
+- **The whole SCHEDULE/SMTP settings section had no listeners and no route.** Added
+  `GET|POST /api/schedule` (arguments passed as an argument *array*, never an interpolated
+  string) plus an APPLY button and persisted settings. The output-directory box was an editable
+  field with a dead BROWSE button; it now truthfully reports the real reports directory read-only.
+
+### Other engine/server fixes
+
+- **Self-elevation silently dropped `-Schedule`/`-SmtpTo`/`-SmtpFrom`/`-SmtpServer`** — running
+  `-Schedule DAILY` from a non-admin shell (the realistic first-time path) relaunched elevated
+  *without* them, so no task was created and no error was printed. Forwarded.
+- **Finding IDs built from `.NET string.GetHashCode()`** are randomised per process on .NET 5+,
+  so `-Baseline` diffing reported the same finding as new forever. Replaced with a deterministic
+  FNV-1a `Get-StableId` at **all 16 sites** (the review named 2; the defect was identical in all).
+- **`$sig` locals shadowed the script-scope `$SIG` signature object** at 10 sites (PowerShell
+  variables are case-insensitive — the `$sev`/`$SEV` incident that disabled all severity
+  classification for weeks). Currently latent, because every `Get-Sig` call happens at load time
+  before any phase assigns `$sig`; renamed to `$asig` so it stays that way.
+- **Phase 32's Authenticode loop had no `SIG_AUDIT` budget** (unlike its Phase 10/15 siblings) —
+  unbounded, over every DLL in every writable PATH dir, with ~15s CRL/OCSP blocking per file.
+- **Phase 63 used a raw `Get-ChildItem -Recurse`** over three user roots instead of `Get-ScanFiles`.
+- **The HTML report's inline CSV `<script>` could be broken out of** by a finding whose path
+  contained `</script>`. It also embedded raw CR/LF into a JS string literal — a syntax error
+  that had quietly broken the report's CSV export for any run with findings. Both fixed, plus a
+  `$HOST_NAME_` typo that parsed as an undefined variable and blanked the download filename.
+- **CSV/formula injection**: a finding's attacker-chosen text starting `=`/`+`/`-`/`@` executes
+  as a formula when the export is opened in Excel. Neutralised in both CSV paths.
+- **`Start-Runspace` never disposed** its PowerShell/Runspace pair and every call site discarded
+  the handle; finished runspaces are now reaped.
+- **`/static/` had no containment check**, unlike every other file-touching route.
+- **`[bool]$ScanConfig.html_report`** — `[bool]'false'` is `$true` in PowerShell. The
+  `ConvertTo-Flag` helper exists precisely for this and was used on the profile path but not here.
+  Unvalidated `hours` threw before `Running` was set, killing the scan with no error surfaced.
+- Removed dead `$script:SEV_PATTERNS` / `$script:PHASE_RE` (a runspace cannot share script scope
+  with its parent — the live copies are inside `$script:SCAN_SCRIPT`; the dead `PHASE_RE` was also
+  a stale non-fractional regex that would have misled an editor into breaking phases 55.5/74.5/99.5).
+
+### Found by validating, not by the review
+
+- **The phase counter walked backwards at end-of-scan.** `Summary.ps1`'s "10 SLOWEST" table prints
+  `PHASE N — …` lines in *descending duration* order; the server's phase regex matched every one,
+  so a completed DEEP reported **89/115**. The counter is now monotonic in both servers.
+- **`rerenderLog()` called `appendLogLine()`, which also pushes into the buffer**, so every log
+  filter change duplicated the entire log (and past the 2000-line cap, silently discarded the
+  oldest real lines). Split rendering from buffering; timestamps are also stamped once on arrival
+  instead of being re-stamped to "now" on every re-render.
+- **A `[byte](0xFF -shl 7)` overflow** in the new CIDR matcher silently broke every prefix that
+  was not a multiple of 8 — caught by unit-testing `/25` and `/12` rather than assuming.
+
+### Parked Python server
+
+Fixed too (6 findings): wildcard SocketIO CORS → loopback origins; `\[OK\]` did not tolerate the
+engine's padded `[OK ]` tag; unanchored `ANOMAL` matched inside the benign word "ANOMALIES";
+`MODE_PHASES` capped DEEP at 107 when the real ceiling is 115; `PHASE_RE` collapsed fractional
+phases onto their integer floor; `/api/scan/start` checked `running` outside the lock so two
+POSTs could spawn two concurrent elevated scans; `/api/reports/<f>` served any file in the reports
+directory (which also holds the quarantine vault and IOC files) with no allow-list.
+
+### WS6 — new detection coverage (9 fractional phases)
+
+Fractional numbering was chosen deliberately: the QUICK/FULL/DEEP plan ceilings and the server's
+1..30 QUICK progress index are untouched, and **every new phase sits inside a
+`if (-not $global:QUICK_MODE)` block**. All signature content is DATA (31 new keys in
+`data/detection_signatures.json`); all 9 phases are MITRE-mapped (+13 new techniques).
+
+| Phase | Coverage |
+|---|---|
+| **17.5** | Timestomping — creation-time newer than write-time, epoch/zeroed stamps. Structural, nothing to signature. Deliberately *not* time-scoped (the timestamps are the forged thing). |
+| **21.5** | `SilentProcessExit` (a separate hive Phase 21 never reads), IFEO aimed at a **security product** = EDR blinding rather than persistence, and COM **TypeLib** hijack (Phase 24 walks CLSID only). |
+| **22.5** | The remaining process-wide DLL load points: `AppCertDlls`, netsh helper DLLs, Winsock LSPs (LSP is review-only — an incorrect removal breaks all networking). |
+| **42.5** | Accounts hidden from the logon UI via `SpecialAccounts\UserList`, shadow-admin naming conventions, and Administrators members whose principal source will not resolve. |
+| **44.5** | Credential-access *residue*: LSASS minidumps, exported SAM/SECURITY/SYSTEM/NTDS hives, DPAPI blobs staged outside their store, and live command lines (`comsvcs MiniDump`, `reg save` of the hives, `ntdsutil ifm`, shadow-copy-for-hive-theft). |
+| **45.5** | RDP exposure (NLA off, password saving, multi-session) + the shared operator hardening set (LSA PPL, WDigest, SMB1, AutoRun, script-block logging, LLMNR, UAC prompt). |
+| **68.5** | **ClickFix / fake-CAPTCHA** — reads `RunMRU`, a verbatim record of what the victim pasted into the Run dialog. Very high fidelity. Graded `Info` **on purpose**: this is the best evidence of *how the box was compromised* and deleting it destroys that. |
+| **82.5** | RMM abuse. **User rule #2 respected — Datto/CentraStage/Kaseya are deliberately absent from the list.** Everything listed is dual-use, so a normal install is INFO; only a staging-path deployment escalates. |
+| **100.5** | Cloud/session token theft. Token files existing is normal (inventory only); loot-shaped archives in staging dirs are the finding. Access tokens survive MFA, so the description says to revoke. |
+
+**Grading rule for the whole block (user decision):** every hardening/lockdown action is
+`Info`/`POSSIBLE` + `RunCmd`, so the CRITICAL/HIGH auto-select can never fire one on a healthy box
+(rule #1). The GUI's new **🛡 SELECT HARDENING** button is the deliberate opt-in — it selects the
+group; the operator still reviews the queue and types `PURGE`.
+
+### GUI / UX
+
+Severity pills are real filters (they always looked clickable and had no handlers); findings
+text-search and GROUP BY threat/severity/MITRE-tactic/phase, groups sorted most-severe-first, with
+per-group select-all. The PURGE modal now shows the **actual targets grouped by fix action**
+instead of a bare count, and demands `PURGE <count>` for batches of 10+. Keyboard access: skip
+link, landmark roles, `role`/`tabindex` on the div-based controls with Enter/Space activation,
+visible focus rings (the command palette and danger input had `outline:none` with no
+replacement), and focus-trapped modals with Esc + focus restore. Severity is no longer colour-only
+(diamond/square/circle/dot — red-green is the worst pairing for the commonest colour blindness).
+Responsive breakpoints for the hardcoded 200px/220px rails. A real `@media print` stylesheet — the
+Report view is now an actual client deliverable rather than printed dark console chrome. MITRE
+tactic rollup chart and a **persisted** remediation summary (previously a 3-second toast was the
+only record of a PURGE run). Client-facing export with internal fields stripped. Visible SSE-drop
+feedback and background-tab notification for 25-minute scans. "No findings" now reads differently
+for a clean completed scan vs "you have not scanned yet". `prefers-reduced-motion` honoured by the
+canvas FX and the Kraken cinematic (a full-screen flashbang is a genuine vestibular hazard).
+**GSAP and Chart.js are vendored locally** — an IR tool must not fetch executable JS from a CDN
+onto an elevated console, and a compromised client network may block egress anyway.
+
+### Docs
+
+`SKILL.md`'s guardrail claimed the engine is BOM-*free* and only the server carries a BOM — the
+exact opposite of the truth, and following it would have stripped a required BOM; its step-4 line
+numbers still pointed into the pre-split monolith. `BLUEPRINT.md` §4's regression baseline said 52
+where CHANGELOG's own round-6 entry establishes 39. `coverage_matrix.json`'s `_comment` still
+claimed "the engine has no QUICK gate" and listed 15 keys as orphaned, both fixed in July.
+
+### Validation
+
+All 7 `.ps1` files parse-clean on live `powershell.exe` 5.1.26100.8875 **and** `pwsh` 7, BOMs
+intact; all 5 `data/*.json` parse; `node --check` clean on all JS; `tools/check-visuals.mjs`
+PASS 13/13. Live server: CSRF matrix (6 cases) verified; QUICK scan 30/30 phases contiguous,
+0 recovered errors; DEEP scan 115 phases, 0 recovered errors. Auto-destructive re-graded from a
+fresh DEEP baseline — the non-Phase-10 tail is entirely tripwires and by-design posture items, and
+none of the WS6 additions contribute to it.
+
+---
+
 ## 2026-07-21 — WS4: Win32_Process snapshot memo (`Get-ProcSnapshot`)
 
 Second WS4 caching step (after the `Get-ScanFiles` memo): **7 phases each ran their own full

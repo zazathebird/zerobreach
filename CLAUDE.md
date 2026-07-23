@@ -249,6 +249,36 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   terminating error drops every remaining phase in that module. Confirm by checking the log for a
   contiguous `PHASE N — … took` sequence — a hard gap (e.g. 16 → 59) right after a `RECOVERED ERROR`
   means a module trap is missing, not display cadence.
+- **The phase counter is MONOTONIC — never let a parsed phase number move it backwards.**
+  `Summary.ps1`'s end-of-run "10 SLOWEST" table prints `PHASE N — …` lines in *descending duration*
+  order, and the phase regex matches every one of them: a finished DEEP reported 89/115 until this
+  was fixed (2026-07-22). Both servers now ignore a lower number. Any new trailing output that
+  mentions a phase is automatically safe because of this — keep it that way.
+- **Never send `Access-Control-Allow-Origin: *`, and route every state-changing request through
+  `Test-RequestAllowed` BEFORE the route table.** "Locally bound" is not "only the GUI can reach
+  it" — every page in the operator's browser can too. Wildcard ACAO + a permissive OPTIONS
+  preflight let any site `POST /api/remediate` and drive real destructive remediation, bypassing
+  the typed-`PURGE` modal (found 2026-07-22). The gate lives ahead of the `switch -Regex` so a new
+  POST route cannot forget it; the GUI attaches its token in the single `postJSON()` choke point.
+- **A runspace cannot see the parent's functions.** `Classify`, `ConvertTo-Flag`, `Get-RegVal` etc.
+  must be *re-declared inside* `$script:SCAN_SCRIPT` / `$script:REMEDIATE_SCRIPT`. A parent-only
+  helper referenced from a runspace silently resolves to nothing.
+
+### Findings, IDs and new phases
+- **Build finding IDs from `Get-StableId`, never `.GetHashCode()`.** `[string]::GetHashCode()` is
+  randomised per process on .NET 5+/pwsh 7, so IDs derived from it change every run and the
+  `-Baseline` diff reports the same finding as new forever (fixed at 16 sites, 2026-07-22).
+- **New detections get a FRACTIONAL phase number inside an existing `if (-not $global:QUICK_MODE)`
+  block.** QUICK is a real 30-phase gate whose count the server maps to a 1..30 progress index, and
+  the plan ceilings (QUICK 30 / FULL 80 / DEEP+ 115) are wired into both servers — a fractional
+  phase in the non-QUICK path changes none of that. Add the `phase_map` entry in
+  `data/mitre_mapping.json` at the same time.
+- **Hardening / lockdown / posture actions are OPERATOR-ONLY: `Info` or `POSSIBLE` + `RunCmd`.**
+  Never `CRITICAL`/`HIGH` with a destructive action — that is the auto-select path and would fire
+  on a healthy box (rule #1). The GUI's **SELECT HARDENING** button is the deliberate opt-in.
+- **Apply benign-path allowlists through `Test-BenignPath`, not a bare `-match`.** Those lists key
+  on folder names (`node_modules`, `site-packages`) that an attacker can simply create to
+  self-allowlist; `Test-BenignPath` additionally vetoes a match found in a staging dir.
 
 ### GUI
 - **Adding a cinematic effect = one `CINE_FX` entry in `app.js` + the matching `body.zbfx-<id>` CSS**

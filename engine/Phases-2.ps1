@@ -12,7 +12,10 @@ Invoke-QuantumBar "BEACON INTERVAL ANALYSIS" 15 120
 $dnsCache2 = Get-DnsClientCache -ErrorAction SilentlyContinue
 $domainCounts = @{}
 foreach ($entry in $dnsCache2) { $domainCounts[$entry.Entry] = ($domainCounts[$entry.Entry] + 1) }
-$beaconDomains = $domainCounts.GetEnumerator() | Where-Object { $_.Value -gt 10 -and $_.Key -notmatch "microsoft|windows|google|cloudflare|akamai|amazonaws" }
+# Allowlist anchored to the registrable domain SUFFIX (data\detection_signatures.json).
+# The beaconed name is entirely attacker-chosen, so the old bare-substring list was cleared
+# by registering e.g. "microsoft-update-cdn.attacker.tld" — a self-allowlisting evasion.
+$beaconDomains = $domainCounts.GetEnumerator() | Where-Object { $_.Value -gt 10 -and $_.Key -notmatch $BEACON_BENIGN_DOM_RE }
 $beaconFound = $false
 foreach ($bd in $beaconDomains) {
     Out-Typewriter "  -> HIGH-FREQ DNS BEACON: $($bd.Key) ($($bd.Value) queries)" "CRIT"
@@ -43,14 +46,14 @@ foreach ($entry in $dnsCache2) {
     $longestLabel = ($entry.Entry -split "\." | Sort-Object Length -Descending | Select-Object -First 1)
     if ($longestLabel.Length -gt 40) {
         Out-ThreatBanner "DNS TUNNELING INDICATOR" "Long DNS label ($($longestLabel.Length) chars): $($entry.Entry)"
-        Add-Finding -ID "DNSTUN_$($entry.Entry.GetHashCode())" -Phase "PHASE 60" -ThreatType "DNS Tunneling" `
+        Add-Finding -ID "DNSTUN_$(Get-StableId $entry.Entry)" -Phase "PHASE 60" -ThreatType "DNS Tunneling" `
             -Severity $SEV_HIGH -Description "DNS tunneling indicator: long subdomain ($($longestLabel.Length) chars) in $($entry.Entry)" `
             -Target "DNS: $($entry.Entry)" -FixAction "Info" -Group "DNS Tunneling"
         $global:RATHits++; $dnsTunnel = $true
     }
     if (($entry.Entry -split "\.").Count -gt 6) {
         Out-Typewriter "  -> HIGH SUBDOMAIN DEPTH: $($entry.Entry)" "WARN"
-        Add-Finding -ID "DNSDEPTH_$($entry.Entry.GetHashCode())" -Phase "PHASE 60" -ThreatType "DNS Tunneling" `
+        Add-Finding -ID "DNSDEPTH_$(Get-StableId $entry.Entry)" -Phase "PHASE 60" -ThreatType "DNS Tunneling" `
             -Severity $SEV_POSSIBLE -Description "High subdomain depth in DNS query: $($entry.Entry) — possible DNS tunneling" `
             -Target "DNS: $($entry.Entry)" -FixAction "Info" -Group "DNS Tunneling"
         $global:RATHits++; $dnsTunnel = $true
@@ -67,7 +70,7 @@ foreach ($rcp in $RAT_CONFIG_PATHS) {
         Out-ThreatBanner "RAT ARTIFACT" $rcp
         Add-Finding -ID "RATFILE_$($rcp -replace '[^a-z0-9]','')" -Phase "PHASE 61" -ThreatType "RAT" `
             -Severity $SEV_CRITICAL -Description "Known RAT config/binary path present: $rcp" `
-            -Target $rcp -FixAction $(if (Test-Path $rcp -PathType Container) { "DeleteFile" } else { "DeleteFile" }) -FixParam $rcp `
+            -Target $rcp -FixAction "DeleteFile" -FixParam $rcp `
             -Group "RAT Artifacts"
         $global:RATHits++; $ratFound = $true
     }
@@ -172,14 +175,18 @@ foreach ($proc in $highCpuProcs) {
     }
 }
 # Miner config files
-$minerConfigFiles = Get-ChildItem -Path @($env:TEMP,$env:LOCALAPPDATA,"$env:USERPROFILE\AppData\Roaming") `
-    -Recurse -Filter "config.json" -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
+# Get-ScanFiles, not a raw Get-ChildItem -Recurse (CLAUDE.md rule): this walks three whole
+# user roots, so it needs the file cap, wall-clock deadline, cache-dir pruning and OneDrive
+# placeholder skip. Parenthesised because Get-ScanFiles returns `,$arr` — piping it directly
+# hands the entire array to Where-Object as ONE item and the filter silently matches nothing.
+$minerConfigFiles = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,"$env:USERPROFILE\AppData\Roaming") `
+    -Filter 'config.json' -TimeScoped)
 foreach ($cf in $minerConfigFiles) {
     $content = Get-Content $cf.FullName -Raw -ErrorAction SilentlyContinue
     if ($content -match '"pools"|url.*stratum|"user".*[0-9A-Za-z]{90,}|monero|xmr|ethereum|mining') {
         # Content words (mining/pools/…) hit legitimate app configs — LGHUB game-integration
         # applets etc. Allowlisted parent paths are review-only, never auto-deleted.
-        if ($cf.FullName -match $MINERCFG_BENIGN_RE) {
+        if (Test-BenignPath $cf.FullName $MINERCFG_BENIGN_RE) {
             Add-Finding -ID "MINERCFG_$($cf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 63" -ThreatType "Cryptominer" `
                 -Severity $SEV_POSSIBLE -Description "config.json matches miner keywords but sits in a known app/library tree (likely an app config — review, not auto-deleted): $($cf.FullName)" `
                 -Target $cf.FullName -FixAction "Info" -Group "Live Cryptominer"
@@ -287,8 +294,8 @@ foreach ($share in $shares) {
             }
             if ($selfRoot -and $mis.FullName -like "$selfRoot*") { continue }   # never flag our own files
             $sigSeen++
-            $sig = Get-AuthSig $mis.FullName
-            if ($sig.Status -ne "Valid") {
+            $asig = Get-AuthSig $mis.FullName
+            if ($asig.Status -ne "Valid") {
                 if ($mis.Extension -match "\.(exe|scr|com|pif)$") {
                     if ($usersRoot -and $mis.FullName.ToLower().StartsWith($usersRoot.ToLower())) {
                         # Unsigned PE inside the local profiles tree — the user's own download/build, not
@@ -424,6 +431,41 @@ if ($allFileRules.Count -gt 0) {
 if ($stealerProcs.Count -eq 0 -and $stealerFiles.Count -eq 0 -and $dropRuleHits -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
 
 }   # end QUICK-skip block
+Show-PhaseHeader "PHASE 68.5" "CLICKFIX / FAKE-CAPTCHA CLIPBOARD LURE RESIDUE" "SOCIAL ENG"
+Out-Typewriter "READING THE RUN-DIALOG HISTORY THE VICTIM ACTUALLY TYPED..." "HUNT"
+# ClickFix / "paste this to prove you are human" is currently one of the highest-volume initial
+# access techniques: the victim is instructed to press Win+R and paste an attacker-supplied
+# command. The residue is RunMRU — a verbatim record of what went into the Run dialog. This is
+# unusually high fidelity: no legitimate workflow puts an encoded PowerShell downloader there.
+$clickHits = 0
+if ($RUNMRU_REG_PATH -and (Test-Path -LiteralPath $RUNMRU_REG_PATH)) {
+    $mruProps = Get-ItemProperty -LiteralPath $RUNMRU_REG_PATH -ErrorAction SilentlyContinue
+    if ($mruProps) {
+        foreach ($mp in $mruProps.PSObject.Properties) {
+            if ($mp.Name -like 'PS*' -or $mp.Name -eq 'MRUList') { continue }
+            $mruCmd = "$($mp.Value)"
+            if (-not $mruCmd) { continue }
+            $mruCmd = $mruCmd -replace '\\1$', ''      # RunMRU values carry a trailing \1
+            foreach ($lr in $CLIPBOARD_LURE_RULES) {
+                if ($mruCmd -notmatch $lr.Pattern) { continue }
+                $clickHits++
+                $lsev = switch ("$($lr.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
+                Out-ThreatBanner "CLICKFIX LURE IN RUN HISTORY" "$($mp.Name): $($mruCmd.Substring(0, [Math]::Min(70, $mruCmd.Length)))"
+                # The evidence is a registry VALUE, not a running process: deleting it destroys
+                # the best proof of how the box was compromised. Info by design — the operator
+                # should read it, then hunt what it downloaded.
+                Add-Finding -ID "CLICKFIX_$($mp.Name)_$(Get-StableId $mruCmd)" -Phase "PHASE 68.5" `
+                    -ThreatType "Social Engineering / Initial Access" -Severity $lsev `
+                    -Description "$($lr.Why). The user pasted this into the Run dialog: $($mruCmd.Substring(0, [Math]::Min(240, $mruCmd.Length))) || THIS IS EVIDENCE OF HOW THE MACHINE WAS COMPROMISED — preserve it, then hunt the payload it fetched. Clear afterwards with: Remove-ItemProperty '$RUNMRU_REG_PATH' -Name '$($mp.Name)'" `
+                    -Target "$RUNMRU_REG_PATH|$($mp.Name)" -FixAction "Info" -Group "ClickFix / Clipboard Lures"
+                $global:TrojanHits++
+                break
+            }
+        }
+    }
+}
+if ($clickHits -eq 0) { Out-Typewriter "  -> [OK] NO CLICKFIX LURE RESIDUE IN RUN HISTORY." "GOOD" }
+
 Show-PhaseHeader "PHASE 69" "PROCESS HOLLOWING / INJECTION DETECTION" "INJECTION"
 Out-Typewriter "CHECKING FOR PROCESSES WITH ANOMALOUS MODULE COUNTS..." "HUNT"
 Invoke-QuantumBar "PROCESS MEMORY MAP ANALYSIS" 12 120
@@ -436,8 +478,8 @@ $hollowCandidates = Get-Process -ErrorAction SilentlyContinue | Where-Object {
     try { $_.Modules.Count -lt 3 } catch { $false }
 }
 foreach ($proc in $hollowCandidates) {
-    $sig = Get-AuthSig $proc.Path
-    if ($sig.Status -ne "Valid" -and $proc.Path -match "AppData|Temp") {
+    $asig = Get-AuthSig $proc.Path
+    if ($asig.Status -ne "Valid" -and $proc.Path -match $global:USER_PATH_RE -and $proc.Path -notmatch $global:WINDOWSAPPS_RE) {
         Out-Typewriter "  -> POSSIBLE HOLLOW PROCESS: $($proc.Name) PID:$($proc.Id) @ $($proc.Path) (only $($proc.Modules.Count) modules)" "WARN"
         Add-Finding -ID "HOLLOW_$($proc.Id)" -Phase "PHASE 69" -ThreatType "Process Hollowing" `
             -Severity $SEV_HIGH -Description "Possible hollow process: $($proc.Name) PID:$($proc.Id) in AppData/Temp with $($proc.Modules.Count) modules loaded" `
@@ -658,21 +700,30 @@ try {
         if (-not (Test-InScope $d.InitialDetectionTime)) { continue }
         $tname = if ($threatNames.ContainsKey([string]$d.ThreatID)) { $threatNames[[string]$d.ThreatID] } else { "ThreatID $($d.ThreatID)" }
         $when  = try { ([datetime]$d.InitialDetectionTime).ToString('yyyy-MM-dd HH:mm') } catch { "unknown" }
+        # $EMAIL_PHISHING_TROJANS was loaded but never read (review #51). Recognising the
+        # phishing/redirector families by Defender's own family name lets an already-handled
+        # detection still say "this box was phished", which is what drives the 74.7 hardening
+        # recommendations — otherwise it reads as one anonymous cleaned file.
+        $isPhishFam = $false
+        foreach ($pf in $EMAIL_PHISHING_TROJANS) {
+            if ($pf -and "$tname".StartsWith("$pf", [StringComparison]::OrdinalIgnoreCase)) { $isPhishFam = $true; break }
+        }
+        if ($isPhishFam) { $global:EMAIL_PHISH_SEEN = $true }
         $emitted = $false
         foreach ($res in @($d.Resources)) {
             $path = ([string]$res) -replace '^(file|webfile|containerfile|amsi|behavior|process|regkey|fixpath|runkey):_?',''
             $onDisk = ($path -match '^[A-Za-z]:\\') -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)
             if ($onDisk) {
                 Out-Typewriter "  -> RESIDUAL FILE STILL ON DISK: $path" "CRIT"
-                Add-Finding -ID "DEFRES_$([Math]::Abs($path.GetHashCode()))" -Phase "PHASE 74.6" `
+                Add-Finding -ID "DEFRES_$(Get-StableId $path)" -Phase "PHASE 74.6" `
                     -ThreatType "Defender-Flagged Residual ($tname)" -Severity $SEV_CRITICAL `
                     -Description "Defender flagged '$tname' on $when but the file is STILL PRESENT: $path" `
                     -Target $path -FixAction "Quarantine" -FixParam $path -Group "Defender History / Residual Threats"
                 $global:TrojanHits++; $emitted = $true
             } elseif ($path -match '^[A-Za-z]:\\') {
-                Add-Finding -ID "DEFHIST_$([Math]::Abs(("$tname|$path").GetHashCode()))" -Phase "PHASE 74.6" `
-                    -ThreatType "Defender Detection (handled)" -Severity $SEV_INFO `
-                    -Description "Defender detected '$tname' on $when at $path (no longer on disk — verify quarantine)." `
+                Add-Finding -ID "DEFHIST_$(Get-StableId ("$tname|$path"))" -Phase "PHASE 74.6" `
+                    -ThreatType $(if ($isPhishFam) { "Defender Detection — Phishing/Redirector family (handled)" } else { "Defender Detection (handled)" }) -Severity $SEV_INFO `
+                    -Description "Defender detected '$tname' on $when at $path (no longer on disk — verify quarantine).$(if ($isPhishFam) { ' This is a known email-phishing/redirector family: treat the mailbox as the entry point and apply the Phase 74.7 hardening.' })" `
                     -Target $path -FixAction "Info" -Group "Defender History / Residual Threats"
                 $emitted = $true
             }
@@ -708,6 +759,29 @@ foreach ($ok in $PROACTIVE_OFFICE_KEYS) {
         }
     } catch {}
 }
+# (a2) Autorun-surface inventory (review #51 — $PROACTIVE_PERSIST_REGS was loaded but never read).
+# Not a detection: an INFO-level census of the autorun keys attackers actually use, with what
+# each one currently holds, so the technician can eyeball the persistence surface in one place
+# after remediation. Only non-empty keys are reported — an empty Run key is not news.
+foreach ($pr in $PROACTIVE_PERSIST_REGS) {
+    try {
+        if (-not (Test-Path -LiteralPath $pr.Path)) { continue }
+        $vals = @()
+        $pp = Get-ItemProperty -LiteralPath $pr.Path -ErrorAction SilentlyContinue
+        if ($pp) {
+            foreach ($pv in $pp.PSObject.Properties) {
+                if ($pv.Name -like 'PS*') { continue }   # provider noise (PSPath/PSParentPath/...)
+                $vals += "$($pv.Name) = $($pv.Value)"
+            }
+        }
+        if ($vals.Count -eq 0) { continue }
+        Add-Finding -ID "AUTORUNSURF_$(Get-StableId $pr.Path)" -Phase "PHASE 74.7" `
+            -ThreatType "Autorun Surface (inventory)" -Severity $SEV_INFO `
+            -Description "$($pr.Why). $($vals.Count) entr$(if ($vals.Count -eq 1) {'y'} else {'ies'}) present: $(($vals | Select-Object -First 8) -join ' ;; ')$(if ($vals.Count -gt 8) { " ;; (+$($vals.Count - 8) more)" })" `
+            -Target $pr.Path -FixAction "Info" -Group "Proactive Hardening"
+        $hardenHits++
+    } catch {}
+}
 # (b) Windows Script Host — disable .js/.vbs/.wsf double-click execution (commodity-malware delivery).
 try {
     $wshPath = "HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings"
@@ -721,6 +795,29 @@ try {
         $hardenHits++
     }
 } catch {}
+# (b2) Script-lure file associations (review #51 — $PROACTIVE_LURE_EXTS was loaded but never read).
+# Disabling WSH above blocks the interpreter; this closes the other half of the same vector by
+# repointing the double-click handler for script/lure extensions at Notepad, so a .js or .hta
+# attachment OPENS instead of RUNS. Per-extension and per-user (HKCU), fully reversible, and
+# opt-in RunCmd at INFO — never auto-applied, because a shop with legitimate .vbs tooling would
+# notice. Only offered for extensions currently mapped to an executing handler.
+foreach ($lx in $PROACTIVE_LURE_EXTS) {
+    try {
+        $lxKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$lx\UserChoice"
+        $curProgId = (Get-ItemProperty -LiteralPath $lxKey -Name 'ProgId' -ErrorAction SilentlyContinue).ProgId
+        # Machine default when the user has made no explicit choice.
+        if (-not $curProgId) { $curProgId = (Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Classes\$lx" -Name '(default)' -ErrorAction SilentlyContinue).'(default)' }
+        if (-not $curProgId) { continue }                       # extension not registered at all
+        if ("$curProgId" -match '(?i)notepad|txtfile') { continue }   # already opens, does not run
+        Add-Finding -ID "HARDEN_LURE_$($lx -replace '[^a-z0-9]','')" -Phase "PHASE 74.7" `
+            -ThreatType "Script Lure Association" -Severity $SEV_INFO `
+            -Description "Double-clicking a '$lx' file currently EXECUTES it (handler: $curProgId) — the standard phishing-attachment delivery path. Repointing this extension at Notepad makes it open harmlessly for inspection. Reversible; not auto-applied." `
+            -Target $lxKey -FixAction "RunCmd" `
+            -FixParam "New-Item -Path 'HKCU:\SOFTWARE\Classes\$lx' -Force | Out-Null; Set-ItemProperty -Path 'HKCU:\SOFTWARE\Classes\$lx' -Name '(default)' -Value 'txtfile' -Force" `
+            -Group "Proactive Hardening"
+        $hardenHits++
+    } catch {}
+}
 # (c) Defender posture + Attack Surface Reduction rules that kill the phishing-trojan kill chain.
 try {
     $mp = Get-MpPreference -ErrorAction Stop
@@ -932,7 +1029,40 @@ if ($PhasePlan.Universal) {
     }
     if (-not $tunnelFound) { Out-Typewriter "  -> [OK] NO TUNNELING TOOLS FOUND." "GOOD" }
 
-    Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
+        Show-PhaseHeader "PHASE 82.5" "REMOTE MONITORING TOOL ABUSE (UNAUTHORISED RMM)" "UNIVERSAL"
+    Out-Typewriter "AUDITING REMOTE-ACCESS AGENTS FOR UNAUTHORISED DEPLOYMENT..." "HUNT"
+    # USER RULE #2: Datto / CentraStage / Kaseya are this shop's own partner tooling and are
+    # deliberately ABSENT from the data list. Everything that IS listed is still genuinely
+    # dual-use — an MSP may legitimately run any of it — so a normal installed agent is INFO.
+    # What escalates is the SHAPE of the deployment: a remote-access agent running from a
+    # staging directory (Temp/Downloads/Public/ProgramData root) is how ransomware crews
+    # maintain hands-on access, and no legitimate install lands there.
+    $rmmHits = 0
+    foreach ($rp in (Get-ProcSnapshot)) {
+        $rname = "$($rp.Name)".ToLower()
+        if ($RMM_TOOL_BINARIES -notcontains $rname) { continue }
+        $rpath = "$($rp.ExecutablePath)"
+        $rmmHits++
+        $rSuspPath = ($rpath -and $rpath -match $RMM_SUSPICIOUS_PATH_RE)
+        # Vendor-trusted partner tooling is protected by Test-VendorTrusted downstream too.
+        if ($rSuspPath) {
+            Out-ThreatBanner "RMM AGENT FROM A STAGING PATH" "$($rp.Name) @ $rpath"
+            Add-Finding -ID "RMMABUSE_$($rp.ProcessId)_$($rname -replace '[^a-z0-9]','')" -Phase "PHASE 82.5" `
+                -ThreatType "Unauthorised Remote Access" -Severity $SEV_HIGH `
+                -Description "Remote-access agent '$($rp.Name)' (PID $($rp.ProcessId)) is running from a user-writable staging path: $rpath — legitimate RMM installs into Program Files, so this is the shape of an attacker-deployed remote-access foothold. Confirm against your own RMM inventory before acting." `
+                -Target "PID:$($rp.ProcessId)" -FixAction "KillProcess" -FixParam $rp.ProcessId `
+                -Group "Remote Access Tooling"
+            $global:BackdoorHits++
+        } else {
+            Add-Finding -ID "RMMPRESENT_$($rname -replace '[^a-z0-9]','')" -Phase "PHASE 82.5" `
+                -ThreatType "Remote Access Tooling (inventory)" -Severity $SEV_INFO `
+                -Description "Remote-access/RMM agent present and running: $($rp.Name)$(if ($rpath) { " ($rpath)" }) — expected on a managed endpoint. Verify it is YOURS: an unexpected second remote-access product is a common intruder persistence method." `
+                -Target "PID:$($rp.ProcessId)" -FixAction "Info" -Group "Remote Access Tooling"
+        }
+    }
+    if ($rmmHits -eq 0) { Out-Typewriter "  -> [OK] NO REMOTE-ACCESS AGENTS RUNNING." "GOOD" }
+
+Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
     Out-Typewriter "EXTENDED PROCESS MEMORY / HOLLOWING ANALYSIS..." "HUNT"
     Invoke-QuantumBar "PROCESS MEMORY MAP ANALYSIS" 15 170
     $extended = Get-Process -ErrorAction SilentlyContinue | Where-Object {
@@ -940,8 +1070,8 @@ if ($PhasePlan.Universal) {
         $_.Name -notmatch "^(svchost|System|smss|csrss|wininit|services|lsass|winlogon|fontdrvhost|dwm|audiodg|conhost|taskhostw|RuntimeBroker|sihost|SearchHost)$"
     }
     foreach ($proc in $extended) {
-        $sig = Get-AuthSig $proc.Path
-        if ($sig.Status -eq "NotSigned" -and $proc.Path -match "AppData|Temp") {
+        $asig = Get-AuthSig $proc.Path
+        if ($asig.Status -eq "NotSigned" -and $proc.Path -match $global:USER_PATH_RE -and $proc.Path -notmatch $global:WINDOWSAPPS_RE) {
             Out-Typewriter "  -> LOW-MODULE UNSIGNED PROC: $($proc.Name) PID:$($proc.Id) @ $($proc.Path) [$($proc.Modules.Count) modules]" "WARN"
             Add-Finding -ID "HOLLOW_EXT_$($proc.Id)" -Phase "PHASE 83" -ThreatType "Process Hollowing" `
                 -Severity $SEV_HIGH -Description "Unsigned low-module process from user path: $($proc.Name) PID:$($proc.Id) [$($proc.Modules.Count) modules]" `

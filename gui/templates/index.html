@@ -31,8 +31,16 @@
 </script>
 <link rel="stylesheet" href="/static/css/main.css">
 <link rel="stylesheet" href="/static/css/fx.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<!-- Vendored locally, NOT from a CDN (2026-07-22 review #33). This tool runs USB-portable on
+     a client incident host that may be air-gapped, on a segmented VLAN, or have egress blocked
+     precisely because it is compromised — a CDN fetch there either hangs the boot or silently
+     degrades the UI. Pulling executable JS from a third party onto an elevated IR console is
+     also a supply-chain risk this tool should not carry. Pinned copies:
+       gsap 3.12.2       — gui/static/vendor/gsap.min.js
+       Chart.js 4.4.0    — gui/static/vendor/chart.umd.min.js
+     Both are already-minified upstream releases; refresh by re-downloading the same versions. -->
+<script src="/static/vendor/gsap.min.js"></script>
+<script src="/static/vendor/chart.umd.min.js"></script>
 </head>
 <body>
 
@@ -58,6 +66,9 @@
 <!--  MAIN APP                                                                  -->
 <!-- ═══════════════════════════════════════════════════════════════════════════ -->
 <div id="app" class="hidden">
+
+  <!-- Keyboard users land here first; jumps past the nav into the active view. -->
+  <a href="#main-content" id="skip-link">Skip to main content</a>
 
   <!-- HEADER -->
   <header id="header">
@@ -91,28 +102,28 @@
   <div id="layout">
 
     <!-- LEFT NAV -->
-    <nav id="sidenav">
-      <div class="nav-item active" data-view="launchpad" title="Launch Pad">
+    <nav id="sidenav" aria-label="Primary">
+      <div class="nav-item active" data-view="launchpad" title="Launch Pad" role="tab" tabindex="0" aria-label="Launch Pad">
         <span class="nav-icon">⚡</span><span class="nav-label">LAUNCH PAD</span>
       </div>
-      <div class="nav-item" data-view="scanmonitor" title="Scan Monitor">
+      <div class="nav-item" data-view="scanmonitor" title="Scan Monitor" role="tab" tabindex="0" aria-label="Scan Monitor">
         <span class="nav-icon">🔍</span><span class="nav-label">SCAN MONITOR</span>
       </div>
-      <div class="nav-item nav-locked" data-view="findings" title="Findings Tree" id="nav-findings">
+      <div class="nav-item nav-locked" data-view="findings" title="Findings Tree" role="tab" tabindex="0" aria-label="Findings Tree" id="nav-findings">
         <span class="nav-icon">🌲</span><span class="nav-label">FINDINGS</span>
         <span class="nav-badge" id="findings-badge" style="display:none">0</span>
       </div>
-      <div class="nav-item nav-locked" data-view="remediation" title="Remediation" id="nav-remediation">
+      <div class="nav-item nav-locked" data-view="remediation" title="Remediation" role="tab" tabindex="0" aria-label="Remediation" id="nav-remediation">
         <span class="nav-icon">🔧</span><span class="nav-label">REMEDIATION</span>
         <span class="nav-lock-icon">🔒</span>
       </div>
-      <div class="nav-item" data-view="report" title="Threat Report">
+      <div class="nav-item" data-view="report" title="Threat Report" role="tab" tabindex="0" aria-label="Threat Report">
         <span class="nav-icon">📊</span><span class="nav-label">REPORT</span>
       </div>
-      <div class="nav-item" data-view="ioc" title="IOC Manager">
+      <div class="nav-item" data-view="ioc" title="IOC Manager" role="tab" tabindex="0" aria-label="IOC Manager">
         <span class="nav-icon">📁</span><span class="nav-label">IOC MANAGER</span>
       </div>
-      <div class="nav-item" data-view="settings" title="Settings">
+      <div class="nav-item" data-view="settings" title="Settings" role="tab" tabindex="0" aria-label="Settings">
         <span class="nav-icon">⚙</span><span class="nav-label">SETTINGS</span>
       </div>
       <!-- System Vitals -->
@@ -136,7 +147,7 @@
     </nav>
 
     <!-- CENTER VIEWS -->
-    <main id="main-content">
+    <main id="main-content" tabindex="-1">
 
       <!-- ── VIEW: LAUNCH PAD ─────────────────────────────────────── -->
       <div class="view active" id="view-launchpad">
@@ -269,6 +280,8 @@
             <span class="log-filter" data-filter="CRITICAL">🔴 CRITICAL</span>
             <span class="log-filter" data-filter="HIGH">🟠 HIGH</span>
             <span class="log-filter" data-filter="POSSIBLE">🟡 POSSIBLE</span>
+            <input type="search" id="log-search" class="path-input" placeholder="Filter log text..."
+                   aria-label="Filter log lines by text" style="max-width:190px;margin-left:8px">
             <label style="margin-left:auto;color:var(--text-dim);font-size:11px">
               <input type="checkbox" id="autoscroll" checked> AUTOSCROLL
             </label>
@@ -299,18 +312,36 @@
       <div class="view" id="view-findings">
         <div class="view-title">AUDIT FINDINGS</div>
         <div id="findings-toolbar">
-          <div id="severity-pills">
-            <span class="sev-pill critical" id="pill-critical">🔴 CRITICAL <span id="count-critical">0</span></span>
-            <span class="sev-pill high" id="pill-high">🟠 HIGH <span id="count-high">0</span></span>
-            <span class="sev-pill possible" id="pill-possible">🟡 POSSIBLE <span id="count-possible">0</span></span>
-            <span class="sev-pill clean" id="pill-clean">🟢 CLEAN <span id="count-clean">0</span></span>
+          <!-- The pills LOOK clickable and now are: each toggles that severity's visibility.
+               role/aria-pressed so the state is announced, tabindex so they are reachable. -->
+          <div id="severity-pills" role="group" aria-label="Filter findings by severity">
+            <button type="button" class="sev-pill critical active" id="pill-critical" aria-pressed="true">🔴 CRITICAL <span id="count-critical">0</span></button>
+            <button type="button" class="sev-pill high active"     id="pill-high"     aria-pressed="true">🟠 HIGH <span id="count-high">0</span></button>
+            <button type="button" class="sev-pill possible active" id="pill-possible" aria-pressed="true">🟡 POSSIBLE <span id="count-possible">0</span></button>
+            <button type="button" class="sev-pill clean active"    id="pill-clean"    aria-pressed="true">🟢 CLEAN <span id="count-clean">0</span></button>
+          </div>
+          <div id="findings-search-row">
+            <input type="search" id="findings-search" class="path-input" placeholder="Search findings (path, description, MITRE ID)..."
+                   aria-label="Search findings">
+            <label for="findings-groupby" class="findings-groupby-label">GROUP BY</label>
+            <select id="findings-groupby" class="path-input">
+              <option value="threat_type">Threat Type</option>
+              <option value="severity">Severity</option>
+              <option value="tactic">MITRE Tactic</option>
+              <option value="phase">Phase</option>
+            </select>
           </div>
           <div id="tree-controls">
             <button class="cyber-btn-sm" id="btn-select-all">SELECT ALL</button>
             <button class="cyber-btn-sm" id="btn-clear-all">CLEAR ALL</button>
             <button class="cyber-btn-sm" id="btn-expand-all">EXPAND ALL</button>
             <button class="cyber-btn-sm" id="btn-collapse-all">COLLAPSE ALL</button>
+            <!-- Hardening actions are deliberately Info/POSSIBLE so the CRITICAL/HIGH
+                 auto-select can never fire them (user rule #1). This button is the
+                 opt-in: it selects the whole hardening group in one click. -->
+            <button class="cyber-btn-sm" id="btn-select-hardening" title="Select every operator-only hardening action (never auto-selected)">🛡 SELECT HARDENING</button>
           </div>
+          <div id="findings-filter-status" aria-live="polite"></div>
         </div>
         <div id="findings-tree"></div>
         <div id="findings-footer">
@@ -359,11 +390,27 @@
           </div>
           <div id="report-cards"></div>
         </div>
+        <!-- Scan-level MITRE rollup. Every finding already carries mitre.tactic, so this
+             is a free second read on the incident: which ATT&CK tactics are represented,
+             and how heavily. Renders as a bar chart, with a text fallback if Chart.js
+             is unavailable (the library is now vendored locally, so that is rare). -->
+        <div id="mitre-rollup-wrap">
+          <div class="report-section-title">MITRE ATT&amp;CK — TACTIC COVERAGE</div>
+          <canvas id="mitreTactics" height="150"></canvas>
+          <div id="mitre-rollup-empty" class="report-empty"></div>
+        </div>
+        <!-- Persisted remediation outcome. Previously the ONLY record of a PURGE run was a
+             3-second toast, which is useless for a client writeup. -->
+        <div id="remediation-summary-wrap" style="display:none">
+          <div class="report-section-title">REMEDIATION SUMMARY</div>
+          <div id="remediation-summary"></div>
+        </div>
         <div id="report-export-bar">
           <button class="cyber-btn" onclick="exportReport('html')">📄 HTML</button>
           <button class="cyber-btn" onclick="exportReport('csv')">📊 CSV</button>
           <button class="cyber-btn" onclick="exportReport('json')">📋 JSON</button>
           <button class="cyber-btn" onclick="window.print()">🖨 PRINT</button>
+          <button class="cyber-btn" id="btn-export-client" title="Findings only, internal fields stripped — safe to hand to a client">👔 CLIENT REPORT</button>
         </div>
       </div>
 
@@ -371,11 +418,11 @@
       <div class="view" id="view-ioc">
         <div class="view-title">IOC MANAGER</div>
         <div class="ioc-tabs">
-          <span class="ioc-tab active" data-tab="hashes">HASHES</span>
-          <span class="ioc-tab" data-tab="ips">IPs</span>
-          <span class="ioc-tab" data-tab="domains">DOMAINS</span>
-          <span class="ioc-tab" data-tab="regex">REGEX</span>
-          <span class="ioc-tab" data-tab="files">FILES</span>
+          <span class="ioc-tab active" data-tab="hashes" role="tab" tabindex="0" aria-selected="true">HASHES</span>
+          <span class="ioc-tab" data-tab="ips" role="tab" tabindex="0" aria-selected="false">IPs</span>
+          <span class="ioc-tab" data-tab="domains" role="tab" tabindex="0" aria-selected="false">DOMAINS</span>
+          <span class="ioc-tab" data-tab="regex" role="tab" tabindex="0" aria-selected="false">REGEX</span>
+          <span class="ioc-tab" data-tab="files" role="tab" tabindex="0" aria-selected="false">FILES</span>
         </div>
         <div id="ioc-table-wrap">
           <table id="ioc-table">
@@ -399,8 +446,14 @@
         <div class="settings-group">
           <div class="settings-label">OUTPUT DIRECTORY</div>
           <div class="file-input-row">
-            <input type="text" id="set-outdir" class="path-input" placeholder="Default: Desktop">
-            <button class="cyber-btn-sm">BROWSE</button>
+            <!-- Read-only on purpose: scan JSON, the engine's rich report and the quarantine
+                 vault must all live in this one folder (the /api/report route is basename-locked
+                 to it), so it is reported, not chosen. Was previously an editable box with a
+                 BROWSE button that had no listener and no server route behind it. -->
+            <input type="text" id="set-outdir" class="path-input" readonly placeholder="(reading...)">
+          </div>
+          <div style="font-size:9px;color:var(--text-dim);letter-spacing:1px;margin-top:6px">
+            REPORTS, QUARANTINE VAULT AND SERVER LOGS ARE WRITTEN HERE
           </div>
         </div>
         <div class="settings-group">
@@ -408,6 +461,15 @@
           <input type="text" class="path-input" placeholder="SMTP Server" id="set-smtp-server" style="margin-bottom:8px">
           <input type="text" class="path-input" placeholder="From address" id="set-smtp-from" style="margin-bottom:8px">
           <input type="text" class="path-input" placeholder="To address" id="set-smtp-to">
+        </div>
+        <div class="settings-group">
+          <div class="settings-label">SHORTCUTS &amp; HIDDEN FEATURES</div>
+          <div class="zb-hint">
+            <kbd>Ctrl</kbd>+<kbd>K</kbd> opens the command palette &mdash; every view, theme and action from the keyboard.<br>
+            <kbd>Esc</kbd> closes any dialog. <kbd>Tab</kbd> reaches every control; the focused one is ringed in the accent colour.<br>
+            12 themes live below. Type <b>msp</b> anywhere before a scan for MSP mode &mdash; and there is one more word the console answers to. 🐙
+          </div>
+          <label class="opt-toggle" style="margin-top:10px"><input type="checkbox" id="opt-notify"> <span class="toggle-box"></span> Desktop notification when a long scan finishes</label>
         </div>
         <div class="settings-group">
           <div class="settings-label">THEME</div>
@@ -431,18 +493,26 @@
         </div>
         <div class="settings-group">
           <div class="settings-label">SCHEDULE</div>
-          <select class="path-input" id="set-schedule" style="width:200px">
-            <option value="">Disabled</option>
-            <option value="DAILY">Daily</option>
-            <option value="WEEKLY">Weekly</option>
-          </select>
+          <div class="file-input-row">
+            <select class="path-input" id="set-schedule" style="width:200px">
+              <option value="">Disabled</option>
+              <option value="DAILY">Daily</option>
+              <option value="WEEKLY">Weekly</option>
+            </select>
+            <button class="cyber-btn-sm" id="btn-schedule-apply">APPLY</button>
+          </div>
+          <div style="font-size:9px;color:var(--text-dim);letter-spacing:1px;margin-top:6px">
+            REGISTERS A SYSTEM SCHEDULED TASK AT 02:00 (FULL SCAN, ALL TIME). SMTP FIELDS ABOVE,
+            IF ALL THREE ARE FILLED, EMAIL THE REPORT AFTER EACH RUN.
+          </div>
+          <div id="schedule-status" style="font-size:10px;color:var(--text-mid);margin-top:6px"></div>
         </div>
       </div>
 
     </main>
 
     <!-- RIGHT INTEL PANEL -->
-    <aside id="intel-panel">
+    <aside id="intel-panel" aria-label="Intel feed">
       <div class="intel-title">INTEL FEED</div>
       <div id="intel-feed"></div>
       <div class="intel-title" style="margin-top:16px">THREAT TALLY</div>

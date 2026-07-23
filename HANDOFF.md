@@ -1,6 +1,71 @@
-# RESUME HANDOFF — updated 2026-07-11 (session 10: review hardening of session-9 work)
+# RESUME HANDOFF — updated 2026-07-22 (session 12: full-repo review fixes + WS6 detections + UX pass)
 
-> ## ▶ START HERE after /clear — SESSION 10 (2026-07-11)
+> ## ▶ START HERE after /clear — SESSION 12 (2026-07-22)
+> **Session 12 applied the whole `REVIEW_FINDINGS_2026-07-22.md` fix list (all 56 findings), the
+> 10 GUI/UX proposals, and a new detection expansion (WS6).** Nothing is left half-done; the
+> review document can now be treated as closed. Highlights:
+>
+> **CRITICAL fixes.** (1) `engine/Summary.ps1` and `engine/FixMode.ps1` were missing their
+> mandatory top-level `trap` — the exact "hung `-Auto`" failure mode the engine-split rules exist
+> to prevent, in the two files CLAUDE.md names explicitly. (2) The PS server sent
+> `Access-Control-Allow-Origin: *` with a permissive OPTIONS preflight, so **any page in the
+> operator's browser could POST `/api/remediate` and drive real destructive remediation, bypassing
+> the typed-PURGE modal**. Now: no wildcard ACAO anywhere, preflight answered only for our own
+> origin, an Origin/Referer lock plus a per-process CSRF token (`GET /api/csrf`, `X-ZB-Token`)
+> enforced on every POST ahead of the route table. **Verified live** — cross-origin POST, missing
+> token and wrong token all 403; same-origin+token and non-browser (no Origin) both 200.
+>
+> **The anchored-path cluster (#4/#5/#6/#7).** Bare `"AppData|Temp"` substring matches were
+> gating auto-selected `KillProcess` (P36, P69, P83), a `sc.exe delete` (P28) and a task
+> unregister (P29). All now anchored to path COMPONENTS via `$global:USER_PATH_RE`, WindowsApps
+> excluded, and — where the action is destructive — the Authenticode verdict, not the path,
+> decides whether it is auto-actionable. P29 on this box went from 3× CRITICAL+RunCmd to
+> 2 POSSIBLE/Info + 1 HIGH/RunCmd.
+>
+> **Rollback actually works now.** `FixMode.ps1`'s snapshot was missing the
+> `Windows Registry Editor Version 5.00` magic, so `regedit /S` imported nothing — the safety net
+> was decorative. Fixed, and **GUI-driven remediation now takes a snapshot too** (it previously
+> took none at all; honours the launchpad's "Create Rollback Snapshot" checkbox).
+>
+> **WS6 — 9 new fractional phases** (17.5 timestomp · 21.5 SilentProcessExit/EDR-blinding IFEO/COM
+> TypeLib · 22.5 AppCert/netsh/Winsock LSP · 42.5 hidden & shadow admin · 44.5 credential-access
+> artifacts · 45.5 RDP exposure + hardening set · 68.5 ClickFix/fake-CAPTCHA RunMRU residue ·
+> 82.5 RMM abuse · 100.5 cloud/session token theft). All signatures are DATA
+> (`data/detection_signatures.json`, 31 new keys), all MITRE-mapped. **Every new hardening/lockdown
+> action is Info/POSSIBLE + RunCmd — operator-only, never auto-selected** (user decision, rule #1);
+> the GUI's new **🛡 SELECT HARDENING** button is the deliberate opt-in. Fractional numbering was
+> chosen so the QUICK/FULL/DEEP plan ceilings and the server's 1..30 QUICK index are untouched —
+> **every new phase sits inside a `if (-not $global:QUICK_MODE)` block.**
+>
+> **UX pass.** Severity pills are real filters; findings search + GROUP BY (threat/severity/MITRE
+> tactic/phase) + per-group select-all; the PURGE modal now previews the exact targets grouped by
+> fix action and demands `PURGE <count>` for batches ≥10; full keyboard access (skip link, roles,
+> focus rings, focus-trapped modals); severity encoded by SHAPE as well as colour; responsive
+> breakpoints; a real `@media print` stylesheet; MITRE tactic rollup + persisted remediation
+> summary on the Report view; client-facing export with internal fields stripped; SSE-drop toast;
+> background-tab notification. GSAP + Chart.js are **vendored locally** (`gui/static/vendor/`) —
+> no CDN dependency on an incident host.
+>
+> **Two bugs found by validating, not by the review:** the server's phase counter walked
+> *backwards* at end-of-scan because `Summary.ps1`'s "10 SLOWEST" table prints `PHASE N — …` lines
+> that the phase regex matched (a finished DEEP reported 89/115); the counter is now monotonic in
+> both servers. And `rerenderLog()` called `appendLogLine()`, which also *pushes* into the buffer,
+> so every log filter change duplicated the entire log.
+>
+> **Still the only USER-driven items** (unchanged): the browser click-through (BLUEPRINT §7 "Now")
+> and the USB foreign-box field test (§7.6). The click-through should now also exercise the CSRF
+> handshake, the three previously-inert launchpad toggles, and the new findings filters.
+
+> ## ▶ (session 11) START HERE reference
+> **WS4 `Get-ProcSnapshot` — Win32_Process snapshot memo (DONE, pushed as `22e582a`).** Seven
+> phases each ran their own full `Win32_Process` WMI enumeration. Added a 90-second-TTL memo
+> (`$global:PROC_SNAP_CACHE`) shared by phases 3/4/44/99/99.5/102, on the same `ZB_NOCACHE`
+> kill-switch as the file cache. **Phase 56 deliberately does NOT use it** — its WMI-vs-Get-Process
+> rootkit delta needs both enumerations captured at the same instant, or a snapshot even seconds
+> stale fabricates CRITICAL rootkit discrepancies. Validated QUICK + DEEP, 0 recovered errors.
+
+
+> ## ▶ (session 10) START HERE reference
 > **Session 10 = full review of the session-9 (Opus) work + hardening.** Two agent audits found
 > **no shipped bug** in the WS4 cache or P82 (all 18 call sites read-only, stealth safe,
 > TimeScoped cutoff constant). Hardened 3 latent cache hazards anyway: (1) deadline-truncated

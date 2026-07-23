@@ -775,6 +775,32 @@
     "70c29fa01c7cb936c92b0df9b8fc1faea3c7108e7dae3d32aa0b889b392dc53d"
   ],
   "_comment_fp_allowlists": "False-positive allowlists (NOT malware signatures). Used to suppress/downgrade benign-but-noisy matches. Regex fragments are matched case-insensitively against file paths/names or cert subjects. Tune here without touching the engine.",
+  "_comment_beacon_benign_domains": "Phase 59 DNS-beacon allowlist. Anchored to the registrable domain SUFFIX (optional trailing dot for a DNS-cache entry) because the beaconed name is entirely attacker-chosen: the previous bare-substring list ('microsoft|windows|google|...') was cleared by simply registering microsoft-update-cdn.example.com. NOTE: *.amazonaws.com is kept here for parity with the pre-2026-07-22 list even though it is commonly abused for C2 — high-frequency DNS is only a beacon HINT and the finding is Info-only, but revisit if FP pressure allows removing it.",
+  "beacon_benign_domain_suffixes": [
+    "(^|\\.)microsoft\\.com\\.?$",
+    "(^|\\.)microsoftonline\\.com\\.?$",
+    "(^|\\.)msftconnecttest\\.com\\.?$",
+    "(^|\\.)msftncsi\\.com\\.?$",
+    "(^|\\.)windowsupdate\\.com\\.?$",
+    "(^|\\.)update\\.microsoft\\.com\\.?$",
+    "(^|\\.)windows\\.net\\.?$",
+    "(^|\\.)windows\\.com\\.?$",
+    "(^|\\.)msedge\\.net\\.?$",
+    "(^|\\.)office\\.com\\.?$",
+    "(^|\\.)office365\\.com\\.?$",
+    "(^|\\.)live\\.com\\.?$",
+    "(^|\\.)google\\.com\\.?$",
+    "(^|\\.)googleapis\\.com\\.?$",
+    "(^|\\.)gstatic\\.com\\.?$",
+    "(^|\\.)googleusercontent\\.com\\.?$",
+    "(^|\\.)cloudflare\\.com\\.?$",
+    "(^|\\.)cloudflare-dns\\.com\\.?$",
+    "(^|\\.)akamai\\.net\\.?$",
+    "(^|\\.)akamaiedge\\.net\\.?$",
+    "(^|\\.)akamaized\\.net\\.?$",
+    "(^|\\.)amazonaws\\.com\\.?$"
+  ],
+  "_comment_trusted_root_ca_issuers": "Phase 39 root-CA name hints. These are BARE WORDS matched against a certificate Subject/Issuer, which an attacker planting a MITM root fully controls ('CN=Microsoft Update CA' self-clears). They are therefore NO LONGER the primary trust signal — Phase 39 now decides on membership of the Microsoft-managed AuthRoot store (which the attacker cannot join) and on the store registry key's install time. This list only refines the wording of the finding.",
   "trusted_root_ca_issuers": [
     "microsoft",
     "windows",
@@ -838,18 +864,19 @@
     "vmware",
     "apple"
   ],
+  "_comment_cloaked_benign_names": "Phase 18 (Hidden+System file scan). Matched against a FILENAME the attacker chooses, so every entry must pin the whole name (^...$) — the pre-2026-07-22 bare substrings 'iconcache'/'thumbcache'/'gdipfontcachev1.dat' let a cloaked payload evade the phase entirely by calling itself e.g. 'iconcache_svchost.exe'.",
   "cloaked_benign_names": [
     "^desktop\\.ini$",
     "^thumbs\\.db$",
-    "iconcache",
-    "thumbcache",
+    "^iconcache(_[0-9a-z]+)?\\.db$",
+    "^thumbcache(_[0-9a-z]+)?\\.db$",
     "\\.library-ms$",
     "^ntuser\\.dat",
     "^ntuser\\.ini$",
     "^ntuser\\.pol$",
     "\\.customdestinations-ms$",
     "\\.automaticdestinations-ms$",
-    "gdipfontcachev1\\.dat",
+    "^gdipfontcachev1\\.dat$",
     "^bootstat\\.dat$",
     "^index\\.dat$",
     "\\.lnk$",
@@ -882,8 +909,8 @@
   "_comment_miner_config_benign_paths": "Phase 63: config.json content heuristics (pools/stratum/mining words) hit legitimate app configs — LGHUB game-integration applets et al. Allowlisted parent paths downgrade to POSSIBLE/Info.",
   "miner_config_benign_paths": [
     "\\\\appdata\\\\local\\\\lghub\\\\",
-    "\\\\node_modules\\\\",
-    "\\\\site-packages\\\\"
+    "\\\\node_modules\\\\[^\\\\]+\\\\",
+    "\\\\lib\\\\site-packages\\\\"
   ],
   "_comment_spooler_benign_dlls": "Phase 96: Microsoft printer RESOURCE DLLs in spool\\drivers are catalog-signed (invisible to Get-AuthSig, which only sees embedded Authenticode) and grade as UNSIGNED on every box with a PCL/PS driver. Known resource-DLL names downgrade to POSSIBLE/Info.",
   "spooler_benign_dlls": [
@@ -896,8 +923,8 @@
   "_comment_keylogger_benign_paths": "Phase 48: keystroke-log *name* heuristics (*typed*, *capture*log*, …) inside package-manager trees are library files (e.g. py.typed markers), not keylogger output. Downgraded to POSSIBLE/Info.",
   "keylogger_benign_paths": [
     "\\\\packages\\\\pythonsoftwarefoundation\\.python[^\\\\]*\\\\localcache\\\\",
-    "\\\\site-packages\\\\",
-    "\\\\node_modules\\\\"
+    "\\\\lib\\\\site-packages\\\\",
+    "\\\\node_modules\\\\[^\\\\]+\\\\"
   ],
   "_comment_yara_benign_paths": "Phase 90: JIT/renderer runtime DLLs legitimately contain VirtualAllocEx/WriteProcessMemory-class API strings (SwiftShader et al. compile shaders at runtime); package-manager trees ship API-name-bearing sources. Rule hits here downgrade to POSSIBLE/Info instead of HIGH/DeleteFile.",
   "yara_benign_paths": [
@@ -907,14 +934,14 @@
     "\\\\libglesv2\\.dll$",
     "\\\\d3dcompiler_4[67]\\.dll$",
     "\\\\vulkan-1\\.dll$",
-    "\\\\site-packages\\\\",
-    "\\\\node_modules\\\\",
+    "\\\\lib\\\\site-packages\\\\",
+    "\\\\node_modules\\\\[^\\\\]+\\\\",
     "\\\\appdata\\\\local\\\\temp\\\\claude\\\\"
   ],
   "_comment_sct_benign_paths": "Phase 94: .sct/.wsc scriptlets inside package-manager trees are library test fixtures (e.g. pywin32's Testpys.sct), not Squiblydoo staging. Downgraded to POSSIBLE/Info.",
   "sct_benign_paths": [
-    "\\\\site-packages\\\\",
-    "\\\\node_modules\\\\"
+    "\\\\lib\\\\site-packages\\\\",
+    "\\\\node_modules\\\\[^\\\\]+\\\\"
   ],
   "safeboot_default_entries": [
     "afd",
@@ -1219,6 +1246,47 @@
     "handlekatz*",
     "lsassy*",
     "pypykatz*"
+  ],
+  "_comment_ws5_externalized": "WS5 (2026-07-22 review #22): the last three inline name-lists left in .ps1 source after WS1. Commercial-keylogger vendor names, keystroke-log filename globs and browser-adware/hijacker extension names all read like AV signatures, so they belong in data (AMSI-safe) like every sibling list. Content is the exact pre-externalization list — no behaviour change.",
+  "keylogger_reg_paths": [
+    "HKCU:\\SOFTWARE\\Ardamax",
+    "HKCU:\\SOFTWARE\\Spyrix",
+    "HKCU:\\SOFTWARE\\Refog",
+    "HKCU:\\SOFTWARE\\KGB Spy",
+    "HKCU:\\SOFTWARE\\Revealer Keylogger",
+    "HKCU:\\SOFTWARE\\Elite Keylogger",
+    "HKCU:\\SOFTWARE\\Actual Keylogger"
+  ],
+  "keylogger_file_patterns": [
+    "*keystroke*",
+    "*keylog*",
+    "*keypress*",
+    "*kgb*",
+    "*.klg",
+    "*.kl",
+    "*typed*",
+    "*capture*log*",
+    "*hook.log*"
+  ],
+  "browser_ext_adware_names": [
+    "web of trust",
+    "superfish",
+    "browsefox",
+    "conduit",
+    "searchprotect",
+    "savefrom",
+    "coupon server",
+    "ebates",
+    "honey",
+    "browsing protection",
+    "webdiscover",
+    "trovi",
+    "istartsurf",
+    "searchqu",
+    "delta search",
+    "babylon",
+    "iminent",
+    "visualbee"
   ],
   "_comment_ws2_expansion": "WS2 (2026-06-30): detection-coverage expansion researched from public sources (MITRE, abuse.ch, CISA #StopRansomware, LOLDrivers, LOLBAS, SigmaHQ, vendor reports). All DATA / AMSI-safe. Point-in-time C2 domains/hashes are confirmation IOCs (many sinkholed) — the durable signals are the behavior rules, drop-path rules, ransom-note filenames, BYOVD driver names, and anchored C2 pipe regexes. Severities deliberately conservative.",
   "c2_pipe_regex_anchored": [
@@ -1756,6 +1824,396 @@
       "Name": "Inhibit-DeleteShadowsQuiet",
       "Pattern": "(?i)delete\\s+shadows\\s+/(all|quiet)",
       "Severity": "CRITICAL"
+    }
+  ],
+  "_comment_ws6_expansion": "WS6 (2026-07-22): detection expansion across credential/identity theft, modern intrusion TTPs, and persistence/evasion depth. Sourced from MITRE ATT&CK, CISA advisories, LOLBAS/LOLDrivers and public vendor reporting. Consumed by the new FRACTIONAL phases 17.5/20.5/32.5/44.5/45.5/51.5/68.5/82.5/100.5. Grading rule for this whole block (user decision 2026-07-22): hardening and lockdown actions are OPERATOR-ONLY — Info/POSSIBLE + RunCmd so they are never picked up by the CRITICAL/HIGH auto-select. Only unambiguous malware artifacts carry an auto-actionable severity, and then Quarantine (reversible) in preference to DeleteFile.",
+  "com_typelib_hijack_roots": [
+    "HKCU:\\SOFTWARE\\Classes\\TypeLib",
+    "HKCU:\\SOFTWARE\\Classes\\CLSID"
+  ],
+  "_comment_ifeo": "Image File Execution Options / SilentProcessExit are legitimate debugging features that malware uses for both persistence and to neuter security tooling. A Debugger value on ANY executable is abnormal outside active development; the security-tool names below make it an escalation.",
+  "ifeo_reg_roots": [
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+    "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options",
+    "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\SilentProcessExit"
+  ],
+  "security_tool_process_names": [
+    "msmpeng.exe",
+    "mssense.exe",
+    "sensecncproxy.exe",
+    "senseir.exe",
+    "securityhealthservice.exe",
+    "smartscreen.exe",
+    "cylancesvc.exe",
+    "csfalconservice.exe",
+    "csfalconcontainer.exe",
+    "sentinelagent.exe",
+    "sentinelservicehost.exe",
+    "sophosfs.exe",
+    "savservice.exe",
+    "mcshield.exe",
+    "mfemms.exe",
+    "ekrn.exe",
+    "egui.exe",
+    "avp.exe",
+    "avgsvc.exe",
+    "avastsvc.exe",
+    "bdagent.exe",
+    "vsserv.exe",
+    "ccsvchst.exe",
+    "nortonsecurity.exe",
+    "tmbmsrv.exe",
+    "coreserviceshell.exe",
+    "xagt.exe",
+    "cbagent.exe",
+    "cb.exe",
+    "tanium.exe",
+    "taniumclient.exe",
+    "rphcpsvc.exe",
+    "elastic-agent.exe",
+    "wazuh-agent.exe",
+    "osqueryd.exe",
+    "procmon.exe",
+    "procmon64.exe",
+    "wireshark.exe",
+    "tcpview.exe",
+    "autoruns.exe",
+    "autorunsc.exe"
+  ],
+  "_comment_injection_dll_points": "Registry values that make Windows load a DLL into OTHER processes. All are legacy/rare on a modern box: AppInit_DLLs is disabled by default and blocked under Secure Boot, AppCertDlls has no legitimate modern use, and a Winsock LSP / netsh helper DLL outside System32 is a classic injection foothold.",
+  "injection_dll_reg_points": [
+    {
+      "Path": "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+      "Name": "AppInit_DLLs",
+      "Why": "AppInit_DLLs loads the named DLL into every process that links user32.dll"
+    },
+    {
+      "Path": "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+      "Name": "AppInit_DLLs",
+      "Why": "32-bit AppInit_DLLs — same injection surface for WOW64 processes"
+    },
+    {
+      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+      "Name": "AppCertDlls",
+      "Why": "AppCertDlls loads into every process that calls CreateProcess; no legitimate modern use"
+    }
+  ],
+  "netsh_helper_reg_root": "HKLM:\\SOFTWARE\\Microsoft\\Netsh",
+  "_comment_cred_access": "Credential-theft staging. The dump-FILE patterns are what a technician actually finds after the fact (the tool itself is usually long gone), so they matter more than the tool names. Matched case-insensitively against a filename.",
+  "credential_dump_artifacts": [
+    "lsass*.dmp",
+    "lsass*.dump",
+    "*lsass*.bin",
+    "lsa.dmp",
+    "SAM.hive",
+    "SYSTEM.hive",
+    "SECURITY.hive",
+    "ntds.dit",
+    "ntds.jfm",
+    "*.ntds",
+    "mimikatz*.log",
+    "*kirbi",
+    "*.ccache",
+    "krbtgt*.txt",
+    "hashes.txt",
+    "hashdump*.txt",
+    "secretsdump*.txt",
+    "sekurlsa*.txt",
+    "creds.txt",
+    "passwords.txt",
+    "wce.txt",
+    "wce_ccache"
+  ],
+  "dpapi_theft_paths_raw": [
+    "%APPDATA%\\Microsoft\\Protect",
+    "%LOCALAPPDATA%\\Microsoft\\Credentials",
+    "%APPDATA%\\Microsoft\\Credentials",
+    "%LOCALAPPDATA%\\Microsoft\\Vault"
+  ],
+  "cred_theft_cmdline_rules": [
+    {
+      "Name": "Comsvcs-MiniDump-LSASS",
+      "Pattern": "(?i)rundll32(\\.exe)?[^\\r\\n]*comsvcs\\.dll[^\\r\\n]*MiniDump",
+      "Severity": "CRITICAL",
+      "Why": "rundll32 comsvcs.dll MiniDump is the signature-free way to dump LSASS"
+    },
+    {
+      "Name": "Reg-Save-CredentialHives",
+      "Pattern": "(?i)\\breg(\\.exe)?\\s+save\\s+[^\\r\\n]*\\bhk(lm|ey_local_machine)\\\\(sam|security|system)\\b",
+      "Severity": "CRITICAL",
+      "Why": "reg save of SAM/SECURITY/SYSTEM exports offline-crackable credential hives"
+    },
+    {
+      "Name": "Ntdsutil-IFM-Dump",
+      "Pattern": "(?i)ntdsutil[^\\r\\n]*(ifm|create\\s+full)",
+      "Severity": "CRITICAL",
+      "Why": "ntdsutil IFM snapshot extracts the entire AD credential database"
+    },
+    {
+      "Name": "Vssadmin-ShadowCopy-For-Hive-Theft",
+      "Pattern": "(?i)vssadmin(\\.exe)?\\s+create\\s+shadow[^\\r\\n]*/for=",
+      "Severity": "HIGH",
+      "Why": "a shadow copy is the standard way to read locked SAM/SYSTEM/NTDS files"
+    },
+    {
+      "Name": "Esentutl-Hive-Copy",
+      "Pattern": "(?i)esentutl(\\.exe)?[^\\r\\n]*/y[^\\r\\n]*(ntds\\.dit|\\\\sam\\b|\\\\system\\b)",
+      "Severity": "HIGH",
+      "Why": "esentutl /y copies locked credential databases"
+    },
+    {
+      "Name": "Cmdkey-Credential-Enumeration",
+      "Pattern": "(?i)\\bcmdkey(\\.exe)?\\s+/list\\b",
+      "Severity": "POSSIBLE",
+      "Why": "enumerates stored credentials — common early recon, also used by admins"
+    }
+  ],
+  "_comment_accessibility_backdoor": "Sticky-keys-class backdoors: replacing or IFEO-debugging an accessibility binary yields a SYSTEM shell from the pre-logon screen. The binaries are Microsoft-signed, so a HASH/signature check is the detection, not the name.",
+  "accessibility_binaries": [
+    "sethc.exe",
+    "utilman.exe",
+    "osk.exe",
+    "magnify.exe",
+    "narrator.exe",
+    "displayswitch.exe",
+    "atbroker.exe",
+    "hh.exe"
+  ],
+  "rdp_hardening_checks": [
+    {
+      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server",
+      "Name": "fDenyTSConnections",
+      "SafeValue": 1,
+      "Compare": "eq",
+      "Why": "Remote Desktop is enabled — if it is not needed, disabling it removes a heavily brute-forced entry point"
+    },
+    {
+      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp",
+      "Name": "UserAuthentication",
+      "SafeValue": 1,
+      "Compare": "ge",
+      "Why": "Network Level Authentication is off — RDP accepts pre-auth connections (BlueKeep-class exposure)"
+    },
+    {
+      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server",
+      "Name": "fSingleSessionPerUser",
+      "SafeValue": 1,
+      "Compare": "ge",
+      "Why": "multiple concurrent sessions per user is a known RDP session-hijack enabler"
+    },
+    {
+      "Path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\Terminal Services",
+      "Name": "DisablePasswordSaving",
+      "SafeValue": 1,
+      "Compare": "ge",
+      "Why": "saved RDP passwords let a foothold pivot without re-authenticating"
+    }
+  ],
+  "_comment_shadow_admin": "Hidden and shadow-admin accounts. SpecialAccounts\\UserList with a 0 value hides an account from the logon screen and from Settings — a real Windows feature with almost no legitimate use on an endpoint, and a favourite of hands-on-keyboard intruders.",
+  "hidden_account_reg_path": "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon\\SpecialAccounts\\UserList",
+  "suspicious_account_name_patterns": [
+    "^admin\\$$",
+    "\\$$",
+    "^support_\\w+$",
+    "^healthcheck$",
+    "^sqlbackup$",
+    "^backupadmin$",
+    "^helpdesk\\d*$",
+    "^temp(admin)?\\d*$",
+    "^test(user|admin)?\\d*$",
+    "^svc[-_]?admin$",
+    "^defaultaccount\\d+$",
+    "^administrateur$",
+    "^adm1n",
+    "^sysadmin\\d*$"
+  ],
+  "_comment_clickfix": "ClickFix / fake-CAPTCHA / 'paste this to verify you are human' social engineering: the victim is told to press Win+R and paste an attacker-supplied command. The forensic residue is the RunMRU registry key — the command the user actually pasted into the Run dialog. Extremely high fidelity: no legitimate workflow puts an encoded PowerShell downloader in RunMRU.",
+  "runmru_reg_path": "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU",
+  "clipboard_lure_rules": [
+    {
+      "Name": "ClickFix-EncodedPowerShell",
+      "Pattern": "(?i)powershell[^\\r\\n]*\\s-(e|en|enc|encod\\w*)\\s+[A-Za-z0-9+/=]{40,}",
+      "Severity": "CRITICAL",
+      "Why": "base64-encoded PowerShell pasted into the Run dialog"
+    },
+    {
+      "Name": "ClickFix-RemoteDownloadCradle",
+      "Pattern": "(?i)(powershell|pwsh|curl|certutil|bitsadmin|mshta)[^\\r\\n]*(https?://|iwr |irm |DownloadString|DownloadFile|urlcache)",
+      "Severity": "CRITICAL",
+      "Why": "remote payload download pasted into the Run dialog"
+    },
+    {
+      "Name": "ClickFix-ClipboardVerifyLure",
+      "Pattern": "(?i)(verif\\w*|captcha|robot|human|fix|repair)[^\\r\\n]{0,40}(powershell|mshta|curl|conhost|cmd\\s*/c)",
+      "Severity": "HIGH",
+      "Why": "the fake-CAPTCHA lure text is often pasted along with the command"
+    },
+    {
+      "Name": "ClickFix-MshtaRemote",
+      "Pattern": "(?i)\\bmshta(\\.exe)?\\s+(https?:|javascript:|vbscript:)",
+      "Severity": "CRITICAL",
+      "Why": "mshta fetching remote script content"
+    },
+    {
+      "Name": "ClickFix-ConhostHiddenLaunch",
+      "Pattern": "(?i)conhost(\\.exe)?[^\\r\\n]*--headless",
+      "Severity": "HIGH",
+      "Why": "conhost --headless is used to hide a console window from the victim"
+    }
+  ],
+  "_comment_rmm_abuse": "Remote monitoring/management tooling abused for hands-on-keyboard access. USER RULE #2 APPLIES: Datto / CentraStage / Kaseya are this shop's own legitimate partner tooling and are deliberately ABSENT from this list. Everything here is still dual-use — an MSP may legitimately run any of it — so a plain install is INFO, and only a suspicious install PATH or a portable/unattended drop escalates it. Never auto-actionable.",
+  "rmm_tool_binaries": [
+    "screenconnect.clientservice.exe",
+    "screenconnect.windowsclient.exe",
+    "connectwisecontrol.client.exe",
+    "atera_agent.exe",
+    "ateraagent.exe",
+    "syncrosetup.exe",
+    "syncro.service.exe",
+    "anydesk.exe",
+    "teamviewer.exe",
+    "tv_w32.exe",
+    "tv_x64.exe",
+    "rustdesk.exe",
+    "meshagent.exe",
+    "supremo.exe",
+    "ammyy.exe",
+    "aa_v3.exe",
+    "netsupport.exe",
+    "client32.exe",
+    "pcichek.exe",
+    "logmein.exe",
+    "lmiignition.exe",
+    "gotoassist.exe",
+    "splashtop.exe",
+    "srservice.exe",
+    "strwinclt.exe",
+    "dwagent.exe",
+    "dwagsvc.exe",
+    "remoteutilities.exe",
+    "rutserv.exe",
+    "rfusclient.exe",
+    "action1_agent.exe",
+    "level.exe",
+    "pulseway.exe",
+    "simplehelp.exe",
+    "gtb.exe"
+  ],
+  "rmm_suspicious_path_regex": "(?i)\\\\(AppData|Temp|Downloads|Desktop|Public|ProgramData|Users\\\\Public|Windows\\\\Temp|PerfLogs|Intel|Recovery)\\\\",
+  "_comment_token_theft": "Cloud and session token theft. Access tokens survive MFA, so these files are now a primary objective for infostealers. Presence of the FILE is normal for a developer box — the detection is a token store being READ or STAGED by an unsigned user-path process, plus tokens copied into a staging directory (archive/clipboard/temp) which is never legitimate.",
+  "cloud_token_paths_raw": [
+    "%USERPROFILE%\\.aws\\credentials",
+    "%USERPROFILE%\\.azure\\msal_token_cache.json",
+    "%USERPROFILE%\\.azure\\accessTokens.json",
+    "%USERPROFILE%\\.config\\gcloud\\credentials.db",
+    "%USERPROFILE%\\.config\\gcloud\\access_tokens.db",
+    "%APPDATA%\\gcloud\\credentials.db",
+    "%USERPROFILE%\\.kube\\config",
+    "%USERPROFILE%\\.docker\\config.json",
+    "%APPDATA%\\Code\\User\\globalStorage\\storage.json",
+    "%USERPROFILE%\\.git-credentials",
+    "%APPDATA%\\npm\\.npmrc",
+    "%USERPROFILE%\\.npmrc",
+    "%USERPROFILE%\\.pypirc",
+    "%APPDATA%\\Slack\\Local Storage\\leveldb",
+    "%APPDATA%\\discord\\Local Storage\\leveldb",
+    "%APPDATA%\\Microsoft\\Teams\\Cookies"
+  ],
+  "token_staging_name_patterns": [
+    "*token*.json",
+    "*credentials*.zip",
+    "*creds*.7z",
+    "*cookies*.txt",
+    "*cookies*.json",
+    "*passwords*.csv",
+    "*autofill*.txt",
+    "*wallet*.dat",
+    "*seed*.txt",
+    "*.kdbx.bak",
+    "browser*data*.zip",
+    "*exfil*",
+    "*loot*",
+    "*stealer*log*"
+  ],
+  "_comment_timestomp": "Time-stomping: an attacker back-dates a dropped file so it blends into the system image and slips past time-scoped scans. Detected structurally (creation time newer than write time by a wide margin, or a zeroed/epoch timestamp), so there is nothing to signature. Bounded to executable content in user-writable paths to keep it quiet.",
+  "timestomp_extensions": [
+    ".exe",
+    ".dll",
+    ".sys",
+    ".scr",
+    ".ocx",
+    ".cpl",
+    ".ps1",
+    ".bat",
+    ".cmd",
+    ".vbs",
+    ".js"
+  ],
+  "_comment_ws6_hardening": "Operator-only hardening actions surfaced by the WS6 phases. All Info/POSSIBLE + RunCmd so the CRITICAL/HIGH auto-select can never fire them (user rule #1); the GUI's APPLY HARDENING button selects them as a group. Each command is idempotent and individually reversible.",
+  "ws6_hardening_actions": [
+    {
+      "Id": "LSA_RUNASPPL",
+      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa",
+      "Name": "RunAsPPL",
+      "SafeValue": 1,
+      "Why": "LSA Protected Process Light stops most userland LSASS credential dumping",
+      "Fix": "Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' RunAsPPL 1 -Type DWord -Force"
+    },
+    {
+      "Id": "WDIGEST_OFF",
+      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest",
+      "Name": "UseLogonCredential",
+      "SafeValue": 0,
+      "Why": "WDigest caches cleartext passwords in LSASS memory when enabled",
+      "Fix": "Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\SecurityProviders\\WDigest' UseLogonCredential 0 -Type DWord -Force"
+    },
+    {
+      "Id": "LSA_RESTRICT_ANON",
+      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa",
+      "Name": "RestrictAnonymous",
+      "SafeValue": 1,
+      "Why": "blocks anonymous enumeration of accounts and shares",
+      "Fix": "Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa' RestrictAnonymous 1 -Type DWord -Force"
+    },
+    {
+      "Id": "SMB1_OFF",
+      "Path": "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters",
+      "Name": "SMB1",
+      "SafeValue": 0,
+      "Why": "SMBv1 is unpatchable-by-design and the WannaCry/NotPetya propagation path",
+      "Fix": "Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters' SMB1 0 -Type DWord -Force"
+    },
+    {
+      "Id": "AUTORUN_OFF",
+      "Path": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer",
+      "Name": "NoDriveTypeAutoRun",
+      "SafeValue": 255,
+      "Why": "disables AutoRun/AutoPlay on every drive type — the classic USB worm vector",
+      "Fix": "New-Item -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer' -Force | Out-Null; Set-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\Explorer' NoDriveTypeAutoRun 255 -Type DWord -Force"
+    },
+    {
+      "Id": "PS_SCRIPTBLOCK_LOG",
+      "Path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",
+      "Name": "EnableScriptBlockLogging",
+      "SafeValue": 1,
+      "Why": "records de-obfuscated PowerShell — the single most useful IR artifact on Windows",
+      "Fix": "New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging' -Force | Out-Null; Set-ItemProperty 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging' EnableScriptBlockLogging 1 -Type DWord -Force"
+    },
+    {
+      "Id": "LLMNR_OFF",
+      "Path": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient",
+      "Name": "EnableMulticast",
+      "SafeValue": 0,
+      "Why": "LLMNR/NBT-NS poisoning is the standard internal credential-relay attack (Responder)",
+      "Fix": "New-Item -Path 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient' -Force | Out-Null; Set-ItemProperty 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows NT\\DNSClient' EnableMulticast 0 -Type DWord -Force"
+    },
+    {
+      "Id": "UAC_ADMIN_PROMPT",
+      "Path": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+      "Name": "ConsentPromptBehaviorAdmin",
+      "SafeValue": 2,
+      "Why": "prompt-on-secure-desktop defeats the fodhelper-class silent auto-elevation bypasses",
+      "Fix": "Set-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System' ConsentPromptBehaviorAdmin 2 -Type DWord -Force"
     }
   ]
 }

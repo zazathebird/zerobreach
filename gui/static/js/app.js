@@ -27,6 +27,12 @@ const STATE = {
   mspBuffer: '',
   mspMode: false,
   logFilter: 'ALL',
+  logQuery: '',          // free-text filter over the log view (paired with the severity chips)
+  // Findings triage filter model (UX pass): the severity pills are real toggles, the
+  // search box matches free text across the finding, and groupBy re-buckets the tree.
+  findingsSevFilter: new Set(['CRITICAL', 'HIGH', 'POSSIBLE', 'CLEAN']),
+  findingsQuery: '',
+  findingsGroupBy: 'threat_type',
   autoScroll: true,
   logLines: [],
   totalThreats: 0,
@@ -35,7 +41,43 @@ const STATE = {
   totalPhases: 115,
   scanStartMs: 0,   // local clock origin (re-synced from server elapsed)
   lastEventMs: 0,   // last time any SSE event arrived (drives the "still working" heartbeat)
+  sseWasDown: false,     // so a reconnect is announced once, not on every retry tick
+  lastRemediation: null, // persisted PURGE outcome, rendered on the Report view
+  bgTitleTimer: 0,       // flashes document.title when a scan finishes in a background tab
 };
+
+// ── CSRF token ────────────────────────────────────────────────────────────────
+// The server rejects any same-origin browser POST that does not echo this token
+// (see Test-RequestAllowed in ZeroBreach-Server.ps1). It is readable only from this
+// origin, so a malicious page in another tab cannot learn it and cannot drive
+// /api/remediate behind the operator's back. Fetched once at boot; postJSON() below
+// is the single choke point that attaches it, so no POST site can forget it.
+let CSRF_TOKEN = '';
+
+function loadCsrfToken() {
+  return fetch('/api/csrf')
+    .then(r => r.json())
+    .then(j => { CSRF_TOKEN = j.token || ''; })
+    .catch(() => { CSRF_TOKEN = ''; });
+}
+
+// Every state-changing request goes through here.
+function postJSON(url, payload) {
+  const headers = { 'Content-Type': 'application/json', 'X-ZB-Token': CSRF_TOKEN };
+  const opts = { method: 'POST', headers };
+  if (payload !== undefined) opts.body = JSON.stringify(payload);
+  return fetch(url, opts).then(r => {
+    // A 403 here almost always means the page was loaded before the server restarted
+    // and is holding a stale token — re-fetch once and retry rather than failing silently.
+    if (r.status === 403) {
+      return loadCsrfToken().then(() => {
+        headers['X-ZB-Token'] = CSRF_TOKEN;
+        return fetch(url, opts);
+      });
+    }
+    return r;
+  });
+}
 
 // ── DOM Helpers ───────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -103,6 +145,9 @@ function finishBoot() {
 
 // ── App Init ──────────────────────────────────────────────────────────────────
 function initApp() {
+  // Fire-and-forget: the token is only needed by POSTs, all of which happen after a
+  // user interaction, and postJSON() re-fetches + retries once on a 403 anyway.
+  loadCsrfToken();
   ZBFX.init();
   ZBThemes.restore();
   // Initialize the per-view FX layer for the default (launchpad) view so the very
@@ -126,6 +171,7 @@ function initApp() {
   startVitalsPoller();
   initSettingsUI();
   initCmdPalette();
+  initKeyboardActivation();
   initAudioUnlock();
   restoreGodBadge();
   ZBSound.play('boot');
@@ -151,11 +197,28 @@ function restoreGodBadge() {
 function initSSE() {
   STATE.sse = new EventSource('/api/events');
 
-  STATE.sse.onopen = () => setConnected(true);
+  STATE.sse.onopen = () => {
+    setConnected(true);
+    // Only announce a RE-connect, not the initial one.
+    if (STATE.sseWasDown) {
+      STATE.sseWasDown = false;
+      showToast('Live connection restored');
+      appendLogLine({ text: '[INFO] Live event stream reconnected.', severity: 'INFO', phase: 0 });
+    }
+  };
 
   STATE.sse.onerror = () => {
     setConnected(false);
-    // EventSource auto-reconnects; no manual retry needed
+    // EventSource auto-reconnects on its own, but silently — during a 25-minute DEEP scan a
+    // dropped stream looked exactly like "the scan went quiet", so say it out loud once.
+    if (!STATE.sseWasDown) {
+      STATE.sseWasDown = true;
+      showToast('Live connection lost — retrying (the scan itself keeps running)');
+      appendLogLine({
+        text: '[WARN] Live event stream dropped — reconnecting. The scan continues on the server; findings will catch up.',
+        severity: 'POSSIBLE', phase: 0,
+      });
+    }
   };
 
   STATE.sse.onmessage = (e) => {
@@ -176,6 +239,7 @@ function initSSE() {
 const EV_QUEUE = [];
 let evPumpScheduled = false;
 const EV_MAX_PER_FRAME = 300;
+let evQueueHead = 0;
 
 function enqueueEvent(data) {
   EV_QUEUE.push(data);
@@ -184,12 +248,25 @@ function enqueueEvent(data) {
 
 function pumpEvents() {
   evPumpScheduled = false;
-  const n = Math.min(EV_QUEUE.length, EV_MAX_PER_FRAME);
-  for (let i = 0; i < n; i++) dispatchEvent(EV_QUEUE.shift());
-  if (EV_QUEUE.length) { evPumpScheduled = true; requestAnimationFrame(pumpEvents); }
+  // Read through the queue with a moving head index instead of Array.shift(): shift()
+  // re-indexes the whole array on every call, so draining a big burst was O(n^2) — the
+  // exact cost this batching exists to avoid. The consumed prefix is dropped in one
+  // splice once it gets large, which keeps memory flat without paying per event.
+  const n = Math.min(EV_QUEUE.length - evQueueHead, EV_MAX_PER_FRAME);
+  for (let i = 0; i < n; i++) handleServerEvent(EV_QUEUE[evQueueHead + i]);
+  evQueueHead += n;
+  if (evQueueHead > 4096 || evQueueHead === EV_QUEUE.length) {
+    EV_QUEUE.splice(0, evQueueHead);
+    evQueueHead = 0;
+  }
+  if (EV_QUEUE.length > evQueueHead) { evPumpScheduled = true; requestAnimationFrame(pumpEvents); }
 }
 
-function dispatchEvent(data) {
+// NOT named dispatchEvent: a top-level function declaration by that name shadows the
+// inherited window.dispatchEvent (EventTarget.prototype.dispatchEvent) for this whole
+// script, so any library or future code calling window.dispatchEvent(new CustomEvent(...))
+// would have silently invoked this SSE handler instead.
+function handleServerEvent(data) {
   STATE.lastEventMs = Date.now();   // heartbeat: engine is producing output
   switch (data.type) {
     case 'sync':
@@ -221,9 +298,15 @@ function dispatchEvent(data) {
       STATE.scanComplete = true;
       if (data.threat_counts) STATE.threatCounts = data.threat_counts;
       onScanComplete(data);
+      notifyBackground(`Scan complete — ${data.findings_count || 0} findings`);
       break;
     case 'remediation_complete':
+      STATE.lastRemediation = {
+        applied: data.applied, failed: data.failed, skipped: data.skipped, blocked: data.blocked,
+        when: new Date().toLocaleString(),
+      };
       onRemediationComplete(data);
+      notifyBackground(`Remediation complete — ${data.applied || 0} applied, ${data.blocked || 0} blocked`);
       break;
   }
 }
@@ -464,11 +547,7 @@ function saveProfile() {
     ioc_file: $('ioc-path').value.trim(),
   };
   PROFILE_TOGGLES.forEach(([id, k]) => { profile[k] = $(id).checked; });
-  fetch('/api/profiles', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ action: 'save', profile }),
-  })
+  postJSON('/api/profiles', { action: 'save', profile })
     .then(r => r.json().then(j => ({ ok: r.ok, j })))
     .then(({ ok, j }) => {
       if (!ok) throw new Error(j.error || 'save failed');
@@ -485,11 +564,7 @@ function deleteProfile() {
   const p = SCAN_PROFILES.find(x => x.name === name);
   if (!p) { ZBSound.play('error'); return; }
   if (p.builtin) { showToast('Built-in profiles cannot be deleted'); ZBSound.play('error'); return; }
-  fetch('/api/profiles', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ action: 'delete', name }),
-  })
+  postJSON('/api/profiles', { action: 'delete', name })
     .then(r => r.json().then(j => ({ ok: r.ok, j })))
     .then(({ ok, j }) => {
       if (!ok) throw new Error(j.error || 'delete failed');
@@ -503,12 +578,103 @@ function deleteProfile() {
 }
 
 // ── Settings: theme grid, FX intensity, audio ────────────────────────────────
+// Anything that is a <div>/<span> with a click handler must also answer Enter/Space,
+// or it simply does not exist for a keyboard user. One delegated listener covers the
+// nav items, IOC tabs, log filters and theme cards without touching their own handlers.
+function initKeyboardActivation() {
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    const el = e.target;
+    if (!el || !el.matches) return;
+    if (el.matches('.nav-item, .ioc-tab, .log-filter, .theme-card, .threat-chip')) {
+      e.preventDefault();
+      el.click();
+    }
+  });
+  // Make the remaining click-only controls reachable in the first place.
+  $$('.log-filter, .theme-card, .threat-chip').forEach(el => {
+    if (!el.hasAttribute('tabindex')) el.setAttribute('tabindex', '0');
+    if (!el.hasAttribute('role')) el.setAttribute('role', 'button');
+  });
+}
+
+// Desktop notifications are opt-in from Settings, never prompted on page load —
+// browsers penalise unprompted permission requests and users rightly distrust them.
+function initNotifyOptIn() {
+  const cb = $('opt-notify');
+  if (!cb || !window.Notification) return;
+  cb.checked = Notification.permission === 'granted';
+  cb.addEventListener('change', () => {
+    if (!cb.checked) return;                       // cannot revoke from JS; browser settings only
+    if (Notification.permission === 'granted') return;
+    Notification.requestPermission().then(perm => {
+      cb.checked = perm === 'granted';
+      showToast(perm === 'granted'
+        ? 'Desktop notifications enabled'
+        : 'Notification permission denied — the tab title will still flash');
+    });
+  });
+}
+
 function initSettingsUI() {
+  initNotifyOptIn();
   buildThemeGrid();
   buildFxTiers();
   buildCineFxToggles();
   initAudioControls();
+  initScheduleUI();
   document.addEventListener('zb-god-unlocked', buildThemeGrid);
+}
+
+// The SCHEDULE + SMTP section used to render with no listeners and no route behind it.
+function initScheduleUI() {
+  const btn = $('btn-schedule-apply');
+  const st  = $('schedule-status');
+  if (!btn) return;
+
+  // Repopulate from the last-applied settings.
+  fetch('/api/schedule').then(r => r.json()).then(d => {
+    if (!d || d.error) return;
+    if ($('set-schedule'))    $('set-schedule').value    = d.schedule    || '';
+    if ($('set-smtp-server')) $('set-smtp-server').value = d.smtp_server || '';
+    if ($('set-smtp-from'))   $('set-smtp-from').value   = d.smtp_from   || '';
+    if ($('set-smtp-to'))     $('set-smtp-to').value     = d.smtp_to     || '';
+  }).catch(() => {});
+
+  btn.addEventListener('click', () => {
+    const payload = {
+      schedule:    $('set-schedule').value,
+      smtp_server: $('set-smtp-server').value.trim(),
+      smtp_from:   $('set-smtp-from').value.trim(),
+      smtp_to:     $('set-smtp-to').value.trim(),
+    };
+    // Partial SMTP is a silent no-op in the engine — say so rather than pretend it worked.
+    const filled = [payload.smtp_server, payload.smtp_from, payload.smtp_to].filter(Boolean).length;
+    if (filled > 0 && filled < 3) {
+      st.textContent = 'Fill in ALL THREE SMTP fields (server, from, to) or leave all three empty.';
+      st.style.color = 'var(--threat-high)';
+      ZBSound.play('error');
+      return;
+    }
+    btn.disabled = true;
+    st.textContent = 'Applying...';
+    st.style.color = 'var(--text-mid)';
+    postJSON('/api/schedule', payload)
+      .then(r => r.json().then(j => ({ ok: r.ok, j })))
+      .then(({ ok, j }) => {
+        if (!ok || j.error) throw new Error(j.error || 'failed');
+        st.textContent = j.status || 'applied';
+        st.style.color = 'var(--threat-clean)';
+        ZBSound.play('confirm');
+        showToast(j.status || 'Schedule applied');
+      })
+      .catch(e => {
+        st.textContent = `Failed: ${e.message}`;
+        st.style.color = 'var(--threat-critical)';
+        ZBSound.play('error');
+      })
+      .finally(() => { btn.disabled = false; });
+  });
 }
 
 function buildThemeGrid() {
@@ -728,12 +894,17 @@ function startScan() {
   });
   $('intel-feed').innerHTML = '';
 
+  // snapshot / baseline / csv round-trip through scan profiles but used never to be
+  // sent here, so those three checkboxes did nothing whatever the operator picked.
   const config = {
     mode:        STATE.scanMode,
     hours:       STATE.scanHours,
     html_report: $('opt-html').checked,
     paranoid:    $('opt-paranoid').checked,
     stealth:     $('opt-stealth').checked,
+    snapshot:    $('opt-snapshot').checked,
+    baseline:    $('opt-baseline').checked,
+    csv:         $('opt-csv').checked,
     ioc_file:    $('ioc-path').value.trim(),
     msp_mode:    STATE.mspMode,
   };
@@ -744,11 +915,7 @@ function startScan() {
 
   switchView('scanmonitor');
 
-  fetch('/api/scan/start', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(config),
-  })
+  postJSON('/api/scan/start', config)
     .then(r => {
       if (!r.ok) return r.json().then(j => { throw new Error(j.error || r.status); });
     })
@@ -768,7 +935,7 @@ function startScan() {
 function initScanMonitor() {
   $('btn-abort').addEventListener('click', () => {
     ZBSound.play('error');
-    fetch('/api/scan/abort', { method: 'POST' });
+    postJSON('/api/scan/abort');
     STATE.scanning = false;
     $('btn-abort').disabled = true;
     $('sb-status').textContent = '● ABORTED';
@@ -776,6 +943,14 @@ function initScanMonitor() {
   });
 
   $('autoscroll').addEventListener('change', e => { STATE.autoScroll = e.target.checked; });
+
+  const logSearch = $('log-search');
+  if (logSearch) {
+    logSearch.addEventListener('input', () => {
+      STATE.logQuery = logSearch.value.trim().toLowerCase();
+      rerenderLog();
+    });
+  }
 
   $$('.log-filter').forEach(f => {
     f.addEventListener('click', () => {
@@ -787,33 +962,52 @@ function initScanMonitor() {
   });
 }
 
+// Severity chip AND text query must both pass for a line to show.
+function logLineVisible(data) {
+  if (STATE.logFilter !== 'ALL' && data.severity !== STATE.logFilter) return false;
+  if (STATE.logQuery && !String(data.text || '').toLowerCase().includes(STATE.logQuery)) return false;
+  return true;
+}
+
 const LOG_BUFFER_CAP = 2000;   // retained log records (caps memory + rerenderLog cost)
 const LOG_DOM_CAP    = 800;    // live <div> nodes in #log-output (caps layout/paint cost)
+
+// Render one line into the log element. Pure DOM — it must NOT touch STATE.logLines,
+// so that re-rendering on a filter change cannot mutate the buffer (see rerenderLog).
+function renderLogNode(data, el) {
+  const line = document.createElement('div');
+  line.className   = `log-line sev-${data.severity}`;
+  line.dataset.sev = data.severity;
+  // Stamp the arrival time once, on first append, and reuse it on every re-render —
+  // formatting `new Date()` here restamped the whole backlog to "now" each time the
+  // filter changed, so the log claimed every line arrived at the same instant.
+  if (!data._ts) data._ts = new Date().toLocaleTimeString('en-US', { hour12: false });
+  line.innerHTML = `<span class="log-ts">${data._ts}</span><span class="log-text">${escapeHtml(data.text)}</span>`;
+  el.appendChild(line);
+  // Trim oldest nodes so a long/noisy scan can't grow the DOM without bound.
+  while (el.childElementCount > LOG_DOM_CAP) el.removeChild(el.firstChild);
+}
 
 function appendLogLine(data) {
   STATE.logLines.push(data);
   if (STATE.logLines.length > LOG_BUFFER_CAP) STATE.logLines.shift();
 
-  const visible = STATE.logFilter === 'ALL' || data.severity === STATE.logFilter;
-  if (!visible) return;
+  if (!logLineVisible(data)) return;
 
-  const el   = $('log-output');
-  const line = document.createElement('div');
-  line.className      = `log-line sev-${data.severity}`;
-  line.dataset.sev    = data.severity;
-
-  const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false });
-  line.innerHTML = `<span class="log-ts">${timeStr}</span><span class="log-text">${escapeHtml(data.text)}</span>`;
-  el.appendChild(line);
-  // Trim oldest nodes so a long/noisy scan can't grow the DOM without bound.
-  while (el.childElementCount > LOG_DOM_CAP) el.removeChild(el.firstChild);
-
+  const el = $('log-output');
+  renderLogNode(data, el);
   if (STATE.autoScroll) el.scrollTop = el.scrollHeight;
 }
 
 function rerenderLog() {
-  $('log-output').innerHTML = '';
-  STATE.logLines.forEach(d => appendLogLine(d));
+  const el = $('log-output');
+  el.innerHTML = '';
+  // Render only. This used to call appendLogLine, which ALSO pushes into
+  // STATE.logLines — so every filter/search change duplicated the entire buffer
+  // (and, once past LOG_BUFFER_CAP, silently discarded the oldest real lines).
+  const visible = STATE.logLines.filter(logLineVisible);
+  visible.slice(-LOG_DOM_CAP).forEach(d => renderLogNode(d, el));
+  if (STATE.autoScroll) el.scrollTop = el.scrollHeight;
 }
 
 function updateMonitorUI(data) {
@@ -1012,6 +1206,69 @@ function initFindingsView() {
     $$('.tree-items').forEach(i => i.style.display = 'none');
   });
 
+  // Severity pills as filters. They were static counters with no handlers despite looking
+  // clickable — the log view's .log-filter chips already proved the pattern.
+  [['pill-critical', 'CRITICAL'], ['pill-high', 'HIGH'], ['pill-possible', 'POSSIBLE'], ['pill-clean', 'CLEAN']]
+    .forEach(([id, sev]) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener('click', () => {
+        if (STATE.findingsSevFilter.has(sev)) STATE.findingsSevFilter.delete(sev);
+        else STATE.findingsSevFilter.add(sev);
+        // Never let the operator filter everything away with no way back.
+        if (STATE.findingsSevFilter.size === 0) {
+          ['CRITICAL', 'HIGH', 'POSSIBLE', 'CLEAN'].forEach(x => STATE.findingsSevFilter.add(x));
+        }
+        ZBSound.play('tick');
+        renderFindingsTree();
+      });
+    });
+
+  const searchEl = $('findings-search');
+  if (searchEl) {
+    searchEl.addEventListener('input', () => {
+      STATE.findingsQuery = searchEl.value.trim().toLowerCase();
+      renderFindingsTree();
+    });
+  }
+  const groupEl = $('findings-groupby');
+  if (groupEl) {
+    groupEl.addEventListener('change', () => {
+      STATE.findingsGroupBy = groupEl.value;
+      renderFindingsTree();
+    });
+  }
+
+  // Bulk-select the operator-only hardening set. These findings are Info/POSSIBLE by
+  // design so nothing auto-ticks them; this is the deliberate opt-in. Deliberately does
+  // NOT execute anything — the operator still reviews the queue and types PURGE.
+  const hardenBtn = $('btn-select-hardening');
+  if (hardenBtn) {
+    hardenBtn.addEventListener('click', () => {
+      const isHardening = f =>
+        /hardening|proactive/i.test(f.threat_type || '') ||
+        /hardening|proactive/i.test(f.group || '') ||
+        /operator hardening|proactive hardening/i.test(f.line || '');
+      const picks = STATE.findings.filter(f => isHardening(f) && !f.protected);
+      if (!picks.length) {
+        showToast('No hardening actions in this scan — posture already good');
+        ZBSound.play('error');
+        return;
+      }
+      picks.forEach(f => STATE.selectedFindings.add(f.id));
+      const pickStr = new Set(picks.map(f => String(f.id)));
+      $$('#findings-tree input[type=checkbox]').forEach(cb => {
+        if (pickStr.has(cb.dataset.id)) cb.checked = true;
+      });
+      ZBSound.play('confirm');
+      showToast(`${picks.length} hardening action(s) selected — review the queue, then EXECUTE`);
+      updateRemediationBtn();
+    });
+  }
+
+  const clientBtn = $('btn-export-client');
+  if (clientBtn) clientBtn.addEventListener('click', () => exportReport('client'));
+
   $('btn-goto-remediation').addEventListener('click', () => switchView('remediation'));
 
   $('btn-export-findings').addEventListener('click', () => {
@@ -1033,41 +1290,94 @@ function renderFindingsTree() {
   // silently re-check and could fire on PURGE.
   const firstPass = !STATE.findingsAutoSelected;
 
-  const groups   = {};
-  const counts   = { CRITICAL: 0, HIGH: 0, POSSIBLE: 0, CLEAN: 0 };
-
-  STATE.findings.forEach(f => {
-    const g = f.threat_type || 'Other';
-    if (!groups[g]) groups[g] = [];
-    groups[g].push(f);
-    if (counts[f.severity] !== undefined) counts[f.severity]++;
-  });
-
+  // Counts always reflect the WHOLE result set, not the filtered view — the pills double as
+  // the filter control, so a count that shrank when you clicked it would be circular.
+  const counts = { CRITICAL: 0, HIGH: 0, POSSIBLE: 0, CLEAN: 0 };
+  STATE.findings.forEach(f => { if (counts[f.severity] !== undefined) counts[f.severity]++; });
   Object.entries(counts).forEach(([k, v]) => {
     const el = $(`count-${k.toLowerCase()}`);
     if (el) el.textContent = v;
+    const pill = $(`pill-${k.toLowerCase()}`);
+    if (pill) {
+      const on = STATE.findingsSevFilter.has(k);
+      pill.classList.toggle('active', on);
+      pill.classList.toggle('filtered-out', !on);
+      pill.setAttribute('aria-pressed', on ? 'true' : 'false');
+    }
   });
 
-  if (Object.keys(groups).length === 0) {
-    container.innerHTML = '<div style="padding:20px;color:var(--text-dim);font-size:11px;text-align:center">NO FINDINGS — RUN A SCAN FIRST</div>';
+  // Apply severity filter + free-text search. Search covers everything the technician can
+  // see on the row plus the MITRE id, so pasting a path or a T-number just works.
+  const q = STATE.findingsQuery;
+  const visible = STATE.findings.filter(f => {
+    if (!STATE.findingsSevFilter.has(f.severity)) return false;
+    if (!q) return true;
+    const hay = [f.line, f.threat_type, f.mitre_id, f.mitre && f.mitre.name,
+                 f.mitre && f.mitre.tactic, f.phase, f.severity]
+      .filter(Boolean).join(' ').toLowerCase();
+    return hay.includes(q);
+  });
+
+  const filterStatus = $('findings-filter-status');
+  if (filterStatus) {
+    const hidden = STATE.findings.length - visible.length;
+    filterStatus.textContent = hidden > 0
+      ? `Showing ${visible.length} of ${STATE.findings.length} findings (${hidden} hidden by filter/search)`
+      : `Showing all ${STATE.findings.length} findings`;
+  }
+
+  if (STATE.findings.length === 0) {
+    // Distinguish "clean box" from "you have not scanned yet" — these used to look identical.
+    container.innerHTML = STATE.scanComplete
+      ? '<div class="findings-empty findings-empty-clean" role="status">✅ <b>NO THREATS FOUND</b><br><span>The scan completed and every phase came back clean.</span></div>'
+      : '<div class="findings-empty" role="status">NO FINDINGS YET — RUN A SCAN FIRST</div>';
+    return;
+  }
+  if (visible.length === 0) {
+    container.innerHTML = '<div class="findings-empty" role="status">NO FINDINGS MATCH THE CURRENT FILTER/SEARCH<br><span>Adjust the severity pills or clear the search box.</span></div>';
     return;
   }
 
-  Object.entries(groups).forEach(([groupName, items]) => {
+  // Bucket by the operator's chosen dimension.
+  const groupKey = f => {
+    switch (STATE.findingsGroupBy) {
+      case 'severity': return f.severity || 'UNKNOWN';
+      case 'tactic':   return (f.mitre && f.mitre.tactic) || 'Unmapped';
+      case 'phase':    return `Phase ${f.phase}`;
+      default:         return f.threat_type || 'Other';
+    }
+  };
+  const groups = {};
+  visible.forEach(f => {
+    const g = groupKey(f);
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(f);
+  });
+
+  // Most-severe groups first so the technician triages top-down.
+  const sevRank = { CRITICAL: 0, HIGH: 1, POSSIBLE: 2, CLEAN: 3 };
+  const groupMaxSev = items =>
+    items.some(i => i.severity === 'CRITICAL') ? 'CRITICAL' :
+    items.some(i => i.severity === 'HIGH')     ? 'HIGH'     :
+    items.some(i => i.severity === 'POSSIBLE') ? 'POSSIBLE' : 'CLEAN';
+  const ordered = Object.entries(groups).sort((a, b) => {
+    const d = sevRank[groupMaxSev(a[1])] - sevRank[groupMaxSev(b[1])];
+    return d !== 0 ? d : b[1].length - a[1].length;
+  });
+
+  ordered.forEach(([groupName, items]) => {
     const groupEl = document.createElement('div');
     groupEl.className = 'tree-group';
 
-    const maxSev = items.some(i => i.severity === 'CRITICAL') ? 'CRITICAL' :
-                   items.some(i => i.severity === 'HIGH')     ? 'HIGH'     :
-                   items.some(i => i.severity === 'POSSIBLE') ? 'POSSIBLE' : 'CLEAN';
-
+    const maxSev = groupMaxSev(items);
     const sevDot = { CRITICAL: '🔴', HIGH: '🟠', POSSIBLE: '🟡', CLEAN: '🟢' }[maxSev] || '⚪';
 
     groupEl.innerHTML = `
-      <div class="tree-group-header">
-        <span class="tree-toggle">▼</span>
-        <span>${sevDot} ${groupName.toUpperCase()}</span>
+      <div class="tree-group-header" role="button" tabindex="0" aria-expanded="true">
+        <span class="tree-toggle" aria-hidden="true">▼</span>
+        <span class="tree-group-name">${sevDot} ${escapeHtml(String(groupName).toUpperCase())}</span>
         <span class="tree-group-count">${items.length}</span>
+        <button type="button" class="tree-group-selall cyber-btn-sm" title="Select every actionable finding in this group">SELECT GROUP</button>
       </div>
       <div class="tree-items"></div>
     `;
@@ -1075,9 +1385,31 @@ function renderFindingsTree() {
     const header  = groupEl.querySelector('.tree-group-header');
     const itemsEl = groupEl.querySelector('.tree-items');
 
-    header.addEventListener('click', () => {
-      header.classList.toggle('collapsed');
-      itemsEl.style.display = itemsEl.style.display === 'none' ? '' : 'none';
+    const toggleGroup = () => {
+      const collapsed = header.classList.toggle('collapsed');
+      itemsEl.style.display = collapsed ? 'none' : '';
+      header.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    };
+    header.addEventListener('click', e => {
+      if (e.target.closest('.tree-group-selall')) return;   // the button has its own job
+      toggleGroup();
+    });
+    header.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleGroup(); }
+    });
+
+    // Per-group select-all. Same safety rule as the global SELECT ALL: never picks up a
+    // protected finding (the server refuses those anyway) or trusted RMM vendor tooling.
+    groupEl.querySelector('.tree-group-selall').addEventListener('click', e => {
+      e.stopPropagation();
+      const allowed = items.filter(f => !f.protected && !f.vendor_trusted);
+      allowed.forEach(f => STATE.selectedFindings.add(f.id));
+      const allowedStr = new Set(allowed.map(f => String(f.id)));
+      itemsEl.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        if (allowedStr.has(cb.dataset.id)) cb.checked = true;
+      });
+      ZBSound.play('confirm');
+      updateRemediationBtn();
     });
 
     items.forEach(finding => {
@@ -1092,13 +1424,13 @@ function renderFindingsTree() {
       if (finding.protected) item.classList.add('protected');
       if (finding.vendor_trusted) item.classList.add('vendor-trusted');
       item.innerHTML = `
-        <input type="checkbox" data-id="${finding.id}" ${autoCheck ? 'checked' : ''} ${finding.protected ? 'disabled' : ''}>
-        <span class="item-sev ${finding.severity}"></span>
+        <input type="checkbox" data-id="${escapeHtml(String(finding.id))}" ${autoCheck ? 'checked' : ''} ${finding.protected ? 'disabled' : ''}>
+        <span class="item-sev ${escapeHtml(String(finding.severity || ''))}"></span>
         <span class="item-text">${escapeHtml(shortText)}</span>
         ${protectedBadge(finding)}
         ${vendorBadge(finding)}
         ${mitreBadge(finding)}
-        <span class="item-phase">PH${finding.phase}</span>
+        <span class="item-phase">PH${escapeHtml(String(finding.phase))}</span>
       `;
 
       if (firstPass && autoEligible) STATE.selectedFindings.add(finding.id);
@@ -1157,8 +1489,20 @@ function renderRemediationView() {
     item.innerHTML = `
       <span class="queue-action">${action.label}</span>
       <span class="queue-target">${escapeHtml((f.line || '').substring(0, 80))}</span>
+      <button type="button" class="queue-remove" title="Remove this action from the queue"
+              aria-label="Remove this action from the queue">✕</button>
       <span class="queue-status">⏳</span>
     `;
+    item.querySelector('.queue-remove').addEventListener('click', () => {
+      if (STATE.remediating) return;              // never mutate the queue mid-run
+      STATE.selectedFindings.delete(f.id);
+      // Keep the findings tree's checkboxes honest with the queue.
+      const cb = document.querySelector(`#findings-tree input[data-id="${CSS.escape(String(f.id))}"]`);
+      if (cb) cb.checked = false;
+      ZBSound.play('close');
+      updateRemediationBtn();
+      renderRemediationView();                    // re-render queue + mini tree + count
+    });
     queue.appendChild(item);
   });
 
@@ -1170,22 +1514,99 @@ function renderRemediationView() {
   $('btn-execute').onclick     = () => showDangerConfirm(
     'PURGE',
     `You are about to execute ${selected.length} remediation action(s) — kills, quarantines, and registry deletions are irreversible without the rollback snapshot.`,
-    () => executeRemediation(selected)
+    () => executeRemediation(selected),
+    selected                       // previewed inside the modal (see showDangerConfirm)
   );
 }
 
+// A DEEP/PARANOID scan runs 25-30 minutes; the technician will be in another tab. Flash the
+// document title (always) and raise a system notification (only if already granted — we never
+// prompt on page load, which browsers rightly punish; Settings offers the opt-in).
+function notifyBackground(text) {
+  if (!document.hidden) return;
+  const original = document.title.replace(/^\(.\)\s*/, '');
+  let on = false;
+  clearInterval(STATE.bgTitleTimer);
+  STATE.bgTitleTimer = setInterval(() => {
+    on = !on;
+    document.title = on ? `(!) ${text}` : original;
+  }, 1200);
+  const restore = () => {
+    if (document.hidden) return;
+    clearInterval(STATE.bgTitleTimer);
+    document.title = original;
+    document.removeEventListener('visibilitychange', restore);
+  };
+  document.addEventListener('visibilitychange', restore);
+
+  try {
+    if (window.Notification && Notification.permission === 'granted') {
+      new Notification('ZeroBreach', { body: text });
+    }
+  } catch (e) { /* notifications unavailable — the title flash still fired */ }
+}
+
 // ── Danger confirm: destructive actions require typing the confirm word ──────
-function showDangerConfirm(word, message, onConfirm) {
+function showDangerConfirm(word, message, onConfirm, previewItems) {
   ZBSound.play('danger');
+
+  // The modal covers #action-queue — the very list the operator just reviewed — so a bare
+  // count string asked them to confirm from memory. Show the actual targets, grouped by fix
+  // action, with the irreversible ones first.
+  const items = Array.isArray(previewItems) ? previewItems : [];
+  let previewHtml = '';
+  if (items.length) {
+    const byAction = {};
+    items.forEach(f => {
+      const a = f.FixAction || f.fix_action || 'Unknown';
+      (byAction[a] = byAction[a] || []).push(f);
+    });
+    // Most-destructive first: what an operator most needs to see before typing the word.
+    const rank = { DeleteFile: 0, DeleteReg: 1, DeleteRegKey: 2, KillProcess: 3, RunCmd: 4, Quarantine: 5 };
+    const label = {
+      DeleteFile:  'DELETE FILE (irreversible)',
+      DeleteReg:   'DELETE REGISTRY VALUE (rollback snapshot only)',
+      DeleteRegKey:'DELETE REGISTRY KEY (rollback snapshot only)',
+      KillProcess: 'KILL PROCESS',
+      RunCmd:      'RUN COMMAND',
+      Quarantine:  'QUARANTINE (reversible — moved to the vault)',
+    };
+    const sections = Object.entries(byAction)
+      .sort((a, b) => (rank[a[0]] ?? 9) - (rank[b[0]] ?? 9))
+      .map(([action, fs]) => {
+        const rows = fs.map(f => {
+          const target = f.Target || f.target || f.FixParam || f.line || '';
+          return `<li title="${escapeHtml(String(target))}">${escapeHtml(String(target).substring(0, 110))}</li>`;
+        }).join('');
+        return `<div class="danger-preview-group">
+                  <div class="danger-preview-action">${escapeHtml(label[action] || action)} <span>x${fs.length}</span></div>
+                  <ul class="danger-preview-list">${rows}</ul>
+                </div>`;
+      }).join('');
+    previewHtml = `<div class="danger-preview" tabindex="0" aria-label="Actions that will be executed">${sections}</div>`;
+  }
+
+  // For a large batch the word alone is too easy to type on autopilot — require the count too.
+  const bigBatch  = items.length >= 10;
+  const needWord  = bigBatch ? `${word} ${items.length}` : word;
+  const hint      = bigBatch
+    ? `Large batch — type <b>${escapeHtml(needWord)}</b> (the word AND the count) to confirm.`
+    : `Type <b>${escapeHtml(needWord)}</b> to confirm.`;
+
   const wrap = document.createElement('div');
   wrap.className = 'modal';
   wrap.id = 'modal-danger';
+  wrap.setAttribute('role', 'dialog');
+  wrap.setAttribute('aria-modal', 'true');
+  wrap.setAttribute('aria-labelledby', 'danger-title');
   wrap.innerHTML = `
     <div class="modal-box danger">
-      <div class="modal-title">⚠ DESTRUCTIVE OPERATION</div>
+      <div class="modal-title" id="danger-title">⚠ DESTRUCTIVE OPERATION</div>
       <div style="font-size:11px;color:var(--text);line-height:1.6">${escapeHtml(message)}</div>
-      <div id="danger-word">${word}</div>
-      <input id="danger-input" autocomplete="off" placeholder="TYPE THE WORD ABOVE">
+      ${previewHtml}
+      <div id="danger-word">${escapeHtml(needWord)}</div>
+      <div class="danger-hint">${hint}</div>
+      <input id="danger-input" autocomplete="off" placeholder="TYPE THE WORD ABOVE" aria-label="Confirmation phrase">
       <div class="modal-actions">
         <button class="cyber-btn danger" id="danger-go" disabled>EXECUTE</button>
         <button class="cyber-btn" id="danger-cancel">CANCEL</button>
@@ -1194,14 +1615,34 @@ function showDangerConfirm(word, message, onConfirm) {
   document.body.appendChild(wrap);
   const input = wrap.querySelector('#danger-input');
   const go    = wrap.querySelector('#danger-go');
+  const close = () => {
+    wrap.remove();
+    document.removeEventListener('keydown', onEsc, true);
+    if (lastFocus && lastFocus.focus) lastFocus.focus();   // return focus where it came from
+  };
+  const lastFocus = document.activeElement;
+  const onEsc = e => { if (e.key === 'Escape') { e.stopPropagation(); ZBSound.play('close'); close(); } };
+  document.addEventListener('keydown', onEsc, true);
+
   input.addEventListener('input', () => {
-    const ok = input.value.trim().toUpperCase() === word;
+    const ok = input.value.trim().toUpperCase() === needWord.toUpperCase();
     go.disabled = !ok;
     if (ok) ZBSound.play('lock');
   });
   input.addEventListener('keydown', e => { if (e.key === 'Enter' && !go.disabled) go.click(); e.stopPropagation(); });
-  go.onclick = () => { wrap.remove(); ZBSound.play('confirm'); onConfirm(); };
-  wrap.querySelector('#danger-cancel').onclick = () => { wrap.remove(); ZBSound.play('close'); };
+
+  // Focus trap: Tab must not escape the two highest-stakes dialogs in the app.
+  wrap.addEventListener('keydown', e => {
+    if (e.key !== 'Tab') return;
+    const f = wrap.querySelectorAll('input, button, [tabindex="0"]');
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+
+  go.onclick = () => { close(); ZBSound.play('confirm'); onConfirm(); };
+  wrap.querySelector('#danger-cancel').onclick = () => { ZBSound.play('close'); close(); };
   input.focus();
 }
 
@@ -1212,7 +1653,7 @@ function renderFindingsTreeMini(findings) {
     const item = document.createElement('div');
     item.className = 'tree-item';
     const dot  = { CRITICAL: '🔴', HIGH: '🟠', POSSIBLE: '🟡' }[f.severity] || '⚪';
-    item.innerHTML = `<span class="item-sev ${f.severity}"></span><span class="item-text">${dot} ${escapeHtml((f.line || '').substring(0, 100))}</span>`;
+    item.innerHTML = `<span class="item-sev ${escapeHtml(String(f.severity || ''))}"></span><span class="item-text">${dot} ${escapeHtml((f.line || '').substring(0, 100))}</span>`;
     container.appendChild(item);
   });
 }
@@ -1288,11 +1729,7 @@ function executeRemediation(findings) {
   STATE.remediating = true;
   $$('#action-queue .queue-item .queue-status').forEach(s => { s.textContent = '⏳'; });
 
-  fetch('/api/remediate', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ report: STATE.engineReport, ids }),
-  })
+  postJSON('/api/remediate', { report: STATE.engineReport, ids })
     .then(r => r.json().then(j => { if (!r.ok || j.error) throw new Error(j.error || r.status); return j; }))
     .then(() => {
       // Live [FIX] lines stream into the scan-monitor log; completion arrives via SSE.
@@ -1430,7 +1867,7 @@ function saveIoc() {
   const payload = {};
   IOC_CATS.forEach(c => payload[c] = STATE.ioc[c] || []);
   $('btn-ioc-save').disabled = true;
-  fetch('/api/ioc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+  postJSON('/api/ioc', payload)
     .then(r => r.json())
     .then(res => {
       if (res.error) throw new Error(res.error);
@@ -1454,6 +1891,8 @@ function buildReport() {
   drawRiskDial(riskScore);
   ZBFX.countUp($('risk-score-label'), riskScore, 1100);
   drawRadarChart(counts);
+  drawMitreTactics();
+  renderRemediationSummary();
 
   const cardsEl = $('report-cards');
   cardsEl.innerHTML = '';
@@ -1466,6 +1905,87 @@ function buildReport() {
   if (!STATE.findings.some(f => f.severity === 'CRITICAL')) {
     cardsEl.innerHTML = '<div style="color:var(--threat-clean);font-size:11px;padding:12px">✓ NO CRITICAL FINDINGS</div>';
   }
+}
+
+
+// Scan-level MITRE ATT&CK tactic rollup. Per-finding badges answer "what is this?"; this
+// answers "what is happening to this machine?" — which tactics the incident actually spans.
+function drawMitreTactics() {
+  const canvas = $('mitreTactics');
+  const emptyEl = $('mitre-rollup-empty');
+  if (!canvas) return;
+
+  const tally = {};
+  STATE.findings.forEach(f => {
+    const t = f.mitre && f.mitre.tactic;
+    if (!t) return;
+    // A technique can map to several tactics; count the finding under each.
+    String(t).split(/\s*,\s*/).filter(Boolean).forEach(one => { tally[one] = (tally[one] || 0) + 1; });
+  });
+  const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+
+  if (canvas._chart) { canvas._chart.destroy(); canvas._chart = null; }
+  if (!entries.length) {
+    canvas.style.display = 'none';
+    if (emptyEl) emptyEl.textContent = STATE.findings.length
+      ? 'No findings in this scan carry a MITRE tactic mapping.'
+      : 'Run a scan to populate the ATT&CK rollup.';
+    return;
+  }
+  canvas.style.display = '';
+  if (emptyEl) emptyEl.textContent = '';
+
+  const cs     = getComputedStyle(document.body);
+  const accent = cs.getPropertyValue('--accent').trim() || '#00D4FF';
+  const text   = cs.getPropertyValue('--text-mid').trim() || '#9aa';
+
+  if (!window.Chart) {
+    // Text fallback so the data is never simply missing.
+    canvas.style.display = 'none';
+    if (emptyEl) emptyEl.textContent = entries.map(([k, v]) => `${k}: ${v}`).join('  ·  ');
+    return;
+  }
+  canvas._chart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels: entries.map(e => e[0]),
+      datasets: [{ label: 'Findings', data: entries.map(e => e[1]), backgroundColor: accent, borderWidth: 0 }],
+    },
+    options: {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: prefersReducedMotion() ? false : undefined,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: text, precision: 0 }, grid: { color: 'rgba(255,255,255,.06)' } },
+        y: { ticks: { color: text }, grid: { display: false } },
+      },
+    },
+  });
+}
+
+function prefersReducedMotion() {
+  try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (e) { return false; }
+}
+
+// A PURGE run's outcome used to survive only as a 3-second toast. Keep it on the Report view
+// so it can go into the client writeup.
+function renderRemediationSummary() {
+  const wrap = $('remediation-summary-wrap');
+  const el   = $('remediation-summary');
+  if (!wrap || !el) return;
+  const r = STATE.lastRemediation;
+  if (!r) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  el.innerHTML = `
+    <div class="remsum-grid">
+      <div class="remsum-cell ok"><span>${r.applied || 0}</span>APPLIED</div>
+      <div class="remsum-cell warn"><span>${r.failed || 0}</span>FAILED</div>
+      <div class="remsum-cell"><span>${r.skipped || 0}</span>SKIPPED</div>
+      <div class="remsum-cell block"><span>${r.blocked || 0}</span>BLOCKED (PROTECTED)</div>
+    </div>
+    <div class="remsum-when">Executed ${escapeHtml(r.when || '')}${r.snapshot ? ` · rollback snapshot: ${escapeHtml(r.snapshot)}` : ''}</div>`;
 }
 
 function drawRiskDial(score) {
@@ -1584,6 +2104,8 @@ function loadSysInfo() {
     $('si-host').textContent = d.hostname || '—';
     $('si-user').textContent = d.username || '—';
     $('si-os').textContent   = d.os || '—';
+    // Settings shows the real reports path instead of a dead, editable "Default: Desktop" box.
+    if (d.reports_dir && $('set-outdir')) $('set-outdir').value = d.reports_dir;
     if (d.defender !== undefined) {
       $('vstat-defender').style.color = d.defender ? 'var(--threat-clean)' : 'var(--threat-critical)';
     }
@@ -1658,6 +2180,44 @@ function exportReport(format) {
     document.body.appendChild(a);
     a.click();
     a.remove();
+  } else if (format === 'client') {
+    // Client-facing export: the raw JSON dump leaks internal plumbing (finding ids, fix
+    // actions, FixParam command strings, protected/vendor flags) that means nothing to a
+    // client and shouldn't leave the shop. Keep only what belongs in a writeup.
+    const sevRank = { CRITICAL: 0, HIGH: 1, POSSIBLE: 2, CLEAN: 3, INFO: 4 };
+    const rows = STATE.findings
+      .slice()
+      .sort((a, b) => (sevRank[a.severity] ?? 9) - (sevRank[b.severity] ?? 9))
+      .map(f => ({
+        severity:    f.severity,
+        category:    f.threat_type || 'Other',
+        phase:       f.phase,
+        detail:      f.line,
+        attack_id:   (f.mitre && f.mitre.id) || '',
+        attack_name: (f.mitre && f.mitre.name) || '',
+        tactic:      (f.mitre && f.mitre.tactic) || '',
+        observed_at: f.timestamp || '',
+      }));
+    const doc = {
+      report:      'ZeroBreach incident findings',
+      generated:   new Date().toISOString(),
+      scan_mode:   STATE.scanMode,
+      total:       rows.length,
+      by_severity: rows.reduce((acc, r) => { acc[r.severity] = (acc[r.severity] || 0) + 1; return acc; }, {}),
+      remediation: STATE.lastRemediation
+        ? { applied: STATE.lastRemediation.applied, failed: STATE.lastRemediation.failed,
+            skipped: STATE.lastRemediation.skipped, blocked: STATE.lastRemediation.blocked,
+            executed: STATE.lastRemediation.when }
+        : null,
+      findings:    rows,
+    };
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `zerobreach_client_report_${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    ZBSound.play('confirm');
+    showToast('Client report exported (internal fields stripped)');
   }
 }
 

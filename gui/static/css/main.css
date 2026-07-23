@@ -928,10 +928,10 @@ select.path-input option { background: var(--bg-raised); color: var(--text); }
 .cyber-btn.danger:hover:not(:disabled) { border-color: var(--threat-critical); color: var(--threat-critical); background: rgba(255,0,51,0.08); }
 
 .cyber-btn-sm {
-  background: transparent;
-  border: 1px solid var(--border);
+  background: var(--accent-dim);
+  border: 1px solid var(--border-bright);
   border-radius: var(--radius);
-  color: var(--text-dim);
+  color: var(--text-mid);
   font-family: var(--font-ui);
   font-size: 9px;
   letter-spacing: 1px;
@@ -991,4 +991,198 @@ select.path-input option { background: var(--bg-raised); color: var(--text); }
 @keyframes glowPulse {
   0%,100% { text-shadow: 0 0 8px var(--accent-glow); }
   50% { text-shadow: 0 0 20px var(--accent), 0 0 40px var(--accent-glow); }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UX PASS — 2026-07-22 (findings triage, a11y, responsive, print)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Severity pills are real filter toggles now (were static counters) ─────── */
+.sev-pill {
+  background: transparent;
+  font-family: var(--font-ui);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  user-select: none;
+}
+.sev-pill.filtered-out { opacity: 0.34; filter: grayscale(1); }
+.sev-pill.active       { box-shadow: inset 0 0 0 1px currentColor; }
+.sev-pill.filtered-out::after { content: ' (hidden)'; font-size: 8px; opacity: 0.9; }
+
+#findings-search-row { display: flex; gap: 8px; align-items: center; flex: 1 1 320px; min-width: 240px; }
+#findings-search { flex: 1; min-width: 160px; }
+.findings-groupby-label { font-size: 9px; letter-spacing: 1px; color: var(--text-dim); white-space: nowrap; }
+#findings-groupby { width: auto; min-width: 130px; }
+#findings-filter-status { flex-basis: 100%; font-size: 9px; letter-spacing: 1px; color: var(--text-dim); }
+
+/* Empty states — a clean completed scan must not look like "you forgot to scan". */
+.findings-empty {
+  padding: 26px 20px; text-align: center; font-size: 11px;
+  color: var(--text-dim); letter-spacing: 1px; line-height: 1.9;
+}
+.findings-empty span { font-size: 10px; opacity: 0.75; }
+.findings-empty-clean { color: var(--threat-clean); }
+.findings-empty-clean b { font-size: 13px; letter-spacing: 2px; }
+
+.tree-group-name { flex: 1; }
+.tree-group-selall { margin-left: auto; flex-shrink: 0; }
+
+/* ── UX #4: severity must not be encoded by COLOUR ALONE ───────────────────
+   Red/green is the most common colour-blind confusion pair, and this tool's
+   whole job is telling a technician what is dangerous. Each severity dot now
+   also carries a distinct SHAPE, so it survives greyscale and printing. */
+.tree-item .item-sev { position: relative; }
+.item-sev.CRITICAL { border-radius: 2px; transform: rotate(45deg); }            /* diamond  */
+.item-sev.HIGH     { border-radius: 2px; }                                      /* square   */
+.item-sev.POSSIBLE { border-radius: 50%; }                                      /* circle   */
+.item-sev.CLEAN    { border-radius: 50%; opacity: 0.6; transform: scale(0.7); } /* small dot */
+
+/* ── UX #3: keyboard accessibility ─────────────────────────────────────────
+   Nearly every control here is a div/span with a click handler, and the two
+   highest-stakes dialogs set outline:none with no replacement. Give every
+   focusable thing a visible, theme-tinted focus ring. :focus-visible so mouse
+   users never see it. */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible,
+.nav-item:focus-visible,
+.ioc-tab:focus-visible,
+.log-filter:focus-visible,
+.theme-card:focus-visible,
+.tree-group-header:focus-visible,
+.sev-pill:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+/* The command palette + destructive-confirm inputs deliberately cleared their
+   outline; restore a visible focus state for them specifically. */
+#cmd-input:focus, #danger-input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+#danger-input:focus { outline-color: var(--threat-critical); }
+
+/* Skip-to-content affordance for keyboard users. */
+#skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 10000;
+  background: var(--bg-raised); color: var(--accent);
+  border: 1px solid var(--accent); padding: 8px 14px;
+  font-family: var(--font-ui); font-size: 11px; letter-spacing: 1px;
+}
+#skip-link:focus { left: 8px; top: 8px; }
+
+/* ── UX #2: the PURGE modal now shows WHAT it is confirming ────────────────── */
+.danger-preview {
+  max-height: 210px; overflow-y: auto; margin: 10px 0;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: rgba(0,0,0,0.28); padding: 8px 10px; text-align: left;
+}
+.danger-preview-group + .danger-preview-group { margin-top: 10px; }
+.danger-preview-action {
+  font-family: var(--font-ui); font-size: 9px; letter-spacing: 1px;
+  color: var(--threat-critical); text-transform: uppercase;
+  border-bottom: 1px solid rgba(255,255,255,0.07); padding-bottom: 3px; margin-bottom: 4px;
+}
+.danger-preview-action span { color: var(--text-dim); }
+.danger-preview-list { list-style: none; margin: 0; padding: 0; }
+.danger-preview-list li {
+  font-family: var(--font-mono); font-size: 10px; color: var(--text-mid);
+  padding: 2px 0 2px 12px; position: relative;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.danger-preview-list li::before { content: '›'; position: absolute; left: 2px; color: var(--text-dim); }
+.danger-hint { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; margin-top: 4px; }
+.danger-hint b { color: var(--threat-critical); }
+
+/* ── UX #10 / #7: report sections ─────────────────────────────────────────── */
+.report-section-title {
+  font-family: var(--font-ui); font-size: 10px; letter-spacing: 2px;
+  color: var(--accent); margin: 18px 0 8px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.report-empty { font-size: 10px; color: var(--text-dim); letter-spacing: 1px; padding: 6px 0; }
+#mitre-rollup-wrap { margin-top: 8px; }
+#mitre-rollup-wrap canvas { max-height: 220px; }
+
+.remsum-grid { display: flex; gap: 10px; flex-wrap: wrap; }
+.remsum-cell {
+  flex: 1 1 110px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 10px; text-align: center;
+  font-family: var(--font-ui); font-size: 9px; letter-spacing: 1px; color: var(--text-dim);
+}
+.remsum-cell span { display: block; font-size: 22px; font-weight: 700; color: var(--text); margin-bottom: 2px; }
+.remsum-cell.ok    span { color: var(--threat-clean); }
+.remsum-cell.warn  span { color: var(--threat-high); }
+.remsum-cell.block span { color: var(--threat-critical); }
+.remsum-when { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; margin-top: 8px; }
+
+/* ── Discoverability (UX #8): the command palette, theme system and easter egg
+   had no on-screen affordance at all. A quiet hint line in Settings + the
+   launchpad is enough — this stays deliberately understated. */
+.zb-hint {
+  font-size: 9px; letter-spacing: 1px; color: var(--text-dim);
+  margin-top: 10px; line-height: 1.8;
+}
+.zb-hint kbd {
+  font-family: var(--font-mono); font-size: 9px;
+  border: 1px solid var(--border-bright); border-radius: 3px;
+  padding: 1px 5px; color: var(--accent); background: rgba(255,255,255,0.03);
+}
+
+/* ── UX #5: responsive — the side rails were hardcoded 200px/220px and the
+   body never scrolls, so a laptop or a half-screen window clipped content. ── */
+@media (max-width: 1180px) {
+  #intel-panel { display: none; }          /* the feed is a nice-to-have, findings are not */
+}
+@media (max-width: 900px) {
+  #sidenav { width: 56px; }
+  #sidenav .nav-label, #sidenav .vitals-title, #sidenav .vital-label { display: none; }
+  #sidenav .nav-item { justify-content: center; }
+  #vitals { padding: 6px 4px; }
+  #header-center { display: none; }
+  #findings-toolbar { flex-direction: column; align-items: stretch; }
+  #tree-controls { flex-wrap: wrap; }
+}
+@media (max-width: 640px) {
+  html, body { overflow: auto; }
+  #layout { flex-direction: column; }
+  #sidenav { width: 100%; flex-direction: row; overflow-x: auto; }
+  #vitals { display: none; }
+  .modal-box { width: 94vw; }
+}
+
+/* ── UX #7: print stylesheet — window.print() used to emit the full dark
+   console chrome. This makes the Report view an actual client deliverable. ── */
+@media print {
+  @page { margin: 14mm; }
+  html, body { overflow: visible !important; height: auto !important; background: #fff !important; color: #000 !important; }
+  #sidenav, #intel-panel, #header, #report-export-bar, #findings-toolbar,
+  #findings-footer, #fx-canvas, .fx-scanlines, .fx-noise, .fx-crt, .fx-vignette,
+  .fx-aurora, .fx-grid, .fx-alarm, .fx-flicker, #view-fx, .modal, #toast-wrap,
+  #cmd-palette, #boot-overlay, #scan-flash, #skip-link { display: none !important; }
+  #layout, #main-content, .view { display: block !important; height: auto !important; overflow: visible !important; }
+  .view:not(.active) { display: none !important; }
+  * { text-shadow: none !important; box-shadow: none !important; animation: none !important; }
+  .view-title, .report-section-title { color: #000 !important; border-color: #999 !important; }
+  .report-card, .remsum-cell, #findings-tree, .tree-group {
+    background: #fff !important; border: 1px solid #bbb !important; color: #000 !important;
+  }
+  .tree-item, .card-text, .item-text { color: #000 !important; }
+  /* Severity survives greyscale printing via the shapes defined above. */
+  .item-sev.CRITICAL, .item-sev.HIGH { border: 1px solid #000 !important; }
+  a[href]::after { content: ''; }   /* no URL spam in a client report */
+}
+
+/* ── Respect the OS reduced-motion setting for core UI motion too ─────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -28,7 +28,7 @@ if ($PhasePlan.Advanced) {
                     if ($text -match $rule.Pattern) {
                         # JIT/renderer runtime DLLs (SwiftShader etc.) legitimately contain
                         # VirtualAllocEx-class API strings; allowlisted paths are review-only.
-                        if ($cand.FullName -match $YARA_BENIGN_RE) {
+                        if (Test-BenignPath $cand.FullName $YARA_BENIGN_RE) {
                             Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
                                 -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
                                 -Description "YARA rule '$($rule.Name)' matched an allowlisted runtime/library file (JIT renderers legitimately contain these API strings — review only): $($cand.FullName)" `
@@ -74,6 +74,59 @@ if ($PhasePlan.Advanced) {
                         }
                     } catch {}
                 }
+                # Known trojan/tooling FILENAME patterns (review #51 — $TROJAN_FILE_PATTERNS was
+                # loaded but never read). Name alone is weak evidence: "agent*.exe"/"*invoice*.exe"
+                # match plenty of legitimate software, so a validly signed binary is review-only
+                # and only an unsigned one is auto-actionable — and even then Quarantine, which is
+                # reversible, never DeleteFile (rule #1 / CLAUDE.md's Quarantine preference).
+                foreach ($tfp in $TROJAN_FILE_PATTERNS) {
+                    if (-not $tfp -or $cand.Name -notlike $tfp) { continue }
+                    $tsig = Get-AuthSig $cand.FullName
+                    if ($tsig -and $tsig.Status -eq 'Valid') {
+                        Add-Finding -ID "TROJNAME_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                            -ThreatType "Suspicious Filename" -Severity $SEV_POSSIBLE `
+                            -Description "Filename matches a known malware/tooling naming pattern ('$tfp') but the binary is validly signed (review only, never auto-acted): $($cand.FullName)" `
+                            -Target $cand.FullName -FixAction "Info" -Group "Suspicious Filenames"
+                    } else {
+                        Out-Decrypt -Text "trojan-pattern filename: $($cand.FullName)" -Prefix "  [NAME HIT] "
+                        Add-Finding -ID "TROJNAME_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                            -ThreatType "Suspicious Filename" -Severity $SEV_HIGH `
+                            -Description "Unsigned file whose name matches a known malware/tooling naming pattern ('$tfp'): $($cand.FullName)" `
+                            -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                            -Group "Suspicious Filenames"
+                        $global:TrojanHits++
+                    }
+                    $yaraHits++
+                    break
+                }
+                # Custom IOC: operator-supplied FILENAMES (`file:` lines in the IOC file).
+                # Quarantine rather than DeleteFile — reversible, and the operator declared
+                # the name, not a hash, so a same-named innocent file is possible.
+                if ($global:CustomIocFileNames.Count -gt 0 -and
+                    $global:CustomIocFileNames -contains $cand.Name.ToLower()) {
+                    Out-Decrypt -Text "IOC filename match: $($cand.FullName)" -Prefix "  [IOC HIT] "
+                    Add-Finding -ID "IOC_FILE_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                        -ThreatType "Custom IOC" -Severity $SEV_HIGH `
+                        -Description "File matches an operator-supplied IOC filename: $($cand.FullName)" `
+                        -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                        -Group "Custom IOC Matches"
+                    $yaraHits++; $global:TrojanHits++
+                }
+                # Custom IOC: operator-supplied REGEX, matched against the file's ASCII text
+                # (already read above for the YARA-lite pass — no extra I/O) and its full path.
+                foreach ($cre in $global:CustomIocRegexOk) {
+                    try {
+                        if ($text -match $cre -or $cand.FullName -match $cre) {
+                            Out-Decrypt -Text "IOC regex match: $($cand.FullName)" -Prefix "  [IOC HIT] "
+                            Add-Finding -ID "IOC_RE_$(Get-StableId ("$cre|$($cand.FullName)"))" -Phase "PHASE 90" `
+                                -ThreatType "Custom IOC" -Severity $SEV_HIGH `
+                                -Description "File matches operator-supplied IOC pattern '$cre': $($cand.FullName)" `
+                                -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                                -Group "Custom IOC Matches"
+                            $yaraHits++; $global:TrojanHits++; break
+                        }
+                    } catch {}
+                }
             } catch {}
         }
     if ($yaraHits -eq 0) { Out-Typewriter "  -> [OK] NO YARA-LITE MATCHES." "GOOD" }
@@ -114,6 +167,23 @@ if ($PhasePlan.Advanced) {
                 $global:UACBypassHits++; $uacFound = $true
             }
         }
+    }
+    # Live auto-elevating-binary check (review #51 — $AUTO_ELEVATE_BINS was loaded but never read).
+    # The registry staging above catches the hijack at rest; this catches the bypass mid-flight.
+    # These binaries auto-elevate WITHOUT a UAC prompt, so malware launches one after hijacking a
+    # protocol/class handler. A user-path or script-host image for one of these names is the
+    # give-away — the genuine articles always live in System32/SysWOW64.
+    foreach ($p in (Get-ProcSnapshot)) {
+        $pname = "$($p.Name)"
+        if (-not $pname -or $AUTO_ELEVATE_BINS -notcontains $pname) { continue }
+        $pexe = "$($p.ExecutablePath)"
+        if ($pexe -and $pexe -match '(?i)^[A-Za-z]:\\Windows\\(System32|SysWOW64)\\') { continue }   # the real one
+        Out-ThreatBanner "AUTO-ELEVATING BINARY FROM NON-SYSTEM PATH" "$pname (PID $($p.ProcessId)) @ $pexe"
+        Add-Finding -ID "AUTOELEV_$($p.ProcessId)_$($pname -replace '[^a-z0-9]','')" -Phase "PHASE 92" `
+            -ThreatType "UAC Bypass" -Severity $SEV_HIGH `
+            -Description "Auto-elevating Windows binary '$pname' running from a non-System32 path (PID $($p.ProcessId)): $(if ($pexe) { $pexe } else { '<path unavailable>' }) — these elevate without a UAC prompt, so a copy outside System32 is a classic bypass stager." `
+            -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "UAC Bypass"
+        $global:UACBypassHits++; $uacFound = $true
     }
     $enableLua = Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA"
     if ($enableLua -eq 0) {
@@ -188,7 +258,7 @@ if ($PhasePlan.Advanced) {
         foreach ($s in $sctFiles) {
             # Library test fixtures (pywin32's Testpys.sct in site-packages etc.) are not
             # Squiblydoo staging — allowlisted package trees are review-only.
-            if ($s.FullName -match $SCT_BENIGN_RE) {
+            if (Test-BenignPath $s.FullName $SCT_BENIGN_RE) {
                 Add-Finding -ID "SCT_$($s.Name -replace '[^a-z0-9]','')" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
                     -Severity $SEV_POSSIBLE -Description "COM scriptlet inside a package/library tree (likely a library test fixture — review, not auto-deleted): $($s.FullName)" `
                     -Target $s.FullName -FixAction "Info" -Group "COM Scriptlet Abuse"
@@ -341,9 +411,9 @@ if ($PhasePlan.Advanced) {
                 $sigBudgetHit = $true; break
             }
             $sigSeen++
-            $sig = Get-AuthSig $f.FullName
-            if ($sig.SignerCertificate) {
-                $subj = $sig.SignerCertificate.Subject
+            $asig = Get-AuthSig $f.FullName
+            if ($asig.SignerCertificate) {
+                $subj = $asig.SignerCertificate.Subject
                 foreach ($lc in $leakedCerts) {
                     if ($subj -match [regex]::Escape($lc)) {
                         Out-Decrypt -Text "Stolen cert: $($f.FullName) -> $subj" -Prefix "  [STOLEN CERT] "
@@ -438,7 +508,42 @@ if ($PhasePlan.Advanced) {
     if ($credHits -eq 0) { Out-Typewriter "  -> [OK] NO RECENT CRED DB ACCESS." "GOOD" }
 
     # ── PHASE 101: WSL / DOCKER CONTAINER SURFACE ─────────────────────────────
-    Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
+        Show-PhaseHeader "PHASE 100.5" "CLOUD & SESSION TOKEN THEFT STAGING" "INFO-STEALER"
+    Out-Typewriter "CHECKING CLOUD CREDENTIAL STORES AND EXFIL STAGING..." "HUNT"
+    # Access tokens survive MFA, which is exactly why infostealers now target them ahead of
+    # passwords. The token FILES existing is completely normal (any developer box has them), so
+    # their mere presence is inventory, not a finding. What is never legitimate is a token store
+    # COPIED into a staging/archive location, or an archive named like stealer loot.
+    $tokHits = 0
+    $tokPresent = 0
+    foreach ($tp in $CLOUD_TOKEN_PATHS) {
+        if (Test-Path -LiteralPath $tp) { $tokPresent++; Write-Log "Cloud token store present (normal): $tp" }
+    }
+    if ($tokPresent -gt 0) {
+        Add-Finding -ID "TOKENSTORES_PRESENT" -Phase "PHASE 100.5" -ThreatType "Cloud Credential Exposure" `
+            -Severity $SEV_INFO `
+            -Description "$tokPresent cloud/session token store(s) present on this machine (AWS/Azure/GCP/kube/npm/browser session data). Normal for a developer or admin workstation — but if this box is confirmed compromised, every one of those tokens must be revoked, because an access token bypasses MFA." `
+            -Target "Cloud token stores" -FixAction "Info" -Group "Cloud Credential Exposure"
+    }
+    # Loot-shaped archives / dumps in staging locations.
+    $tokRe = ($TOKEN_STAGING_PATTERNS | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
+    $tokRoots = @($env:TEMP, "$env:USERPROFILE\Downloads", "$env:PUBLIC", "$env:ProgramData", "$env:LOCALAPPDATA")
+    $tokFiles = (Get-ScanFiles -Path $tokRoots -TimeScoped)
+    foreach ($tf in $tokFiles) {
+        if ($tf.Name -notmatch $tokRe) { continue }
+        # Package-manager and app trees legitimately contain token*.json library fixtures.
+        if (Test-BenignPath $tf.FullName $YARA_BENIGN_RE) { continue }
+        $tokHits++
+        Out-Decrypt -Text $tf.FullName -Prefix "  [TOKEN STAGING] "
+        Add-Finding -ID "TOKENSTAGE_$(Get-StableId $tf.FullName)" -Phase "PHASE 100.5" `
+            -ThreatType "Info-Stealer / Token Theft" -Severity $SEV_HIGH `
+            -Description "File named like credential/token exfil loot in a staging directory: $($tf.FullName) — infostealers collect browser cookies, wallets and cloud tokens into an archive here before upload. Revoke cloud sessions if confirmed." `
+            -Target $tf.FullName -FixAction "Quarantine" -FixParam $tf.FullName -Group "Cloud Credential Exposure"
+        $global:SpywareHits++
+    }
+    if ($tokHits -eq 0) { Out-Typewriter "  -> [OK] NO TOKEN-THEFT STAGING ARTIFACTS." "GOOD" }
+
+Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     Out-Typewriter "CHECKING WSL DISTROS AND DOCKER DAEMON..." "HUNT"
     if (Get-Command wsl -ErrorAction SilentlyContinue) {
         $wslList = (wsl --list --quiet 2>$null)
@@ -755,7 +860,7 @@ if ($PhasePlan.Integrity) {
                 # Review-only: a recursive 'icacls /reset /T' on a protected system directory can
                 # break the OS, so it is NEVER auto-applied. Surfaced as POSSIBLE + Info; the suggested
                 # command is in the description for an operator to run by hand after confirming.
-                Add-Finding -ID "ACL108_$([Math]::Abs(("$cp$idr").GetHashCode()))" -Phase "PHASE 108" -ThreatType "Permission Abuse / Privesc" `
+                Add-Finding -ID "ACL108_$(Get-StableId ("$cp$idr"))" -Phase "PHASE 108" -ThreatType "Permission Abuse / Privesc" `
                     -Severity $SEV_POSSIBLE -Description "Weak ACE on protected path: '$idr' has '$($ace.FileSystemRights)' on $cp (privilege-escalation surface — a non-admin could replace SYSTEM-run files here). Review manually; suggested fix (do NOT auto-apply — recursive reset can break the OS): icacls `"$cp`" /reset /T /C /Q" `
                     -Target $cp -FixAction "Info" -Group "NTFS Permission Abuse"
             }
@@ -769,7 +874,7 @@ if ($PhasePlan.Integrity) {
             if ($o -and (($TRUSTED_OWNERS | Where-Object { $o -like "*$_*" }).Count -eq 0)) {
                 $aclFindings++
                 Out-Glitch "  [OWNER TAMPER] $pf owned by $o" Red
-                Add-Finding -ID "OWN108_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 108" -ThreatType "Ownership Tamper / Privesc" `
+                Add-Finding -ID "OWN108_$(Get-StableId $pf)" -Phase "PHASE 108" -ThreatType "Ownership Tamper / Privesc" `
                     -Severity $SEV_CRITICAL -Description "Protected system file owned by untrusted principal '$o': $pf (ownership change is a common pre-replacement tamper step). Review manually; suggested fix (NOT auto-applied — changing owner on a system binary is invasive): takeown /F `"$pf`" /A && icacls `"$pf`" /setowner `"NT SERVICE\TrustedInstaller`" /C /Q" `
                     -Target $pf -FixAction "Info" -Group "Ownership Tampering"
             }
@@ -798,18 +903,18 @@ if ($PhasePlan.Integrity) {
         if ($v.Status -eq 'HashMismatch' -or $v.Status -eq 'NotTrusted') {
             $sigBad++
             Out-Glitch "  [INTEGRITY FAIL] $pf — signature: $($v.Status)" Red
-            Add-Finding -ID "SIG109_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
+            Add-Finding -ID "SIG109_$(Get-StableId $pf)" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
                 -Severity $SEV_CRITICAL -Description "Protected system binary failed signature check (Status=$($v.Status), Signer='$($v.Signer)'): $pf — possible replacement/patch. Verify with: sfc /scannow" `
                 -Target $pf -FixAction "Info" -Group "System Binary Integrity"
         } elseif ($v.Status -eq 'Valid' -and -not $v.Trusted) {
             $sigBad++
             Out-Typewriter "  -> UNTRUSTED SIGNER on $pf : $($v.Signer)" "WARN"
-            Add-Finding -ID "SIG109U_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
+            Add-Finding -ID "SIG109U_$(Get-StableId $pf)" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
                 -Severity $SEV_HIGH -Description "System binary signed by a non-trusted publisher '$($v.Signer)': $pf (expected Microsoft). Possible substitution." `
                 -Target $pf -FixAction "Info" -Group "System Binary Integrity"
         } else {
             $sigUnverif++
-            Add-Finding -ID "SIG109X_$([Math]::Abs($pf.GetHashCode()))" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
+            Add-Finding -ID "SIG109X_$(Get-StableId $pf)" -Phase "PHASE 109" -ThreatType "Binary Tamper / Integrity" `
                 -Severity $SEV_POSSIBLE -Description "Protected system binary signature unverifiable (Status=$($v.Status) — usually catalog-signed but the catalog couldn't be read in-process; review): $pf" `
                 -Target $pf -FixAction "Info" -Group "System Binary Integrity"
         }
@@ -867,7 +972,7 @@ if ($PhasePlan.Integrity) {
                 $idr = "$($ace.IdentityReference)"
                 $regAcl++
                 Out-Glitch "  [WEAK REG ACL] $rk <- $idr : $($ace.RegistryRights)" Red
-                Add-Finding -ID "REGACL110_$([Math]::Abs(("$rk$idr").GetHashCode()))" -Phase "PHASE 110" -ThreatType "Registry Permission Abuse" `
+                Add-Finding -ID "REGACL110_$(Get-StableId ("$rk$idr"))" -Phase "PHASE 110" -ThreatType "Registry Permission Abuse" `
                     -Severity $SEV_HIGH -Description "Persistence/privesc registry key writable by '$idr' ($($ace.RegistryRights)): $rk — non-admins can plant autostart entries." `
                     -Target $rk -FixAction "Info" -Group "Registry Permission Abuse"
             }
@@ -880,6 +985,11 @@ if ($PhasePlan.Integrity) {
     Out-Typewriter "INSPECTING SERVICE IMAGE PATHS FOR PRIVILEGE-ESCALATION FLAWS..." "HUNT"
     Invoke-QuantumBar "SERVICE BINARY ACL ANALYSIS" 12 110
     $svcPriv = 0
+    # unquoted_path_whitelist is documented in data\permission_baseline.json and referenced by
+    # coverage_matrix.json as this phase's suppression source, but nothing ever read it — the
+    # phase flagged every unquoted service path with zero suppression. Now honoured. Ships empty
+    # by design ("rare; keep tight"), so this changes nothing until an operator adds an entry.
+    $unquotedAllow = @(Get-Perm 'unquoted_path_whitelist')
     $services = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue
     foreach ($svc in $services) {
         $ip = "$($svc.PathName)".Trim()
@@ -890,7 +1000,9 @@ if ($PhasePlan.Integrity) {
         elseif ($ip -match '^\s*([^\s]+\.exe)') { $exe = $matches[1] }
         else { $exe = ($ip -split '\s+')[0] }
         # Unquoted path with a space outside System32 = classic privesc
-        if ($ip -notmatch '^\s*"' -and $ip -match '\s' -and $ip -match '\\' -and $ip -notmatch '^[A-Za-z]:\\Windows\\(System32|SysWOW64)\\') {
+        $uqAllowed = $false
+        foreach ($ua in $unquotedAllow) { if ($ua -and $ip -like "*$ua*") { $uqAllowed = $true; break } }
+        if (-not $uqAllowed -and $ip -notmatch '^\s*"' -and $ip -match '\s' -and $ip -match '\\' -and $ip -notmatch '^[A-Za-z]:\\Windows\\(System32|SysWOW64)\\') {
             $svcPriv++
             Out-Typewriter "  -> UNQUOTED SERVICE PATH: $($svc.Name) = $ip" "WARN"
             Add-Finding -ID "SVCUQ111_$($svc.Name)" -Phase "PHASE 111" -ThreatType "Unquoted Service Path / Privesc" `
@@ -932,7 +1044,7 @@ if ($PhasePlan.Integrity) {
                 $pathHits++
                 $idr = "$($weak[0].IdentityReference)"
                 Out-Glitch "  [WRITABLE PATH DIR] $pd <- $idr" Red
-                Add-Finding -ID "PATH112_$([Math]::Abs($pd.GetHashCode()))" -Phase "PHASE 112" -ThreatType "DLL Hijack / PATH Privesc" `
+                Add-Finding -ID "PATH112_$(Get-StableId $pd)" -Phase "PHASE 112" -ThreatType "DLL Hijack / PATH Privesc" `
                     -Severity $SEV_HIGH -Description "Directory on the system PATH is writable by '$idr': $pd — enables DLL/binary planting that elevated processes will load. Review manually; stripping Users/Everyone here can break a legit app that owns this dir, so it is NOT auto-applied. Suggested: icacls `"$pd`" /remove:g `"*S-1-1-0`" `"*S-1-5-11`" `"*S-1-5-32-545`" /C /Q" `
                     -Target $pd -FixAction "Info" -Group "DLL Hijack Surface"
             }
@@ -962,7 +1074,7 @@ if ($PhasePlan.Integrity) {
                 $genuine = ($v.Status -eq 'HashMismatch' -or $v.Status -eq 'NotTrusted')
                 $sev = if (-not $genuine) { $SEV_POSSIBLE } elseif ($f.Extension -match 'sys') { $SEV_CRITICAL } else { $SEV_HIGH }
                 Out-Typewriter "  -> CHANGED+UNVERIFIED: $($f.FullName) [$($v.Status)] $($f.LastWriteTime)" "CRIT"
-                Add-Finding -ID "RECSYS113_$([Math]::Abs($f.FullName.GetHashCode()))" -Phase "PHASE 113" -ThreatType "System File Tamper" `
+                Add-Finding -ID "RECSYS113_$(Get-StableId $f.FullName)" -Phase "PHASE 113" -ThreatType "System File Tamper" `
                     -Severity $sev -Description "Recently-modified protected-directory file with failed signature ($($v.Status)): $($f.FullName) (modified $($f.LastWriteTime)). Driver/binary drop indicator." `
                     -Target $f.FullName -FixAction "Info" -Group "System File Tamper" }
         }
@@ -1041,7 +1153,7 @@ if ($PhasePlan.Integrity) {
                         $autoHits++
                         $idr = "$($weak[0].IdentityReference)"
                         Out-ThreatBanner "HIJACKABLE AUTORUN TARGET" "$($p.Name): $texe"
-                        Add-Finding -ID "AUTO115_$([Math]::Abs(("$ak$($p.Name)").GetHashCode()))" -Phase "PHASE 115" -ThreatType "Hijackable Autorun / Privesc" `
+                        Add-Finding -ID "AUTO115_$(Get-StableId ("$ak$($p.Name)"))" -Phase "PHASE 115" -ThreatType "Hijackable Autorun / Privesc" `
                             -Severity $SEV_HIGH -Description "HKLM autorun '$($p.Name)' runs '$texe' which is writable by '$idr' — a non-admin can replace it to run code at every boot/logon as the next user. Review manually; resetting the ACL may break the app's updater, so it is NOT auto-applied. Suggested: icacls `"$texe`" /reset /C /Q" `
                             -Target $texe -FixAction "Info" -Group "Hijackable Autoruns"
                     }

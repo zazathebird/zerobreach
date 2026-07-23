@@ -100,6 +100,13 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     if ($IocFile)    { $argList += " -IocFile `"$IocFile`"" }
     if ($Baseline)   { $argList += " -Baseline `"$Baseline`"" }
     if ($OutDir)     { $argList += " -OutDir `"$OutDir`"" }
+    # -Schedule/-Smtp* MUST be forwarded too: registering a scheduled task is the one
+    # realistic reason to run this from a NON-admin shell, and dropping them here made the
+    # elevated child skip the schedule block entirely while printing no error at all.
+    if ($Schedule)   { $argList += " -Schedule $Schedule" }
+    if ($SmtpTo)     { $argList += " -SmtpTo `"$SmtpTo`"" }
+    if ($SmtpFrom)   { $argList += " -SmtpFrom `"$SmtpFrom`"" }
+    if ($SmtpServer) { $argList += " -SmtpServer `"$SmtpServer`"" }
     Start-Process powershell $argList -Verb RunAs; exit
 }
 
@@ -156,6 +163,7 @@ $global:MinerHits      = 0
 $global:WormHits       = 0
 $global:SpywareHits    = 0
 $global:TrojanHits     = 0
+$global:EMAIL_PHISH_SEEN = $false   # set by Phase 74.6 when Defender history names a phishing/redirector family
 $global:BackdoorHits   = 0
 $global:UACBypassHits  = 0
 $global:PhaseTimings   = [System.Collections.Generic.List[hashtable]]::new()
@@ -638,77 +646,48 @@ function Test-ShellKillFlag {
 function Stop-PhaseTimer  { param([hashtable]$T); $global:PhaseTimings.Add(@{ Phase=$T.Phase; Seconds=[Math]::Round(((Get-Date)-$T.Start).TotalSeconds,2) }) }
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  REMEDIATION ENGINE
+#  REMEDIATION ENGINE — REMOVED 2026-07-22
+#  Invoke-VerifiedAnnihilation / Invoke-VerifiedRegScrub / Invoke-SectorScan /
+#  Invoke-RegSectorScan / Reset-FilePermissions were dead code with zero call sites
+#  anywhere in the repo (the real remediation switch lives in engine\FixMode.ps1's
+#  Invoke-FixMode and its mirror in ZeroBreach-Server.ps1's $script:REMEDIATE_SCRIPT).
+#  Reset-FilePermissions ran an unscoped `icacls /reset /T` on a caller-supplied path —
+#  exactly the whole-drive catastrophe FP round 5 removed from Phase 108. Per user rule
+#  #1, a destructive lever that exists can eventually be wired up by mistake; deleted.
 # ══════════════════════════════════════════════════════════════════════════════
-function Invoke-VerifiedAnnihilation {
-    param([string]$Path, [bool]$IsDirectory = $false)
-    Out-Decrypt -Text $Path -Prefix "  [TARGET LOCKED] "
-    try { Remove-Item -Path $Path -Recurse -Force -Confirm:$false -ErrorAction Stop }
-    catch {
-        cmd.exe /c "del /f /s /q `"$Path`" >nul 2>&1"
-        if ($IsDirectory) { cmd.exe /c "rmdir /s /q `"$Path`" >nul 2>&1" }
-    }
-    Start-Sleep -Milliseconds 100
-    if (Test-Path $Path) {
-        try {
-            $regPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-            $target  = "\??\$Path"
-            $cur     = Get-RegVal -Path $regPath -Name "PendingFileRenameOperations"
-            if ($null -eq $cur) { $cur = @() }
-            Set-ItemProperty -Path $regPath -Name "PendingFileRenameOperations" -Value ([string[]]($cur) + @($target, "")) -Type MultiString -Force -ErrorAction Stop
-            Out-Typewriter "KERNEL HOOKED: QUEUED FOR NEXT REBOOT." "WARN"; $global:KillCount++
-        } catch { $global:VerifyFails++ }
-    } else { $global:KillCount++ }
-}
-
-function Invoke-VerifiedRegScrub {
-    param([string]$Path, [string]$Name)
-    Out-Decrypt -Text "$Path\$Name" -Prefix "  [REG NODE] "
-    Remove-ItemProperty -Path $Path -Name $Name -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 100
-    $check = Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
-    if ($null -ne $check.$Name) { $global:VerifyFails++ } else { $global:KillCount++ }
-}
-
-function Invoke-SectorScan {
-    param([string]$Path, [bool]$IsDirectory = $false)
-    $ts = (Get-Date).ToString("HH:mm:ss.fff")
-    Write-Host "[$ts] [SYS] " -NoNewline -ForegroundColor DarkGray
-    Write-Host "AUDITING: " -NoNewline -ForegroundColor (Get-AccentColor); Write-Host $Path -ForegroundColor DarkGray
-    if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds ($rng.Next(500,1200)) }
-    if (Test-Path $Path) {
-        Out-Typewriter "  -> SECTOR EXISTS — FLAGGED." "WARN"
-        # In audit mode, we only add findings — no deletion
-    } else { Out-Typewriter "  -> [OK] SECTOR ABSENT." "GOOD" }
-}
-
-function Invoke-RegSectorScan {
-    param([string]$Path, [string]$Name)
-    $ts = (Get-Date).ToString("HH:mm:ss.fff")
-    Write-Host "[$ts] [SYS] " -NoNewline -ForegroundColor DarkGray
-    Write-Host "REG CHECK: " -NoNewline -ForegroundColor Magenta; Write-Host "$Path\$Name" -ForegroundColor DarkGray
-    if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds ($rng.Next(400,900)) }
-    $check = Get-ItemProperty -Path $Path -Name $Name -ErrorAction SilentlyContinue
-    if ($null -ne $check.$Name) {
-        Out-Typewriter "  -> ANOMALY: $Name = $($check.$Name)" "CRIT"; return $true
-    } else { Out-Typewriter "  -> [OK] KEY ABSENT/CLEAN." "GOOD"; return $false }
-}
-
-function Reset-FilePermissions {
-    param([string]$Path)
-    if (-not (Test-Path $Path)) { return }
-    try {
-        $acl = Get-Acl $Path -ErrorAction Stop
-        $acl.SetAccessRuleProtection($false, $true)
-        Set-Acl -Path $Path -AclObject $acl -ErrorAction Stop
-        cmd.exe /c "icacls `"$Path`" /reset /T /Q >nul 2>&1"
-        Out-Typewriter "  -> PERMISSIONS RESET: $Path" "VER"
-    } catch { Out-Typewriter "  -> PERM RESET FAILED: $Path" "WARN" }
-}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
+# Anchored user-writable-path tests (2026-07-22 review, findings #4/#5/#6/#7).
+# CLAUDE.md hard rule: anchor folder-name tests to path COMPONENTS, never bare
+# substrings. A bare "AppData|Temp" also matches Store package names (the historical
+# WhatsAppDesktop auto-kill), vendor folders like "Temperature Monitor"/"Templates",
+# and "C:\Program Files\Tempest\...". Several call sites gate an AUTO-SELECTED
+# KillProcess / service-delete / task-unregister on this test, so an unanchored match
+# there is a rule-#1 violation, not just noise. WindowsApps is a signed Store root —
+# it lives under Program Files but holds user-installed apps, so exclude it explicitly.
+$global:USER_PATH_RE       = '\\(AppData|Temp)\\'
+$global:USER_PATH_WIDE_RE  = '\\(AppData|Temp|Downloads|Desktop)\\'
+$global:WINDOWSAPPS_RE     = '\\Program Files( \(x86\))?\\WindowsApps\\'
+
+# Stable short ID for finding keys derived from free text (paths, DNS names, ACL identities).
+# [string]::GetHashCode() is randomised PER PROCESS on .NET Core / .NET 5+ (i.e. under pwsh 7),
+# so any finding ID built from it changes on every run and the -Baseline diff reports the same
+# finding as "new" forever. FNV-1a over UTF-8 is deterministic across processes AND runtimes.
+# uint64 accumulator + explicit 32-bit mask: PS 5.1 throws on [uint32] multiply overflow.
+function Get-StableId {
+    param([string]$Text)
+    $h = [uint64]2166136261
+    foreach ($b in [Text.Encoding]::UTF8.GetBytes("$Text")) {
+        $h = ($h -bxor [uint64]$b)
+        # 4294967295 written in decimal on purpose: PowerShell parses the literal 0xFFFFFFFF
+        # as [int] -1 (32-bit signed overflow), and [uint64](-1) then throws.
+        $h = ($h * [uint64]16777619) -band [uint64]4294967295
+    }
+    return ('{0:x8}' -f $h)
+}
+
 function Test-InScope {
     param($ItemTime)
     if ($null -eq $ItemTime) { return $true }
@@ -898,9 +877,10 @@ function Get-ExtensionRisk {
         $mData = Get-Content $manifestFile.FullName -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json -ErrorAction SilentlyContinue
         $name = if ($mData.name) { $mData.name } else { "Unknown" }
         $perms = ($mData.permissions -join " ").ToLower()
-        # CRITICAL: known malicious extension names or permissions
-        $knownBad = @("web of trust","superfish","browsefox","conduit","searchprotect","savefrom","coupon server","ebates","honey","browsing protection","webdiscover","trovi","istartsurf","searchqu","delta search","babylon","iminent","visualbee")
-        foreach ($bad in $knownBad) {
+        # CRITICAL: known malicious extension names or permissions.
+        # Name list is DATA ($BROWSER_EXT_ADWARE, data\detection_signatures.json) — an inline
+        # literal list of adware vendor names is exactly the AMSI liability WS1 externalized.
+        foreach ($bad in $BROWSER_EXT_ADWARE) {
             if ($name.ToLower() -match [regex]::Escape($bad)) {
                 return @{Risk="CRITICAL"; Name=$name; Reason="Known adware/hijacker: $bad"}
             }
@@ -966,6 +946,7 @@ $PROACTIVE_LURE_EXTS    = @((Get-Sig 'proactive_lure_extensions') | ForEach-Obje
 # key never suppresses anything. See "fp_allowlists" in data/detection_signatures.json.
 function Join-AllowRegex([string]$Name) { $a = @(Get-Sig $Name); if ($a.Count) { ($a -join '|') } else { '(?!)' } }
 $TRUSTED_ROOT_CA_RE     = Join-AllowRegex 'trusted_root_ca_issuers'
+$BEACON_BENIGN_DOM_RE   = Join-AllowRegex 'beacon_benign_domain_suffixes'   # Phase 59 (anchored suffixes)
 $CLOAKED_BENIGN_RE      = Join-AllowRegex 'cloaked_benign_names'
 $INFOSTEALER_BENIGN_RE  = Join-AllowRegex 'infostealer_benign_paths'
 $SAFEBOOT_DEFAULTS      = @((Get-Sig 'safeboot_default_entries') | ForEach-Object { "$_".ToLower() })
@@ -976,6 +957,19 @@ $KEYLOG_BENIGN_RE       = Join-AllowRegex 'keylogger_benign_paths'   # Phase 48 
 $YARA_BENIGN_RE         = Join-AllowRegex 'yara_benign_paths'        # Phase 90 (JIT/renderer runtime DLLs)
 $SCT_BENIGN_RE          = Join-AllowRegex 'sct_benign_paths'         # Phase 94 (library test scriptlets)
 $MINERCFG_BENIGN_RE     = Join-AllowRegex 'miner_config_benign_paths' # Phase 63 (LGHUB-class app configs)
+# Allowlist VETO (2026-07-22 review #26). The package-manager-tree allowlists above key on
+# folder names ("node_modules", "site-packages") that an attacker can simply create, letting a
+# dropper self-allowlist out of an auto-selectable finding. Real dev trees do not live in the
+# download/handoff staging dirs, so a benign-path match found THERE is ignored. pip genuinely
+# builds under %TEMP%\pip-*, so those are carved back out rather than flooding a dev box.
+$global:ALLOW_VETO_RE   = '\\(Downloads|Public)\\|\\Temp\\(?!pip-|pip_|build\\)'
+# Apply an allowlist honestly: benign-path match AND not sitting in a staging dir.
+function Test-BenignPath {
+    param([string]$Path, [string]$AllowRegex)
+    if (-not $Path) { return $false }
+    if ($Path -notmatch $AllowRegex) { return $false }
+    return ($Path -notmatch $global:ALLOW_VETO_RE)
+}
 $SPOOLDLL_BENIGN_RE     = Join-AllowRegex 'spooler_benign_dlls'      # Phase 96 (catalog-signed MS printer resources)
 $BITS_SUSP_REMOTE_RE    = if (@(Get-Sig 'bits_suspicious_remote_regex').Count) { @(Get-Sig 'bits_suspicious_remote_regex')[0] } else { '(?!)' }
 $BITS_SUSP_LOCAL_RE     = if (@(Get-Sig 'bits_suspicious_local_regex').Count) { @(Get-Sig 'bits_suspicious_local_regex')[0] } else { '(?!)' }
@@ -1011,6 +1005,32 @@ $TUNNELING_TOOLS_DUALUSE   = Get-Sig 'tunneling_tools_dualuse'       # Phase 82 
 $STEGO_TOOLS               = Get-Sig 'stego_tools'                   # Phase 89 (was inline)
 $LEAKED_CERT_ISSUERS       = Get-Sig 'leaked_cert_issuers'           # Phase 98 (was inline)
 $CRED_DUMP_TOOLS           = Get-Sig 'cred_dump_tools'               # Phase 106 (was inline)
+$KEYLOGGER_REG_PATHS       = Get-Sig 'keylogger_reg_paths'           # Phase 48 (was inline — WS5)
+$KEYLOGGER_FILE_PATTERNS   = Get-Sig 'keylogger_file_patterns'       # Phase 48 (was inline — WS5)
+$BROWSER_EXT_ADWARE        = @((Get-Sig 'browser_ext_adware_names') | ForEach-Object { "$_".ToLower() })  # Get-ExtensionRisk (was inline — WS5)
+
+# ── WS6 (2026-07-22) detection expansion — consumed by the new fractional phases ──
+# Credential/identity theft, modern intrusion TTPs, persistence+evasion depth. All DATA.
+$COM_TYPELIB_ROOTS         = Get-Sig 'com_typelib_hijack_roots'          # Phase 20.5
+$IFEO_REG_ROOTS            = Get-Sig 'ifeo_reg_roots'                    # Phase 20.5
+$SECURITY_TOOL_PROCS       = @((Get-Sig 'security_tool_process_names') | ForEach-Object { "$_".ToLower() })  # Phase 20.5
+$INJECTION_DLL_POINTS      = Get-Sig 'injection_dll_reg_points'          # Phase 32.5
+$NETSH_HELPER_ROOT         = @(Get-Sig 'netsh_helper_reg_root')[0]       # Phase 32.5
+$CRED_DUMP_ARTIFACTS       = Get-Sig 'credential_dump_artifacts'         # Phase 44.5
+$DPAPI_THEFT_PATHS         = @((Get-Sig 'dpapi_theft_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 44.5
+$CRED_THEFT_CMD_RULES      = Get-Sig 'cred_theft_cmdline_rules'          # Phase 44.5
+$ACCESSIBILITY_BINS        = @((Get-Sig 'accessibility_binaries') | ForEach-Object { "$_".ToLower() })      # Phase 45.5
+$RDP_HARDENING_CHECKS      = Get-Sig 'rdp_hardening_checks'              # Phase 45.5
+$HIDDEN_ACCOUNT_REG        = @(Get-Sig 'hidden_account_reg_path')[0]     # Phase 51.5
+$SUSPICIOUS_ACCOUNT_RE     = Join-AllowRegex 'suspicious_account_name_patterns'  # Phase 51.5
+$RUNMRU_REG_PATH           = @(Get-Sig 'runmru_reg_path')[0]             # Phase 68.5
+$CLIPBOARD_LURE_RULES      = Get-Sig 'clipboard_lure_rules'              # Phase 68.5
+$RMM_TOOL_BINARIES         = @((Get-Sig 'rmm_tool_binaries') | ForEach-Object { "$_".ToLower() })           # Phase 82.5
+$RMM_SUSPICIOUS_PATH_RE    = @(Get-Sig 'rmm_suspicious_path_regex')[0]   # Phase 82.5
+$CLOUD_TOKEN_PATHS         = @((Get-Sig 'cloud_token_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 100.5
+$TOKEN_STAGING_PATTERNS    = Get-Sig 'token_staging_name_patterns'       # Phase 100.5
+$TIMESTOMP_EXTENSIONS      = @((Get-Sig 'timestomp_extensions') | ForEach-Object { "$_".ToLower() })        # Phase 17.5
+$WS6_HARDENING_ACTIONS     = Get-Sig 'ws6_hardening_actions'             # Phase 45.5 (operator-only hardening set)
 $LOADER_PROCS              = Get-Sig 'loader_procs'                  # Phase 6 (loader/botnet proc IOC)
 $BANKING_TROJAN_PROCS      = Get-Sig 'banking_trojan_procs'          # Phase 6 (banking-trojan proc IOC)
 $C2_PIPE_PATTERNS          = Get-Sig 'c2_pipe_patterns'              # Phase 62 (framework-name pipe pass)
@@ -1436,6 +1456,35 @@ if ($global:GUI_MODE -and -not $global:STEALTH_MODE) {
 if (-not $global:GUI_MODE -and -not $global:STEALTH_MODE -and -not $Auto) {
     $global:SHELL_KILL_JOB = Start-ShellKillWatcher
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  CUSTOM IOC WIRE-UP (2026-07-22 review #17)
+#  Import-CustomIocs has always filled all five buckets, but only .Hashes was ever
+#  read (Phase 90) — an operator who added a known-bad domain/IP/regex/filename via
+#  -IocFile or the GUI IOC Manager got a counter that went up and zero coverage.
+#  Merged here, AFTER every import path (CLI param + interactive menu) and BEFORE the
+#  engine modules are dot-sourced, so the phases below see one combined list.
+#  Domains join the *narrow* malware-C2 list, not the broad LOLBin list: the operator
+#  explicitly declared these malicious, so a DNS-cache hit is a real HIGH, and that is
+#  the list Phase 34 is allowed to fire on (see the $MALWARE_C2_DOMAINS note above).
+# ══════════════════════════════════════════════════════════════════════════════
+if ($global:CustomIocs.Domains.Count -gt 0) {
+    $MALWARE_C2_DOMAINS = @(@($MALWARE_C2_DOMAINS) + @($global:CustomIocs.Domains) | Select-Object -Unique)
+    $ALL_C2_DOMAINS     = @(@($ALL_C2_DOMAINS)     + @($global:CustomIocs.Domains) | Select-Object -Unique)
+}
+# Pre-compile the operator's free-form regex IOCs once. A bad pattern from a hand-edited
+# IOC file must not take the scan down, so each is validated here and dropped with a warning
+# rather than throwing inside a phase loop.
+$global:CustomIocRegexOk = @()
+foreach ($cre in @($global:CustomIocs.Regex)) {
+    if (-not $cre) { continue }
+    try { [void][regex]::new($cre); $global:CustomIocRegexOk += $cre }
+    catch { Write-Host "[ZeroBreach] WARNING: ignoring invalid custom IOC regex: $cre" -ForegroundColor DarkYellow }
+}
+# Normalise the operator's filename IOCs to bare lowercase leaf names for comparison.
+$global:CustomIocFileNames = @(@($global:CustomIocs.Files) | ForEach-Object {
+    try { [IO.Path]::GetFileName("$_").ToLower() } catch { "$_".ToLower() }
+} | Where-Object { $_ })
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ENGINE MODULES — dot-sourced in execution order into THIS scope (variables,

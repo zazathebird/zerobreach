@@ -444,6 +444,25 @@ const ZBFX = (() => {
   let intensity = localStorage.getItem('zb_fx') || 'full';
   if (!INTENSITY[intensity]) intensity = 'full';
 
+  // Accessibility: honour the OS "reduce motion" setting for the animated canvas
+  // renderers, the same way the CINE_FX overlays and fx.css already do. Only the
+  // ANIMATED layer is suppressed — the static overlays (grid/vignette/scanlines)
+  // still render, so the console keeps its look without moving anything. An explicit
+  // operator choice of MAX still wins; this only clamps the default.
+  const REDUCE_MOTION = (() => {
+    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    catch (e) { return false; }
+  })();
+  if (REDUCE_MOTION && !localStorage.getItem('zb_fx')) intensity = 'lite';
+
+  // Effective animation cap: 0 when the OS asks for reduced motion and the operator
+  // has not deliberately opted into an animated tier this session.
+  function effectiveCap() {
+    const cap = INTENSITY[intensity].cap;
+    if (REDUCE_MOTION && intensity !== 'max') return Math.min(cap, 0.55);
+    return cap;
+  }
+
   const OVERLAY_KEYS = ['aurora', 'grid', 'scanlines', 'crt', 'noise', 'vignette', 'alarm', 'flicker'];
 
   function init() {
@@ -478,7 +497,7 @@ const ZBFX = (() => {
     cancelAnimationFrame(rafId);
     renderers = [];
     ctx2d && ctx2d.clearRect(0, 0, w || 1, h || 1);
-    const cap = INTENSITY[intensity].cap;
+    const cap = effectiveCap();
     const vfx = (theme && theme.vfx) || {};
     const on = k => vfx[k] !== undefined && cap > 0 && vfx[k] <= cap;
 

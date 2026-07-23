@@ -32,13 +32,24 @@ app = Flask(
     static_folder=str(ROOT_DIR / "gui" / "static"),
 )
 app.config["SECRET_KEY"] = "zerobreach-kraken-2024"
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+# Loopback origins only. cors_allowed_origins="*" let any page in the operator's browser open
+# a SocketIO connection to this elevated local server and drive it — the same class of issue as
+# the PS server's wildcard ACAO. The GUI is served from this same origin, so nothing else is
+# needed. The listening port is only chosen at startup (find_free_port scans 5000-5099), and
+# SocketIO is constructed at import time, so the whole candidate range is enumerated here.
+PORT_RANGE = range(5000, 5100)
+ALLOWED_ORIGINS = [
+    f"http://{host}:{port}"
+    for port in PORT_RANGE
+    for host in ("localhost", "127.0.0.1", "[::1]")
+]
+socketio = SocketIO(app, cors_allowed_origins=ALLOWED_ORIGINS, async_mode="threading")
 
 # ── Global Scan State ─────────────────────────────────────────────────────────
 scan_state = {
     "running": False,
     "phase": 0,
-    "phase_total": 107,
+    "phase_total": 115,
     "phase_name": "",
     "section": "",
     "mode": "FULL",
@@ -56,10 +67,16 @@ scan_process = None
 scan_lock = threading.Lock()
 
 # ── Phase count per mode ───────────────────────────────────────────────────────
-MODE_PHASES = {"QUICK": 30, "FULL": 80, "DEEP": 107, "PARANOID": 107, "STEALTH": 107}
+# DEEP/PARANOID/STEALTH really reach 115: the WS2 port added the permission/integrity
+# phases 108-115. Capping at 107 left the GUI progress bar stuck near "done" for the last
+# eight phases. Mirrors $MODE_PHASES in ZeroBreach-Server.ps1.
+MODE_PHASES = {"QUICK": 30, "FULL": 80, "DEEP": 115, "PARANOID": 115, "STEALTH": 115}
 
 # ── Output line parser ─────────────────────────────────────────────────────────
-PHASE_RE = re.compile(r"PHASE\s+(\d+)[^\d]", re.IGNORECASE)
+# Fractional phases (55.5, 74.5-74.7, 99.5) are real plan steps and must keep their decimal —
+# an integer-only capture collapsed them onto their floor, so the counter stalled and findings
+# were attributed to the wrong phase. Mirrors the PS server's fractional-aware regex.
+PHASE_RE = re.compile(r"PHASE\s+(\d+(?:\.\d+)?)[^\d]", re.IGNORECASE)
 SECTION_RE = re.compile(r"SECTION[:\s]+(.+)", re.IGNORECASE)
 THREAT_MAP = {
     "RAT": ["rat", "c2", "beacon", "asyncrat", "njrat", "remcos", "darkcomet"],
@@ -77,8 +94,12 @@ THREAT_MAP = {
 SEVERITY_PATTERNS = {
     "CRITICAL": re.compile(r"\[CRIT\]|CRITICAL|\[!!\]|THREAT BANNER|IOC HIT|BLATANT", re.I),
     "HIGH":     re.compile(r"\[HIGH\]|HIGH SEVERITY|\[WARN\]|SUSPICIOUS", re.I),
-    "POSSIBLE": re.compile(r"\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMAL", re.I),
-    "CLEAN":    re.compile(r"\[OK\]|CLEAN|NO .* FOUND|-> \[OK\]", re.I),
+    # ANOMAL(?:Y|IES|OUS), not a bare "ANOMAL": the unanchored substring matched inside the
+    # benign summary word "ANOMALIES" ("NO ANOMALIES FOUND") and turned clean lines POSSIBLE.
+    "POSSIBLE": re.compile(r"\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMALOUS|ANOMALY", re.I),
+    # The engine emits a PADDED "[OK ]" tag — \[OK\] alone never matched it, so every clean
+    # line fell through to INFO. Mirrors the PS server's \[OK\s*\] form.
+    "CLEAN":    re.compile(r"\[OK\s*\]|CLEAN|NO .* FOUND|->\s*\[OK\s*\]", re.I),
     "INFO":     re.compile(r"\[INFO\]|\[VER\]|EXECUTED|EVALUATED", re.I),
     "HUNT":     re.compile(r"\[HUNT\]|SCANNING|CHECKING|AUDITING", re.I),
 }
@@ -145,7 +166,7 @@ def run_scan(config: dict):
         scan_state["phase"] = 0
         scan_state["findings"] = []
         scan_state["threat_counts"] = {k: 0 for k in scan_state["threat_counts"]}
-        scan_state["phase_total"] = MODE_PHASES.get(config.get("mode", "FULL"), 107)
+        scan_state["phase_total"] = MODE_PHASES.get(config.get("mode", "FULL"), 115)
         scan_state["mode"] = config.get("mode", "FULL")
 
     start_time = time.time()
@@ -178,7 +199,16 @@ def run_scan(config: dict):
             # Phase detection
             pm = PHASE_RE.search(line)
             if pm:
-                scan_state["phase"] = int(pm.group(1))
+                # Keep the decimal for fractional phases (55.5, 74.5-74.7, 99.5) — int() would
+                # raise on them now that the regex captures the fraction. Whole numbers stay int
+                # so the JSON payload matches what the GUI has always received.
+                pv = pm.group(1)
+                new_phase = float(pv) if "." in pv else int(pv)
+                # MONOTONIC, same reason as the PS server: Summary.ps1's end-of-run
+                # "10 SLOWEST" table prints "PHASE N - ..." lines in descending duration
+                # order, which otherwise drag the counter backwards after the scan ends.
+                if new_phase > scan_state["phase"]:
+                    scan_state["phase"] = new_phase
 
             # Section detection
             sm = SECTION_RE.search(line)
@@ -293,8 +323,13 @@ def sysinfo():
 
 @app.route("/api/scan/start", methods=["POST"])
 def start_scan():
-    if scan_state["running"]:
-        return jsonify({"error": "Scan already running"}), 400
+    # Check AND set the flag under the same lock. run_scan sets running=True inside the worker
+    # thread, so two near-simultaneous POSTs both passed the bare check and spawned two
+    # concurrent elevated PowerShell scans over the same reports directory.
+    with scan_lock:
+        if scan_state["running"]:
+            return jsonify({"error": "Scan already running"}), 400
+        scan_state["running"] = True
     config = request.json or {}
     thread = threading.Thread(target=run_scan, args=(config,), daemon=True)
     thread.start()
@@ -321,8 +356,15 @@ def list_reports():
     files = sorted(REPORTS_DIR.glob("*.json"), reverse=True)
     return jsonify([{"name": f.name, "path": str(f), "size": f.stat().st_size} for f in files[:20]])
 
+REPORT_NAME_RE = re.compile(r"^(KrakenBaseline_|audit_)[A-Za-z0-9_\-]*\.json$")
+
 @app.route("/api/reports/<filename>")
 def get_report(filename):
+    # Allow-list the filename like the PS server's /api/report route does. This directory also
+    # holds the quarantine vault, custom IOC files and durable server logs, none of which should
+    # be downloadable, and a bare send_from_directory call invited traversal attempts besides.
+    if not REPORT_NAME_RE.match(filename):
+        return jsonify({"error": "invalid report name"}), 400
     return send_from_directory(REPORTS_DIR, filename)
 
 @socketio.on("connect")

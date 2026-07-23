@@ -1,4 +1,5 @@
-﻿Stop-PhaseTiming   # close out the final phase's wall-clock
+﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT statement in THIS module, not by falling through into FixMode.ps1 (see CLAUDE.md engine-split rule)
+Stop-PhaseTiming   # close out the final phase's wall-clock
 $elapsed    = [Math]::Round(((Get-Date) - $global:START_TIME).TotalMinutes, 2)
 $phaseCount = $PhasePlan.Max
 $totalRisk  = $global:RansomwareRisk + ($global:RootkitHits * 3) + ($global:RATHits * 2) +
@@ -131,7 +132,14 @@ function Write-HtmlReport {
         $csvData += """$($_.Severity)"",""$($_.Phase)"",""$($_.ThreatType)"",""$($_.Description -replace '"','""')"",""$($_.Target -replace '"','""')"",""$($_.FixAction)"",""$($_.Timestamp)""`n"
         "<tr class='sev-$($_.Severity.ToLower())'><td><span class='badge' style='background:$col'>$($_.Severity)</span></td><td>$phase</td><td>$type</td><td>$desc</td><td class='tgt' title='$tgt'>$tgt</td><td>$($_.FixAction)</td></tr>"
     }
-    $csvDataJs = $csvData -replace '\\','\\' -replace "'","\\'"
+    # The CSV blob is embedded in a single-quoted JS string literal inside <script>.
+    # Escape in this exact order: backslash first (so later escapes aren't re-escaped),
+    # then the quote, then the real CR/LF the CSV builder emits (raw newlines are a JS
+    # syntax error inside a string literal), and finally '<' -> \x3C so a finding whose
+    # Description/Target contains "</script>" cannot break out and inject HTML/JS into a
+    # report the technician opens and forwards to a client.
+    $csvDataJs = $csvData -replace '\\','\\' -replace "'","\\'" `
+                          -replace "`r",'\r' -replace "`n",'\n' -replace '<','\x3C'
     $tallyHtml = ""
     foreach ($k in @("RAT","Rootkit","Ransomware","Keylogger","Miner","Worm","Spyware","Trojan","Backdoor","UACBypass")) {
         $v   = $auditCache.ThreatTally.$k
@@ -243,7 +251,7 @@ function filterSev(s,b){document.querySelectorAll('.filters .btn').forEach(funct
 function applyFilters(){document.querySelectorAll('#tbl tbody tr').forEach(function(r){var sevOk=curSev==='ALL'||r.classList.contains('sev-'+curSev.toLowerCase());var txtOk=!curQ||r.innerText.toLowerCase().includes(curQ);r.style.display=(sevOk&&txtOk)?'':'none'})}
 var sortDir={};
 function sortTable(col){var tbl=document.getElementById('tbl');var rows=Array.from(tbl.tBodies[0].rows);var asc=sortDir[col]!==1;sortDir={};sortDir[col]=asc?1:-1;rows.sort(function(a,b){var va=a.cells[col].innerText.trim();var vb=b.cells[col].innerText.trim();return asc?va.localeCompare(vb,undefined,{numeric:true}):vb.localeCompare(va,undefined,{numeric:true})});rows.forEach(function(r){tbl.tBodies[0].appendChild(r)})}
-function exportCSV(){var csv=$([char]39)$csvDataJs$([char]39);var blob=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ZeroBreach_V22_$HOST_NAME_$(Get-Date -Format 'yyyyMMdd').csv';a.click()}
+function exportCSV(){var csv=$([char]39)$csvDataJs$([char]39);var blob=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ZeroBreach_V22_$($HOST_NAME)_$(Get-Date -Format 'yyyyMMdd').csv';a.click()}
 </script></body></html>
 "@
     $html | Out-File -FilePath $OutPath -Encoding UTF8 -ErrorAction SilentlyContinue
