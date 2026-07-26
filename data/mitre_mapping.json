@@ -1080,6 +1080,15 @@
     }
   },
   "threat_type_map": {
+    "Web Origin Evidence": [
+      "T1553.005",
+      "T1105",
+      "T1566.002"
+    ],
+    "Audit Visibility Gap": [
+      "T1562.002",
+      "T1562.001"
+    ],
     "RAT": [
       "T1219",
       "T1219.002",
