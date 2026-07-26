@@ -1,6 +1,10 @@
-# TIME_LOG.md — Estimated Time Spent (full project history)
+# TIME_LOG.md — Estimated Time Spent (project history up to 2026-07-03)
 
-Generated 2026-07-03 from `git log` — the **entire** repository history, 2026-05-19 → 2026-07-03.
+Generated 2026-07-03 from `git log` — repository history 2026-05-19 → **2026-07-03 only**.
+
+> **Point-in-time snapshot — not maintained.** Sessions after 2026-07-03 (WS4/WS5, the 2026-07-22
+> review + WS6, WS7/8/9, the native Tauri shell, sandbox malware testing) are **not** included in
+> any figure below. Regenerate from `git log` if you need a current total.
 
 ## Methodology
 

@@ -1,7 +1,7 @@
 # ZeroBreach V23 - "Kraken Console"
 
 Windows-only MSP incident-response / malware-detection tool. A PowerShell scan engine
-(~115 phases) behind a local web GUI, with MITRE ATT&CK tagging, a hard safety guard on
+(~140 numbered phases) behind a local web GUI, with MITRE ATT&CK tagging, a hard safety guard on
 remediation, and reversible quarantine. Runs from any folder (USB-portable). Admin required.
 
 ---
@@ -14,6 +14,15 @@ remediation, and reversible quarantine. Runs from any folder (USB-portable). Adm
 4. Watch findings stream live; a JSON report lands in **`reports\`** when done.
 
 That is it. No install, no Python, no internet needed.
+
+### The native app (optional, newer)
+
+There is also a real Windows `.exe` that runs the same server and the same GUI inside a native
+window - no browser tab, no visible PowerShell console. Build it from `native-app\`
+(`npm install` then `npx tauri build`); the portable result is
+`native-app\src-tauri\target\release\zerobreach-native.exe`. It needs the **Microsoft Edge WebView2
+Runtime** installed (it exits with a message box if that is missing). `Launch-GUI.bat` remains the
+reference entry point - it is the path everything is validated against. See `native-app\README.md`.
 
 ---
 
@@ -62,9 +71,9 @@ Pick in the GUI, or pass `-Mode` on the CLI.
 
 | Mode | Roughly |
 |---|---|
-| `QUICK` | Fast pass, phases 1-30 |
-| `FULL` | Standard full audit |
-| `DEEP` | Full + deeper/slower checks |
+| `QUICK` | Fast triage - a fixed 30-phase subset (not "phases 1-30"; it skips the expensive file walks, signature audits and event-log mining) |
+| `FULL` | Standard full audit - the whole 1-80 span |
+| `DEEP` | Full + the deeper/slower 81-115 checks |
 | `PARANOID` | Most aggressive heuristics, more findings (and more noise) |
 | `STEALTH` | Silent; engine emits one JSON blob, parsed into findings at completion |
 
@@ -135,8 +144,9 @@ powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Schedule DAILY -H
 Launch-GUI.bat              Entry point (double-click)
 ZeroBreach-Server.ps1       Local web server (default)
 ZeroBreach-V23.ps1          Scan-engine loader (dot-sources engine\)
-engine\                     The ~115 scan phases + summary + fix mode
+engine\                     The ~140 numbered scan phases + summary + fix mode
 gui\                        Web UI (HTML/CSS/JS)
+native-app\                 Native Tauri .exe shell around the same server + GUI (see its README)
 data\
   detection_signatures.json Built-in malware signatures (loaded at runtime)
   ioc_defaults.json         Default IOC list for -IocFile
@@ -165,4 +175,6 @@ _python\                    Alternate Flask server (parked)
 - `CLAUDE.md` - hard rules, gotchas, parsing details for anyone editing code.
 - `HANDOFF.md` - current session state + the live-GUI validation runbook.
 - `CHANGELOG.md` - dated history of fixes and false-positive tuning rounds.
-- `NEXT_STEPS.md` / `UPGRADE_PLAN.md` - historical plans (superseded by BLUEPRINT.md).
+- `native-app/README.md` - the native Tauri shell: build, run, debug, known gotchas.
+- `NEXT_STEPS.md` / `UPGRADE_PLAN.md` / `NIGHT_RUN_PLAN.md` - historical plans (superseded by
+  BLUEPRINT.md; their task lists are not current work).

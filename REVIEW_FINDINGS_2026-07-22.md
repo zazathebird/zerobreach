@@ -1,5 +1,11 @@
 # ZeroBreach Full-Repo Review — 2026-07-22
 
+> ### ✅ CLOSED — all 56 findings were applied on 2026-07-22 (see `CHANGELOG.md` for the narrative).
+> Kept as the historical record of *what* was wrong and *why*, and because several findings became
+> permanent `CLAUDE.md` rules. **Do not work through it as a task list**, and note that every
+> `file:line` reference below has drifted — thousands of lines have changed since (the 2026-07-22
+> round-2 audits, WS7/8/9, the native shell). Re-read the cited code before believing any citation.
+
 **Audience:** a fresh model (Fable/Opus) picking this up to fix. **Nothing in this repo was edited during
 this review** — it is static analysis + sandboxed non-destructive parse/syntax checks only, run via a
 multi-agent workflow (88 sub-agents) plus 2 dedicated follow-up agents. Every bug/security finding below

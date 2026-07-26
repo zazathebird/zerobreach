@@ -3,6 +3,15 @@
 
 This document covers the Python/Flask server only. For the full project picture see `../CLAUDE.md`.
 
+> ### ⚠ PARKED — this server is NOT the product, and the TASK LIST below is NOT current work
+> The project is **PowerShell-only**: `ZeroBreach-Server.ps1` is the real server and the only one
+> that is maintained, validated or shipped. Everything under "TASK LIST" describes gaps in *this
+> parked Flask build*. Do not action it. Every one of those items — STEALTH JSON parsing, real
+> remediation, MITRE tagging, scan profiles, the IOC Manager, HTML/CSV export — **has long since
+> shipped in the PowerShell server**, and its route/event contracts (which differ from the SocketIO
+> ones below) are documented in `../CLAUDE.md` and `../BLUEPRINT.md`. Read this file only when you
+> are deliberately working on `_python/`.
+
 ---
 
 ## WHAT THIS FOLDER IS

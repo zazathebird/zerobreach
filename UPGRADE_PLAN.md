@@ -1,14 +1,18 @@
 # ZeroBreach — "Opus Treatment" Upgrade Plan (post-/clear handoff)
 
-> **⚠ STATUS 2026-07-02 — largely delivered; the live roadmap is `BLUEPRINT.md` §7.**
-> Workstream scoreboard: **WS0** coverage matrix exists (`data/coverage_matrix.json`) but was
-> generated against the work-rig engine — re-audit pending · **WS1** AMSI externalization DONE ·
-> **WS2** detection expansion DONE (data merged + 6 detections ported 2026-07-01, all Info-only) ·
-> **WS3** FP tuning DONE rounds 1-5 for the pre-WS2 engine; the WS2 detections still need their
-> own pass · **WS4** performance: the file-walk/sig-budget work landed 2026-06-22; phase
-> parallelization not started · **WS5** MITRE tagging DONE, richer reporting open ·
-> **WS6** remediation + STEALTH parsing DONE. The hard boundaries + validation loop below
-> remain authoritative for any future detection work.
+> **⚠ STATUS 2026-07-26 — delivered; the live roadmap is `BLUEPRINT.md` §7. Historical context only.**
+> Workstream scoreboard: **WS0** coverage matrix regenerated 2026-07-02 and again 2026-07-25, but
+> it is **stale again** (130 phases vs the current engine) — re-audit still pending · **WS1** AMSI
+> externalization DONE · **WS2** detection expansion DONE (2026-07-01) · **WS3** FP tuning DONE
+> rounds 1-6, including the WS2 pass (2026-07-02) · **WS4** performance DONE (file-walk memo
+> 2026-07-04, `Get-ProcSnapshot` 2026-07-21, signature caching 2026-07-25); **true phase
+> parallelism is ruled out** — one dot-sourced scope · **WS5** MITRE tagging DONE, richer
+> reporting (exec summary / trend / compare) shipped 2026-07-25 · **WS6** remediation + STEALTH
+> parsing DONE, and separately a 9-phase WS6 *detection* round shipped 2026-07-22 (the label is
+> reused — do not confuse them) · **WS7/WS8/WS9** 18 further techniques shipped 2026-07-26.
+> **Note the numbering collision:** "WS6" means remediation+STEALTH in this file and the 2026-07-22
+> detection round everywhere else. The hard boundaries + validation loop below remain authoritative
+> for any future detection work.
 
 > Originally written 2026-06-06 as the work plan for the *major detection & quality upgrade*.
 > The original tool was built with Sonnet 4.6; the goal was to take it as far as possible.

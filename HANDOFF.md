@@ -1,6 +1,61 @@
-# RESUME HANDOFF — updated 2026-07-22 (session 12: full-repo review fixes + WS6 detections + UX pass)
+# RESUME HANDOFF — updated 2026-07-26 (sessions 13-15: WS7-9, native Tauri shell, sandbox malware testing)
 
-> ## ▶ START HERE after /clear — SESSION 12 (2026-07-22)
+> ## ▶ START HERE after /clear — SESSIONS 13-15 (2026-07-25/26)
+> **Everything below this block is older than the current state. In particular, every earlier block
+> that says "the only USER-driven items are the browser click-through and the USB field test" is
+> STALE** — three more sessions have shipped since, and the acceptance list is longer now.
+>
+> **Branch: `session12/review-remediation-ws6`. NOT merged to `main`.** The working tree also
+> carries **uncommitted** changes to `ZeroBreach-V23.ps1`, `engine/Phases-1/2/3.ps1`,
+> `data/mitre_mapping.json` and `native-app/src-tauri/{Cargo.toml,src/main.rs}` — run
+> `git status` / `git diff` first and decide what to do with them before starting anything new.
+>
+> **Session 13 (2026-07-25) — architecture pivot + WS4/WS5.** Decided: the PS engine and server
+> stay as they are; a **native Tauri shell** wraps them, and a brand-new Three.js 3D GUI eventually
+> replaces `gui/static/js`. (A full C rewrite, a re-monolith and kernel-mode driver work were all
+> explicitly **rejected**.) Shipped `c578c25`: WS4 Authenticode/signature caching + real registry
+> key times, WS5 executive summary / trend / baseline-compare.
+>
+> **Session 14 (2026-07-26) — WS7/WS8/WS9 + the native `.exe`.** 18 further MITRE techniques as
+> fractional phases (0 new auto-destructive findings from any of them); tri-state
+> gone/present/unknown remediation verification in **both** paths; a tamper-evident hash-chained
+> `reports/remediation_audit_*.jsonl`; **6 RunCmd command-injection fixes** (unescaped single quote,
+> two on auto-selected CRITICAL paths); rule-#1 auto-kill FP fixes and self-allowlist anchoring;
+> and **`native-app/` — a real Tauri v2 `.exe`**, screenshot-verified rendering the actual GUI, with
+> its child server tied to a Windows **Job Object** (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, verified
+> against a real force-kill). Five independent audit rounds drove most of those fixes.
+> **User's stated priority: the native standalone, not further PS-portable GUI work.**
+>
+> **Session 15 (2026-07-26) — Windows Sandbox infection testing.** Stage A (FULL, tripwires +
+> EICAR): 80/80 phases contiguous, 0 recovered errors, all 5 documented tripwires detected at their
+> documented severities. Stage B (DEEP × 2, **5 real theZoo malware families** incl. KRBanker):
+> 115/115 phases contiguous, 0 recovered errors, auto-destructive set == the known tripwires plus
+> the 2 legacy hardening posture items. **EICAR is not detected — that is expected**, ZeroBreach
+> matches families/behaviour, not AV test strings.
+> **A real bug was found and fixed:** the native shell hung *completely silently* on a box with no
+> WebView2 Runtime (no window, no dialog, no debug log, no exit). `main.rs` now logs as its very
+> first statement and runs a `fatal_if_webview2_missing()` preflight (message box + exit code 3)
+> before any webview is built. **Built and staged, but NOT committed.**
+>
+> **Open / unverified — do not claim any of these are done:**
+> - **Stage C** (detonate KRBanker offline → DEEP rescan → two properly sequenced `/api/remediate`
+>   calls) and **Stage D** (confirm the WebView2 fix on a WebView2-less box): both harnesses are
+>   written, neither has completed a run.
+> - The **browser click-through** (runbook further down) — now also inside the native shell.
+> - The **USB foreign-box field test**.
+> - The **NSIS installer** (`ZeroBreach_0.1.0_x64-setup.exe` is built; it has never been installed).
+> - `data/coverage_matrix.json` (regenerated 2026-07-25 at 130 phases — behind the engine).
+> - `tools/Build-Release.ps1` has **no `native-app` awareness**.
+> - The Three.js 3D GUI has not been started.
+>
+> **Hard-won process lessons from these sessions are now CLAUDE.md rules** — read
+> "Test harnesses, sandboxes and headless validation" before writing any harness: a BOM-less `.ps1`
+> with an em dash fails to *parse* on PS 5.1 (zero statements run, looks exactly like a hang);
+> Windows Sandbox does not reap its VM, so the next launch silently never boots; theZoo archives are
+> password-protected and `tar` silently writes 0-byte files; `/api/remediate` replies
+> `{"status":"started"}` and proves nothing.
+
+> ## ▶ (session 12) START HERE reference — 2026-07-22
 > **Session 12 applied the whole `REVIEW_FINDINGS_2026-07-22.md` fix list (all 56 findings), the
 > 10 GUI/UX proposals, and a new detection expansion (WS6).** Nothing is left half-done; the
 > review document can now be treated as closed. Highlights:
@@ -558,13 +613,27 @@ A real admin `Launch-GUI.bat` run exercising: scan → MITRE badges → HTML/CSV
 un-tickable and that blocked count shows if you force one). Tripwires: see CLAUDE.md.
 
 ## Validation commands
+
+Run the parse check on **real `powershell.exe` 5.1**, not `pwsh` — the PS-5.1-only failure modes
+(single-element unwrap, `(try{}catch{})`, `,$arr`, Windows-1252 decoding of a BOM-less file) do not
+reproduce on 7. No helper script needed:
+
+```powershell
+# Parse-check any .ps1 (prints nothing on success)
+powershell.exe -NoProfile -Command "$e=$null;$t=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('<abs path>.ps1',[ref]$t,[ref]$e);$e"
+
+# BOM check — the first 3 bytes of every repo .ps1 must be EF BB BF
+powershell.exe -NoProfile -Command "Get-Content '<abs path>.ps1' -Encoding Byte -TotalCount 3"
 ```
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File /tmp/zbparse.ps1 -F "<abs>\ZeroBreach-Server.ps1"   # ParseFile -> errors
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File /tmp/zbvalidate.ps1 -File "<abs>\ZeroBreach-Server.ps1" # extract @'...'@ here-strings, ParseInput each
+
+The server additionally needs its `@'...'@` here-strings extracted and `ParseInput`-checked
+separately (they are runspace scripts — a syntax error in one is invisible to `ParseFile`).
+
+```
 node --check gui/static/js/app.js
 node tools/check-visuals.mjs   # FX audit, expect PASS 13/13 (kill stray zb-vfx-profile browser first)
+cd native-app && npx tauri build   # then actually LAUNCH the .exe — compiling is not running
 ```
-(zbparse.ps1/zbvalidate.ps1 are trivial to re-create — see their one-line jobs above.)
 
 Newest engine report analyzed: `reports/KrakenBaseline_20260623_135347.json`.
 Test tripwires (still on the machine, named `ZeroBreach_TEST_DELETEME`): recreate/cleanup in CLAUDE.md.

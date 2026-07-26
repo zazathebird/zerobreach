@@ -3,7 +3,11 @@
 > ### ⚠ SUPERSEDED 2026-07-02 — the prioritized roadmap now lives in **`BLUEPRINT.md` §7**
 > This file is kept as historical context (session logs + the original phase plans). For
 > current state read `BLUEPRINT.md` (product map + roadmap) and `HANDOFF.md` (session state
-> + the live-GUI runbook). Everything below reflects sessions up to 2026-07-01.
+> + the live-GUI runbook). Everything below reflects sessions up to 2026-07-01 — **its "STILL
+> open" / "NEXT" items are three-plus months of work out of date; do not action them.** Notably:
+> QUICK is now a real 30-phase gate (it was not when this was written), the "work-rig branch"
+> WS3/WS5/WS6 items listed below have all since shipped on this repo, and the engine has grown
+> from ~121 to ~140 phase headers.
 
 > ### ▶ START HERE — next session (updated 2026-07-01, session 4: engine split + WS2 port DONE)
 > **BIG ARCHITECTURE CHANGE this session — read the 2026-07-01 CHANGELOG entry first.** The engine is

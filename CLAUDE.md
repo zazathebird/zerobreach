@@ -12,9 +12,16 @@ Guidance for Claude Code (claude.ai/code) working in this repo.
 
 ZeroBreach V23 "Kraken Console" is a **Windows-only MSP incident-response tool**: a PowerShell HTTP
 server sits between a cyberpunk HTML/JS frontend and a PowerShell scan engine (`ZeroBreach-V23.ps1`)
-that runs **~115 phases** of malware detection. A parked Python/Flask server (`_python/server.py`) is
-an alternative to the PS server. The engine still self-identifies as "V22" in some strings (scheduled
-task name `ZeroBreach_V22_Scheduled`, banners) — **intentional, not a bug to fix.**
+that runs a numbered malware-detection phase pipeline — **~140 distinct phase headers as of
+2026-07-26**, numbered 1–115 with 24 fractional insertions (see "Phase numbering + counts" below;
+the old "~115 phases" figure was the *label ceiling*, not a count). A parked Python/Flask server
+(`_python/server.py`) is an alternative to the PS server. The engine still self-identifies as "V22"
+in some strings (scheduled task name `ZeroBreach_V22_Scheduled`, banners) — **intentional, not a bug
+to fix.**
+
+There are now **two shells over the same server + GUI**: `Launch-GUI.bat` (browser tab, the reference
+entry point everything is validated against) and `native-app/` (a Tauri v2 `.exe` that spawns the
+same unmodified `ZeroBreach-Server.ps1` and points a native window at it — see `native-app/README.md`).
 
 ## Launching
 
@@ -26,6 +33,10 @@ Launch-GUI.bat python     # Python/Flask server (needs deps installed first)
 `Launch-GUI.bat` self-elevates to admin, then launches `ZeroBreach-Server.ps1`. On failure the window
 stays open and writes `zerobreach_launch_error.log` to the project root. Requires Windows 10/11,
 PowerShell 5.1+, admin rights.
+
+The native shell is built from `native-app/` (`npm install` → `npx tauri build` →
+`src-tauri/target/release/zerobreach-native.exe`). It requires the **WebView2 Runtime** at run time
+and refuses to start without it (exit code 3 + a message box).
 
 ## Architecture
 
@@ -52,22 +63,33 @@ PowerShell 5.1+, admin rights.
 ├── engine/                     Dot-sourced phase modules (each UTF-8 BOM). Split BY RANGE, not
 │   │                           category — phases run in numeric order and reuse vars across
 │   │                           phases; dot-sourcing into the loader's ONE scope preserves that.
-│   ├── Phases-1.ps1            Sections 1-11, phases 1-58 (incl. 55.5 BYOVD)
-│   ├── Phases-2.ps1            Sections 12-16 front, phases 59-89 (incl. 69 mutex, 74.5/.6/.7)
-│   ├── Phases-3.ps1            if($PhasePlan.Advanced) 90-105+ (incl. 99.5) + Integrity 108-115
+│   ├── Phases-1.ps1            Sections 1-11, phases 1-58 (incl. 10.5/10.6/17.5/…/55.5)
+│   ├── Phases-2.ps1            Sections 12-16 front, phases 59-89 (incl. 69 mutex, 74.5–74.9)
+│   ├── Phases-3.ps1            if($PhasePlan.Advanced) 90-107 (incl. 97.5/99.5/100.5) +
+│   │                           if($PhasePlan.Integrity) 108-115
 │   ├── Summary.ps1             risk score + audit summary + stealth/auto exits
-│   └── FixMode.ps1             fix-mode entry, rollback snapshot, Invoke-FixMode
+│   └── FixMode.ps1             fix-mode entry, rollback snapshot, Invoke-FixMode (WinForms UI)
 ├── gui/
 │   ├── templates/index.html    Single-page app (the only copy; served by both servers)
 │   └── static/
 │       ├── css/main.css        Core styles + base :root CSS vars
 │       ├── css/fx.css          VFX overlays, cmd palette, danger modal, cinematic FX toggles
+│       ├── fx-preview.html     Standalone FX/theme harness driven by tools/check-visuals.mjs
+│       ├── vendor/             GSAP + Chart.js vendored locally — NO CDN on an incident host
 │       └── js/  (load order: sound → themes → fx → kraken → app)
-│           ├── app.js          SSE client, views, cmd palette (Ctrl+K), PURGE modal, CINE_FX
+│           ├── app.js          SSE client, views, cmd palette (Ctrl+K), PURGE modal, CINE_FX,
+│           │                   postJSON() — the single CSRF-token choke point
 │           ├── sound.js        ZBSound — synthesized Web Audio SFX (no audio files)
 │           ├── themes.js       ZBThemes — 12 themes + secret KRAKEN theme (inline body CSS vars)
 │           ├── fx.js           ZBFX — canvas renderers + intensity tiers OFF/LITE/FULL/MAX
 │           └── kraken.js       ZBKraken — ~19s "kraken" unlock cinematic
+├── native-app/                 Tauri v2 native shell (Milestone 1) — see native-app/README.md.
+│                               src-tauri/src/main.rs spawns the UNMODIFIED server as a child.
+│                               src-tauri/target/**/engine-root/ holds BUILD COPIES of the
+│                               engine/server/gui — never edit those; they are build output.
+├── tools/
+│   ├── Build-Release.ps1       Portable release-zip builder (parse+BOM+JSON gate, SHA256 sidecar)
+│   └── check-visuals.mjs       Headless-Chrome FX/theme audit → writes fx-audit/*.png (gitignored)
 ├── _python/                    Parked Flask/SocketIO server + PyInstaller spec (see README there)
 ├── data/
 │   ├── ioc_defaults.json            Default IOC list for -IocFile
@@ -119,11 +141,27 @@ trailing space)/`[HUNT]`/`[INFO]` → `CRITICAL | HIGH | POSSIBLE | CLEAN | INFO
 keywords → `RAT | Rootkit | Ransomware | Keylogger | Worm | Miner | Trojan | Spyware | Fileless
 | Other`.
 
-Phase headers: `PHASE\s+(\d+(?:\.\d+)?)[^\d]` — **fractional phases (55.5, 74.5/.6/.7, 99.5) keep
-their decimal** (since 2026-07-02): they advance the GUI counter/progress as real plan steps,
-findings carry the true fractional phase, and both `Resolve-Mitre` copies look up the fractional
-`phase_map` key first (integer-floor fallback). `phase_total` stays the plan ceiling per mode
-(QUICK 30 / FULL 80 / DEEP+ 115, mirroring the loader's `$PhasePlan`).
+### Phase numbering + counts
+
+Phase headers are emitted by `Show-PhaseHeader "PHASE <n>" "<desc>" "<cat>"` (loader) and parsed as
+`PHASE\s+(\d+(?:\.\d+)?)[^\d]` — **fractional phases keep their decimal** (since 2026-07-02): they
+advance the GUI counter/progress as real plan steps, findings carry the true fractional phase, and
+both `Resolve-Mitre` copies look up the fractional `phase_map` key first (integer-floor fallback).
+
+**Ceiling ≠ count — do not conflate them.** `phase_total` is the plan *ceiling* per mode
+(QUICK 30 / FULL 80 / DEEP+ 115, mirroring the loader's `$PhasePlan.Max`, mirrored again in the
+server's `$MODE_PHASES`). Because every expansion since WS2 has been inserted as a **fractional**
+number, the highest label is still 115 while the number of headers that actually execute is larger:
+as of 2026-07-26 the engine has **~140 distinct headers** (Phases-1: 70, 1–58 + 12 fractionals;
+Phases-2: 40, 59–89 + 9 fractionals; Phases-3: 30, 90–115 + 97.5/99.5/100.5, plus a conditional
+`PHASE 105+` baseline-diff banner). QUICK is the one mode where ceiling == count: it runs **exactly
+30** ungated headers (the set is listed in the loader's `$PhasePlan` comment) and the server maps it
+to a 1..30 index. Progress/`phase_total` stay honest because they track the *label*, not the count —
+so never "fix" this by renumbering phases. **Re-count after adding a phase**
+(`Show-PhaseHeader "PHASE` occurrences per module, and the QUICK-ungated set must stay at 30.)
+
+### Auto-select, encoding, and the SSE event table
+
 **Only CRITICAL/HIGH + a destructive FixAction is auto-selected
 for remediation** — POSSIBLE is shown but never auto-acted-on (the lever behind every FP downgrade).
 **Child stdout is UTF-8 end-to-end:** the loader sets `[Console]::OutputEncoding` to UTF-8 when
@@ -184,6 +222,13 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   just never runs. This exact bug shipped in the server's `Classify` and killed ALL severity
   classification for weeks (every SSE line INFO). The dict is now `$SEV_RX`; when a lookup
   mysteriously returns nothing, check for a case-insensitive shadow first.
+  **The engine's single dot-sourced scope makes this worse: a local in a phase body can assign the
+  LOADER'S `param()` variables.** A new `$auto` in a phase body *is* the loader's `[switch]$Auto` —
+  the flag `Summary.ps1` tests to decide whether to `[Environment]::Exit(0)` instead of falling
+  through into `FixMode.ps1`'s interactive `Read-Host`. Clobbering it hangs every server-driven scan
+  with no output and no error (caught in review 2026-07-26). Same hazard for `$mode`, `$hours`,
+  `$html`, `$baseline`, `$schedule`, `$stealth`, `$paranoid`, `$outdir`, `$iocfile`, `$smtp*`.
+  Prefix phase-local names (`$rk*`, `$zb*`) when in any doubt.
 - **Never call these raw in a phase body — use the safe wrapper:** `Get-AuthenticodeSignature` →
   `Get-AuthSig`; `Get-ItemPropertyValue` → `Get-RegVal`; `Get-WinEvent -FilterHashtable` →
   `Get-WinEventSafe`; `Get-FileHash` → `Get-FileHashSafe`. `-EA SilentlyContinue` does **not** suppress
@@ -211,6 +256,39 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Validate on live `powershell.exe` 5.1**, not a PS-7 simulation — the unwrap / `(try{})` /
   `,$arr` behaviors only surface on the real 5.1 runtime. Keep the engine **parse-clean on 5.1 + 7**
   and the **UTF-8 BOM** intact.
+
+### Test harnesses, sandboxes and headless validation (all confirmed live 2026-07-26)
+- **Every `.ps1` you write — including throwaway harnesses — must be ASCII + UTF-8 BOM, and must be
+  parse-checked on real `powershell.exe` 5.1 BEFORE it is run.** A BOM-less `.ps1` containing an em
+  dash is decoded by PS 5.1 as Windows-1252: the em dash's trailing byte becomes **U+201D, a curly
+  quote**, which PS 5.1 honours as a real string delimiter. The file then fails to **parse**, so
+  **zero statements execute — not even the first log line.** That is indistinguishable from a hang
+  and cost an entire session of debugging. Belt and braces: keep harness source **plain ASCII** (no
+  em dashes, smart quotes or box-drawing) **and** save it with the BOM — either alone would have
+  prevented this, so do both. The repo `.ps1` files may use those characters precisely because their
+  BOM is guaranteed; a scratch file's is not.
+- **A script driving a hidden-window `LogonCommand` (Windows Sandbox, scheduled task, service) MUST
+  redirect stdout AND stderr to a file.** With no console and no redirect, a parse error, a missing
+  file or a thrown exception produces *nothing* anywhere — you cannot tell "failed instantly" from
+  "still working". Make the first statement an unconditional line-flushed log write, so an empty log
+  is itself proof the script body never ran.
+- **Windows Sandbox does not reap its VM when you kill its processes.** `vmmemWindowsSandbox`
+  survives indefinitely, and because Sandbox is single-instance the NEXT launch silently never boots
+  — which looks exactly like a hang. `Restart-Service vmcompute -Force` clears it. **Always verify no
+  sandbox VM is alive before launching another**, and only ever run one at a time.
+- **theZoo malware archives are password-protected (`infected`), and `tar` cannot decrypt them — it
+  writes 0-BYTE files and exits 0.** Any test that "places malware" must **assert non-zero file size
+  and the expected magic bytes** before drawing any conclusion, or a meaningless clean result reads
+  as a passing test. Use `7za` (bootstrap via `7zr` + the `7zXXXX-extra.7z` package) with
+  `-pinfected`. Note `7zr.exe` handles **only** `.7z`, never `.zip`.
+- **`POST /api/remediate` answers `{"status":"started"}` asynchronously — the HTTP response proves
+  nothing was remediated.** Verify on the filesystem/registry AND in the durable
+  `reports/server_events_*.log` (`applied` / `failed` / `skipped` / `blocked`) plus
+  `reports/remediation_audit_*.jsonl`. Two calls back-to-back return **400
+  `{"error":"remediation already running"}`** — sequence them ~30s apart.
+- **PowerShell's `Invoke-RestMethod` sends no `Origin`/`Referer`**, so `Test-RequestAllowed` treats
+  it as a non-browser client: headless API scripting against the server needs **no CSRF token**.
+  Do not weaken the browser-facing gate to make a harness work.
 
 ### AMSI / signatures
 - **Never put malware-signature literals in the `.ps1`** — Defender AMSI blocks the engine at load
@@ -241,8 +319,10 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   to `reports/quarantine/`, renamed `.quar`, with a `.quar.json` restore manifest).
 
 ### Server / display
-- **The GUI phase counter is driven by `scan_state`, throttled to every 12 log lines** — any UI element
-  that must track phase precisely needs a phase-change-triggered emit, not the `%12` tick. When a user
+- **The GUI phase counter is driven by `scan_state`: emitted on EVERY phase change plus a periodic
+  `%12`-log-line tick** (the phase-change emit was added by `c0477ae` precisely because the `%12`
+  tick alone skipped sub-second phases). Any new UI element that must track phase precisely hangs off
+  the phase-change emit, never the tick. When a user
   reports "skipped phases," first grep the `KrakenConsole_*.log` for `PHASE N — … took` + `RECOVERED
   ERROR` — usually it's display cadence, not a dropped phase. **BUT since the engine split, a genuine
   skip IS possible**: if a phase module is missing its top-level `trap` (see the Engine-split rules), a
@@ -335,7 +415,16 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   findings with `FixAction`/`FixParam`, MITRE-enriched; name validated `^(KrakenBaseline_|audit_).*\.json$`);
   `POST /api/remediate {report, ids[]}` (spawns `$script:REMEDIATE_SCRIPT`, mirrors the engine's
   `Invoke-FixMode` switch — DeleteFile/DeleteReg/DeleteRegKey/KillProcess/RunCmd/Quarantine — streams
-  `[FIX]` lines then `remediation_complete`; report path basename-locked to `reports/`).
+  `[FIX]` lines then `remediation_complete`; report path basename-locked to `reports/`; **responds
+  `{"status":"started"}` immediately — see the harness rules for how to actually verify it**).
+  Also live, and easy to miss when auditing the route table: `GET /api/csrf` (per-process token),
+  `GET /api/findings` (live findings array), `GET /api/reports` (report file list),
+  `GET /api/report/diff?a=&b=` (baseline compare), `GET|POST /api/schedule`, `GET /api/sysinfo`,
+  `GET /api/state`, `GET /api/events`, `POST /api/scan/start|abort` (POST-only, 405 otherwise),
+  `GET /favicon.ico` (204), plus `/` and `/static/`.
+- **Remediation audit trail** — both remediation paths append a tamper-evident hash-chained
+  `reports/remediation_audit_<stamp>.jsonl`; the GUI path also writes a rollback `.reg` snapshot
+  first when the launchpad checkbox is set. Read these, not the HTTP response, to confirm an action.
 - **STEALTH mode** — engine emits one compressed-JSON audit blob to stdout instead of formatted text;
   the scan runspace buffers stdout when `stealth` is set and parses the blob after the child exits.
 - **Email/phishing** (Phases 74.5/74.6/74.7) — attachment-cache scan (scoped to Outlook caches, NOT the
@@ -354,6 +443,13 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   heuristics vs externalized loader/banking/infostealer/inhibit-recovery behavior rules. Signatures live
   in `data/detection_signatures.json` (WS2 keys: `byovd_*`, `known_malware_mutexes`, `ransom_note_*`,
   `c2_pipe_regex_anchored`, `banking_named_pipes`, `*_behavior_rules`, `inhibit_recovery_rules`, …).
+- **WS6–WS9 detection expansion** (2026-07-22 / 2026-07-26) — 9 WS6 fractional phases (17.5 · 21.5 ·
+  22.5 · 42.5 · 44.5 · 45.5 · 68.5 · 82.5 · 100.5) and 18 further WS7/WS8/WS9 techniques (10.5 · 10.6 ·
+  32.5 · 36.5 · 49.5 · 74.8 · 87.5 · 88.5 · 97.5 + integer-phase extensions). Same contract as WS2:
+  fractional numbering inside `if (-not $global:QUICK_MODE)`, signatures in data, MITRE `phase_map`
+  entry per phase, hardening actions operator-only. `data/coverage_matrix.json` was last regenerated
+  **2026-07-25 at 130 phases** — it is therefore **behind the current engine** and must be re-audited
+  before it is trusted as a coverage source.
 - **GUI feature layer** — 12 themes + secret KRAKEN (type "kraken" for a ~19s cinematic, sets
   `zb_god=1`); synthesized sound; canvas VFX; command palette (Ctrl+K); EXECUTE REMEDIATION requires
   typing `PURGE`. **MSP Mode**: type "msp"/"gannon"/"staples" pre-scan → `gannon-orange` theme + badge.
@@ -403,16 +499,40 @@ Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
 - **Encoding**: Python subprocess output uses `encoding="utf-8", errors="replace"`.
 - **PS self-detection**: Phase 2 Script Block Logging may flag the script's own run — it has a
   self-filter; verify it works.
+- **Native shell**: needs the WebView2 Runtime (exits 3 with a message box without it); writes
+  `%TEMP%\zerobreach_native_debug.log`; only the window labelled `main` is wired to kill the child.
+- **Duplicate engine copies**: `native-app/src-tauri/target/{debug,release}/engine-root/` contains
+  full copies of `ZeroBreach-*.ps1`, `engine/`, `gui/`, `data/`. Repo-wide greps hit them — always
+  check the path before editing, and never edit the copy.
 
 ## Outstanding Work
 
-The bulk of the roadmap is **done and merged** (scan-blocking prompts, re-run handling, MITRE, IOC
-Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–5, engine
-split + WS2 port, live finding stream + UTF-8 pipeline, VFX/themes/sound). The 2026-07-01 browser
-DEEP run **passed the scan/engine path live** (115 phases contiguous, phase counter validated).
-**The last standing acceptance item is the browser click-through** of destructive remediation
-(PURGE + protected HARD block), export downloads, IOC save→re-scan, and STEALTH — now also
-eyeballing the live finding ticker/chips and clean banner glyphs. **The prioritized roadmap lives
-in `BLUEPRINT.md` §7** (WS3 FP-tune of the WS2 detections, FP sign-off list, per-phase progress
-truth, scan profiles, coverage-matrix re-audit, USB field test; `NEXT_STEPS.md`/`UPGRADE_PLAN.md`
-are historical context).
+> Status as of **2026-07-26**. Work since 2026-07-22 lives on the branch
+> **`session12/review-remediation-ws6`**, not `main` — check `git log`/`git status` before assuming
+> anything here is merged, and note the working tree currently carries **uncommitted engine +
+> `native-app` changes** (`ZeroBreach-V23.ps1`, `engine/Phases-1/2/3.ps1`, `data/mitre_mapping.json`,
+> `native-app/src-tauri/{Cargo.toml,src/main.rs}`).
+
+The bulk of the original roadmap is **done** (scan-blocking prompts, re-run handling, MITRE, IOC
+Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–6, engine
+split + WS2 port, live finding stream + UTF-8 pipeline, VFX/themes/sound, QUICK-as-a-real-gate,
+scan profiles, portable release build, the 2026-07-22 review remediation + WS6, and the WS7/8/9
+expansion). Since then:
+
+- **Native shell (Milestone 1) — built and live-verified.** Real `.exe` rendering the real GUI,
+  Job-Object-tied child process (force-kill verified), WebView2 preflight. The Three.js 3D GUI
+  redesign it is a stepping stone to has **not** been started.
+- **Sandbox malware testing (2026-07-26) — partially complete.** Stage A (FULL, tripwires + EICAR:
+  80/80 phases, 0 recovered errors) and Stage B (DEEP × 2 against 5 real theZoo families incl.
+  KRBanker: 115/115 phases, 0 recovered errors, auto-destructive set == the known tripwires) both
+  passed in Windows Sandbox. **Stage C (live detonation → rescan → remediation) and Stage D
+  (WebView2-fix confirmation) are written but have NOT been run to completion** — treat both as
+  unverified.
+- **Still open / unverified:** the user-driven **browser click-through** (destructive PURGE +
+  protected HARD block, export downloads, IOC save→re-scan, STEALTH, live ticker/chips, banner
+  glyphs); the **USB foreign-box field test**; the **NSIS installer** (built, never installed);
+  `data/coverage_matrix.json` re-audit; `tools/Build-Release.ps1` has **no `native-app` awareness**.
+
+**The prioritized roadmap lives in `BLUEPRINT.md` §7**; `HANDOFF.md` carries per-session state;
+`NEXT_STEPS.md`/`UPGRADE_PLAN.md`/`NIGHT_RUN_PLAN.md`/`REVIEW_FINDINGS_2026-07-22.md` are historical
+context only — do not action their task lists without re-checking them against the code.

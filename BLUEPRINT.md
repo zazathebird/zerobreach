@@ -3,14 +3,17 @@
 > **The definitive top-level map of what this tool is, how it fits together, and where it goes
 > next.** Rules live in `CLAUDE.md`; history lives in `CHANGELOG.md`; session state lives in
 > `HANDOFF.md`. This file changes only when the product itself changes shape.
-> Last structural update: 2026-07-02.
+> Last structural update: 2026-07-26 (native shell + phase-count correction).
 
 ## 1. Mission
 
 A **single-operator, USB-portable, zero-install Windows incident-response console** for MSP
-techs. One double-click (`Launch-GUI.bat`) on any Windows 10/11 box gives you:
+techs. One double-click (`Launch-GUI.bat`, or the native `zerobreach-native.exe`) on any
+Windows 10/11 box gives you:
 
-1. **Detect** — ~115 scan phases covering the full malware taxonomy (RAT/C2, ransomware,
+1. **Detect** — ~140 numbered scan phases (labels 1–115 plus 24 fractional insertions; the plan
+   ceiling per mode is 30/80/115 — see `CLAUDE.md` → "Phase numbering + counts") covering the
+   full malware taxonomy (RAT/C2, ransomware,
    rootkits, keyloggers, worms, miners, trojans, spyware, fileless/LOLBins, persistence,
    credential theft, exfil, email/phishing, BYOVD, permission integrity).
 2. **Decide** — findings triaged with severity, MITRE ATT&CK technique, threat type, a
@@ -28,19 +31,22 @@ The Python/Flask server is **parked** — PowerShell-only direction (see `_pytho
 ## 2. Architecture
 
 ```
-Launch-GUI.bat  (self-elevates → admin)
+Launch-GUI.bat  (self-elevates → admin)          native-app/  zerobreach-native.exe
    └─ ZeroBreach-Server.ps1          pure-PS HttpListener server, SSE at /api/events
+        ↑  (the Tauri shell spawns this SAME, unmodified server as a Job-Object-tied child
+        │   with -Port <free> -NoBrowser, then points a native window at localhost:<port>)
         ├─ serves gui/  (index.html + css + js: sound→themes→fx→kraken→app)
         ├─ scan runspace ── spawns ── powershell.exe ZeroBreach-V23.ps1 -Auto …
         │     stdout (UTF-8) ─→ parse loop ─→ SSE events ─→ browser
         ├─ remediation runspace ($script:REMEDIATE_SCRIPT — mirrors Invoke-FixMode)
-        └─ reports/  (baseline JSON, HTML, console + SSE logs, quarantine vault)
+        └─ reports/  (baseline JSON, HTML, console + SSE logs, quarantine vault,
+                      hash-chained remediation_audit_*.jsonl)
 
 ZeroBreach-V23.ps1  = THIN LOADER  (params/elevation/globals/ALL helpers/banner/menus)
    └─ dot-sources, in order, into ONE scope:
-        engine/Phases-1.ps1   phases 1-58   (incl. 55.5 BYOVD)      ┐ each module has its
-        engine/Phases-2.ps1   phases 59-89  (incl. 69, 74.5/.6/.7)  │ OWN top-level trap
-        engine/Phases-3.ps1   phases 90-115 (incl. 99.5)            ┘ (see CLAUDE.md)
+        engine/Phases-1.ps1   phases 1-58   (+12 fractional, incl. 55.5)  ┐ each module has
+        engine/Phases-2.ps1   phases 59-89  (+9 fractional, 74.5-74.9)    │ its OWN top-level
+        engine/Phases-3.ps1   phases 90-115 (+97.5/99.5/100.5)            ┘ trap (CLAUDE.md)
         engine/Summary.ps1    risk score + exits ([Environment]::Exit)
         engine/FixMode.ps1    interactive fix mode (console runs only)
 
@@ -82,8 +88,15 @@ so the live stream drives the in-scan experience and the report drives triage/re
   `domain:`/`regex:`/`file:` (mirrors `data/ioc_defaults.json`).
 - **Quarantine manifest**: file moved to `reports/quarantine/*.quar` + `.quar.json` with
   original path, SHA256, restore command.
-- **HTTP routes**: `/api/scan/start|abort`, `/api/state`, `/api/events`, `/api/report?name=`,
-  `/api/remediate {report, ids[]}`, `/api/export/html|csv`, `/api/ioc` GET/POST, `/api/sysinfo`.
+- **HTTP routes**: `/api/csrf`, `/api/scan/start|abort` (POST-only), `/api/state`, `/api/events`,
+  `/api/findings`, `/api/report?name=`, `/api/reports`, `/api/report/diff?a=&b=`,
+  `/api/remediate {report, ids[]}` (POST-only; replies `{"status":"started"}` **asynchronously** —
+  verify in `reports/server_events_*.log`, and a second concurrent call 400s
+  `remediation already running`), `/api/export/html|csv`, `/api/ioc` GET/POST, `/api/profiles`
+  GET/POST, `/api/schedule` GET/POST, `/api/sysinfo`, `/favicon.ico`, plus `/` and `/static/`.
+  Every non-GET/HEAD request passes `Test-RequestAllowed` (Origin/Referer lock + `X-ZB-Token`)
+  **before** the route table; a client sending neither Origin nor Referer (curl,
+  `Invoke-RestMethod`) is treated as non-browser and needs no token.
 
 ## 4. Safety model (the product's spine)
 
@@ -103,24 +116,64 @@ so the live stream drives the in-scan experience and the report drives triage/re
 6. Engine in `-Auto` is **audit-only** — remediation happens only through the GUI's typed
    `PURGE` confirmation.
 
-Regression metric: **auto-destructive count from a full `-Hours 0` DEEP baseline** — currently
-**39**, all by-design (tripwires + posture items + genuine unsigned-script signal). The older
-**52** figure was the *pre*-round-6 reference; FP round 6 (2026-07-02, `CHANGELOG.md`) cleared the
-remaining healthy-box tail and re-based it at 39. Re-grade after any severity/FixAction change.
+Regression metric: **auto-destructive count from a full `-Hours 0` DEEP baseline** (CRIT/HIGH +
+DeleteFile/DeleteReg/DeleteRegKey/KillProcess/RunCmd/Quarantine). **The absolute number is
+box-dependent — compare only against a baseline taken on the SAME machine**, and always inspect the
+breakdown, never just the count. Reference points, all real runs:
+**52** = pre-round-6 dev box · **39** = post-round-6 dev box (2026-07-02) · **25** = end of the
+2026-07-22 review session · **100** = 2026-07-26 WS7-9 grading on this dev box at `-Hours 0`, of
+which **87 are Phase-10 "suspicious file in TEMP" hits** on an accumulation-heavy dev machine
+(explained, not a regression — WS7/8/9 themselves contributed **0**) · **6** = a clean Windows
+Sandbox (4 auto-selected tripwire findings + 2 legacy hardening posture items). Re-grade after any
+severity/FixAction change, and state which box the number came from.
 
 ## 5. Quality gates (all must pass before a change ships)
 
 1. Parse-clean on **live PS 5.1** and PS 7 — all 6 engine files + server (+ the server's
-   here-strings extracted and `ParseInput`-checked separately); UTF-8 BOM intact.
+   here-strings extracted and `ParseInput`-checked separately); UTF-8 BOM intact. **Any harness
+   `.ps1` you write counts too** — ASCII + BOM, parse-checked before it is run (see `CLAUDE.md`
+   → "Test harnesses, sandboxes and headless validation").
 2. `node --check` on touched JS; FX audit `node tools/check-visuals.mjs` (PASS 13/13).
 3. AMSI: engine spawns and streams (no `ScriptContainedMaliciousContent`).
 4. Headless `-Auto` scan: contiguous `PHASE N — … took` sequence (no module-trap gaps),
-   clean self-exit, reports written.
-5. Auto-destructive re-grade vs. baseline (target: 52, and 0 system-damage FixParams).
+   clean self-exit, reports written. After adding a phase: re-count the QUICK-ungated header set
+   (must be exactly 30) and add the `data/mitre_mapping.json` `phase_map` entry.
+5. Auto-destructive re-grade **vs. a baseline from the same machine** (§4), and 0 system-damage
+   FixParams.
 6. Live GUI acceptance for UX-facing changes (`Launch-GUI.bat` as admin; tripwires in
    `CLAUDE.md` → "Remediation test tripwires").
+7. Touching `native-app/`: `npx tauri build` clean, and the built `.exe` actually launched once —
+   Rust that compiles is not a shell that runs (WebView2, manifest and console-allocation
+   failures all happen at run time, before any of our code logs anything).
 
-## 6. Status snapshot — 2026-07-02
+## 6. Status snapshot
+
+### 2026-07-26 (current)
+
+**Where the code is:** everything since 2026-07-22 sits on the branch
+`session12/review-remediation-ws6`, **not merged to `main`**, and the working tree carries
+uncommitted engine + `native-app` changes. Verify with `git log`/`git status` before assuming.
+
+**Proven live since the 07-02 snapshot below:**
+- **2026-07-22** review remediation (all 56 findings) + WS6 + UX pass, then 3 independent audit
+  passes; DEEP 115 labels, 0 recovered errors.
+- **2026-07-26** WS7/WS8/WS9 — 18 further techniques, graded on a fresh all-time DEEP
+  (0 new auto-destructive from any new phase), plus remediation tri-state verification, a
+  hash-chained remediation audit log, and 6 RunCmd command-injection fixes.
+- **Native shell (Milestone 1)** — Tauri `.exe` screenshot-verified rendering the real GUI, child
+  server tied to a Job Object (force-kill verified), WebView2 preflight added after a live
+  silent-hang was reproduced on a WebView2-less machine.
+- **Windows Sandbox infection testing, Stages A + B** — FULL 80/80 and DEEP 115/115, 0 recovered
+  errors, against 5 real malware families (incl. KRBanker); auto-destructive set == the known
+  tripwires.
+
+**Not verified / not done:** Stage C (live detonation → rescan → remediation) and Stage D
+(WebView2-fix confirmation) are written but were never run to completion; the browser
+click-through; the USB foreign-box field test; the NSIS installer (built, never installed);
+`data/coverage_matrix.json` (last regenerated 2026-07-25 at 130 phases — behind the engine);
+`tools/Build-Release.ps1` has no `native-app` awareness; the Three.js 3D GUI is not started.
+
+### 2026-07-02 (historical)
 
 **Proven live:** the engine-split architecture end-to-end in the browser (2026-07-01 DEEP run:
 115 phases contiguous, 0 recovered errors, ~9.5 min, clean exit); phase-counter fix `c0477ae`
@@ -148,12 +201,36 @@ now also eyeballing the live finding ticker/chips + clean banner glyphs. Runbook
 ## 7. Roadmap
 
 ### Now (current/next session)
-- **Live GUI click-through** (user-driven; runbook in `HANDOFF.md`) — closes the last
-  acceptance gap and visually confirms the new live-finding stream + UTF-8 banners.
-  Now also needs to confirm the CSRF-token handshake (the GUI fetches `/api/csrf` at boot;
-  a 403 on any POST means the token or the origin lock is misbehaving) and the three
-  previously-inert launchpad toggles (snapshot / baseline diff / CSV export).
-- **USB field test on a real foreign box** — the only other open acceptance item.
+- **Finish the sandbox test matrix** — Stage C (detonate KRBanker offline → DEEP rescan → two
+  properly sequenced `/api/remediate` calls, one on tripwires and one probing a `protected`
+  finding) and Stage D (confirm the WebView2 preflight fires on a WebView2-less box). Both
+  harnesses exist; neither has completed a run. **One Windows Sandbox VM at a time**, and confirm
+  no `vmmemWindowsSandbox` is alive before launching (see `CLAUDE.md` harness rules).
+- **Decide the fate of the uncommitted working tree** (engine + `native-app` changes) and whether
+  `session12/review-remediation-ws6` merges to `main`.
+- **Live GUI click-through** (user-driven; runbook in `HANDOFF.md`) — still open, and now also
+  needs to confirm the CSRF-token handshake (the GUI fetches `/api/csrf` at boot; a 403 on any POST
+  means the token or the origin lock is misbehaving), the three previously-inert launchpad toggles
+  (snapshot / baseline diff / CSV export), and the same pass inside the **native shell**.
+- **USB field test on a real foreign box** — still open.
+- **Native track (the stated priority):** the Three.js 3D GUI redesign that Milestone 1 is a
+  stepping stone to; real branding (the icon is a placeholder); `tools/Build-Release.ps1` /
+  `README.md` decision on whether the `.exe` replaces or coexists with `Launch-GUI.bat`.
+- **`data/coverage_matrix.json` re-audit** — regenerated 2026-07-25 at 130 phases, so it no longer
+  matches the engine.
+
+### Done 2026-07-26 — WS7/8/9 detections, remediation correctness, native shell
+Branch `session12/review-remediation-ws6` (**not merged to `main`**). Commits `c578c25`..`bb2a22d`:
+**WS7/WS8/WS9** (18 further MITRE techniques, all fractional-phase, 0 new auto-destructive findings
+from any of them) · **tri-state gone/present/unknown** remediation verification for
+DeleteFile/DeleteRegKey/Quarantine in **both** paths, then DeleteReg in `FixMode.ps1` ·
+**tamper-evident hash-chained remediation audit log** (`reports/remediation_audit_*.jsonl`, both
+paths) · **6 RunCmd command-injection fixes** (unescaped single quote, 2 of them on auto-selected
+CRITICAL paths) · rule-#1 auto-kill FP fixes + self-allowlist anchoring · LNK-downloader / LOLBin /
+reverse-shell STRONG-vs-WEAK severity splits · **`native-app/` Tauri shell (Milestone 1)** plus its
+hardening (Job Object kill-on-close, poison-safe locks, handle-leak fix) and the WebView2 preflight.
+Five independent audit rounds drove most of the fixes. `data/coverage_matrix.json` was **not**
+regenerated for WS7-9 — it is stale by design-debt, not by decision.
 
 ### Done 2026-07-22 — full review remediation + WS6 detections + UX pass
 `REVIEW_FINDINGS_2026-07-22.md` applied in full (all 56 findings) — see `CHANGELOG.md` for the
@@ -259,13 +336,17 @@ the dev machine) per the item below.
   enumerations (Phases 3/4/44/99/99.5/102); Phase 56's WMI-vs-Get-Process rootkit delta stays on
   raw same-instant enumerations by design. Service lookups audited: only one full `Win32_Service`
   enum per scan (Phase 111 unquoted-path privesc) + cheap name-filtered `Get-Service` calls —
-  nothing left to cache there. Remaining WS4: per-file signature lookups; target a sub-2-minute QUICK.
-- **WS5 reporting**: richer executive summary, per-tactic MITRE rollup, trend/diff view
-  across baselines (`-Baseline` is already wired).
-- **Scheduled scans productized**: `-Schedule` + SMTP delivery hardening, plus a GUI panel.
-- **Build**: zip-with-BAT distribution is DONE (`tools/Build-Release.ps1`). PyInstaller for
-  the parked Python server stays deprioritized; optional polish: `assets/icon.ico`, a signed
-  launcher, or PS2EXE if SmartScreen friction ever matters.
+  nothing left to cache there. **Per-file signature caching DONE 2026-07-25** (`c578c25`:
+  `$global:SIG_CACHE` + `$global:AUTHSIG_CACHE`, same `ZB_NOCACHE` kill-switch). The sub-2-minute
+  QUICK target has not been re-measured since.
+- **WS5 reporting**: executive summary, per-tactic MITRE rollup and baseline trend/compare shipped
+  2026-07-25 (`c578c25`, server-rendered report + `/api/report/diff`). Open: fleet-level rollups.
+- **Scheduled scans productized**: `-Schedule` + SMTP delivery hardening. `GET|POST /api/schedule`
+  and its GUI panel exist (hardened in the 2026-07-22 round-2 pass); delivery hardening is open.
+- **Build**: two distribution paths now — `tools/Build-Release.ps1` (portable zip + `Launch-GUI.bat`,
+  **no `native-app` awareness yet**) and the Tauri NSIS installer (`native-app`, built but never
+  installed/tested). PyInstaller for the parked Python server stays deprioritized. Open: real
+  branding to replace the placeholder icon, code signing / SmartScreen.
 - **Fleet ideas** (multi-box): central drop-folder for baselines + a compare view.
 
 ## 8. Doc map
@@ -274,7 +355,13 @@ the dev machine) per the item below.
 |---|---|
 | `BLUEPRINT.md` | This file — product shape + roadmap. Start here. |
 | `CLAUDE.md` | Hard rules + subsystem reference for anyone editing code. |
-| `HANDOFF.md` | Current session state + the live-GUI runbook. |
+| `HANDOFF.md` | Per-session state + the live-GUI runbook. Newest session block on top. |
 | `CHANGELOG.md` | Dated narrative of every fix/tuning round. |
-| `NEXT_STEPS.md` / `UPGRADE_PLAN.md` | Historical work plans (superseded by §7; kept for context). |
-| `_python/README_CLAUDE_CODE.md` | Parked Python server spec. |
+| `README.md` | Operator-facing: quick start, deployment, CLI, GUI features. |
+| `native-app/README.md` | Tauri native shell — build, run, debug, known gotchas. |
+| `.claude/skills/ingest-malware-alert/SKILL.md` | Workflow for turning an AV/EDR alert into coverage. |
+| `NEXT_STEPS.md` / `UPGRADE_PLAN.md` / `NIGHT_RUN_PLAN.md` | Historical work plans (superseded by §7; kept for context — **do not action their task lists**). |
+| `REVIEW_FINDINGS_2026-07-22.md` | Closed review — all 56 findings applied 2026-07-22. Historical. |
+| `TIME_LOG.md` | Effort estimate generated 2026-07-03; a point-in-time snapshot. |
+| `client_alerts/` | Sanitized real-world alert intake (see the ingest skill). |
+| `_python/README_CLAUDE_CODE.md` | Parked Python server spec — its task list is NOT current work. |

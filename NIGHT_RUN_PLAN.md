@@ -1,5 +1,11 @@
 # Overnight Autonomous Run — Game Plan (2026-06-25, ~03:00)
 
+> ### ⚠ HISTORICAL — a one-off plan for the night of 2026-06-25. Completed; nothing here is pending.
+> The `Get-RegVal` / `Get-WinEventSafe` wrappers described below shipped and are now hard rules in
+> `CLAUDE.md`. The status files it points at (`reports/NIGHT_RUN_RESULT.txt`,
+> `reports/.night_run_status`) **no longer exist** — do not go looking for them, and do not treat
+> this file as a runbook. Current state lives in `BLUEPRINT.md` §6/§7 and `HANDOFF.md`.
+
 You went to bed. I have admin rights on this shell, so **I am driving the validation myself** —
 you do **not** need to launch anything. Here's the plan and where to look in the morning.
 

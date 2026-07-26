@@ -6,6 +6,90 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-26 — documentation audit + the sandbox/harness lessons that produced new rules
+
+### Documentation audit (`.md` only — no code or data files touched)
+
+Every markdown file in the repo was checked against the actual code. Corrected:
+
+- **"~115 phases" was a count claim, and it was wrong.** 115 is the DEEP/PARANOID/STEALTH *label
+  ceiling* (`$PhasePlan.Max`), not the number of phases that run. Because every expansion since WS2
+  has been inserted as a **fractional** phase number, the engine now emits **~140 distinct phase
+  headers** (Phases-1: 70 · Phases-2: 40 · Phases-3: 30) while the highest label is still 115.
+  QUICK is the one mode where ceiling == count (exactly 30 ungated headers, verified by AST). The
+  ceiling/count distinction is now an explicit `CLAUDE.md` section ("Phase numbering + counts"), so
+  nobody "fixes" the progress bar by renumbering phases.
+- **`CLAUDE.md`'s fractional-phase list was 5 entries long; there are 24** (10.5, 10.6, 17.5, 21.5,
+  22.5, 32.5, 36.5, 42.5, 44.5, 45.5, 49.5, 55.5, 68.5, 74.5–74.9, 82.5, 87.5, 88.5, 97.5, 99.5,
+  100.5), all present in `data/mitre_mapping.json`'s `phase_map`.
+- **Six live HTTP routes were undocumented** — `/api/csrf`, `/api/findings`, `/api/reports`,
+  `/api/report/diff`, `/api/schedule` (GET+POST), `/favicon.ico`. An auditor reading the docs would
+  have concluded the route table was smaller than it is.
+- **`native-app/` and `tools/` were absent from the `CLAUDE.md` file map entirely**, as were
+  `gui/static/vendor/` and `fx-preview.html`. Added, along with a warning that
+  `native-app/src-tauri/target/{debug,release}/engine-root/` holds full **build copies** of the
+  engine/server/gui that repo-wide greps hit and that must never be edited.
+- **`BLUEPRINT.md` contradicted itself on the regression metric** — §4 said the auto-destructive
+  baseline was 39, §5's quality gate said "target: 52". Neither is a constant: the count is
+  box-dependent. §4 now lists the real reference points (52 → 39 → 25 dev-box, 100 on an all-time
+  dev-box run of which 87 are Phase-10 TEMP hits, 6 in a clean sandbox) and requires stating which
+  machine a number came from.
+- **`CLAUDE.md` still described `scan_state` as throttled to `%12` log lines.** The phase-change
+  emit (`c0477ae`) has been in for weeks; the doc was describing the pre-fix behaviour.
+- **`README.md` described QUICK as "phases 1-30".** QUICK is a fixed 30-phase *subset*, not a range.
+- Status/roadmap sections in `CLAUDE.md`, `BLUEPRINT.md` and `HANDOFF.md` still ended at
+  2026-07-22 and asserted the browser click-through and USB test were the only open items. Three
+  sessions have shipped since (WS7/8/9, the native Tauri shell, sandbox malware testing); the open
+  list is longer, and items that were never run to completion are now explicitly marked unverified
+  rather than implied done.
+- `NIGHT_RUN_PLAN.md`, `REVIEW_FINDINGS_2026-07-22.md`, `TIME_LOG.md` and
+  `_python/README_CLAUDE_CODE.md` all read as live task lists; each now carries a banner saying it
+  is historical/parked, because a fresh session actioning any of them would waste a session or
+  re-do finished work.
+
+### New durable rules (all confirmed live on 2026-07-26)
+
+- **A BOM-less `.ps1` containing an em dash does not run — it does not even parse.** PS 5.1 decodes
+  the file as Windows-1252, so the em dash's trailing byte becomes **U+201D**, a curly quote that
+  PS 5.1 honours as a real string delimiter. The file fails to parse, **zero statements execute, and
+  not even the first log line is written.** Combined with a hidden-window `LogonCommand` (no console,
+  no redirect) this is indistinguishable from a hang, and it silently cost an entire session of
+  debugging. Rule: harness scripts are ASCII + UTF-8 BOM, parse-checked on real `powershell.exe` 5.1
+  before being run, and anything driving a hidden window redirects stdout **and** stderr to a file.
+- **Windows Sandbox does not reap its VM when you kill its processes.** `vmmemWindowsSandbox`
+  survives indefinitely, and because Sandbox is single-instance the *next* launch silently never
+  boots — which looks exactly like the harness hanging. `Restart-Service vmcompute -Force` clears it.
+  Verify no sandbox VM is alive before launching another.
+- **theZoo malware archives are password-protected (`infected`) and `tar` cannot decrypt them — it
+  writes 0-byte files and exits successfully.** A test that "places malware" and then reports a
+  clean scan proves nothing unless it **asserts non-zero size and expected magic bytes** first. Use
+  `7za` (bootstrapped via `7zr` + the `7zXXXX-extra.7z` package) with `-pinfected`; `7zr.exe`
+  handles only `.7z`, never `.zip`.
+- **`POST /api/remediate` replies `{"status":"started"}` asynchronously.** The HTTP response says
+  nothing about whether anything was remediated — verify on the filesystem/registry and in
+  `reports/server_events_*.log` (`applied`/`failed`/`skipped`/`blocked`) plus
+  `reports/remediation_audit_*.jsonl`. Two calls back-to-back return 400
+  `{"error":"remediation already running"}`; sequence them ~30s apart.
+- **`Invoke-RestMethod` sends no `Origin`/`Referer`**, so `Test-RequestAllowed` classifies it as a
+  non-browser client: headless API scripting needs no CSRF token. Never weaken the browser-facing
+  gate to make a harness work.
+- **The case-insensitive-shadow rule now names the worst case.** All engine modules dot-source into
+  ONE scope, so a phase-local `$auto` *is* the loader's `[switch]$Auto` — the flag `Summary.ps1`
+  tests to decide whether to `[Environment]::Exit(0)` instead of falling through into `FixMode.ps1`'s
+  interactive `Read-Host`. Clobbering it hangs every server-driven scan with no output and no error.
+  Caught in review, never shipped. Same hazard for every other loader `param()` name.
+
+### Noted, not fixed (no code was touched)
+
+`data/coverage_matrix.json` is stale — regenerated 2026-07-25 at `phase_count: 130`, so it predates
+WS7/8/9 and the current working tree. `tools/Build-Release.ps1` has no `native-app` awareness.
+`ZeroBreach-V23.ps1`'s comment-based help still says `-OutDir` defaults to the Desktop; the code
+defaults to `reports/`. `Show-PhaseHeader`'s `$global:CURRENT_PHASE_NUM / $global:TOTAL_PHASES`
+percentage over-counts in FULL/DEEP for the same ceiling-vs-count reason (only reachable through
+`FixMode.ps1`'s WinForms progress bar, and clamped by `[Math]::Min(100, …)`).
+
+---
+
 ## 2026-07-22 — full-repo review remediation (all 56 findings) + WS6 detections + UX pass
 
 Applied `REVIEW_FINDINGS_2026-07-22.md` in full — every CRITICAL/HIGH/MEDIUM/LOW finding, the
