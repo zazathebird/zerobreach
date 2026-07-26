@@ -381,6 +381,89 @@ logic. Mapping tables and alias lists belong in `data/`, not in `.ps1` (AMSI rul
 - **Hacktool / dual-use** — flag with vendor/publisher context; these are the classic "the MSP's own
   tech installed it" false positives.
 
+### 5.4 Universal paste ingestion — "throw anything at it"
+
+The operator pastes whatever the ticket contains: Autotask/Datto ticket bodies, a JSON export, EDR
+output, RocketCyber SOC notes, or all three concatenated. The tool must take the blob, find what is
+relevant, and produce a game plan. **No format negotiation with the user.**
+
+**Pipeline:** `raw blob` → *format sniff* (JSON / CSV / XML / key-value / log lines / prose — a blob
+may contain several, so sniff per-region, never whole-file) → *structured parse where possible* →
+*free-text extraction over the remainder* → *entity normalisation + dedup* → *noise suppression* →
+*relevance scoring* → `ZBAlert[]` → scan plan.
+
+**Retain, don't destroy.** The raw paste is provenance: it proves where an indicator came from, and
+when extraction definitions improve you will want to re-parse old tickets. Park the unmatched
+remainder next to the report; never delete it. (It inherits the sensitivity rules in §5.5.)
+
+**Extraction definition catalogue** — all patterns live in `data/` JSON, never in `.ps1` (AMSI), so
+they are editable without touching the engine:
+
+- **Hashes** — SHA256/SHA1/MD5, with surrounding-context capture; reject hash-shaped strings that are
+  actually GUIDs, JWT segments, git SHAs or base64.
+- **File paths** — Windows absolute, UNC (`\\host\share`), env-var forms (`%TEMP%`,
+  `$env:APPDATA`), quoted paths with spaces, paths embedded in command lines, Defender resource
+  prefixes (`file:_`, `webfile:_`, `containerfile:_`, `process:_`, `regkey:_`, `runkey:_`).
+- **Registry keys** — `HKLM\`/`HKCU\`/`HKU\`/`HKEY_*`, and PowerShell `HKLM:\` forms.
+- **Network** — IPv4/IPv6, CIDR, domains, URLs, and **defanged forms** (`hxxp`, `[.]`, `(dot)`,
+  `[:]`, `\.`) which SOC tools emit constantly and which naive regexes miss.
+- **Threat names** — Defender grammar `Type:Platform/Family.Variant!suffix` decomposed into the
+  `ZBAlert` fields; plus vendor label forms from SentinelOne, CrowdStrike, Sophos, ESET, Malwarebytes,
+  and RocketCyber rule names.
+- **Confidence suffixes** — `!ml`, `!MTB`, `!MSR`, `!rfn`, `!bit`, `!lnk`, `!ibt`, `!dha` — each mapped
+  to a confidence tier that gates grading (§5.0).
+- **PUA/PUP grammar** — `PUA:`/`PUP.`/`Riskware`/`not-a-virus:` prefixes, which must route to the
+  PUP class and its softer remediation posture (§5.2).
+- **MITRE** — `T1234`, `T1234.001`, tactic names; resolved via `data/mitre_mapping.json`.
+- **CVE** — `CVE-YYYY-NNNNN` → patch-hygiene checks.
+- **Process / service / task / mutex names**, **command lines**, **base64 blobs** (decode-and-rescan),
+  **ports**, **usernames / SIDs / SAM names**, **hostnames / FQDNs**, **MAC addresses**, **email
+  addresses**, **certificate thumbprints**, **GUIDs/CLSIDs**, **ticket IDs**, and **timestamps** in
+  the many formats these platforms emit (ISO-8601, US `M/d/yyyy h:mm tt`, epoch, FILETIME).
+- **Vendor field aliases** — one alias table mapping e.g. `threatName`/`ThreatName`/`detection_name`/
+  `RuleName`/`malwareName` → `threat_name`; same for path, hash, host, user, action. Adding a vendor
+  is a data edit.
+
+**Noise suppression** (so the game plan is not 400 lines of the operator's own infrastructure):
+RFC1918/loopback/link-local IPs, the org's own domains and hostname patterns, Microsoft/vendor signer
+names, known-good RMM paths (`Test-VendorTrusted`), the ticketing platform's own URLs, and boilerplate
+signature blocks. Suppressed items are *demoted and kept*, never silently dropped.
+
+**Relevance scoring** — each extracted entity carries `(value, type, confidence, provenance-offset)`.
+An entity that appears in a structured field outranks the same value scraped from prose. The game
+plan is ordered by score, and every line states which phase/check will act on it — including
+**"no coverage for this"**, stated explicitly rather than omitted.
+
+### 5.5 Sensitive data handling (operator requirement)
+
+Pasted tickets routinely contain hostnames, internal IPs, MAC addresses, usernames and client
+identifiers that must not end up in a report that gets attached to a ticket or emailed onward.
+
+**First, the reassurance:** ZeroBreach runs entirely locally and transmits nothing. Pasting into the
+tool is not disclosure. **The exposure is the exported report** — that is what gets controlled.
+
+**The trap to avoid:** naive redaction destroys the evidence. A malicious external IP or C2 domain
+*is* the finding. Redaction must therefore classify, not blanket-match.
+
+| Class | Examples | Treatment |
+|---|---|---|
+| **Internal / PII** | RFC1918 + loopback IPs, MAC addresses, local hostnames, usernames, SIDs, email addresses, client/site names, ticket IDs | **Pseudonymise by default** |
+| **Threat indicator** | public IPs, C2 domains, payload URLs, hashes, malware paths | **Never redacted** — they are the answer |
+| **Ambiguous** | a public IP that is also the client's own WAN address; a user profile path that is both PII and the payload location | Pseudonymise the *identity* component, keep the *structural* one: `C:\Users\<USER-1>\AppData\Local\Temp\evil.exe` |
+
+**Pseudonymise, don't delete.** Replace with stable tokens — `HOST-1`, `USER-2`, `IP-3` — so the
+analytical value survives: the reader can still see that the same host appears in four findings
+without learning its name. Blanket `[REDACTED]` destroys that correlation.
+
+- A **local-only key map** (token → real value) is written beside the report, clearly marked
+  sensitive, so the tech can de-anonymise locally. It is never embedded in the report itself.
+- **Redaction is ON by default for every outbound artifact** — HTML/CSV export, clipboard copy, the
+  emailed scheduled-scan report — with a conscious, logged opt-out for internal use.
+- The parked raw paste (§5.4) and the key map are both **sensitive artifacts**: same folder
+  treatment as the quarantine vault, excluded from any "send report" path.
+- Redaction happens at the **render/export boundary**, not at ingestion — the engine reasons over
+  real values, and only the output is sanitised. Redacting at ingestion would break matching.
+
 ### 5.3 Triage entry point
 
 - Engine: new params (e.g. `-TriageAlert <file|json>`, `-TriageThreat`, `-TriagePath`, `-TriageHash`)
