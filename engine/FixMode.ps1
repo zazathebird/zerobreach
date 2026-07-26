@@ -621,6 +621,12 @@ function Invoke-FixMode {
     $fixLog = [System.Collections.Generic.List[string]]::new()
     $fixOK = 0; $fixFail = 0; $fixSkip = 0
 
+    $auditStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+    $global:AuditLogPath = Join-Path $OUT_ROOT "remediation_audit_$auditStamp.jsonl"
+    Add-AuditEntry -Id 'GENESIS' -ThreatType '' -Severity '' -Action '' -Target "$REPORT_PATH" `
+        -Result 'session-start' -Detail "$($SelectedFindings.Count) action(s) selected; host=$HOST_NAME user=$USER_NAME"
+    Out-Typewriter "AUDIT TRAIL: $($global:AuditLogPath)" "INFO"
+
     foreach ($f in $SelectedFindings) {
         $ts = (Get-Date).ToString("HH:mm:ss.fff")
         $d = $f.Description; if ($d.Length -gt 60) { $d = $d.Substring(0,57)+"..." }
@@ -737,6 +743,11 @@ function Invoke-FixMode {
 
         if ($ok -and $f.FixAction -ne "Info") { $fixOK++ }
         $fixLog.Add("[$($f.Severity)] $($f.ThreatType) | $($f.Description) | $($f.FixAction) | $(if($ok){'OK'}else{'FAILED'})")
+        # Derived, not tracked separately: matches the $fixOK/$fixFail counting rule immediately
+        # above exactly, so the audit trail can never disagree with the run summary.
+        $auditResult = if (-not $ok) { 'failed' } elseif ($f.FixAction -eq 'Info') { 'skipped' } else { 'applied' }
+        Add-AuditEntry -Id "$($f.ID)" -ThreatType "$($f.ThreatType)" -Severity "$($f.Severity)" -Action "$($f.FixAction)" `
+            -Target "$($f.FixParam)" -Result $auditResult -Detail "$($f.Description)"
         if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 150 }
     }
 
@@ -768,6 +779,7 @@ function Invoke-FixMode {
     Write-Host "  INFO / SKIPPED    : " -NoNewline -ForegroundColor DarkGray; Write-Host $fixSkip -ForegroundColor DarkGray
     Write-Host "  SNAPSHOT          : " -NoNewline -ForegroundColor DarkGray; Write-Host $SNAPSHOT_PATH -ForegroundColor Yellow
     Write-Host "  FULL REPORT       : " -NoNewline -ForegroundColor DarkGray; Write-Host $REPORT_PATH   -ForegroundColor Cyan
+    Write-Host "  AUDIT TRAIL       : " -NoNewline -ForegroundColor DarkGray; Write-Host $global:AuditLogPath -ForegroundColor Cyan
     Write-Host ("─"*80) -ForegroundColor DarkCyan
     if ($fixFail -gt 0 -or $global:VerifyFails -gt 0) {
         Write-Host "  STATUS: REBOOT RECOMMENDED — PENDING DELETIONS QUEUED." -ForegroundColor Yellow

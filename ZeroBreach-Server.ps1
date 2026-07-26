@@ -1293,6 +1293,43 @@ function Test-RPathGone {
     }
 }
 
+# Tamper-evident hash-chained remediation audit trail — one JSONL file per remediation run,
+# separate from (and unconditional on) the optional registry rollback snapshot above: the
+# snapshot lets an operator UNDO, this lets anyone AUDIT what was done and to what, after the
+# fact, without trusting the log stream alone (a compromised/crashed process can't quietly edit
+# an earlier line without the chain breaking from that point forward). Each entry's hash covers
+# the previous entry's hash plus this entry's own fields in a fixed key order — recomputing it
+# from field 2 onward is how a reviewer verifies the file was not edited after being written.
+$script:RAuditLogPath = $null
+$script:RAuditPrevHash = ('0' * 64)
+$script:RAuditSeq = 0
+function Add-RAuditEntry {
+    param([string]$Id, [string]$ThreatType, [string]$Severity, [string]$Action, [string]$Target, [string]$Result, [string]$Detail)
+    if (-not $script:RAuditLogPath) { return }
+    $script:RAuditSeq++
+    $entry = [ordered]@{
+        seq = $script:RAuditSeq
+        ts = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+        id = $Id; threatType = $ThreatType; severity = $Severity
+        action = $Action; target = $Target; result = $Result; detail = $Detail
+        prevHash = $script:RAuditPrevHash
+    }
+    $json = $entry | ConvertTo-Json -Compress
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try { $hashBytes = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($script:RAuditPrevHash + $json)) }
+    finally { $sha256.Dispose() }
+    # [Convert]::ToHexString is .NET 5+ only — unavailable on live powershell.exe 5.1's .NET
+    # Framework runtime (CLAUDE.md: validate on 5.1, not a pwsh-7 simulation). Manual hex join
+    # runs identically on both.
+    $hash = -join ($hashBytes | ForEach-Object { $_.ToString('x2') })
+    $entry.hash = $hash
+    $line = ($entry | ConvertTo-Json -Compress) + [Environment]::NewLine
+    for ($i = 0; $i -lt 3; $i++) {
+        try { [System.IO.File]::AppendAllText($script:RAuditLogPath, $line); break } catch { Start-Sleep -Milliseconds 15 }
+    }
+    $script:RAuditPrevHash = $hash
+}
+
 # SAFETY: hard backstop — mirror of Test-ProtectedTarget (main thread). The tool must NEVER
 # damage the system, so even a manually-selected finding is refused if it touches a protected
 # resource. Keep in sync with the main-thread copy in Get-EngineReportFindings's vicinity.
@@ -1317,6 +1354,14 @@ try {
     $idset = @{}; foreach ($id in @($FixIds)) { $idset["$id"] = $true }
     $sel = @($report.Findings) | Where-Object { $idset.ContainsKey("$($_.ID)") }
     RLog ("[REMEDIATE] {0} action(s) selected from {1}." -f $sel.Count, [System.IO.Path]::GetFileName($ReportPath)) 'INFO'
+
+    if (@($sel).Count -gt 0) {
+        $auditStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+        $script:RAuditLogPath = Join-Path $RemReports "remediation_audit_$auditStamp.jsonl"
+        Add-RAuditEntry -Id 'GENESIS' -ThreatType '' -Severity '' -Action '' -Target "$([System.IO.Path]::GetFileName($ReportPath))" `
+            -Result 'session-start' -Detail "$(@($sel).Count) action(s) selected; host=$env:COMPUTERNAME user=$env:USERNAME"
+        RLog "[REMEDIATE] Audit trail: $($script:RAuditLogPath)" 'INFO'
+    }
 
     # ── Rollback snapshot ──────────────────────────────────────────────────────
     # The console fix mode has always taken one before touching anything; GUI-driven
@@ -1368,6 +1413,8 @@ try {
         $why = Test-RProtected "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
         if ($why) {
             RLog "[BLOCKED] protected ($why) — refusing $($f.FixAction): $desc" 'POSSIBLE'
+            Add-RAuditEntry -Id "$($f.ID)" -ThreatType "$($f.ThreatType)" -Severity "$($f.Severity)" -Action "$($f.FixAction)" `
+                -Target "$($f.Target)" -Result 'blocked' -Detail "protected: $why"
             $blocked++
             continue
         }
@@ -1483,6 +1530,11 @@ try {
             RLog "  -> ERROR: $($_.Exception.Message)" 'CRITICAL'; $failed++
         }
         if ($ok -and ("$($f.FixAction)" -notin @('Info','None',''))) { $applied++ }
+        # Derived, not tracked separately: matches the $applied/$failed/$skipped counting rule
+        # immediately above exactly, so the audit trail can never disagree with the run summary.
+        $auditResult = if (-not $ok) { 'failed' } elseif ("$($f.FixAction)" -in @('Info','None','')) { 'skipped' } else { 'applied' }
+        Add-RAuditEntry -Id "$($f.ID)" -ThreatType "$($f.ThreatType)" -Severity "$($f.Severity)" -Action "$($f.FixAction)" `
+            -Target "$($f.Target)" -Result $auditResult -Detail $desc
     }
 } catch {
     RLog "[REMEDIATE] FATAL: $($_.Exception.Message)" 'CRITICAL'
@@ -1491,8 +1543,9 @@ try {
     # snapshot: the rollback file's path. $RemState.SnapshotPath was written and never read, so
     # the Report view's "rollback snapshot: …" line could never render and the one piece of
     # information the operator needs after a bad PURGE only ever appeared in a transient log line.
-    REnqueue @{ type='remediation_complete'; applied=$applied; failed=$failed; skipped=$skipped; blocked=$blocked; snapshot="$($RemState.SnapshotPath)" }
+    REnqueue @{ type='remediation_complete'; applied=$applied; failed=$failed; skipped=$skipped; blocked=$blocked; snapshot="$($RemState.SnapshotPath)"; auditLog="$($script:RAuditLogPath)" }
     RLog "[REMEDIATE] Complete — applied:$applied  failed:$failed  skipped:$skipped  blocked(protected):$blocked" 'OK'
+    if ($script:RAuditLogPath) { RLog "[REMEDIATE] Audit trail closed: $($script:RAuditLogPath)" 'INFO' }
 }
 '@
 

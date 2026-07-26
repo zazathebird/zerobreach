@@ -1215,6 +1215,36 @@ function Test-PathGone {
         return 'unknown'
     }
 }
+# Tamper-evident hash-chained remediation audit trail — console-mode mirror of
+# ZeroBreach-Server.ps1's Add-RAuditEntry/Test-RPathGone pair. Kept in sync deliberately: the GUI
+# rollback snapshot was missing entirely until the two paths were audited together (2026-07-22),
+# so any safety/audit feature added to one remediation path now always gets its console twin.
+$global:AuditLogPath = $null
+$global:AuditPrevHash = ('0' * 64)
+$global:AuditSeq = 0
+function Add-AuditEntry {
+    param([string]$Id, [string]$ThreatType, [string]$Severity, [string]$Action, [string]$Target, [string]$Result, [string]$Detail)
+    if (-not $global:AuditLogPath) { return }
+    $global:AuditSeq++
+    $entry = [ordered]@{
+        seq = $global:AuditSeq
+        ts = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss.fffK')
+        id = $Id; threatType = $ThreatType; severity = $Severity
+        action = $Action; target = $Target; result = $Result; detail = $Detail
+        prevHash = $global:AuditPrevHash
+    }
+    $json = $entry | ConvertTo-Json -Compress
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    try { $hashBytes = $sha256.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($global:AuditPrevHash + $json)) }
+    finally { $sha256.Dispose() }
+    $hash = -join ($hashBytes | ForEach-Object { $_.ToString('x2') })   # manual hex join — [Convert]::ToHexString is .NET 5+ only, unavailable on live 5.1
+    $entry.hash = $hash
+    $line = ($entry | ConvertTo-Json -Compress) + [Environment]::NewLine
+    for ($i = 0; $i -lt 3; $i++) {
+        try { [System.IO.File]::AppendAllText($global:AuditLogPath, $line); break } catch { Start-Sleep -Milliseconds 15 }
+    }
+    $global:AuditPrevHash = $hash
+}
 # Registry-key last-write time. The registry provider's RegistryKey objects expose no
 # LastWriteTime property (.NET has none) — reading it needs the RegQueryInfoKey Win32 API.
 # Read-only query; returns a local [datetime] or $null (missing key / access denied / API
