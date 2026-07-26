@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ZeroBreach",
+  "version": "0.1.0",
+  "identifier": "com.zerobreach.krakenconsole",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5183",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "boot",
+        "title": "ZeroBreach — Kraken Console",
+        "width": 620,
+        "height": 380,
+        "resizable": false,
+        "center": true,
+        "decorations": true,
+        "url": "index.html"
+      }
+    ],
+    "security": {
+      "csp": null
+    },
+    "withGlobalTauri": false
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../../ZeroBreach-Server.ps1": "engine-root/ZeroBreach-Server.ps1",
+      "../../ZeroBreach-V23.ps1": "engine-root/ZeroBreach-V23.ps1",
+      "../../engine/": "engine-root/engine/",
+      "../../gui/": "engine-root/gui/",
+      "../../data/": "engine-root/data/"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
+  }
+}

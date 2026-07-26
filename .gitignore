@@ -20,6 +20,18 @@ build/
 # delete once those are ported. Ignored so it never gets committed into the outer repo.
 zerobreach/
 
+# Native Tauri shell (native-app/) — Rust/Node build output, never source.
+# Icons ARE committed (tauri.conf.json's bundle.icon requires them present to build) —
+# only android/ios variants `tauri icon` also generates are excluded, this app is Windows-only.
+# Cargo.lock IS committed too — this is an application, not a library; pinned deps matter for
+# a security tool's supply-chain consistency.
+native-app/node_modules/
+native-app/dist/
+native-app/src-tauri/target/
+native-app/src-tauri/icons/android/
+native-app/src-tauri/icons/ios/
+native-app/src-tauri/gen/
+
 # OS noise
 Thumbs.db
 desktop.ini

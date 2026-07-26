@@ -1,0 +1,24 @@
+[package]
+name = "zerobreach-native"
+version = "0.1.0"
+description = "ZeroBreach Kraken Console — native shell"
+edition = "2021"
+rust-version = "1.77"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "net"] }
+# Strips the \\?\ extended-length-path prefix that resource_dir()/canonicalize() return on
+# Windows — ZeroBreach-Server.ps1 was never written expecting to see that prefix in
+# $PSScriptRoot-derived paths, and it broke every route (500 on GET / — see main.rs).
+dunce = "1"
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+strip = true

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ZeroBreach — Kraken Console</title>
+  <style>
+    :root { color-scheme: dark; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      background: #0a0a0f; color: #7fe3ff;
+      font-family: 'Consolas', 'Cascadia Code', monospace;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden;
+    }
+    #boot {
+      text-align: center;
+      max-width: 640px;
+    }
+    #boot h1 {
+      font-size: 1.4rem; letter-spacing: 0.35em; margin: 0 0 1.5rem;
+      text-shadow: 0 0 12px #00c8ff, 0 0 28px #00c8ff44;
+    }
+    #status { font-size: 0.85rem; color: #58a; min-height: 1.4em; }
+    #err { color: #ff5f5f; margin-top: 1rem; font-size: 0.8rem; white-space: pre-wrap; display: none; }
+    .bar {
+      width: 320px; height: 3px; background: #0f2a33; margin: 1.2rem auto;
+      overflow: hidden; border-radius: 2px;
+    }
+    .bar::after {
+      content: ''; display: block; width: 40%; height: 100%;
+      background: linear-gradient(90deg, transparent, #00c8ff, transparent);
+      animation: sweep 1.3s ease-in-out infinite;
+    }
+    @keyframes sweep { 0% { transform: translateX(-120%); } 100% { transform: translateX(360%); } }
+  </style>
+</head>
+<body>
+  <div id="boot">
+    <h1>◈ Z E R O B R E A C H</h1>
+    <div class="bar"></div>
+    <div id="status">starting local engine…</div>
+    <pre id="err"></pre>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

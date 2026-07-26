@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <!--
+    ZeroBreach is an admin-only IR tool (registry/service/process/file remediation
+    across the whole machine) — every existing entry point (Launch-GUI.bat, the PS
+    loader, ZeroBreach-Server.ps1) already self-elevates via RunAs. Requesting
+    elevation directly in THIS exe's manifest means the process token is already
+    admin by the time main.rs spawns ZeroBreach-Server.ps1, so the server's own
+    IsInRole check passes immediately and it never re-launches itself — keeping the
+    Rust side's Child handle pointed at the actual listening process instead of an
+    orphaned pre-elevation one.
+  -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
+    <security>
+      <requestedPrivileges>
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" /> <!-- Windows 10/11 -->
+    </application>
+  </compatibility>
+  <!--
+    A custom app manifest REPLACES Tauri's generated one wholesale rather than merging with
+    it — dropping this dependency broke the build with a native "Entry Point Not Found:
+    TaskDialogIndirect" dialog before main() ever ran. Without it, Windows binds the process
+    to the old unthemed ComCtl32 v5 (which doesn't export TaskDialogIndirect at all); wry/tao
+    need the themed v6 controls. This is the exact dependency block Tauri's own default
+    manifest carries — reproduced here so the custom requireAdministrator manifest doesn't
+    silently lose it.
+  -->
+  <dependency>
+    <dependentAssembly>
+      <assemblyIdentity
+        type="win32"
+        name="Microsoft.Windows.Common-Controls"
+        version="6.0.0.0"
+        processorArchitecture="*"
+        publicKeyToken="6595b64144ccf1df"
+        language="*"
+      />
+    </dependentAssembly>
+  </dependency>
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
+    </windowsSettings>
+  </application>
+</assembly>
