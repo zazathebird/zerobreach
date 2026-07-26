@@ -83,9 +83,22 @@ $lolHits = $false
 # One WMI enumeration + case-insensitive name lookup instead of one filtered
 # Get-WmiObject query per LOLBIN name (was ~46 WMI round-trips per scan).
 $lolSet = @{}; foreach ($lb in $lolbins) { $lolSet["$lb.exe"] = $true }
+# msiexec/forfiles are routinely and legitimately invoked from AppData/Temp — every third-party
+# installer (Chrome, Zoom, Adobe, Slack, ...) stages its MSI under %TEMP% and runs
+# `msiexec /i "...\AppData\Local\Temp\...\installer.msi"`, and Temp-cleanup maintenance scripts
+# commonly shell `forfiles /p "...AppData\Local\Temp" ...` — a bare AppData/Temp substring match
+# on either is a routine healthy-box action, not evidence of abuse (rule #1, caught in adversarial
+# FP audit 2026-07-26). For those two specifically, AppData/Temp alone no longer qualifies; every
+# other LOLBin in the list keeps the original broader trigger (mshta/wscript/etc. running from a
+# staging path IS still comparatively unusual).
+$lolAppDataTempOnlyOk = @{ 'msiexec.exe' = $true; 'forfiles.exe' = $true }
+$lolStrongRe = 'http|\.js|Base64|scrobj|unc|\\\\'
+$lolWeakRe   = 'AppData|Temp'
 foreach ($p in (Get-ProcSnapshot)) {
     if (-not $lolSet.ContainsKey($p.Name)) { continue }
-    if ($p.CommandLine -match "http|AppData|Temp|\.js|Base64|scrobj|unc|\\\\") {
+    $lolStrongHit = ($p.CommandLine -match $lolStrongRe)
+    $lolWeakHit   = (-not $lolAppDataTempOnlyOk.ContainsKey($p.Name)) -and ($p.CommandLine -match $lolWeakRe)
+    if ($lolStrongHit -or $lolWeakHit) {
         $lolHits = $true
         Out-Decrypt -Text "LOLBIN: $($p.Name) PID:$($p.ProcessId)" -Prefix "  [LOLBIN] "
         Add-Finding -ID "LOLBIN_$($p.ProcessId)" -Phase "PHASE 4" -ThreatType "LoLBin Abuse" `

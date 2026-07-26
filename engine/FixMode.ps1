@@ -658,11 +658,12 @@ function Invoke-FixMode {
                     $pts = $f.FixParam -split "\|", 2
                     if ($pts.Count -eq 2) {
                         Remove-ItemProperty -Path $pts[0] -Name $pts[1] -Force -ErrorAction SilentlyContinue
-                        $chk = Get-ItemProperty -Path $pts[0] -Name $pts[1] -ErrorAction SilentlyContinue
-                        if ($null -eq $chk.($pts[1])) {
-                            Out-Typewriter "  -> REG VALUE DELETED: $($pts[1])" "GOOD"; $global:KillCount++; $ok = $true
-                        } else { Out-Typewriter "  -> REG DELETE FAILED." "WARN"; $fixFail++ }
-                    }
+                        switch (Test-RegValueGone $pts[0] $pts[1]) {
+                            'gone' { Out-Typewriter "  -> REG VALUE DELETED: $($pts[1])" "GOOD"; $global:KillCount++; $ok = $true }
+                            'present' { Out-Typewriter "  -> REG DELETE FAILED (still present): $($pts[1])" "WARN"; $fixFail++ }
+                            default { Out-Typewriter "  -> REG DELETE UNVERIFIABLE (key unreadable after removal attempt — likely a DENY ACE, which is itself a finding): $($pts[1])" "WARN"; $fixFail++ }
+                        }
+                    } else { Out-Typewriter "  -> MALFORMED REG TARGET." "WARN"; $fixFail++ }
                 }
                 "DeleteRegKey" {
                     $preState = Test-PathGone $f.FixParam

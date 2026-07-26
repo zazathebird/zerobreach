@@ -1203,9 +1203,18 @@ if ($PhasePlan.Universal) {
         if ($rp.Name -match "cmd|powershell|wscript|cscript|mshta|nc|ncat|socat|python|ruby|perl") {
             $foundShell = $true
             Out-ThreatBanner "LIVE REVERSE SHELL DETECTED" "$($rp.Name) PID:$($rp.Id) -> $($conn.RemoteAddress):$($conn.RemotePort)"
+            # Downgraded from CRITICAL+auto-KillProcess (2026-07-26 adversarial FP audit, rule #1):
+            # cmd.exe/powershell.exe/python.exe etc. holding ANY established connection to a
+            # non-default port is routine on a healthy dev/business box (a local dev API, a
+            # database client, a package-index mirror, a webhook test, VS Code's integrated
+            # terminal) — interpreter name + destination port alone isn't corroboration, and
+            # unlike file/artifact-based checks elsewhere in this engine, signature/path gating
+            # doesn't help here (an attacker abusing a real reverse shell uses the system's own,
+            # validly-signed cmd.exe/powershell.exe, not a dropped copy). Still surfaced
+            # prominently for review, never auto-killed.
             Add-Finding -ID "REVSHELL_$($rp.Id)" -Phase "PHASE 81" -ThreatType "Reverse Shell" `
-                -Severity $SEV_CRITICAL -Description "Live reverse shell: $($rp.Name) PID:$($rp.Id) -> $($conn.RemoteAddress):$($conn.RemotePort)" `
-                -Target "PID:$($rp.Id)" -FixAction "KillProcess" -FixParam $rp.Id -Group "Reverse Shells"
+                -Severity $SEV_HIGH -Description "Possible reverse shell (review — interpreter/shell processes routinely hold non-standard-port connections on healthy dev boxes, so this needs a human look before acting): $($rp.Name) PID:$($rp.Id) -> $($conn.RemoteAddress):$($conn.RemotePort)" `
+                -Target "PID:$($rp.Id)" -FixAction "Info" -Group "Reverse Shells"
             $global:RATHits++
         }
     }

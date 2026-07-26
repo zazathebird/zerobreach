@@ -1215,6 +1215,22 @@ function Test-PathGone {
         return 'unknown'
     }
 }
+# Console-mode mirror of ZeroBreach-Server.ps1's Test-RRegValueGone. A bare Get-ItemProperty
+# read returns $null on ANY failure, including a DENY ACE an attacker set on their own Run key
+# to survive exactly this kind of removal attempt — the same failure mode Get-RegVal's own
+# doc-comment describes, and the single worst lie this tool can tell (reporting persistence
+# removed when it is still armed). Only a missing KEY means the value is genuinely gone.
+function Test-RegValueGone {
+    param([string]$Path, [string]$Name)
+    try {
+        $k = Get-Item -LiteralPath $Path -ErrorAction Stop
+        if ($k.GetValueNames() -contains $Name) { return 'present' }
+        return 'gone'
+    } catch {
+        if (-not (Test-Path -LiteralPath $Path)) { return 'gone' }
+        return 'unknown'
+    }
+}
 # Tamper-evident hash-chained remediation audit trail — console-mode mirror of
 # ZeroBreach-Server.ps1's Add-RAuditEntry/Test-RPathGone pair. Kept in sync deliberately: the GUI
 # rollback snapshot was missing entirely until the two paths were audited together (2026-07-22),

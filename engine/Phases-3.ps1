@@ -497,11 +497,20 @@ if ($PhasePlan.Advanced) {
     # One WMI enumeration + name lookup instead of one filtered Get-WmiObject per
     # LOLBAS name. Map name -> original token so the finding ID keeps the $lb tag.
     $lolbasSet = @{}; foreach ($lb in $LOLBAS_EXPANDED) { $lolbasSet["$lb.exe"] = $lb }
+    # Same rule#1 fix as Phase 4 (2026-07-26 adversarial FP audit): msiexec/forfiles legitimately
+    # and routinely run from AppData/Temp (every third-party MSI installer stages there; Temp
+    # cleanup scripts shell forfiles against it) — a bare AppData/Temp match on either no longer
+    # qualifies alone. Every other LOLBAS-class binary keeps the original broader trigger.
+    $lolbasAppDataTempOnlyOk = @{ 'msiexec.exe' = $true; 'forfiles.exe' = $true }
+    $lolbasStrongRe = "http|https|ftp|Base64|EncodedCommand|IEX|DownloadString|/i:|scrobj|Net\.WebClient"
+    $lolbasWeakRe   = "AppData|Temp"
     if ($lolbasSet.Count -gt 0) {
         foreach ($p in (Get-ProcSnapshot)) {
             $lb = $lolbasSet[$p.Name]
             if (-not $lb) { continue }
-            if ($p.CommandLine -match "http|https|ftp|AppData|Temp|Base64|EncodedCommand|IEX|DownloadString|/i:|scrobj|Net\.WebClient") {
+            $lolbasStrongHit = ($p.CommandLine -match $lolbasStrongRe)
+            $lolbasWeakHit   = (-not $lolbasAppDataTempOnlyOk.ContainsKey($p.Name)) -and ($p.CommandLine -match $lolbasWeakRe)
+            if ($lolbasStrongHit -or $lolbasWeakHit) {
                 $cmdShort = $p.CommandLine.Substring(0,[Math]::Min(140,$p.CommandLine.Length))
                 Add-Finding -ID "LOLBAS_$($p.ProcessId)_$lb" -Phase "PHASE 99" -ThreatType "LOLBAS Abuse" `
                     -Severity $SEV_HIGH -Description "LOLBAS abuse: $($p.Name) PID:$($p.ProcessId) | $cmdShort" `
