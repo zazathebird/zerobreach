@@ -344,7 +344,16 @@ if (-not $global:QUICK_MODE) {
 # user may have just legitimately clicked something and this needs a human look first).
 Show-PhaseHeader "PHASE 10.5" "MALICIOUS LNK/SHORTCUT DOWNLOADER SWEEP"
 Out-Typewriter "SCANNING SHORTCUTS FOR DOWNLOADER/LOADER PAYLOADS..." "HUNT"
-$lnkDownloaderRe = '(?i)(-e(nc(odedcommand)?)?\s+[A-Za-z0-9+/=]{20,})|(DownloadString|DownloadFile|\bIEX\b|Invoke-Expression)|((mshta|wscript|cscript)(\.exe)?\b[^\r\n]*https?://)'
+# STRONG/WEAK split (2026-07-26 adversarial FP audit, same pattern as Phase 3/29): the
+# mshta/wscript/cscript+URL combo is a rare, high-signal shape and stays HIGH. A bare
+# -EncodedCommand blob or DownloadString/IEX is NOT — vendors routinely ship shortcuts that
+# launch `powershell.exe -EncodedCommand <blob>` specifically to dodge .lnk argument-quoting
+# problems (not to hide malice), and the official Chocolatey/Scoop bootstrap one-liners (a
+# real MSP-technician "save the install command as a shortcut" workflow) are literally
+# `iex (New-Object Net.WebClient).DownloadString('https://...')` from vendor documentation —
+# both would have auto-fired HIGH with zero corroboration otherwise.
+$lnkDownloaderStrongRe = '(?i)(mshta|wscript|cscript)(\.exe)?\b[^\r\n]*https?://'
+$lnkDownloaderWeakRe   = '(?i)(-e(nc(odedcommand)?)?\s+[A-Za-z0-9+/=]{20,})|(DownloadString|DownloadFile|\bIEX\b|Invoke-Expression)'
 $lnkDirs = @(
     "$env:USERPROFILE\Downloads",
     "$env:USERPROFILE\Desktop",
@@ -359,12 +368,20 @@ foreach ($lf in $lnkFiles) {
         $lnkShell = New-Object -ComObject WScript.Shell -ErrorAction Stop
         $lnkSc = $lnkShell.CreateShortcut($lf.FullName)
         $lnkBlob = "$($lnkSc.TargetPath) $($lnkSc.Arguments)"
-        if ($lnkBlob -match $lnkDownloaderRe) {
+        $lnkStrong = ($lnkBlob -match $lnkDownloaderStrongRe)
+        $lnkWeak   = ($lnkBlob -match $lnkDownloaderWeakRe)
+        if ($lnkStrong -or $lnkWeak) {
             $lnkFound = $true
             Out-ThreatBanner "MALICIOUS LNK DOWNLOADER" "$($lf.Name) | $lnkBlob"
-            Add-Finding -ID "LNKDL_$(Get-StableId $lf.FullName)" -Phase "PHASE 10.5" -ThreatType "Malicious LNK/Downloader" `
-                -Severity $SEV_HIGH -Description "Shortcut resolves to an encoded-command / download-cradle payload (review — the user may have just clicked something legitimate, so this is not auto-deleted): $($lf.Name) -> $lnkBlob" `
-                -Target $lf.FullName -FixAction "Info" -Group "Malicious LNK Payloads"
+            if ($lnkStrong) {
+                Add-Finding -ID "LNKDL_$(Get-StableId $lf.FullName)" -Phase "PHASE 10.5" -ThreatType "Malicious LNK/Downloader" `
+                    -Severity $SEV_HIGH -Description "Shortcut resolves to an mshta/wscript/cscript-with-URL download cradle (review — the user may have just clicked something legitimate, so this is not auto-deleted): $($lf.Name) -> $lnkBlob" `
+                    -Target $lf.FullName -FixAction "Info" -Group "Malicious LNK Payloads"
+            } else {
+                Add-Finding -ID "LNKDL_$(Get-StableId $lf.FullName)" -Phase "PHASE 10.5" -ThreatType "Malicious LNK/Downloader" `
+                    -Severity $SEV_POSSIBLE -Description "Shortcut resolves to an encoded-command / DownloadString-IEX pattern — common in both malicious downloaders AND legitimate vendor/RMM shortcuts and official install one-liners (Chocolatey/Scoop), so this alone is weak evidence: $($lf.Name) -> $lnkBlob" `
+                    -Target $lf.FullName -FixAction "Info" -Group "Malicious LNK Payloads"
+            }
         }
     } catch {}
 }
