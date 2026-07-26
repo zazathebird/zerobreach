@@ -1271,6 +1271,28 @@ function Test-RRegValueGone {
     }
 }
 
+# Same tri-state contract as Test-RRegValueGone, generalized to any provider path (filesystem OR
+# registry key — Get-Item throws the SAME ItemNotFoundException type for a missing path on both
+# drives). DeleteFile/DeleteRegKey/Quarantine previously verified with a bare Test-Path both
+# BEFORE removal ("already absent, skip") and AFTER ("gone, report success") — Test-Path returns
+# $false on an ACCESS-DENIED path exactly like it does on a genuinely-missing one (malware can DENY
+# the read-attributes/list-directory right to Administrators the same way it DENYs a Run-key read),
+# so either check can silently lie: the pre-check can skip removal entirely and still report OK,
+# the post-check can report OK on a file/key that is still fully armed. ItemNotFoundException is
+# the ONLY exception that means "genuinely gone" here; anything else (UnauthorizedAccessException,
+# a sharing violation, etc.) means the tool cannot tell, so this must never collapse to 'gone'.
+function Test-RPathGone {
+    param([string]$Path)
+    try {
+        $null = Get-Item -LiteralPath $Path -ErrorAction Stop
+        return 'present'
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return 'gone'
+    } catch {
+        return 'unknown'
+    }
+}
+
 # SAFETY: hard backstop — mirror of Test-ProtectedTarget (main thread). The tool must NEVER
 # damage the system, so even a manually-selected finding is refused if it touches a protected
 # resource. Keep in sync with the main-thread copy in Get-EngineReportFindings's vicinity.
@@ -1355,17 +1377,25 @@ try {
         try {
             switch ("$($f.FixAction)") {
                 'DeleteFile' {
-                    if (Test-Path -LiteralPath $f.FixParam) {
-                        Remove-Item -LiteralPath $f.FixParam -Recurse -Force -ErrorAction Stop
-                        if (Test-Path -LiteralPath $f.FixParam) {
-                            $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                            $cur = RGet-RegVal $rpk "PendingFileRenameOperations"   # raw Get-ItemPropertyValue throws when absent
-                            if ($null -eq $cur) { $cur = @() }
-                            Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$($f.FixParam)", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
-                            RLog "  -> locked; queued for reboot deletion." 'POSSIBLE'
-                        } else { RLog "  -> deleted: $($f.FixParam)" 'OK' }
-                        $ok = $true
-                    } else { RLog "  -> already absent." 'OK'; $ok = $true }
+                    $preState = Test-RPathGone $f.FixParam
+                    if ($preState -eq 'gone') { RLog "  -> already absent." 'OK'; $ok = $true }
+                    else {
+                        # 'unknown' (e.g. an ACL denying read-attributes to Administrators) is still
+                        # attempted, never skipped — Remove-Item gets its own chance, and the result
+                        # is judged on the POST-removal state, not this pre-check.
+                        Remove-Item -LiteralPath $f.FixParam -Recurse -Force -ErrorAction SilentlyContinue
+                        switch (Test-RPathGone $f.FixParam) {
+                            'gone' { RLog "  -> deleted: $($f.FixParam)" 'OK'; $ok = $true }
+                            default {
+                                $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+                                $cur = RGet-RegVal $rpk "PendingFileRenameOperations"   # raw Get-ItemPropertyValue throws when absent
+                                if ($null -eq $cur) { $cur = @() }
+                                Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$($f.FixParam)", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
+                                RLog "  -> locked; queued for reboot deletion." 'POSSIBLE'
+                                $ok = $true
+                            }
+                        }
+                    }
                 }
                 'DeleteReg' {
                     $pts = "$($f.FixParam)" -split "\|", 2
@@ -1383,11 +1413,18 @@ try {
                     } else { RLog "  -> malformed reg target." 'POSSIBLE'; $failed++ }
                 }
                 'DeleteRegKey' {
-                    if (Test-Path -LiteralPath $f.FixParam) {
+                    $preState = Test-RPathGone $f.FixParam
+                    if ($preState -eq 'gone') { RLog "  -> key already absent." 'OK'; $ok = $true }
+                    else {
+                        # 'unknown' pre-state (e.g. a DENY ACE on the key) still gets a removal
+                        # attempt — never skipped on the strength of a read that itself failed.
                         Remove-Item -LiteralPath $f.FixParam -Recurse -Force -ErrorAction SilentlyContinue
-                        if (-not (Test-Path -LiteralPath $f.FixParam)) { RLog "  -> reg key deleted." 'OK'; $ok = $true }
-                        else { RLog "  -> reg key delete failed." 'POSSIBLE'; $failed++ }
-                    } else { RLog "  -> key already absent." 'OK'; $ok = $true }
+                        switch (Test-RPathGone $f.FixParam) {
+                            'gone'  { RLog "  -> reg key deleted." 'OK'; $ok = $true }
+                            'present' { RLog "  -> reg key delete failed (still present)." 'POSSIBLE'; $failed++ }
+                            default { RLog "  -> reg key delete UNVERIFIABLE (key unreadable after removal attempt — likely an ACL denying Administrators, which is itself a finding)." 'POSSIBLE'; $failed++ }
+                        }
+                    }
                 }
                 'KillProcess' {
                     $procId = [int]"$($f.FixParam)"
@@ -1407,8 +1444,11 @@ try {
                 }
                 'Quarantine' {
                     $src = "$($f.FixParam)"
-                    if (-not (Test-Path -LiteralPath $src)) { RLog "  -> already absent." 'OK'; $ok = $true }
+                    $qPreState = Test-RPathGone $src
+                    if ($qPreState -eq 'gone') { RLog "  -> already absent." 'OK'; $ok = $true }
                     else {
+                        # 'unknown' (unreadable) still gets a quarantine attempt below — Move-Item
+                        # gets its own chance rather than trusting a pre-check that couldn't read it.
                         $vault = Join-Path $RemReports 'quarantine'
                         if (-not (Test-Path $vault)) { New-Item -Path $vault -ItemType Directory -Force | Out-Null }
                         $sha  = (Get-FileHash -LiteralPath $src -Algorithm SHA256 -ErrorAction SilentlyContinue).Hash

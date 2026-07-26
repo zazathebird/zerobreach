@@ -1196,6 +1196,25 @@ function Get-RegVal {
     param([string]$Path, [string]$Name)
     try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
 }
+# Tri-state post-condition check for FixMode's DeleteFile/DeleteRegKey/Quarantine (mirrors
+# ZeroBreach-Server.ps1's Test-RPathGone for the GUI runspace — same bug, same fix, both paths).
+# A bare Test-Path returns $false on an ACCESS-DENIED path exactly like it does on a genuinely
+# missing one, so it can lie in both directions here: skip a removal attempt entirely because
+# the pre-check claims "already absent" on a file/key it just could not read, or report a
+# still-armed persistence mechanism as removed because the post-check hit the same denial.
+# ItemNotFoundException is the only exception that means "genuinely gone"; anything else
+# (UnauthorizedAccessException, a sharing violation, ...) must report 'unknown', never 'gone'.
+function Test-PathGone {
+    param([string]$Path)
+    try {
+        $null = Get-Item -LiteralPath $Path -ErrorAction Stop
+        return 'present'
+    } catch [System.Management.Automation.ItemNotFoundException] {
+        return 'gone'
+    } catch {
+        return 'unknown'
+    }
+}
 # Registry-key last-write time. The registry provider's RegistryKey objects expose no
 # LastWriteTime property (.NET has none) — reading it needs the RegQueryInfoKey Win32 API.
 # Read-only query; returns a local [datetime] or $null (missing key / access denied / API

@@ -632,10 +632,13 @@ function Invoke-FixMode {
         try {
             switch ($f.FixAction) {
                 "DeleteFile" {
-                    if (Test-Path $f.FixParam) {
-                        Remove-Item -Path $f.FixParam -Recurse -Force -ErrorAction Stop
-                        if (Test-Path $f.FixParam) {
-                            # Kernel-queue for locked files
+                    if ((Test-PathGone $f.FixParam) -eq 'gone') { Out-Typewriter "  -> ALREADY ABSENT." "VER"; $ok = $true }
+                    else {
+                        # 'unknown' pre-state (e.g. a DENY ACE) still gets a removal attempt —
+                        # never skipped on the strength of a read that itself failed.
+                        Remove-Item -Path $f.FixParam -Recurse -Force -ErrorAction SilentlyContinue
+                        if ((Test-PathGone $f.FixParam) -ne 'gone') {
+                            # Kernel-queue for locked/unverifiable files
                             $rp  = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
                             $cur = Get-RegVal $rp "PendingFileRenameOperations"
                             if ($null -eq $cur) { $cur = @() }
@@ -643,7 +646,7 @@ function Invoke-FixMode {
                             Out-Typewriter "  -> QUEUED FOR REBOOT DELETION." "WARN"
                         } else { Out-Typewriter "  -> DELETED: $($f.FixParam)" "GOOD" }
                         $global:KillCount++; $ok = $true
-                    } else { Out-Typewriter "  -> ALREADY ABSENT." "VER"; $ok = $true }
+                    }
                 }
                 "DeleteReg" {
                     $pts = $f.FixParam -split "\|", 2
@@ -656,12 +659,16 @@ function Invoke-FixMode {
                     }
                 }
                 "DeleteRegKey" {
-                    if (Test-Path $f.FixParam) {
+                    $preState = Test-PathGone $f.FixParam
+                    if ($preState -eq 'gone') { Out-Typewriter "  -> KEY ALREADY ABSENT." "VER"; $ok = $true }
+                    else {
                         Remove-Item -Path $f.FixParam -Recurse -Force -ErrorAction SilentlyContinue
-                        if (-not (Test-Path $f.FixParam)) {
-                            Out-Typewriter "  -> REG KEY DELETED." "GOOD"; $global:KillCount++; $ok = $true
-                        } else { Out-Typewriter "  -> REG KEY DELETE FAILED." "WARN"; $fixFail++ }
-                    } else { Out-Typewriter "  -> KEY ALREADY ABSENT." "VER"; $ok = $true }
+                        switch (Test-PathGone $f.FixParam) {
+                            'gone' { Out-Typewriter "  -> REG KEY DELETED." "GOOD"; $global:KillCount++; $ok = $true }
+                            'present' { Out-Typewriter "  -> REG KEY DELETE FAILED." "WARN"; $fixFail++ }
+                            default { Out-Typewriter "  -> REG KEY DELETE UNVERIFIABLE (unreadable after removal — likely a DENY ACE)." "WARN"; $fixFail++ }
+                        }
+                    }
                 }
                 "KillProcess" {
                     $pid2 = [int]$f.FixParam
@@ -683,7 +690,7 @@ function Invoke-FixMode {
                     # Reversible isolation: move the file into a vault, neutralize it, and
                     # record a JSON manifest (orig path + SHA256 + detection) so it can be restored.
                     $src = $f.FixParam
-                    if (-not (Test-Path -LiteralPath $src)) { Out-Typewriter "  -> ALREADY ABSENT." "VER"; $ok = $true }
+                    if ((Test-PathGone $src) -eq 'gone') { Out-Typewriter "  -> ALREADY ABSENT." "VER"; $ok = $true }
                     else {
                         $vault = Join-Path $OUT_ROOT "quarantine"
                         if (-not (Test-Path $vault)) { New-Item -Path $vault -ItemType Directory -Force | Out-Null }
