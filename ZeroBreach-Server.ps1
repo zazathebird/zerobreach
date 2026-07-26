@@ -282,6 +282,25 @@ function Get-HtmlReport {
         if ($v -gt 0) { "<span class='chip'>$k <b>$v</b></span>" }
     }
 
+    # WS5: executive summary — severity totals, a one-line verdict and the top ATT&CK
+    # tactics, so the export opens with the "what does this mean" a client writeup needs.
+    $sevCounts = @{ CRITICAL = 0; HIGH = 0; POSSIBLE = 0; INFO = 0 }
+    foreach ($f in $findings) { $s = "$($f.severity)"; if ($sevCounts.ContainsKey($s)) { $sevCounts[$s]++ } }
+    $tacTally = @{}
+    foreach ($f in $findings) {
+        $t = if ($f.mitre) { "$($f.mitre.tactic)" } else { '' }
+        if ($t) { foreach ($one in ($t -split '\s*,\s*')) { if ($one) { $tacTally[$one] = [int]$tacTally[$one] + 1 } } }
+    }
+    $topTactics = @($tacTally.GetEnumerator() | Sort-Object -Property @{Expression={$_.Value}} -Descending | Select-Object -First 5)
+    $execVerdict =
+        if     ($sevCounts.CRITICAL -gt 0) { "ACTIVE-THREAT INDICATORS PRESENT — $($sevCounts.CRITICAL) critical finding(s) require immediate triage." }
+        elseif ($sevCounts.HIGH -gt 0)     { "ELEVATED RISK — $($sevCounts.HIGH) high-severity finding(s) require review before this host is trusted." }
+        elseif ($sevCounts.POSSIBLE -gt 0) { "LOW SIGNAL — possible/informational findings only; review at convenience." }
+        else                               { "No actionable findings — system appears clean." }
+    $tacLine = if ($topTactics.Count -gt 0) {
+        "Top ATT&CK tactics: " + (($topTactics | ForEach-Object { "$([System.Net.WebUtility]::HtmlEncode($_.Key)) ($($_.Value))" }) -join ' · ')
+    } else { '' }
+
     $genAt = [datetime]::Now.ToString('yyyy-MM-dd HH:mm:ss')
     @"
 <!doctype html><html><head><meta charset="utf-8"><title>ZeroBreach Report — $($env:COMPUTERNAME)</title>
@@ -299,9 +318,21 @@ tr:nth-child(even){background:#080f16}
 .badge{color:#03121a;font-weight:700;padding:2px 8px;border-radius:4px;font-size:11px}
 a{color:#00d9ff;text-decoration:none}a:hover{text-decoration:underline}
 .empty{color:#39ff9a;padding:30px;text-align:center}
+.exec{background:#0a141d;border:1px solid #1b2b3a;border-radius:8px;padding:14px 18px;margin:0 0 18px}
+.exec-title{color:#6fb6d8;font-size:11px;letter-spacing:2px;text-transform:uppercase;margin-bottom:8px}
+.exec-verdict{font-size:14px;color:#e8f4fb;margin-bottom:10px}
+.exec-grid{font-size:12px;color:#9fc1d6}
+.exec-grid b{font-size:15px;margin-right:4px}
+.exec-tac{color:#7d97a8;font-size:11.5px;margin-top:8px}
 </style></head><body>
 <h1>◈ ZEROBREACH V23 — INCIDENT REPORT</h1>
 <div class="meta">Host: $([System.Net.WebUtility]::HtmlEncode($env:COMPUTERNAME)) &nbsp;·&nbsp; Mode: $($script:State.Mode) &nbsp;·&nbsp; Findings: $total &nbsp;·&nbsp; Generated: $genAt</div>
+<div class="exec">
+  <div class="exec-title">Executive Summary</div>
+  <div class="exec-verdict">$execVerdict</div>
+  <div class="exec-grid"><b style="color:#ff3838">$($sevCounts.CRITICAL)</b> CRITICAL &nbsp;&nbsp; <b style="color:#ff9500">$($sevCounts.HIGH)</b> HIGH &nbsp;&nbsp; <b style="color:#ffd60a">$($sevCounts.POSSIBLE)</b> POSSIBLE &nbsp;&nbsp; <b style="color:#6b7280">$($sevCounts.INFO)</b> INFO</div>
+  $(if ($tacLine) { "<div class='exec-tac'>$tacLine</div>" })
+</div>
 <div class="chips">$($tally -join '')</div>
 $(if ($total -gt 0) { "<table><tr><th>Severity</th><th>Phase</th><th>Threat</th><th>ATT&CK</th><th>Detail</th></tr>$($rows -join '')</table>" } else { "<div class='empty'>✓ NO FINDINGS — SYSTEM APPEARS CLEAN</div>" })
 </body></html>
@@ -457,6 +488,54 @@ function Get-EngineReportFindings {
         $i++
     }
     return @($out)
+}
+
+# WS5: cheap per-baseline summary for the report-history / trend view. A full
+# ConvertFrom-Json on a multi-MB baseline can take minutes on PS 5.1 and the accept loop
+# is single-threaded, so scalars are pulled with plain-text regex instead. That is sound
+# because inside a JSON string every literal quote is escaped (\"), so a bare "Key":
+# pattern can only match a real JSON key; RiskScore/RiskLabel/Mode/TimeWindow exist only
+# at the baseline's top level. Severity totals prefer the SevTally block new baselines
+# carry ("CRITICAL": <n> key shapes exist nowhere else); legacy files fall back to
+# counting "Severity" values, which can over-count by the BaselineDelta copies — fine
+# for a trend line, and exact for every baseline written from now on. Cached by
+# name|size|mtime so each file is read once per server lifetime.
+$script:REPORT_SUMMARY_CACHE = @{}
+function Get-ReportSummary {
+    param([System.IO.FileInfo]$File)
+    $ck = "$($File.Name)|$($File.Length)|$($File.LastWriteTimeUtc.Ticks)"
+    if ($script:REPORT_SUMMARY_CACHE.ContainsKey($ck)) { return $script:REPORT_SUMMARY_CACHE[$ck] }
+    $sum = [ordered]@{
+        name  = $File.Name
+        size  = [long]$File.Length
+        mtime = $File.LastWriteTime.ToString('yyyy-MM-dd HH:mm')
+        mode = ''; time_window = ''; risk_score = $null; risk_label = ''
+        critical = 0; high = 0; possible = 0; info = 0
+    }
+    try {
+        $raw = [System.IO.File]::ReadAllText($File.FullName)
+        $m = [regex]::Match($raw, '"RiskScore":\s*(\d+)');      if ($m.Success) { $sum.risk_score = [int]$m.Groups[1].Value }
+        $m = [regex]::Match($raw, '"RiskLabel":\s*"([^"]*)"');  if ($m.Success) { $sum.risk_label = $m.Groups[1].Value }
+        $m = [regex]::Match($raw, '"Mode":\s*"([^"]*)"');       if ($m.Success) { $sum.mode = $m.Groups[1].Value }
+        $m = [regex]::Match($raw, '"TimeWindow":\s*"([^"]*)"'); if ($m.Success) { $sum.time_window = $m.Groups[1].Value }
+        $tallied = $false
+        $mc = [regex]::Match($raw, '"CRITICAL":\s*(\d+)')
+        if ($mc.Success) {
+            $tallied = $true
+            $sum.critical = [int]$mc.Groups[1].Value
+            $m = [regex]::Match($raw, '"HIGH":\s*(\d+)');     if ($m.Success) { $sum.high     = [int]$m.Groups[1].Value }
+            $m = [regex]::Match($raw, '"POSSIBLE":\s*(\d+)'); if ($m.Success) { $sum.possible = [int]$m.Groups[1].Value }
+            $m = [regex]::Match($raw, '"INFO":\s*(\d+)');     if ($m.Success) { $sum.info     = [int]$m.Groups[1].Value }
+        }
+        if (-not $tallied) {
+            $sum.critical = [regex]::Matches($raw, '"Severity":\s*"CRITICAL"').Count
+            $sum.high     = [regex]::Matches($raw, '"Severity":\s*"HIGH"').Count
+            $sum.possible = [regex]::Matches($raw, '"Severity":\s*"POSSIBLE"').Count
+            $sum.info     = [regex]::Matches($raw, '"Severity":\s*"INFO"').Count
+        }
+    } catch {}
+    $script:REPORT_SUMMARY_CACHE[$ck] = $sum
+    return $sum
 }
 
 function Read-RequestBody {
@@ -1484,6 +1563,68 @@ function Handle-Request {
             $p = Join-Path $script:REPORTS $name
             if (-not (Test-Path -LiteralPath $p)) { Write-JsonResponse $Ctx '{"error":"report not found"}' 404; return }
             Write-JsonResponse $Ctx (@(Get-EngineReportFindings $p) | ConvertTo-Json -Depth 5)
+        }
+
+        '^/api/reports$' {
+            # WS5: scan history for the Report view's trend/compare section. Newest first,
+            # capped — summaries are regex-cheap + cached (see Get-ReportSummary).
+            $files = @(Get-ChildItem -LiteralPath $script:REPORTS -Filter 'KrakenBaseline_*.json' -File -ErrorAction SilentlyContinue |
+                       Sort-Object LastWriteTime -Descending | Select-Object -First 25)
+            $list = @(foreach ($f in $files) { Get-ReportSummary $f })
+            Write-JsonResponse $Ctx ([ordered]@{
+                current = "$($script:State.EngineReport)"
+                reports = $list
+            } | ConvertTo-Json -Depth 4)
+        }
+
+        '^/api/report/diff$' {
+            # WS5: baseline-to-baseline diff — ?a=<older>&b=<newer>. Distinct from the
+            # engine's own -Baseline delta (which only knows the immediately-previous run):
+            # this compares ANY two saved baselines. Finding IDs are Get-StableId-derived,
+            # so identity is durable across runs. Size-capped: ConvertFrom-Json on a huge
+            # baseline would freeze the single-threaded accept loop.
+            $an = [System.IO.Path]::GetFileName("$($req.QueryString['a'])")
+            $bn = [System.IO.Path]::GetFileName("$($req.QueryString['b'])")
+            $bad = $false
+            foreach ($nm in @($an, $bn)) { if ($nm -notmatch '^KrakenBaseline_.*\.json$') { $bad = $true } }
+            if ($bad) { Write-JsonResponse $Ctx '{"error":"invalid report name"}' 400; return }
+            $ap = Join-Path $script:REPORTS $an
+            $bp = Join-Path $script:REPORTS $bn
+            foreach ($pp in @($ap, $bp)) {
+                if (-not (Test-Path -LiteralPath $pp)) { Write-JsonResponse $Ctx '{"error":"report not found"}' 404; return }
+                if ((Get-Item -LiteralPath $pp).Length -gt 12MB) {
+                    Write-JsonResponse $Ctx '{"error":"report too large to diff in-console (over 12 MB)"}' 400; return
+                }
+            }
+            $fa = $null; $fb = $null
+            try {
+                $fa = (Get-Content -LiteralPath $ap -Raw | ConvertFrom-Json).Findings
+                $fb = (Get-Content -LiteralPath $bp -Raw | ConvertFrom-Json).Findings
+            } catch { Write-JsonResponse $Ctx '{"error":"report parse failed"}' 500; return }
+            $mapA = @{}; foreach ($f in @($fa)) { if ("$($f.ID)") { $mapA["$($f.ID)"] = $f } }
+            $mapB = @{}; foreach ($f in @($fb)) { if ("$($f.ID)") { $mapB["$($f.ID)"] = $f } }
+            $mk = {
+                param($f)
+                $d = "$($f.Description)"
+                [ordered]@{
+                    id = "$($f.ID)"; severity = "$($f.Severity)"; threat_type = "$($f.ThreatType)"
+                    phase = "$($f.Phase)"; fix_action = "$($f.FixAction)"
+                    desc = $d.Substring(0, [Math]::Min(180, $d.Length))
+                }
+            }
+            $added    = @(foreach ($k in $mapB.Keys) { if (-not $mapA.ContainsKey($k)) { & $mk $mapB[$k] } })
+            $resolved = @(foreach ($k in $mapA.Keys) { if (-not $mapB.ContainsKey($k)) { & $mk $mapA[$k] } })
+            $sevRank = @{ CRITICAL = 0; HIGH = 1; POSSIBLE = 2; INFO = 3 }
+            $srt = { param($x) $r = $sevRank["$($x.severity)"]; if ($null -eq $r) { $r = 9 }; $r }
+            $added    = @($added    | Sort-Object { & $srt $_ })
+            $resolved = @($resolved | Sort-Object { & $srt $_ })
+            Write-JsonResponse $Ctx ([ordered]@{
+                a = $an; b = $bn
+                added_count = $added.Count; resolved_count = $resolved.Count
+                persisting_count = @($mapB.Keys | Where-Object { $mapA.ContainsKey($_) }).Count
+                added    = @($added    | Select-Object -First 300)
+                resolved = @($resolved | Select-Object -First 300)
+            } | ConvertTo-Json -Depth 4)
         }
 
         '^/api/remediate$' {

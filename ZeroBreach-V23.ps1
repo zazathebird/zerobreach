@@ -1118,15 +1118,32 @@ function Get-WeakAces { param($Acl, [string[]]$WeakIds, [string]$RightsRegex = '
     return $out
 }
 
-# Authenticode verdict for a file: returns a hashtable {Status, Signer, Trusted, IsMs}.
-# Cached per-path to avoid re-verifying the same binary across phases.
-$global:SIG_CACHE = @{}
+# $global:SIG_CACHE memoizes Get-SignatureVerdict's hashtable verdicts (below);
+# $global:AUTHSIG_CACHE memoizes Get-AuthSig's raw Signature objects. Both are per-scan
+# memos (WS4): the same binary is signature-checked by multiple phases (System32 sets,
+# process paths, startup targets), and each uncached check builds the full cert chain
+# with online CRL/OCSP revocation lookups that can block ~15s. The filesystem is static
+# in audit-only -Auto runs, so a scan-scoped memo is safe. Both honour the ZB_NOCACHE
+# kill-switch via $global:SCAN_FILE_CACHE_ON. The SIG_AUDIT_* loop budgets are untouched:
+# a cache hit is instant, so the wall-clock deadline simply stops biting.
+$global:SIG_CACHE          = @{}
+$global:AUTHSIG_CACHE      = @{}
+$global:AUTHSIG_CACHE_HITS = 0
 function Get-AuthSig([string]$Path) {
     # Safe wrapper. Get-AuthenticodeSignature throws a *terminating* error on a
     # locked / in-use file, which -ErrorAction SilentlyContinue does NOT suppress;
     # left unhandled it unwinds to a trap and skips phases. Catch it here so callers
     # just get $null. -LiteralPath also avoids wildcard expansion on bracketed paths.
-    try { Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop } catch { $null }
+    # A cached $null (locked/unreadable file) is a real entry — ContainsKey, never truthiness.
+    $ck = "$Path".ToLowerInvariant()
+    if ($global:SCAN_FILE_CACHE_ON -and $global:AUTHSIG_CACHE.ContainsKey($ck)) {
+        $global:AUTHSIG_CACHE_HITS++
+        return $global:AUTHSIG_CACHE[$ck]
+    }
+    $sig = $null
+    try { $sig = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop } catch { $sig = $null }
+    if ($global:SCAN_FILE_CACHE_ON) { $global:AUTHSIG_CACHE[$ck] = $sig }
+    return $sig
 }
 function Get-RegVal {
     # Safe wrapper. Get-ItemPropertyValue throws a *terminating* error when the named
@@ -1137,6 +1154,42 @@ function Get-RegVal {
     # raw — use Get-RegVal.
     param([string]$Path, [string]$Name)
     try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
+}
+# Registry-key last-write time. The registry provider's RegistryKey objects expose no
+# LastWriteTime property (.NET has none) — reading it needs the RegQueryInfoKey Win32 API.
+# Read-only query; returns a local [datetime] or $null (missing key / access denied / API
+# failure). Callers treat $null as "no time signal" (Test-InScope admits $null), so a
+# failure degrades to the pre-P/Invoke behaviour, never to a dropped detection. Phase 39
+# uses this as the root-CA install-time signal an attacker cannot fake; Phases 26/27/85
+# use it to make their registry-key time-scope filters real.
+try {
+    Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices;
+public class ZBRegInfo { [DllImport("advapi32.dll", EntryPoint="RegQueryInfoKeyW", CharSet=CharSet.Unicode)] public static extern int RegQueryInfoKey(IntPtr hKey, IntPtr lpClass, IntPtr lpcchClass, IntPtr lpReserved, IntPtr lpcSubKeys, IntPtr lpcbMaxSubKeyLen, IntPtr lpcbMaxClassLen, IntPtr lpcValues, IntPtr lpcbMaxValueNameLen, IntPtr lpcbMaxValueLen, IntPtr lpcbSecurityDescriptor, out long lpftLastWriteTime); }
+"@ -ErrorAction SilentlyContinue
+} catch {}
+function Get-RegKeyLastWriteTime {
+    # $Key: a [Microsoft.Win32.RegistryKey] (e.g. straight from Get-ChildItem on a hive —
+    # no reopen, and the caller's key is NOT closed here) or a PS-provider path string
+    # (HKLM:\… / HKCU:\…) which is opened read-only via the provider and closed after.
+    param($Key)
+    $k = $null; $opened = $false
+    try {
+        if ($Key -is [Microsoft.Win32.RegistryKey]) { $k = $Key }
+        else {
+            $k = Get-Item -LiteralPath "$Key" -ErrorAction Stop
+            $opened = $true
+            if ($k -isnot [Microsoft.Win32.RegistryKey]) { return $null }
+        }
+        [long]$ft = 0
+        $rc = [ZBRegInfo]::RegQueryInfoKey($k.Handle.DangerousGetHandle(),
+            [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero,
+            [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero, [IntPtr]::Zero,
+            [ref]$ft)
+        if ($rc -eq 0 -and $ft -gt 0) { return [datetime]::FromFileTime($ft) }
+    } catch {}
+    finally { if ($opened -and $k -is [Microsoft.Win32.RegistryKey]) { try { $k.Close() } catch {} } }
+    return $null
 }
 function Get-WinEventSafe {
     # Safe wrapper. Get-WinEvent -FilterHashtable throws a *terminating* error that
@@ -1167,12 +1220,12 @@ function Get-FileHashSafe {
     finally { if ($fs) { $fs.Dispose() }; if ($sha) { $sha.Dispose() } }
 }
 function Get-SignatureVerdict { param([string]$FilePath)
-    if ($global:SIG_CACHE.ContainsKey($FilePath)) { return $global:SIG_CACHE[$FilePath] }
+    if ($global:SCAN_FILE_CACHE_ON -and $global:SIG_CACHE.ContainsKey($FilePath)) { return $global:SIG_CACHE[$FilePath] }
     $result = @{ Status='Unknown'; Signer=''; Trusted=$false; IsMs=$false; Exists=$false }
     try {
         if (Test-Path -LiteralPath $FilePath) {
             $result.Exists = $true
-            $sig = Get-AuthenticodeSignature -LiteralPath $FilePath -ErrorAction SilentlyContinue
+            $sig = Get-AuthSig $FilePath
             if ($sig) {
                 $result.Status = "$($sig.Status)"
                 $subj = if ($sig.SignerCertificate) { "$($sig.SignerCertificate.Subject)" } else { "" }
@@ -1183,7 +1236,7 @@ function Get-SignatureVerdict { param([string]$FilePath)
             }
         }
     } catch {}
-    $global:SIG_CACHE[$FilePath] = $result
+    if ($global:SCAN_FILE_CACHE_ON) { $global:SIG_CACHE[$FilePath] = $result }
     return $result
 }
 

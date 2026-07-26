@@ -171,6 +171,7 @@ function initApp() {
   loadSysInfo();
   startVitalsPoller();
   initSettingsUI();
+  initReportTools();
   initCmdPalette();
   initKeyboardActivation();
   initAudioUnlock();
@@ -1965,6 +1966,8 @@ function buildReport() {
   ZBFX.countUp($('risk-score-label'), riskScore, 1100);
   drawRadarChart(counts);
   drawMitreTactics();
+  renderExecSummary();
+  loadReportHistory();
   renderRemediationSummary();
 
   const cardsEl = $('report-cards');
@@ -2059,6 +2062,156 @@ function renderRemediationSummary() {
       <div class="remsum-cell block"><span>${r.blocked || 0}</span>BLOCKED (PROTECTED)</div>
     </div>
     <div class="remsum-when">Executed ${escapeHtml(r.when || '')}${r.snapshot ? ` · rollback snapshot: ${escapeHtml(r.snapshot)}` : ''}</div>`;
+}
+
+// ── WS5: executive summary + scan history/trend + baseline compare ────────────
+
+// The verdict line an MSP writeup opens with. Rendered from the same STATE.findings the
+// dial/radar use, so it can never disagree with them.
+function renderExecSummary() {
+  const el = $('exec-summary');
+  if (!el) return;
+  const sev = { CRITICAL: 0, HIGH: 0, POSSIBLE: 0, INFO: 0 };
+  STATE.findings.forEach(f => { if (sev[f.severity] !== undefined) sev[f.severity]++; });
+  const tac = {};
+  STATE.findings.forEach(f => {
+    const t = f.mitre && f.mitre.tactic;
+    if (!t) return;
+    String(t).split(/\s*,\s*/).filter(Boolean).forEach(one => { tac[one] = (tac[one] || 0) + 1; });
+  });
+  const topTac = Object.entries(tac).sort((a, b) => b[1] - a[1]).slice(0, 5);
+  let verdict, vcolor;
+  if (sev.CRITICAL > 0)      { verdict = `ACTIVE-THREAT INDICATORS PRESENT — ${sev.CRITICAL} critical finding${sev.CRITICAL > 1 ? 's' : ''} require immediate triage.`; vcolor = 'var(--threat-critical)'; }
+  else if (sev.HIGH > 0)     { verdict = `ELEVATED RISK — ${sev.HIGH} high-severity finding${sev.HIGH > 1 ? 's' : ''} require review before this host is trusted.`; vcolor = 'var(--threat-high)'; }
+  else if (sev.POSSIBLE > 0) { verdict = 'LOW SIGNAL — possible/informational findings only; review at convenience.'; vcolor = 'var(--threat-possible)'; }
+  else                       { verdict = 'No actionable findings — system appears clean.'; vcolor = 'var(--threat-clean)'; }
+  const rem = STATE.lastRemediation;
+  el.innerHTML = `
+    <div class="exec-verdict" style="color:${vcolor}">${verdict}</div>
+    <div class="exec-counts">
+      <span><b style="color:var(--threat-critical)">${sev.CRITICAL}</b> CRITICAL</span>
+      <span><b style="color:var(--threat-high)">${sev.HIGH}</b> HIGH</span>
+      <span><b style="color:var(--threat-possible)">${sev.POSSIBLE}</b> POSSIBLE</span>
+      <span><b style="color:var(--text-dim)">${sev.INFO}</b> INFO</span>
+    </div>
+    ${topTac.length ? `<div class="exec-tactics">Top ATT&amp;CK tactics: ${topTac.map(([k, v]) => `${escapeHtml(k)} (${v})`).join(' · ')}</div>` : ''}
+    ${rem ? `<div class="exec-tactics">Remediation: ${rem.applied || 0} applied · ${rem.failed || 0} failed · ${rem.blocked || 0} blocked</div>` : ''}`;
+}
+
+// Scan history from GET /api/reports (newest first). Drives the trend chart + the
+// compare pickers. GETs carry no CSRF token by design — the gate covers non-GET only.
+let REPORT_HISTORY = [];
+
+function loadReportHistory() {
+  fetch('/api/reports')
+    .then(r => r.json())
+    .then(j => {
+      REPORT_HISTORY = (j && j.reports) || [];
+      drawTrendChart();
+      populateComparePickers();
+    })
+    .catch(() => {});
+}
+
+function drawTrendChart() {
+  const canvas = $('trendChart');
+  const emptyEl = $('trend-empty');
+  if (!canvas) return;
+  const runs = REPORT_HISTORY.slice(0, 20).reverse();   // oldest → newest, last 20
+  if (canvas._chart) { canvas._chart.destroy(); canvas._chart = null; }
+  if (runs.length < 2) {
+    canvas.style.display = 'none';
+    if (emptyEl) emptyEl.textContent = runs.length ? 'Only one saved baseline — run another scan to start the trend.' : 'No saved baselines yet.';
+    return;
+  }
+  canvas.style.display = '';
+  if (emptyEl) emptyEl.textContent = '';
+  if (!window.Chart) {
+    // Text fallback so the data is never simply missing.
+    canvas.style.display = 'none';
+    if (emptyEl) emptyEl.textContent = runs.map(r => `${r.mtime}: risk ${r.risk_score} (${r.critical}C/${r.high}H)`).join('  ·  ');
+    return;
+  }
+  const cs = getComputedStyle(document.body);
+  const accent = cs.getPropertyValue('--accent').trim() || '#00D4FF';
+  const text = cs.getPropertyValue('--text-mid').trim() || '#9aa';
+  const crit = cs.getPropertyValue('--threat-critical').trim() || '#ff3838';
+  const high = cs.getPropertyValue('--threat-high').trim() || '#ff9500';
+  canvas._chart = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels: runs.map(r => `${(r.mtime || '').slice(5, 16)} ${r.mode || ''}`),
+      datasets: [
+        { label: 'Risk score', data: runs.map(r => r.risk_score), borderColor: accent, backgroundColor: 'transparent', tension: 0.25 },
+        { label: 'Critical',   data: runs.map(r => r.critical),   borderColor: crit,   backgroundColor: 'transparent', tension: 0.25 },
+        { label: 'High',       data: runs.map(r => r.high),       borderColor: high,   backgroundColor: 'transparent', tension: 0.25 },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: prefersReducedMotion() ? false : undefined,
+      plugins: { legend: { labels: { color: text, boxWidth: 12 } } },
+      scales: {
+        x: { ticks: { color: text, maxRotation: 45 }, grid: { color: 'rgba(255,255,255,.06)' } },
+        y: { ticks: { color: text, precision: 0 }, grid: { color: 'rgba(255,255,255,.06)' }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+function populateComparePickers() {
+  const a = $('cmp-a'), b = $('cmp-b');
+  if (!a || !b) return;
+  const opts = REPORT_HISTORY.map(r =>
+    `<option value="${escapeHtml(r.name)}">${escapeHtml(r.mtime)} — ${escapeHtml(r.mode || '?')} (${r.critical}C/${r.high}H)</option>`).join('');
+  const prevA = a.value, prevB = b.value;
+  a.innerHTML = opts; b.innerHTML = opts;
+  // Default: previous run → newest run (REPORT_HISTORY is newest-first). Keep the
+  // operator's own picks across refreshes when those files still exist.
+  if (prevA && REPORT_HISTORY.some(r => r.name === prevA)) a.value = prevA;
+  else if (REPORT_HISTORY.length > 1) a.value = REPORT_HISTORY[1].name;
+  if (prevB && REPORT_HISTORY.some(r => r.name === prevB)) b.value = prevB;
+  else if (REPORT_HISTORY.length) b.value = REPORT_HISTORY[0].name;
+}
+
+function initReportTools() {
+  const btn = $('btn-compare');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    const a = $('cmp-a').value, b = $('cmp-b').value;
+    const out = $('compare-result');
+    if (!a || !b) { showToast('Pick two baselines to compare'); return; }
+    if (a === b) { showToast('Pick two different baselines'); return; }
+    btn.disabled = true;
+    out.innerHTML = '<div class="report-empty">Comparing…</div>';
+    fetch(`/api/report/diff?a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`)
+      .then(r => r.json())
+      .then(j => {
+        if (j.error) throw new Error(j.error);
+        renderCompareResult(j);
+      })
+      .catch(e => {
+        out.innerHTML = `<div class="report-empty" style="color:var(--threat-high)">Compare failed: ${escapeHtml(e.message)}</div>`;
+        ZBSound.play('error');
+      })
+      .finally(() => { btn.disabled = false; });
+  });
+}
+
+function renderCompareResult(j) {
+  const out = $('compare-result');
+  const li = f => `<div class="cmp-item"><span class="cmp-sev cmp-sev-${(f.severity || '').toLowerCase()}">${escapeHtml(f.severity || '?')}</span> <span class="cmp-tt">${escapeHtml(f.threat_type || '')}</span> ${escapeHtml(f.desc || '')}</div>`;
+  const section = (title, arr, totalCount, color) => {
+    const shown = (arr || []).slice(0, 50);
+    return `<div class="cmp-section"><div class="cmp-head" style="color:${color}">${title} — ${totalCount}</div>` +
+      (shown.length ? shown.map(li).join('') : '<div class="report-empty">none</div>') +
+      (totalCount > shown.length ? `<div class="report-empty">…and ${totalCount - shown.length} more</div>` : '') + '</div>';
+  };
+  out.innerHTML =
+    `<div class="cmp-meta">${escapeHtml(j.a)} → ${escapeHtml(j.b)} · ${j.persisting_count} unchanged</div>` +
+    section('NEW FINDINGS', j.added, j.added_count, 'var(--threat-high)') +
+    section('RESOLVED', j.resolved, j.resolved_count, 'var(--threat-clean)');
 }
 
 function drawRiskDial(score) {

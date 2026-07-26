@@ -382,6 +382,13 @@
       <!-- ── VIEW: REPORT ─────────────────────────────────────────── -->
       <div class="view" id="view-report">
         <div class="view-title">THREAT REPORT</div>
+        <!-- WS5: executive summary — the "what does this mean" line an MSP writeup opens
+             with: verdict, per-severity totals, top tactics. Rendered from the same
+             findings the dial/radar use, so it can never disagree with them. -->
+        <div id="exec-summary-wrap">
+          <div class="report-section-title">EXECUTIVE SUMMARY</div>
+          <div id="exec-summary"></div>
+        </div>
         <div id="report-layout">
           <div id="risk-dial-wrap">
             <canvas id="riskDial" width="200" height="200"></canvas>
@@ -401,6 +408,26 @@
           <div class="report-section-title">MITRE ATT&amp;CK — TACTIC COVERAGE</div>
           <canvas id="mitreTactics" height="150"></canvas>
           <div id="mitre-rollup-empty" class="report-empty"></div>
+        </div>
+        <!-- WS5: scan history across saved baselines (GET /api/reports) — risk score and
+             CRIT/HIGH counts per run as a trend line, with a text fallback sans Chart.js. -->
+        <div id="trend-wrap">
+          <div class="report-section-title">SCAN HISTORY — RISK TREND</div>
+          <canvas id="trendChart" height="150"></canvas>
+          <div id="trend-empty" class="report-empty"></div>
+        </div>
+        <!-- WS5: compare ANY two saved baselines (GET /api/report/diff) — new vs resolved
+             findings by stable ID. The engine's own -Baseline delta only knows the
+             immediately-previous run; this picker answers "what changed since Tuesday". -->
+        <div id="compare-wrap">
+          <div class="report-section-title">BASELINE COMPARE</div>
+          <div class="file-input-row">
+            <select id="cmp-a" class="path-input" aria-label="Older baseline"></select>
+            <span style="color:var(--text-dim);font-size:11px">→</span>
+            <select id="cmp-b" class="path-input" aria-label="Newer baseline"></select>
+            <button class="cyber-btn-sm" id="btn-compare">COMPARE</button>
+          </div>
+          <div id="compare-result"></div>
         </div>
         <!-- Persisted remediation outcome. Previously the ONLY record of a PURGE run was a
              3-second toast, which is useless for a client writeup. -->

@@ -1120,6 +1120,24 @@ textarea:focus-visible,
 .remsum-cell.block span { color: var(--threat-critical); }
 .remsum-when { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; margin-top: 8px; }
 
+/* ── WS5: executive summary + scan history/trend + baseline compare ─────────── */
+#exec-summary-wrap { margin-bottom: 6px; }
+.exec-verdict { font-size: 13px; letter-spacing: 0.5px; margin: 4px 0 8px; }
+.exec-counts { display: flex; gap: 18px; flex-wrap: wrap; font-family: var(--font-ui); font-size: 9px; letter-spacing: 1px; color: var(--text-dim); }
+.exec-counts b { font-size: 16px; margin-right: 4px; }
+.exec-tactics { font-size: 10px; color: var(--text-mid); letter-spacing: 0.5px; margin-top: 8px; }
+#trend-wrap canvas { max-height: 220px; }
+#compare-wrap .file-input-row { margin-bottom: 8px; }
+.cmp-meta { font-size: 9px; color: var(--text-dim); letter-spacing: 1px; margin: 4px 0 8px; }
+.cmp-section { margin-bottom: 10px; }
+.cmp-head { font-family: var(--font-ui); font-size: 10px; letter-spacing: 2px; margin-bottom: 4px; }
+.cmp-item { font-size: 11px; color: var(--text); padding: 3px 0; border-bottom: 1px dotted var(--border); }
+.cmp-sev { font-family: var(--font-ui); font-size: 8px; letter-spacing: 1px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--border-bright); color: var(--text-mid); }
+.cmp-sev-critical { color: var(--threat-critical); border-color: var(--threat-critical); }
+.cmp-sev-high     { color: var(--threat-high);     border-color: var(--threat-high); }
+.cmp-sev-possible { color: var(--threat-possible); border-color: var(--threat-possible); }
+.cmp-tt { color: var(--text-mid); font-size: 10px; }
+
 /* ── Discoverability (UX #8): the command palette, theme system and easter egg
    had no on-screen affordance at all. A quiet hint line in Settings + the
    launchpad is enough — this stays deliberately understated. */
@@ -1172,6 +1190,8 @@ textarea:focus-visible,
     background: #fff !important; border: 1px solid #bbb !important; color: #000 !important;
   }
   .tree-item, .card-text, .item-text { color: #000 !important; }
+  .exec-verdict, .exec-counts, .exec-tactics, .cmp-item, .cmp-meta { color: #000 !important; }
+  #compare-wrap .file-input-row { display: none !important; }   /* pickers are chrome, results print */
   /* Severity survives greyscale printing via the shapes defined above. */
   .item-sev.CRITICAL, .item-sev.HIGH { border: 1px solid #000 !important; }
   a[href]::after { content: ''; }   /* no URL spam in a client report */

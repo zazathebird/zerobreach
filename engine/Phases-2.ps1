@@ -1098,7 +1098,10 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
     Out-Typewriter "SCANNING INSTALLUTIL/MSIEXEC PERSISTENCE..." "HUNT"
     foreach ($fp in @("HKCU:\SOFTWARE\Microsoft\InstallShield","HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer")) {
         if (Test-Path $fp) {
-            $recentKeys = Get-ChildItem -Path $fp -Recurse -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
+            # "Recent" is now backed by the real key write time (RegQueryInfoKey via the loader's
+            # Get-RegKeyLastWriteTime) — the old $_.LastWriteTime read was $null (no such property),
+            # so every installer key ever written surfaced as "recent" regardless of scan window.
+            $recentKeys = Get-ChildItem -Path $fp -Recurse -ErrorAction SilentlyContinue | Where-Object { Test-InScope (Get-RegKeyLastWriteTime $_) }
             foreach ($k in $recentKeys) {
                 Out-Typewriter "  -> RECENT INSTALL KEY: $($k.PSPath)" "WARN"
                 Add-Finding -ID "LOLBIN_INST_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 85" -ThreatType "LoLBin Persistence" `

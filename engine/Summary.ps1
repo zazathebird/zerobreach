@@ -86,6 +86,13 @@ $auditCache = @{
     TimeWindow    = $global:TW_LABEL
     RiskScore     = $totalRisk
     RiskLabel     = $riskLabel
+    # WS5: authoritative per-severity totals as cheap top-level scalars, so the server's
+    # report-history view can read them by regex without ConvertFrom-Json'ing a
+    # multi-MB baseline inside its single-threaded accept loop.
+    SevTally      = @{
+        CRITICAL = $critCount; HIGH = $highCount
+        POSSIBLE = $possibleCount; INFO = $infoCount
+    }
     Paranoid      = $global:PARANOID_MODE
     Stealth       = $global:STEALTH_MODE
     Findings      = @($global:AuditFindings)
@@ -319,6 +326,8 @@ if ($Auto) {
             $global:SCAN_FILE_CACHE.Count, $global:SCAN_FILE_CACHE_HITS, $global:SCAN_FILE_CACHE_ON)
         Write-Host ("[CACHE] ProcSnapshot memo: {0} cache hits, TTL {1}s (on={2})" -f `
             $global:PROC_SNAP_HITS, $global:PROC_SNAP_TTL_S, $global:SCAN_FILE_CACHE_ON)
+        Write-Host ("[CACHE] AuthSig memo: {0} distinct files, {1} cache hits (on={2})" -f `
+            $global:AUTHSIG_CACHE.Count, $global:AUTHSIG_CACHE_HITS, $global:SCAN_FILE_CACHE_ON)
     }
     Out-Typewriter "AUDIT COMPLETE. $findingCount FINDINGS. REPORTS WRITTEN. (auto mode — fix handled by GUI)" "GOOD"
     [Environment]::Exit(0)   # dot-sourced: plain exit would fall through to FixMode

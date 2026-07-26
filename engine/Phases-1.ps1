@@ -936,7 +936,10 @@ Show-PhaseHeader "PHASE 26" "BROWSER HELPER OBJECT (BHO) PURGE"
 $bhoPaths = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects")
 foreach ($bho in $bhoPaths) {
     if (Test-Path $bho) {
-        $bhoKeys = Get-ChildItem -Path $bho -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
+        # Registry keys have no .LastWriteTime property — that read was silently $null (admits
+        # everything). Get-RegKeyLastWriteTime (RegQueryInfoKey) makes the time-scope filter real;
+        # a $null (P/Invoke failure) still admits the key, so this only ever narrows, fail-open.
+        $bhoKeys = Get-ChildItem -Path $bho -ErrorAction SilentlyContinue | Where-Object { Test-InScope (Get-RegKeyLastWriteTime $_) }
         foreach ($k in $bhoKeys) {
             Out-Decrypt -Text $k.Name -Prefix "  [BHO HIT] "
             # BHOs are a legacy IE hijack vector, but legitimate ones exist (Adobe PDF, Office/Lync,
@@ -961,8 +964,9 @@ foreach ($sm in @("Minimal","Network")) {
         # DeleteRegKey would (absent the safety guard) offer to break Safe Mode boot. Skip the known
         # defaults; surface only *unrecognized* entries as POSSIBLE for manual review (the SafeBoot
         # registry is also a Test-ProtectedTarget hard-block, so this is purely noise reduction).
+        # Key write time now read for real via RegQueryInfoKey (was a $null no-op property read).
         $safeKeys = Get-ChildItem -Path $safePath -ErrorAction SilentlyContinue |
-            Where-Object { $_.PSChildName -notmatch "^{" -and (Test-InScope $_.LastWriteTime) -and ($_.PSChildName.ToLower() -notin $SAFEBOOT_DEFAULTS) }
+            Where-Object { $_.PSChildName -notmatch "^{" -and (Test-InScope (Get-RegKeyLastWriteTime $_)) -and ($_.PSChildName.ToLower() -notin $SAFEBOOT_DEFAULTS) }
         foreach ($k in $safeKeys) {
             Out-Decrypt -Text $k.PSPath -Prefix "  [SAFEMODE PERSIST] "
             Add-Finding -ID "SAFEBOOT_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 27" -ThreatType "SafeBoot Hijack" `
@@ -1498,21 +1502,20 @@ foreach ($arKey in @(
         }
     } catch {}
 }
-# KNOWN LIMITATION (verified 2026-07-22): we wanted the store entry's INSTALL TIME as the
-# signal an attacker cannot fake, but PowerShell's registry provider returns a
-# Microsoft.Win32.RegistryKey, which exposes no LastWriteTime — reading it needs a P/Invoke to
-# RegQueryInfoKey. Get-CertStoreInstallTime therefore always returns $null today and the
-# escalation branch below never fires. It is left in place, correct and inert, so that adding
-# the P/Invoke later switches it on with no other change. UNTIL THEN, be honest about what this
-# phase does: it distinguishes roots Windows manages from roots added locally, and it CANNOT by
-# itself catch a rogue root that names itself after a well-known CA. Name-based root-CA trust is
-# not made non-evadable by anything in this phase.
+# The store entry's INSTALL TIME is the signal an attacker cannot fake. PowerShell's registry
+# provider exposes no LastWriteTime, so this reads it via the loader's Get-RegKeyLastWriteTime
+# (RegQueryInfoKey P/Invoke, wired 2026-07-24 — the escalation branch below is now LIVE).
+# On any P/Invoke/read failure this still returns $null and the branch degrades to inert,
+# never to a false escalation. NOTE: CryptoAPI rewrites a cert entry's Blob value when it
+# caches new cert properties, which also bumps the key's LastWriteTime — so "recently
+# written" is evidence for REVIEW (HIGH + Info fix), not proof of a plant; the finding text
+# says to verify provenance, and the cert store stays a 3-layer HARD block regardless.
 $CERT_RECENT_DAYS = 30
 function Get-CertStoreInstallTime {
     param([string]$StoreRegPath, [string]$Thumbprint)
     try {
-        $ik = Get-Item -Path (Join-Path $StoreRegPath $Thumbprint) -ErrorAction SilentlyContinue
-        if ($ik) { return $ik.LastWriteTime }
+        $kp = Join-Path $StoreRegPath $Thumbprint
+        if (Test-Path -LiteralPath $kp) { return Get-RegKeyLastWriteTime $kp }
     } catch {}
     return $null
 }
