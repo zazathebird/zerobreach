@@ -214,6 +214,11 @@ fn spawn_server(app: AppHandle) {
                             dlog("child assigned to kill-on-close job object");
                             *lock_or_recover(&app.state::<ServerState>().job) = Some(job);
                         } else {
+                            // AssignProcessToJobObject failed after the job was successfully
+                            // created — without this, the job HANDLE would never be stored
+                            // (nothing else references it) and never closed, leaking it for
+                            // the life of the process (found in a follow-up review pass).
+                            unsafe { CloseHandle(job as _) };
                             dlog("AssignProcessToJobObject failed — falling back to cooperative-only cleanup");
                         }
                     } else {
