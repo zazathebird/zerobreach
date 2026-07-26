@@ -400,7 +400,11 @@ $stealerFiles = $p68Files |
 foreach ($sf in $stealerFiles) {
     # Exclude legitimate browser storage + known-benign dictionaries/caches (ZxcvbnData password
     # lists, *.LICENSE.txt, Edge Wallet bundles, Cef/EBWebView caches) — these are NOT creds dumps.
-    if ($sf.FullName -match "Chrome\\User Data|Firefox\\Profiles" -or $sf.FullName -match $INFOSTEALER_BENIGN_RE) { continue }
+    # Routed through Test-BenignPath (not a bare -match) so this HIGH+DeleteFile finding gets the
+    # same Downloads/Public/Temp staging-dir veto every other allowlist consumer gets — a bare
+    # match here previously let an attacker self-allowlist a real credential dump by naming it
+    # e.g. "stolen_passwords_mini-wallet.zip" with zero staging-dir check at all.
+    if ($sf.FullName -match "Chrome\\User Data|Firefox\\Profiles" -or (Test-BenignPath $sf.FullName $INFOSTEALER_BENIGN_RE)) { continue }
     # A loose .txt/.log/.db merely *named* like a credential store is weak evidence and FP-prone;
     # treat it as POSSIBLE (shown, not auto-selected for destructive remediation). A creds *archive*
     # (.zip) staged in a user path is a stronger stealer signal -> keep HIGH.

@@ -46,17 +46,33 @@ if ($psHits) {
 }   # end QUICK-skip block
 Show-PhaseHeader "PHASE 3" "PROCESS ANCESTRY & INJECTION AUDIT"
 Invoke-QuantumBar "MAPPING LIVE PROCESS TREE" 8 120
+# Split STRONG (unambiguous — obfuscation/injection API names/decode flags in a command line is
+# never routine) from WEAK (a bare LOLBin tool name with no argument qualifier at all — the rare
+# legitimate legacy-HTA/WSH-logon-script case looks identical to this at the substring level).
+# Mirrors the STRONG/WEAK split Phase 29's task-action check already uses for the same reason.
+# `\bIEX\b` (word-boundary) so this doesn't substring-match "iexplore.exe" — bare `IEX` matched
+# every ordinary launch of Internet Explorer / an embedded WebBrowser control (rule #1 regression
+# caught in review, never shipped).
+$procInjStrongRe = '\bIEX\b|EncodedCommand|DownloadString|regsvr32[^;]*http|rundll32[^;]*http|certutil[^;]*decode|VirtualAlloc|CreateRemoteThread'
+$procInjWeakRe   = '\bmshta\b|\bwscript\b|\bcscript\b'
 $suspectProcs = (Get-ProcSnapshot) | Where-Object {
-    $_.CommandLine -match "IEX|EncodedCommand|DownloadString|mshta|wscript|cscript|regsvr32.*http|rundll32.*http|certutil.*decode|VirtualAlloc|CreateRemoteThread"
+    $_.CommandLine -match $procInjStrongRe -or $_.CommandLine -match $procInjWeakRe
 }
 if ($suspectProcs) {
     foreach ($proc in $suspectProcs) {
         Out-Glitch "  [SUSPECT PROCESS]" Red
         $cmd = $proc.CommandLine.Substring(0,[Math]::Min(120,$proc.CommandLine.Length))
+        $isStrong = ($proc.CommandLine -match $procInjStrongRe)
         Out-Typewriter "  -> PID:$($proc.ProcessId) | $($proc.Name) | $cmd" "CRIT"
-        Add-Finding -ID "PROC_INJ_$($proc.ProcessId)" -Phase "PHASE 3" -ThreatType "Process Injection/Fileless" `
-            -Severity $SEV_CRITICAL -Description "Suspect process: $($proc.Name) PID:$($proc.ProcessId) | $cmd" `
-            -Target "PID:$($proc.ProcessId)" -FixAction "KillProcess" -FixParam $proc.ProcessId -Group "Live Malicious Processes"
+        if ($isStrong) {
+            Add-Finding -ID "PROC_INJ_$($proc.ProcessId)" -Phase "PHASE 3" -ThreatType "Process Injection/Fileless" `
+                -Severity $SEV_CRITICAL -Description "Suspect process: $($proc.Name) PID:$($proc.ProcessId) | $cmd" `
+                -Target "PID:$($proc.ProcessId)" -FixAction "KillProcess" -FixParam $proc.ProcessId -Group "Live Malicious Processes"
+        } else {
+            Add-Finding -ID "PROC_INJ_$($proc.ProcessId)" -Phase "PHASE 3" -ThreatType "Process Injection/Fileless" `
+                -Severity $SEV_POSSIBLE -Description "LOLBin tool running with no further qualifier — could be a legacy HTA/WSH logon or print script (review, not auto-killed): $($proc.Name) PID:$($proc.ProcessId) | $cmd" `
+                -Target "PID:$($proc.ProcessId)" -FixAction "Info" -Group "Live Malicious Processes"
+        }
     }
 } else { Out-Typewriter "  -> [OK] NO INJECTED/MALICIOUS PROCESS SIGNATURES." "GOOD" }
 
