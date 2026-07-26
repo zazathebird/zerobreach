@@ -13,14 +13,83 @@ if ($PhasePlan.Advanced) {
     Show-PhaseHeader "PHASE 90" "YARA-LITE BINARY STRING SCAN & CUSTOM IOC HASHES" "YARA-LITE"
     Out-Typewriter "SCANNING USER-PATH BINARIES FOR MALWARE STRINGS..." "HUNT"
     Invoke-QuantumBar "BINARY STRING ANALYSIS" 18 90
-    $yaraRoots = @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop")
-    $yaraExt   = @(".exe",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
+    # ORDER MATTERS: Get-ScanFiles walks these in sequence under ONE shared file/wall-clock budget,
+    # so whatever is last is simply never reached on a busy box (measured: the walk hit its 20,000
+    # file cap and the sniff hit its deadline long before Downloads). Downloads and Desktop are the
+    # delivery locations this content pass exists for — a real banking trojan sat in Downloads as
+    # *.exe.vir — so they go FIRST. %TEMP% is a subtree of %LOCALAPPDATA% and the noisiest, so it
+    # goes last (it is still covered, and Phase 10 sweeps the temp dirs independently).
+    $yaraRoots = @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop",$env:APPDATA,$env:LOCALAPPDATA,$env:TEMP)
+    $yaraExt   = @(".exe",".com",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
     $yaraHits  = 0
     $trojSigSeen = 0; $trojSigSw = [System.Diagnostics.Stopwatch]::StartNew()   # SIG_AUDIT budget (P90 name loop)
     # Single bounded walk across all roots (was per-root recursion x5, -First 200 each).
-    $candidates = (Get-ScanFiles -Path $yaraRoots -TimeScoped) |
-        Where-Object { ($yaraExt -contains $_.Extension.ToLower()) -and $_.Length -lt 10MB } |
-        Select-Object -First 200
+    # Assigned to a variable first, never piped directly — Get-ScanFiles returns ,$arr (CLAUDE.md).
+    $allScanned = Get-ScanFiles -Path $yaraRoots -TimeScoped
+
+    # Extension match is the CHEAP first pass. It is no longer the only way in: a payload that is
+    # renamed (.vir/.dat/.tmp), shipped extensionless, or given any extension not on this list used
+    # to skip the YARA strings pass, the content rules AND the known-malware hash check entirely.
+    # See Test-IsPeFile's comment for the live proof. Content now decides, not the filename.
+    $byExt = @($allScanned | Where-Object { ($yaraExt -contains $_.Extension.ToLower()) -and $_.Length -lt 10MB })
+
+    # Magic-byte pass over everything the extension list did NOT already claim. Sniffing reads 8
+    # bytes per file, but on a real box these roots hold thousands of files, so it carries the same
+    # deadline+count budget convention as the Get-AuthSig loops (see Phase 10/93/96/98).
+    $magicSeen = 0; $magicSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $MAGIC_MAX_FILES = 4000; $MAGIC_DEADLINE_S = 45
+    $byMagic = @()
+    $magicBudgetHit = $false
+    foreach ($f in $allScanned) {
+        if ($magicSeen -ge $MAGIC_MAX_FILES -or $magicSw.Elapsed.TotalSeconds -ge $MAGIC_DEADLINE_S) { $magicBudgetHit = $true; break }
+        if ($f.Length -ge 10MB -or $f.Length -lt 64) { continue }
+        if ($yaraExt -contains $f.Extension.ToLower()) { continue }
+        $magicSeen++
+        if (Test-IsPeFile $f.FullName) { $byMagic += $f }
+    }
+    $magicSw.Stop()
+    if ($magicBudgetHit) {
+        Out-Typewriter ("  -> [INFO] MAGIC-BYTE SNIFF BUDGET REACHED ({0} files / {1}s) — partial." -f $magicSeen, [Math]::Round($magicSw.Elapsed.TotalSeconds,1)) "WARN"
+    }
+
+    # A real PE binary wearing a non-executable extension in a user staging dir is masquerading —
+    # a strong, low-FP signal on its own. HIGH so it is impossible to miss, but FixAction Info:
+    # rule #1 forbids shipping a destructive action that an auto-select could fire on a healthy
+    # box, and a renamed-binary heuristic is exactly the kind of thing that needs a human look
+    # first (installers legitimately ship payload blobs). Same HIGH+Info shape as Phase 10.5.
+    # NOTE: Phase 10 mints the IDENTICAL MASQPE_<stableid> for files in the temp/download dirs both
+    # phases cover, and Add-Finding dedupes by ID — so for those the call below is a silent no-op.
+    # The counters must therefore NOT be incremented unconditionally, or the GUI's Trojan threat
+    # counter double-counts every file both phases saw (caught in review 2026-07-26). Compare the
+    # finding count before/after and only count what was actually added.
+    foreach ($mf in $byMagic) {
+        $beforeCount = $global:AuditFindings.Count
+        Add-Finding -ID "MASQPE_$(Get-StableId $mf.FullName)" -Phase "PHASE 90" `
+            -ThreatType "Masquerading Executable" -Severity $SEV_HIGH `
+            -Description "File is a real Windows PE executable but carries a non-executable extension ('$($mf.Extension)') in a user staging path: $($mf.FullName) — classic rename-to-evade delivery. Review before acting." `
+            -Target $mf.FullName -FixAction "Info" -Group "Masquerading Executables"
+        if ($global:AuditFindings.Count -gt $beforeCount) { $yaraHits++; $global:TrojanHits++ }
+    }
+    if ($byMagic.Count -gt 0) { Out-Typewriter "  -> $($byMagic.Count) MISNAMED PE BINAR(IES) FOUND BY CONTENT." "WARN" }
+
+    # Cap raised 200 -> 600: the old cap silently limited the DEEPEST content inspection in the
+    # whole engine to an arbitrary 200-file subset across FIVE roots (TEMP, LOCALAPPDATA, APPDATA,
+    # Downloads, Desktop) — trivially exceeded on any real box. The two sources get SEPARATE caps:
+    # a single flood can otherwise crowd the other out entirely (600 magic hits on a Python/Store
+    # heavy box would stop the extension-based YARA pass from running at all, and vice versa).
+    $candidates = @(@($byMagic | Select-Object -First 200) + @($byExt | Select-Object -First 400))
+
+    # Files that got here ONLY because of the magic-byte sniff were never previously subject to
+    # this loop's pre-existing auto-destructive outcomes (YARA -> CRITICAL/HIGH + DeleteFile).
+    # Two of the shipped YARA rules match plain PE IMPORT-TABLE strings (WMI_Reflective matches
+    # VirtualAllocEx/WriteProcessMemory/CreateRemoteThread; UAC_Bypass_FodHelper matches any
+    # binary that merely references eventvwr.exe), and installer bootstrappers, anti-cheat shims
+    # and .NET hosting stubs legitimately contain those. An unsigned extensionless PE staged in
+    # %TEMP% by a normal installer would therefore have become a HIGH + DeleteFile AUTO-SELECTED
+    # finding on a healthy box — rule #1. Newly-reachable files are review-only; nothing is lost,
+    # because every one of them already carries its own HIGH masquerade finding.
+    $magicOnly = @{}
+    foreach ($m in $byMagic) { $magicOnly[$m.FullName] = $true }
         foreach ($cand in $candidates) {
             try {
                 $bytes = [System.IO.File]::ReadAllBytes($cand.FullName)
@@ -33,6 +102,16 @@ if ($PhasePlan.Advanced) {
                             Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
                                 -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
                                 -Description "YARA rule '$($rule.Name)' matched an allowlisted runtime/library file (JIT renderers legitimately contain these API strings — review only): $($cand.FullName)" `
+                                -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches"
+                            $yaraHits++; break
+                        }
+                        if ($magicOnly.ContainsKey($cand.FullName)) {
+                            # Reachable only because of the magic-byte sniff — review-only (see the
+                            # $magicOnly comment above; rule #1). It already carries a HIGH
+                            # masquerade finding, so the operator still sees it prominently.
+                            Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                                -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
+                                -Description "YARA rule '$($rule.Name)' matched a file identified as an executable by CONTENT rather than extension: $($cand.FullName) — review-only, because this rule class also matches ordinary PE import-table strings in installers and runtime shims." `
                                 -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches"
                             $yaraHits++; break
                         }
@@ -93,6 +172,13 @@ if ($PhasePlan.Advanced) {
                             -ThreatType "Suspicious Filename" -Severity $SEV_POSSIBLE `
                             -Description "Filename matches a known malware/tooling naming pattern ('$tfp') but the binary is validly signed (review only, never auto-acted): $($cand.FullName)" `
                             -Target $cand.FullName -FixAction "Info" -Group "Suspicious Filenames"
+                    } elseif ($magicOnly.ContainsKey($cand.FullName)) {
+                        # Magic-sniffed file: newly reachable here, so keep it out of the
+                        # auto-select path (rule #1 — see the $magicOnly comment above).
+                        Add-Finding -ID "TROJNAME_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
+                            -ThreatType "Suspicious Filename" -Severity $SEV_POSSIBLE `
+                            -Description "Unsigned file, identified as an executable by CONTENT rather than extension, whose name matches a known malware/tooling naming pattern ('$tfp'): $($cand.FullName) — review-only." `
+                            -Target $cand.FullName -FixAction "Info" -Group "Suspicious Filenames"
                     } else {
                         Out-Decrypt -Text "trojan-pattern filename: $($cand.FullName)" -Prefix "  [NAME HIT] "
                         Add-Finding -ID "TROJNAME_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
@@ -135,6 +221,47 @@ if ($PhasePlan.Advanced) {
                 }
             } catch {}
         }
+
+    # ── UNGATED KNOWN-MALWARE / IOC HASH SWEEP ────────────────────────────────
+    # A SHA256 comparison is EXACT: it cannot false-positive, so it is the one detection in the
+    # engine that never had any business being restricted by filename. It used to live only
+    # inside the extension-filtered $candidates loop above, which made the single highest-
+    # confidence check in the product unreachable for exactly the files an attacker renames.
+    # This pass covers every time-scoped file the walk saw, whatever it is called.
+    # CRITICAL + Quarantine matches the in-loop behaviour: reversible, and a hash match is
+    # confirmed malware, so auto-action is justified (rule #1 is about heuristics firing on a
+    # HEALTHY box — a known-malware hash hit means the box is not healthy).
+    if ($KNOWN_MALWARE_HASHES.Count -gt 0 -or $global:CustomIocs.Hashes.Count -gt 0) {
+        $alreadyHashed = @{}
+        foreach ($c in $candidates) { $alreadyHashed[$c.FullName] = $true }
+        $hashSeen = 0; $hashSw = [System.Diagnostics.Stopwatch]::StartNew()
+        $HASH_MAX_FILES = 3000; $HASH_DEADLINE_S = 60
+        $hashBudgetHit = $false
+        foreach ($hf in $allScanned) {
+            if ($hashSeen -ge $HASH_MAX_FILES -or $hashSw.Elapsed.TotalSeconds -ge $HASH_DEADLINE_S) { $hashBudgetHit = $true; break }
+            if ($alreadyHashed.ContainsKey($hf.FullName)) { continue }
+            if ($hf.Length -ge 25MB -or $hf.Length -lt 1) { continue }
+            $hashSeen++
+            try {
+                $h2 = (Get-FileHashSafe $hf.FullName)
+                if (-not $h2) { continue }
+                $h2 = $h2.ToLower()
+                if (($KNOWN_MALWARE_HASHES -contains $h2) -or ($global:CustomIocs.Hashes -contains $h2)) {
+                    Out-Decrypt -Text "IOC hash match (name-independent): $($hf.FullName)" -Prefix "  [IOC HIT] "
+                    Add-Finding -ID "IOC_HASH_$(Get-StableId $hf.FullName)" -Phase "PHASE 90" `
+                        -ThreatType "Known-Malware Hash" -Severity $SEV_CRITICAL `
+                        -Description "File matches known-malware/IOC hash ($h2) despite a non-executable filename: $($hf.FullName)" `
+                        -Target $hf.FullName -FixAction "Quarantine" -FixParam $hf.FullName `
+                        -Group "Known-Malware Hash Matches"
+                    $yaraHits++; $global:TrojanHits++
+                }
+            } catch {}
+        }
+        $hashSw.Stop()
+        if ($hashBudgetHit) {
+            Out-Typewriter ("  -> [INFO] IOC HASH SWEEP BUDGET REACHED ({0} files / {1}s) — partial." -f $hashSeen, [Math]::Round($hashSw.Elapsed.TotalSeconds,1)) "WARN"
+        }
+    }
     if ($yaraHits -eq 0) { Out-Typewriter "  -> [OK] NO YARA-LITE MATCHES." "GOOD" }
 
     # ── PHASE 91: MARK-OF-THE-WEB ABUSE ───────────────────────────────────────
@@ -688,7 +815,28 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
             if ($Ip -eq '0.0.0.0') { return $true }
             return $false
         }
-        $wslList = (wsl --list --quiet 2>$null)
+        # wsl.exe emits UTF-16LE. PS 5.1 decodes the child's stdout with the console code page, so
+        # each distro name arrives with NUL bytes interleaved ("U b u n t u"). Stripping the NULs
+        # recovers the name — deliberately NOT by reassigning [Console]::OutputEncoding, because the
+        # loader sets that to UTF-8 for the whole redirected-stdout pipeline and flipping it here
+        # would corrupt the parent's own output (CLAUDE.md: don't change one side of that alone).
+        #
+        # Second, worse bug: wsl.exe ships in System32 on EVERY Win11 box, so `Get-Command wsl`
+        # always succeeds — and when the WSL feature is not installed, wsl.exe prints its install
+        # PROMPT to stdout. Every one of those lines was being registered as a "WSL distro present"
+        # finding; a live sandbox run emitted 5, reading "Press any key to install...", "Operation
+        # aborted", "This prompt will time out in 60 seconds." (2026-07-26). Real WSL distro names
+        # contain no whitespace, so anything with a space is prompt/error prose, not a distro.
+        $wslList = @(@(& wsl.exe --list --quiet 2>$null) |
+            ForEach-Object { ("$_" -replace "`0", '').Trim() } |
+            Where-Object { $_ -and $_.Length -le 64 -and $_ -match '^[A-Za-z0-9][\w.+-]*$' })
+        # \w (not [A-Za-z0-9._+-]) because UNDERSCORES are real: Oracle ships OracleLinux_7_9 /
+        # OracleLinux_8_7 / OracleLinux_9_1 and they install under exactly those names, so the
+        # tighter class silently dropped every Oracle distro. Verified to still accept
+        # Ubuntu-22.04, kali-linux, docker-desktop-data, openSUSE-Leap-15.5, FedoraLinux-42.
+        # Known gap: a hand-imported `wsl --import "Dev Box"` name contains a space and is dropped.
+        # Accepted - this is an INFO-severity inventory finding, and allowing spaces would let the
+        # install-prompt prose back in, which is the bug being fixed.
         $wslHits = 0
         $wslProbeDeadlineS = 20
         $wslSw = [System.Diagnostics.Stopwatch]::StartNew()

@@ -24,7 +24,7 @@ dunce = "1"
 # ExitRequested) — a force-kill (Task Manager "End Task", a panic, a crash) bypasses both of
 # those and orphans a still-listening elevated PowerShell HTTP server with no UI telling the
 # operator it's alive (found in review 2026-07-26).
-windows-sys = { version = "0.59", features = ["Win32_System_JobObjects", "Win32_Foundation", "Win32_System_Threading", "Win32_Security"] }
+windows-sys = { version = "0.59", features = ["Win32_System_JobObjects", "Win32_Foundation", "Win32_System_Threading", "Win32_Security", "Win32_System_Registry", "Win32_UI_WindowsAndMessaging"] }
 
 [profile.release]
 panic = "abort"

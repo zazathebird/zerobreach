@@ -298,7 +298,11 @@ $targetDirs = @(
     @{P="$env:PUBLIC\Downloads"; L="Public Downloads"},
     @{P="$env:USERPROFILE\AppData\Local\Microsoft\Windows\INetCache"; L="INetCache"}
 )
-$malExt = @(".exe",".bat",".cmd",".ps1",".vbs",".js",".hta",".wsf",".dll",".sys",".scr",".pif",".cpl",".jar")
+# .com added 2026-07-26: it is a genuinely executable Windows extension and its absence meant even
+# EICAR (written as eicar.com) sailed through this sweep untouched. NOTE this list is now only the
+# CHEAP first pass — files it misses are still content-sniffed for a PE header below, so a renamed
+# payload no longer escapes just because its extension is not enumerated here.
+$malExt = @(".exe",".com",".bat",".cmd",".ps1",".vbs",".js",".hta",".wsf",".dll",".sys",".scr",".pif",".cpl",".jar")
 # Bounded sig loop — Get-AuthSig can block on online cert-revocation (CRL/OCSP), and with
 # -Hours 0 the temp/download/INetCache dirs can hold thousands of cached executables. Cap
 # total checks + wall-clock across ALL target dirs so a slow/offline revocation responder
@@ -306,6 +310,13 @@ $malExt = @(".exe",".bat",".cmd",".ps1",".vbs",".js",".hta",".wsf",".dll",".sys"
 $sigSeen = 0
 $sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
 $sigBudgetHit = $false
+# Masquerade-sniff budget. Declared OUT HERE, not inside the per-directory loop: a per-directory
+# budget would be 6 dirs x (2000 files / 30s) = 12,000 sniffs and up to 3 MINUTES of added wall
+# clock. Measured cost is ~27ms/file (Defender scans every File.Open; the 8-byte read is free),
+# so this must be shared across all target dirs exactly like $sigSeen/$sigSw above.
+$masqSeen = 0
+$masqSw   = [System.Diagnostics.Stopwatch]::StartNew()
+$masqBudgetHit = $false
 foreach ($td in $targetDirs) {
     if ($sigBudgetHit) { break }
     Out-Typewriter "SCANNING: $($td.L)" "INFO"
@@ -335,11 +346,36 @@ foreach ($td in $targetDirs) {
     }
     if ($otherFiles.Count -gt 0) {
         Out-Typewriter "  -> $($otherFiles.Count) NON-EXECUTABLE FILES IN $($td.L) — WITHIN TIME SCOPE." "DATA"
+        # ...but "non-executable" was decided purely by FILENAME. Sniff the actual bytes: a real PE
+        # binary wearing a non-executable extension in a temp/download/cache dir is masquerading.
+        # Before this, such a file was counted in the line above and then dropped on the floor —
+        # a live sandbox run had a real banking trojan sitting in Downloads as "*.exe.vir" and the
+        # engine reported it only as one of "8 non-executable files" (2026-07-26).
+        # HIGH so it cannot be missed, FixAction Info so no auto-select can ever act on it
+        # (rule #1) — installers do legitimately ship payload blobs with odd extensions.
+        # Bounded like every other bulk file loop in this phase; 8 bytes read per file. The budget
+        # is PHASE-wide (declared above the target-dir loop), not per-directory.
+        foreach ($of in $otherFiles) {
+            if ($masqSeen -ge 2000 -or $masqSw.Elapsed.TotalSeconds -ge 30) { $masqBudgetHit = $true; break }
+            if ($of.Length -lt 64 -or $of.Length -ge 100MB) { continue }
+            $masqSeen++
+            if (Test-IsPeFile $of.FullName) {
+                Add-Finding -ID "MASQPE_$(Get-StableId $of.FullName)" -Phase "PHASE 10" `
+                    -ThreatType "Masquerading Executable" -Severity $SEV_HIGH `
+                    -Description "File is a real Windows PE executable but carries a non-executable extension ('$($of.Extension)') in $($td.L): $($of.FullName) — classic rename-to-evade delivery. Review before acting." `
+                    -Target $of.FullName -FixAction "Info" -Group "Masquerading Executables"
+                $global:TrojanHits++
+            }
+        }
     }
 }
 $sigSw.Stop()
+$masqSw.Stop()
 if ($sigBudgetHit) {
     Out-Typewriter ("  -> [INFO] TEMP-EXE SIG BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
+}
+if ($masqBudgetHit) {
+    Out-Typewriter ("  -> [INFO] MASQUERADE SNIFF BUDGET REACHED ({0} files / {1}s) — partial scan." -f $masqSeen, [Math]::Round($masqSw.Elapsed.TotalSeconds,1)) "WARN"
 }
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)

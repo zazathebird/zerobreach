@@ -1034,6 +1034,115 @@ foreach ($br in @($becResults)) {
 if ($outlookRunning -and $null -ne $becResults -and $becHits -eq 0) { Out-Typewriter "  -> [OK] NO FORWARD+HIDE RULES FOUND." "GOOD" }
 Out-Typewriter "  -> OUTLOOK FORWARD+HIDE AUDIT COMPLETE." "VER"
 
+Show-PhaseHeader "PHASE 74.9" "OFFICE MACRO DOCUMENT CONTENT ANALYSIS" "MACRO"
+Out-Typewriter "INSPECTING OFFICE DOCUMENTS FOR EMBEDDED VBA MACROS..." "HUNT"
+# Until now the engine checked whether macros were ALLOWED TO RUN (Phase 74's VBAWarnings /
+# ASR registry posture) but never once opened a document to see whether a macro was actually
+# PRESENT. A live sandbox run placed a real Word macro virus (W97M.Class.AU / VAMP_DEMO.doc) in
+# Downloads and produced zero findings (2026-07-26) — macro documents are the dominant real-world
+# initial-access vector, and this was a complete blind spot.
+#
+# Detection is by CONTENT, never extension alone: legacy Office files are OLE compound documents
+# (D0CF11E0A1B11AE1) whose VBA project lives in a "_VBA_PROJECT" stream; modern ones are ZIP
+# containers (PK\x03\x04) holding "vbaProject.bin". A .docx renamed to .doc, or vice versa, is
+# therefore still classified correctly.
+#
+# Severity discipline (rule #1): a macro in a business document is completely normal, so mere
+# presence is POSSIBLE. Only a macro combined with an AUTO-EXECUTING entry point or a
+# shell/download API is HIGH. Both are FixAction Info — never auto-acted. Deleting a user's
+# document because it contains a macro would be exactly the kind of damage rule #1 forbids.
+# .rtf is deliberately NOT here: RTF is neither an OLE compound file nor a ZIP, so the magic-byte
+# gate below discards every one. Listing it would only imply a coverage this phase does not have.
+$docExt   = @('.doc','.docm','.dot','.dotm','.xls','.xlsm','.xlsb','.xlt','.xltm','.ppt','.pptm','.pot','.potm','.docx','.xlsx','.pptx')
+# ORDER MATTERS: Get-ScanFiles walks these in sequence under ONE shared file/wall-clock budget, so
+# whatever is last gets dropped on a busy box. The Outlook attachment cache is the highest-value
+# root for macro-doc delivery (and the only one the $inMail escalation can fire on), so it goes
+# first; %TEMP% is the noisiest and least valuable, so it goes last.
+$docRoots = @(
+    "$env:LOCALAPPDATA\Microsoft\Windows\INetCache\Content.Outlook",
+    "$env:USERPROFILE\Downloads",
+    "$env:USERPROFILE\Desktop",
+    "$env:PUBLIC\Downloads",
+    $env:TEMP
+) | Where-Object { $_ -and (Test-Path $_) }
+$macroHits = 0
+if ($docRoots.Count -gt 0) {
+    $docFiles = Get-ScanFiles -Path $docRoots -TimeScoped
+    $docCands = @($docFiles | Where-Object { ($docExt -contains $_.Extension.ToLower()) -and $_.Length -gt 512 -and $_.Length -lt 15MB })
+    # Auto-executing VBA entry points: these run the moment the document is opened, which is what
+    # turns "has a macro" into "is a delivery mechanism".
+    $autoExecRe = '(?i)\b(AutoOpen|AutoExec|AutoClose|Auto_Open|Auto_Close|Document_Open|Document_Close|Workbook_Open|Workbook_Activate|DocumentOpen)\b'
+    # Shell / download / staging APIs reachable from VBA. Deliberately EXCLUDES the bare words
+    # 'powershell', 'cmd.exe', 'Shell(', 'CreateObject(', 'GetObject(' and 'Environ(' - for legacy
+    # OLE files the document's own prose lives in the same byte space that gets searched, so an IT
+    # runbook or support-ticket export that merely mentions PowerShell would escalate to HIGH.
+    # What is kept are strings that are far more specific to a weaponised VBA project.
+    $vbaBadApiRe = '(?i)(WScript\.Shell|ShellExecute|URLDownloadToFile|MSXML2\.(Server)?XMLHTTP|ADODB\.Stream|WinHttp\.WinHttpRequest|Scripting\.FileSystemObject|VirtualAlloc|CallWindowProc|RtlMoveMemory|Win32_Process)'
+    $docSeen = 0; $docSw = [System.Diagnostics.Stopwatch]::StartNew()
+    foreach ($doc in $docCands) {
+        if ($docSeen -ge 400 -or $docSw.Elapsed.TotalSeconds -ge 45) {
+            Out-Typewriter "  -> [INFO] MACRO-DOC BUDGET REACHED — partial scan." "WARN"
+            break
+        }
+        $docSeen++
+        try {
+            $docBytes = [System.IO.File]::ReadAllBytes($doc.FullName)
+            if ($docBytes.Length -lt 8) { continue }
+            $isOle = ($docBytes[0] -eq 0xD0 -and $docBytes[1] -eq 0xCF -and $docBytes[2] -eq 0x11 -and $docBytes[3] -eq 0xE0 -and
+                      $docBytes[4] -eq 0xA1 -and $docBytes[5] -eq 0xB1 -and $docBytes[6] -eq 0x1A -and $docBytes[7] -eq 0xE1)
+            $isZip = ($docBytes[0] -eq 0x50 -and $docBytes[1] -eq 0x4B -and $docBytes[2] -eq 0x03 -and $docBytes[3] -eq 0x04)
+            if (-not ($isOle -or $isZip)) { continue }
+            # Latin1 keeps a 1:1 byte->char mapping (no lossy UTF-8 substitution). OLE directory
+            # entry names are UTF-16, so a NUL-stripped copy is searched for those.
+            $docRaw  = [System.Text.Encoding]::GetEncoding('ISO-8859-1').GetString($docBytes)
+            $docFlat = $docRaw -replace "`0", ''
+            $hasMacro = $false
+            if ($isOle -and ($docFlat -match '_VBA_PROJECT' -or $docFlat -match 'VBA_PROJECT_CUR' -or $docRaw -match '_VBA_PROJECT')) { $hasMacro = $true }
+            if ($isZip -and $docRaw -match 'vbaProject\.bin') { $hasMacro = $true }
+            if (-not $hasMacro) { continue }
+            # NAMING: these MUST NOT be $auto/$bad. PowerShell variables are case-insensitive and
+            # every engine module dot-sources into the loader's ONE scope, so `$auto = ...` here
+            # assigns the loader's [switch]$Auto parameter - the flag Summary.ps1 tests to decide
+            # whether to [Environment]::Exit(0) instead of dropping into FixMode's interactive
+            # Read-Host. A single macro-free document processed last would silently flip $Auto to
+            # false and hang every server-driven scan. Caught in review 2026-07-26; the live run
+            # that "passed" only did so because the auto-exec document happened to be processed
+            # last. This is CLAUDE.md's case-insensitive-shadow rule, exactly.
+            $vbaAutoExec = ($docFlat -match $autoExecRe)
+            # Require TWO distinct suspicious APIs, not one: $docFlat is the WHOLE file, and for
+            # legacy OLE the document's prose shares that byte space, so an IT runbook saved as
+            # .doc that merely mentions a shell API would otherwise escalate to HIGH.
+            $vbaApiHits = @([regex]::Matches($docFlat, $vbaBadApiRe) | ForEach-Object { $_.Value.ToLower() } | Select-Object -Unique)
+            $vbaBadApi  = ($vbaApiHits.Count -ge 2)
+            $inMail = ($doc.FullName -match '(?i)\\Content\.Outlook\\')
+            if ($vbaAutoExec -or $vbaBadApi) {
+                $why = @()
+                if ($vbaAutoExec) { $why += 'an auto-executing entry point (runs on open)' }
+                if ($vbaBadApi)   { $why += "shell/download API strings ($($vbaApiHits.Count) distinct)" }
+                if ($inMail)      { $why += 'and it arrived as an email attachment' }
+                Out-ThreatBanner "MACRO DOCUMENT" "$($doc.Name)"
+                Add-Finding -ID "MACRODOC_$(Get-StableId $doc.FullName)" -Phase "PHASE 74.9" `
+                    -ThreatType "Malicious Macro Document" -Severity $SEV_HIGH `
+                    -Description "Office document contains an embedded VBA macro project WITH $($why -join ', '): $($doc.FullName). This is the dominant initial-access delivery shape. Open in Protected View only; do not enable content. Review-only — never auto-acted, because legitimate business documents also carry macros." `
+                    -Target $doc.FullName -FixAction "Info" -Group "Macro Documents"
+                $global:TrojanHits++
+            } else {
+                Add-Finding -ID "MACRODOC_$(Get-StableId $doc.FullName)" -Phase "PHASE 74.9" `
+                    -ThreatType "Macro Document" -Severity $SEV_POSSIBLE `
+                    -Description "Office document contains an embedded VBA macro project (no auto-exec entry point or shell/download API string detected): $($doc.FullName). Macros are common in legitimate business documents — inventory/review only." `
+                    -Target $doc.FullName -FixAction "Info" -Group "Macro Documents"
+            }
+            $macroHits++
+        } catch {}
+    }
+    $docSw.Stop()
+    # These are script-scope (dot-sourced), so without this the LAST document's byte array plus its
+    # two full string copies (up to ~75MB combined for a 15MB doc) stay rooted for the whole scan.
+    $docBytes = $null; $docRaw = $null; $docFlat = $null
+}
+if ($macroHits -eq 0) { Out-Typewriter "  -> [OK] NO MACRO-BEARING DOCUMENTS FOUND." "GOOD" }
+else { Out-Typewriter "  -> $macroHits MACRO-BEARING DOCUMENT(S) FOUND." "WARN" }
+
 }   # end QUICK-skip block
 Show-PhaseHeader "PHASE 75" "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT"
 Out-Typewriter "CHECKING DEFENDER EXCLUSION LIST FOR MALWARE HIDING SPOTS..." "HUNT"

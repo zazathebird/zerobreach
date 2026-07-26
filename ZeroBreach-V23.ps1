@@ -1325,6 +1325,61 @@ function Get-FileHashSafe {
     } catch { $null }
     finally { if ($fs) { $fs.Dispose() }; if ($sha) { $sha.Dispose() } }
 }
+function Test-IsPeFile {
+    # Content-based executable identification: does this file START with an MZ DOS header whose
+    # e_lfanew points at a valid "PE\0\0" signature? True for every Windows .exe/.dll/.sys/.scr/
+    # .cpl/.ocx regardless of what the file is NAMED.
+    #
+    # Why this exists: every file-content detection in the engine used to be gated behind a
+    # hardcoded filename-EXTENSION allowlist ($malExt in Phase 10, $yaraExt in Phase 90), so a
+    # payload that was renamed, shipped extensionless, or delivered with any extension not on the
+    # list was never opened at all — the YARA-lite strings pass, the content rules AND the
+    # known-malware/IOC hash check all silently skipped it. Live sandbox proof (2026-07-26): the
+    # same real banking-trojan binary produced ZERO findings as "CretClient.exe.vir" and was
+    # detected the moment it was renamed to ".exe". A one-character rename defeated the whole
+    # content engine. Identify by content, never by name.
+    #
+    # Reads only the first 4 bytes + 4 bytes at the PE offset — cheap enough for a bulk file walk,
+    # and it opens with ReadWrite share so a file another process holds open still gets read.
+    param([string]$Path)
+    # Stream.Read is permitted to return FEWER bytes than requested; on a redirected/UNC path that
+    # happens for real. Treating a short read as "not a PE" would be a false negative on exactly
+    # the file class this function exists to catch, so read until satisfied or genuinely at EOF.
+    function Read-Exact { param($Stream, [int]$Count)
+        $buf = New-Object byte[] $Count
+        $got = 0
+        while ($got -lt $Count) {
+            $n = $Stream.Read($buf, $got, $Count - $got)
+            if ($n -le 0) { return $null }
+            $got += $n
+        }
+        return $buf
+    }
+    $fs = $null
+    try {
+        # FileShare::Delete as well as ReadWrite: installers and updaters routinely open their
+        # staged payloads with FILE_SHARE_DELETE, and omitting it throws a sharing violation that
+        # would silently read as "not a PE".
+        $share = [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete
+        $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, $share)
+        if ($fs.Length -lt 64) { return $false }
+        $hdr = Read-Exact $fs 2
+        if ($null -eq $hdr) { return $false }
+        if ($hdr[0] -ne 0x4D -or $hdr[1] -ne 0x5A) { return $false }   # 'MZ'
+        $fs.Position = 0x3C
+        $off = Read-Exact $fs 4
+        if ($null -eq $off) { return $false }
+        $peOff = [BitConverter]::ToUInt32($off, 0)
+        # A 16-bit DOS/NE binary has a bogus or out-of-range e_lfanew; treat it as "not PE" but
+        # note the caller still sees MZ, which is itself worth flagging on a misnamed file.
+        if ($peOff -le 0 -or ($peOff + 4) -ge $fs.Length) { return $false }
+        $fs.Position = $peOff
+        $sig = Read-Exact $fs 4
+        if ($null -eq $sig) { return $false }
+        return ($sig[0] -eq 0x50 -and $sig[1] -eq 0x45 -and $sig[2] -eq 0 -and $sig[3] -eq 0)   # 'PE\0\0'
+    } catch { return $false }
+    finally { if ($fs) { $fs.Dispose() } }
+}
 function Get-SignatureVerdict { param([string]$FilePath)
     if ($global:SCAN_FILE_CACHE_ON -and $global:SIG_CACHE.ContainsKey($FilePath)) { return $global:SIG_CACHE[$FilePath] }
     $result = @{ Status='Unknown'; Signer=''; Trusted=$false; IsMs=$false; Exists=$false }

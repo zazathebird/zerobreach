@@ -1931,9 +1931,10 @@
       ]
     },
     "PHASE 90": {
-      "name": "YARA-Lite Binary String Scan & Custom IOC Hashes",
+      "name": "YARA-Lite Binary String Scan, Masquerading Executables & Custom IOC Hashes",
       "techniques": [
         "T1027",
+        "T1036.008",
         "T1219",
         "T1003.001"
       ]
@@ -2269,6 +2270,14 @@
       "name": "Outlook Mailbox Forward+Hide (BEC) Audit",
       "techniques": [
         "T1114.003"
+      ]
+    },
+    "PHASE 74.9": {
+      "name": "Office Macro Document Content Analysis",
+      "techniques": [
+        "T1204.002",
+        "T1566.001",
+        "T1059.005"
       ]
     }
   }
