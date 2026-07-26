@@ -1,4 +1,126 @@
 ﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT phase in THIS module, not the next dot-sourced module (see CLAUDE.md engine-split rule)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  EVENT-LOG EVIDENCE HELPERS  (EVIDENCE_ENGINE_PLAN P2 / P3)
+# ══════════════════════════════════════════════════════════════════════════════
+# Module-scope helpers for Phase 107. Declared at the top of the module (after the
+# resilience trap) so they exist regardless of which $PhasePlan blocks run.
+# Names are $zb*/Get-Zb* prefixed: the engine is ONE dot-sourced scope and a local
+# that happens to share letters with a loader param() silently reassigns it.
+
+function Get-ZbEvtField {
+    # Extract one <Data Name="X"> value from an EventLogRecord's raw XML, by NAME.
+    #
+    # Why not `[xml]$ev.ToXml()` (what Phase 107 shipped, TWICE per event): building an
+    # XmlDocument per record costs ~26 ms/event on a real box. Measured live 2026-07-26
+    # over 400 real Security/4624 records on this machine:
+    #     [xml] DOM + Where-Object  10,278 ms
+    #     ToXml() string + regex       124 ms   <- this function (83x faster)
+    #     .Properties[n].Value          73 ms
+    # Why not .Properties[n]: fastest, but POSITIONAL — the index of IpAddress within
+    # 4624 is not a documented contract across Windows builds/locales, and a silent
+    # off-by-one reads the wrong field with no error. Name-anchored is version-proof.
+    # Why not $_.Message: it is a localised, human-formatted blob rendered by the
+    # provider message DLL — matching detection regexes against it is locale-dependent
+    # and matches decoration rather than field values.
+    param([string]$Xml, [string]$Name)
+    if (-not $Xml -or -not $Name) { return '' }
+    $zbM = [regex]::Match($Xml, ('<Data Name=[''"]{0}[''"]\s*>(.*?)</Data>' -f [regex]::Escape($Name)), 'Singleline')
+    if (-not $zbM.Success) { return '' }          # absent OR self-closing <Data Name="X"/> — both mean "no value"
+    $zbV = $zbM.Groups[1].Value
+    if (-not $zbV) { return '' }
+    # ToXml() XML-escapes the payload; the [xml] path used to un-escape it for us.
+    try { return [System.Net.WebUtility]::HtmlDecode($zbV) } catch { }
+    return ((($zbV -replace '&lt;','<') -replace '&gt;','>' -replace '&quot;','"' -replace '&apos;',"'") -replace '&amp;','&')
+}
+
+function Get-ZbEvtQuery {
+    # EVIDENCE_ENGINE_PLAN P2. Build a Get-WinEvent FilterHashtable with the engine's
+    # -Hours window pushed INSIDE it.
+    #
+    # The bug this fixes: `Get-WinEvent -FilterHashtable @{...} -MaxEvents 2000 |
+    # Where-Object { Test-InScope $_.TimeCreated }` takes the newest N records and THEN
+    # applies the time filter, so on a busy box the operator's -Hours window silently
+    # collapses to however far back N records happen to reach. Measured on this box
+    # 2026-07-26: the newest 2000 x 4624 spanned 24.02 hours — i.e. a -Hours 24 scan was
+    # already AT the truncation boundary, and any busier endpoint (or -Hours 48/168)
+    # would have been quietly cut short with no warning anywhere.
+    # StartTime inside the hashtable is compiled to server-side XPath and evaluated by
+    # the EventLog service: correct AND cheaper (9.9s vs 14.2s for the same 552 results).
+    #
+    # Record caps (rule: every bulk loop carries a budget). When the query is time-bounded
+    # the window itself is the bound, so the cap can be generous; with -Hours 0 (all time)
+    # there is no bound at all, so the original newest-N sampling caps are retained.
+    param([hashtable]$Filter, [int]$MaxScoped = 20000, [int]$MaxAllTime = 2000)
+    $zbF = @{}
+    foreach ($zbK in $Filter.Keys) { $zbF[$zbK] = $Filter[$zbK] }
+    $zbMax = $MaxAllTime
+    if ($null -ne $global:TIME_LIMIT -and $global:TIME_LIMIT -ne [datetime]::MinValue) {
+        $zbF['StartTime'] = $global:TIME_LIMIT
+        $zbMax = $MaxScoped
+    }
+    return @{ Filter = $zbF; Max = $zbMax; Scoped = ($zbF.ContainsKey('StartTime')) }
+}
+
+function Get-ZbProcAuditState {
+    # EVIDENCE_ENGINE_PLAN P3. "Audit Process Creation" is OFF by default on Win10/11, and
+    # command-line capture is a SECOND, INDEPENDENT policy. With either off, Phase 107's
+    # 4688 regexes cannot possibly match — yet the phase printed "0 SUSPICIOUS 4688 PROCESS
+    # EVENTS" in green, which is a lie: it is "we cannot see", not "nothing happened".
+    #
+    # Returns @{ Audit='ON'|'OFF'|'UNKNOWN'; AuditWhy; CmdLine='ON'|'OFF'; CmdLineRaw }
+    #
+    # Three sources, weakest last:
+    #  1. Registry (Get-RegVal, never raw Get-ItemPropertyValue) for the cmdline policy.
+    #  2. EMPIRICAL: does the Security log hold ANY 4688 at all? One record, no time bound.
+    #     This is the only signal that cannot be wrong about what was really recorded, and
+    #     it is completely locale- and policy-plumbing-independent.
+    #  3. auditpol, matched on the subcategory GUID (stable worldwide) rather than the
+    #     subcategory NAME (localised). The inclusion-setting VALUE is still localised, so
+    #     it is only ever allowed to say OFF, never to override the empirical evidence, and
+    #     an unrecognised value degrades to UNKNOWN — never to a clean result.
+    $zbR = @{ Audit = 'UNKNOWN'; AuditWhy = ''; CmdLine = 'OFF'; CmdLineRaw = $null }
+
+    $zbCl = Get-RegVal 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit' 'ProcessCreationIncludeCmdLine_Enabled'
+    $zbR.CmdLineRaw = $zbCl
+    if ($null -ne $zbCl -and "$zbCl" -eq '1') { $zbR.CmdLine = 'ON' }
+
+    $zbAny4688 = @(Get-WinEventSafe @{LogName='Security'; Id=4688} -MaxEvents 1)
+
+    $zbIncl = $null
+    try {
+        $zbApExe = Join-Path $env:SystemRoot 'System32\auditpol.exe'
+        if (Test-Path -LiteralPath $zbApExe) {
+            $zbAp = & $zbApExe /get "/subcategory:{0CCE922B-69AE-11D9-BED3-505054503030}" /r 2>$null
+            foreach ($zbLn in @($zbAp)) {
+                if ("$zbLn" -match '(?i)0CCE922B-69AE-11D9-BED3-505054503030') {
+                    $zbCols = "$zbLn" -split ','
+                    if ($zbCols.Count -ge 5) { $zbIncl = "$($zbCols[4])".Trim() }
+                }
+            }
+        }
+    } catch { $zbIncl = $null }
+
+    # Localised "no auditing" vocabulary lives in data (AMSI rule); the English form is the
+    # documented fallback so an absent key degrades to "cannot classify", not "clean".
+    $zbOffRe = if (@(Get-Sig 'audit_policy_disabled_regex').Count) { @(Get-Sig 'audit_policy_disabled_regex')[0] } else { '(?i)^(no auditing|none)$' }
+
+    if ($zbAny4688.Count -gt 0) {
+        $zbR.Audit    = 'ON'
+        $zbR.AuditWhy = 'the Security log contains 4688 records, so process-creation auditing is genuinely recording'
+    } elseif ($null -eq $zbIncl) {
+        $zbR.Audit    = 'UNKNOWN'
+        $zbR.AuditWhy = 'auditpol output could not be read, and the Security log holds no 4688 records'
+    } elseif ($zbIncl -eq '' -or $zbIncl -match $zbOffRe) {
+        $zbR.Audit    = 'OFF'
+        $zbR.AuditWhy = "auditpol reports Process Creation = '$zbIncl' (the Win10/11 default)"
+    } else {
+        $zbR.Audit    = 'UNKNOWN'
+        $zbR.AuditWhy = "auditpol reports Process Creation = '$zbIncl', but the Security log holds no 4688 records at all (policy only just enabled, log cleared, or the value is a locale this build does not recognise)"
+    }
+    return $zbR
+}
+
 if ($PhasePlan.Advanced) {
     trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
     if (-not $global:STEALTH_MODE) {
@@ -266,24 +388,102 @@ if ($PhasePlan.Advanced) {
 
     # ── PHASE 91: MARK-OF-THE-WEB ABUSE ───────────────────────────────────────
     Show-PhaseHeader "PHASE 91" "MARK-OF-THE-WEB (MOTW) ZONE.IDENTIFIER STRIP" "MOTW"
-    Out-Typewriter "SCANNING DOWNLOADS FOR MOTW-STRIPPED EXECUTABLES..." "HUNT"
+    Out-Typewriter "SCANNING DOWNLOADS FOR MOTW-STRIPPED EXECUTABLES AND WEB-ORIGIN EVIDENCE..." "HUNT"
+    # EVIDENCE_ENGINE_PLAN P6 / A10 — this phase already opened the right stream and threw the
+    # answer away. It only ever tested for the ABSENCE of Zone.Identifier. When the stream is
+    # PRESENT it carries ZoneId and, very often, HostUrl and ReferrerUrl — the download source
+    # and the referring page. That is one of the few places a payload's ORIGIN survives the
+    # payload itself (it is still there after self-deletion, after Defender quarantines the file,
+    # and after a tech "cleaned it"). Verified live on this box 2026-07-26: real HostUrl +
+    # ReferrerUrl pairs recovered from Downloads.
+    #
+    # Grading is by evidence, never destructive (rule #1 — a download origin is not an action):
+    #   POSSIBLE : executable-class file, ZoneId >= 3 (Internet/Untrusted), and a HostUrl.
+    #   INFO     : anything else carrying an origin URL — a normal download is not a finding.
+    # Both are FixAction Info. The MoTW-STRIPPED detection below is unchanged in behaviour: it
+    # is still gated on the original executable extension list and the original 8 KB floor.
     $motwHits = 0
+    $zbMotwExecRe = "\.(exe|msi|dll|scr|js|vbs|hta|ps1|bat|lnk|iso|img)$"
+    # Origin evidence is worth reading for the phishing DELIVERY vehicles too (archives are how
+    # a payload arrives); this wider list is used ONLY for the read, never for the strip test.
+    $zbMotwEvidRe = "\.(exe|msi|dll|scr|js|vbs|hta|ps1|bat|cmd|lnk|iso|img|zip|7z|rar|cab|jar|xll|wsf|jse|vbe)$"
+    # Benign-origin demotion. Empty/absent key -> '(?!)' which matches nothing, so an absent key
+    # suppresses nothing (fail-open on reporting, never fail-open on safety).
+    $zbMotwBenignRe = if (@(Get-Sig 'motw_benign_origin_host_regex').Count) { @(Get-Sig 'motw_benign_origin_host_regex')[0] } else { '(?!)' }
+    # Bulk-loop budget: one ADS probe + one small read per candidate file.
+    $zbZoneSeen = 0; $zbZoneMax = 1500; $zbZoneDeadlineS = 30; $zbZoneCut = $false
+    $zbZoneSw = [System.Diagnostics.Stopwatch]::StartNew()
+    $zbOriginHits = 0
     foreach ($root in @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop")) {
+        if ($zbZoneCut) { break }
         if (-not (Test-Path $root)) { continue }
-        $exes = (Get-ScanFiles -Path $root -TimeScoped) |
-            Where-Object { $_.Extension -match "\.(exe|msi|dll|scr|js|vbs|hta|ps1|bat|lnk|iso|img)$" }
+        $zbMotwCand = Get-ScanFiles -Path $root -TimeScoped     # assign first — Get-ScanFiles returns ,$arr (CLAUDE.md)
+        $exes = @($zbMotwCand | Where-Object { $_.Extension -match $zbMotwEvidRe })
         foreach ($exe in $exes) {
-            $stream = Get-Item -Path $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue
-            if (-not $stream -and $exe.Length -gt 8192) {
-                Add-Finding -ID "MOTW_$($exe.Name -replace '[^a-z0-9]','')" -Phase "PHASE 91" -ThreatType "MoTW Abuse" `
-                    -Severity $SEV_POSSIBLE `
-                    -Description "Executable in Downloads/Desktop missing Zone.Identifier (MoTW stripped): $($exe.FullName)" `
-                    -Target $exe.FullName -FixAction "Info" -Group "MoTW / Web-Origin Abuse"
-                $motwHits++
+            if ($zbZoneSeen -ge $zbZoneMax -or $zbZoneSw.Elapsed.TotalSeconds -gt $zbZoneDeadlineS) { $zbZoneCut = $true; break }
+            $zbZoneSeen++
+            $zbIsExec = ($exe.Extension -match $zbMotwExecRe)
+            $stream = Get-Item -LiteralPath $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue
+            if (-not $stream) {
+                if ($zbIsExec -and $exe.Length -gt 8192) {
+                    Add-Finding -ID "MOTW_$($exe.Name -replace '[^a-z0-9]','')" -Phase "PHASE 91" -ThreatType "MoTW Abuse" `
+                        -Severity $SEV_POSSIBLE `
+                        -Description "Executable in Downloads/Desktop missing Zone.Identifier (MoTW stripped): $($exe.FullName)" `
+                        -Target $exe.FullName -FixAction "Info" -Group "MoTW / Web-Origin Abuse"
+                    $motwHits++
+                }
+                continue
             }
+            # ── P6: the stream IS present — read it instead of discarding it ──────────
+            $zbZoneTxt = ''
+            try { $zbZoneTxt = ((Get-Content -LiteralPath $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue) -join "`n") } catch { $zbZoneTxt = '' }
+            if (-not $zbZoneTxt) { continue }
+            $zbZoneId = ''; $zbHostUrl = ''; $zbRefUrl = ''
+            $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*ZoneId\s*=\s*(\d+)')
+            if ($zbZm.Success) { $zbZoneId = $zbZm.Groups[1].Value }
+            $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*HostUrl\s*=\s*(\S.*?)\s*$')
+            if ($zbZm.Success) { $zbHostUrl = $zbZm.Groups[1].Value }
+            $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*ReferrerUrl\s*=\s*(\S.*?)\s*$')
+            if ($zbZm.Success) { $zbRefUrl = $zbZm.Groups[1].Value }
+            # A bare ZoneId with no URL carries no origin — nothing to report, and reporting it
+            # on every downloaded file would be pure noise.
+            if (-not $zbHostUrl -and -not $zbRefUrl) { continue }
+            $zbZoneNum = 0
+            if ($zbZoneId) { [void][int]::TryParse($zbZoneId, [ref]$zbZoneNum) }
+            $zbZoneName = switch ($zbZoneNum) {
+                0       { 'Local machine' }
+                1       { 'Local intranet' }
+                2       { 'Trusted sites' }
+                3       { 'Internet' }
+                4       { 'Restricted / untrusted' }
+                default { 'unspecified' }
+            }
+            $zbBenignOrigin = (($zbHostUrl -and $zbHostUrl -match $zbMotwBenignRe) -or ($zbRefUrl -and $zbRefUrl -match $zbMotwBenignRe))
+            $zbSevZ = if ($zbIsExec -and $zbZoneNum -ge 3 -and $zbHostUrl -and -not $zbBenignOrigin) { $SEV_POSSIBLE } else { $SEV_INFO }
+            # A known-benign origin on a non-executable is not worth a line at all.
+            if ($zbBenignOrigin -and -not $zbIsExec) { continue }
+            # SharePoint/Graph download URLs run to 1 KB+; keep the finding readable.
+            $zbHostShort = if ($zbHostUrl.Length -gt 300) { $zbHostUrl.Substring(0,300) + '...[truncated]' } else { $zbHostUrl }
+            $zbRefShort  = if ($zbRefUrl.Length  -gt 300) { $zbRefUrl.Substring(0,300)  + '...[truncated]' } else { $zbRefUrl }
+            $zbZdesc = "Web-origin evidence recovered from the Zone.Identifier stream of $($exe.FullName): ZoneId=$(if ($zbZoneId) { $zbZoneId } else { '?' }) ($zbZoneName)"
+            if ($zbHostShort) { $zbZdesc += " | HostUrl=$zbHostShort" }
+            if ($zbRefShort)  { $zbZdesc += " | ReferrerUrl=$zbRefShort" }
+            $zbZdesc += ". This is where the file was downloaded from, as recorded by the browser; it survives deletion of the payload. Evidence only - no action is proposed."
+            Add-Finding -ID "MOTWORIGIN_$(Get-StableId $exe.FullName)" -Phase "PHASE 91" -ThreatType "Web Origin Evidence" `
+                -Severity $zbSevZ -Description $zbZdesc `
+                -Target $exe.FullName -FixAction "Info" -Group "MoTW / Web-Origin Abuse"
+            $zbOriginHits++
         }
     }
+    if ($zbZoneCut) {
+        Out-Typewriter ("  -> [INFO] ZONE.IDENTIFIER READ BUDGET REACHED ({0} files / {1}s) — partial." -f $zbZoneSeen, $zbZoneDeadlineS) "WARN"
+    }
     if ($motwHits -eq 0) { Out-Typewriter "  -> [OK] NO MOTW-STRIPPED EXECUTABLES." "GOOD" }
+    if ($zbOriginHits -gt 0) {
+        Out-Typewriter "  -> $zbOriginHits FILE(S) CARRY RECOVERABLE WEB-ORIGIN (HostUrl/ReferrerUrl) EVIDENCE." "INFO"
+    } else {
+        Out-Typewriter "  -> NO WEB-ORIGIN URLS RECOVERABLE FROM ZONE.IDENTIFIER STREAMS IN SCOPE." "INFO"
+    }
 
     # ── PHASE 92: UAC AUTO-ELEVATE BYPASS DETECTION ───────────────────────────
     Show-PhaseHeader "PHASE 92" "UAC AUTO-ELEVATE BYPASS REGISTRY STAGING" "UAC BYPASS"
@@ -1114,98 +1314,178 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     Out-Typewriter "MINING SECURITY/SYSTEM LOGS FOR ANOMALOUS PATTERNS..." "HUNT"
     Invoke-QuantumBar "EVENT LOG ANALYSIS" 12 100
 
-    # 4624 — Anomalous logons (type 3/10 from unusual sources)
-    Out-Typewriter "  -> SCANNING EVENT 4624 (LOGON) FOR ANOMALIES..." "INFO"
-    try {
-        $logons = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4624} -MaxEvents 2000 -ErrorAction Stop |
-            Where-Object { Test-InScope $_.TimeCreated }
-        $suspLogons = $logons | Where-Object {
-            $xml = [xml]$_.ToXml()
-            $logonType = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'LogonType' }).'#text'
-            $ipAddr    = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'IpAddress'  }).'#text'
-            $user      = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
-            # WS9: LogonType 9 (NewCredentials — e.g. `runas /netonly`, and how Mimikatz-class
-            # Pass-the-Hash tooling stages a token) added alongside 3/10. Reuses the SAME
-            # non-local-IP gate as the existing types, which is deliberately conservative here:
-            # a NewCredentials logon is generated LOCALLY on the source box, so IpAddress is
-            # typically blank/local for it — this stays POSSIBLE (the else branch below), never
-            # escalated, and a genuinely remote-sourced Type 9 is the strong, low-FP case.
-            ($logonType -in @('3','9','10') -and $ipAddr -and $ipAddr -notmatch '(^-$|^::1$|^127\.)') -or
-            ($user -match '\$' -and $logonType -eq '3')
-        }
-        foreach ($ev in ($suspLogons | Select-Object -First 50)) {
-            try {
-                $xml      = [xml]$ev.ToXml()
-                $user     = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
-                $ipAddr   = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'IpAddress'     }).'#text'
-                $logonType= ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'LogonType'     }).'#text'
-                $sev = if ($logonType -eq '10') { $SEV_HIGH } else { $SEV_POSSIBLE }
-                $typeNote = if ($logonType -eq '9') { ' [NewCredentials — possible Pass-the-Hash / runas /netonly]' } else { '' }
-                Add-Finding -ID "EVT4624_$($ev.RecordId)" -Phase "PHASE 107" -ThreatType "Anomalous Logon" `
-                    -Severity $sev -Description "Suspicious logon: User=$user Type=$logonType From=$ipAddr @ $($ev.TimeCreated.ToString('HH:mm:ss yyyy-MM-dd'))$typeNote" `
-                    -Target "EventID:4624 Record:$($ev.RecordId)" -FixAction "Info" -Group "Event Log — Anomalous Logons"
-            } catch {}
-        }
-        Out-Typewriter "  -> $($suspLogons.Count) ANOMALOUS 4624 EVENTS FOUND." $(if ($suspLogons.Count -gt 0) {"WARN"} else {"GOOD"})
-    } catch { Out-Typewriter "  -> 4624 QUERY FAILED (ACCESS DENIED OR EMPTY LOG)." "WARN" }
+    # ── EVIDENCE_ENGINE_PLAN P2 ────────────────────────────────────────────────
+    # All three queries below used to be raw `Get-WinEvent -FilterHashtable ... -MaxEvents N |
+    # Where-Object { Test-InScope $_.TimeCreated }`. Three separate defects in one line:
+    #   1. take-newest-N-then-filter silently truncated the operator's -Hours window (P2);
+    #   2. raw Get-WinEvent bypassed the Get-WinEventSafe wrapper, so an unregistered
+    #      LogName/Provider threw a TERMINATING error -EA SilentlyContinue does not suppress,
+    #      which unwinds to the module trap and drops the rest of the phase (CLAUDE.md rule);
+    #   3. [xml]$_.ToXml() was built TWICE per event (once in the filter, once to render the
+    #      finding) at ~26 ms a time — 10.3 s per 400 records, measured live on this box.
+    # Now: StartTime inside the hashtable (server-side XPath), Get-WinEventSafe, and ONE
+    # name-anchored regex pass over the raw XML string per record. See the helpers at the top
+    # of this module for the measurements behind each choice.
+    $zbEvtDeadlineS = 45      # wall-clock budget for each per-record analysis loop
 
-    # 4688 — Process creation with suspicious patterns
+    # 4624 — Anomalous logons (type 3/9/10 from unusual sources)
+    Out-Typewriter "  -> SCANNING EVENT 4624 (LOGON) FOR ANOMALIES..." "INFO"
+    $zb4624Q    = Get-ZbEvtQuery @{LogName='Security'; Id=4624} 20000 2000
+    $zb4624Evts = @(Get-WinEventSafe $zb4624Q.Filter -MaxEvents $zb4624Q.Max)
+    if ($zb4624Evts.Count -ge $zb4624Q.Max) {
+        Out-Typewriter ("  -> [INFO] 4624 RECORD CAP REACHED ({0}) — OLDER EVENTS IN THE WINDOW WERE NOT EXAMINED." -f $zb4624Q.Max) "WARN"
+    }
+    $zbSuspLogons = New-Object System.Collections.ArrayList
+    $zb4624Sw = [System.Diagnostics.Stopwatch]::StartNew(); $zb4624Cut = $false
+    foreach ($zbEv in $zb4624Evts) {
+        if ($zb4624Sw.Elapsed.TotalSeconds -gt $zbEvtDeadlineS) { $zb4624Cut = $true; break }
+        $zbXml = ''
+        try { $zbXml = $zbEv.ToXml() } catch { continue }
+        $zbLogonType = Get-ZbEvtField $zbXml 'LogonType'
+        $zbIpAddr    = Get-ZbEvtField $zbXml 'IpAddress'
+        $zbUser      = Get-ZbEvtField $zbXml 'TargetUserName'
+        # WS9: LogonType 9 (NewCredentials — e.g. `runas /netonly`, and how Mimikatz-class
+        # Pass-the-Hash tooling stages a token) added alongside 3/10. Reuses the SAME
+        # non-local-IP gate as the existing types, which is deliberately conservative here:
+        # a NewCredentials logon is generated LOCALLY on the source box, so IpAddress is
+        # typically blank/local for it — this stays POSSIBLE (the else branch below), never
+        # escalated, and a genuinely remote-sourced Type 9 is the strong, low-FP case.
+        if ((($zbLogonType -in @('3','9','10')) -and $zbIpAddr -and ($zbIpAddr -notmatch '(^-$|^::1$|^127\.)')) -or
+            ($zbUser -match '\$' -and $zbLogonType -eq '3')) {
+            [void]$zbSuspLogons.Add([pscustomobject]@{
+                RecordId = $zbEv.RecordId
+                When     = $(if ($zbEv.TimeCreated) { $zbEv.TimeCreated.ToString('HH:mm:ss yyyy-MM-dd') } else { 'unknown time' })
+                User     = $zbUser
+                Ip       = $zbIpAddr
+                Type     = $zbLogonType
+            })
+        }
+    }
+    if ($zb4624Cut) { Out-Typewriter ("  -> [INFO] 4624 ANALYSIS DEADLINE ({0}s) REACHED — RESULT IS PARTIAL." -f $zbEvtDeadlineS) "WARN" }
+    foreach ($zbHit in ($zbSuspLogons | Select-Object -First 50)) {
+        $zbSev4624 = if ($zbHit.Type -eq '10') { $SEV_HIGH } else { $SEV_POSSIBLE }
+        $zbTypeNote = if ($zbHit.Type -eq '9') { ' [NewCredentials — possible Pass-the-Hash / runas /netonly]' } else { '' }
+        Add-Finding -ID "EVT4624_$($zbHit.RecordId)" -Phase "PHASE 107" -ThreatType "Anomalous Logon" `
+            -Severity $zbSev4624 -Description "Suspicious logon: User=$($zbHit.User) Type=$($zbHit.Type) From=$($zbHit.Ip) @ $($zbHit.When)$zbTypeNote" `
+            -Target "EventID:4624 Record:$($zbHit.RecordId)" -FixAction "Info" -Group "Event Log — Anomalous Logons"
+    }
+    if ($zb4624Evts.Count -eq 0) {
+        Out-Typewriter "  -> [INFO] NO 4624 RECORDS RETURNED (EMPTY/ROLLED LOG, ACCESS DENIED, OR NONE IN WINDOW) — ABSENCE PROVES NOTHING." "WARN"
+    } else {
+        Out-Typewriter "  -> $($zbSuspLogons.Count) ANOMALOUS 4624 EVENTS FOUND (OF $($zb4624Evts.Count) IN WINDOW)." $(if ($zbSuspLogons.Count -gt 0) {"WARN"} else {"GOOD"})
+    }
+
+    # ── 4688 — Process creation with suspicious patterns (EVIDENCE_ENGINE_PLAN P3) ──
+    # "Audit Process Creation" is OFF by default on Win10/11, and command-line capture is a
+    # SECOND, INDEPENDENT policy. Without the latter, 4688 carries no arguments at all, so the
+    # patterns below (powershell -enc, certutil -decode, ...) CANNOT match — and the phase used
+    # to print "0 SUSPICIOUS 4688 PROCESS EVENTS" in green anyway. Read both policy states, say
+    # so explicitly, and never report a clean result for a check that could not have fired.
     Out-Typewriter "  -> SCANNING EVENT 4688 (PROCESS CREATE) FOR MALWARE PATTERNS..." "INFO"
-    try {
-        $proc4688 = Get-WinEvent -FilterHashtable @{LogName='Security'; Id=4688} -MaxEvents 3000 -ErrorAction Stop |
-            Where-Object { Test-InScope $_.TimeCreated }
-        $suspProcs = $proc4688 | Where-Object {
-            $_.Message -match "(powershell.*-enc|cmd.*\/c.*DownloadString|certutil.*-decode|bitsadmin.*\/transfer|mshta.*vbscript|wscript.*\.js|cscript.*\.vbs|regsvr32.*\/s.*\/n.*\/u|rundll32.*,|installutil.*\/logfile|msiexec.*\/q.*http)"
+    $zbAudit = Get-ZbProcAuditState
+    $zbAuditBlind = ($zbAudit.Audit -ne 'ON')
+    $zbCmdlBlind  = ($zbAudit.CmdLine -ne 'ON')
+    if ($zbAuditBlind) {
+        Out-Typewriter ("  -> [!] PROCESS-CREATION AUDITING: {0} — {1}" -f $zbAudit.Audit, $zbAudit.AuditWhy) "WARN"
+        # Posture/visibility observation, NOT a threat: Info + FixAction Info so it can never be
+        # auto-selected (rule #1 / plan §7.1). The enable command lives in the description for an
+        # operator to run by hand — it is a system-configuration change and is not ours to make.
+        Add-Finding -ID "EVT4688_AUDIT_BLIND" -Phase "PHASE 107" -ThreatType "Audit Visibility Gap" `
+            -Severity $SEV_INFO `
+            -Description ("BLIND CHECK: the Security-log process-creation (4688) hunt could not have produced a result. Audit Process Creation is {0} — {1}. This is the Windows 10/11 default, so it usually means 'never configured', not 'tampered with'; but it does mean a zero result from this check is NOT evidence of a clean machine. To enable it (operator action, changes system audit policy): auditpol.exe /set /subcategory:""{{0CCE922B-69AE-11D9-BED3-505054503030}}"" /success:enable /failure:enable" -f $zbAudit.Audit, $zbAudit.AuditWhy) `
+            -Target "Security log / Audit Process Creation" -FixAction "Info" -Group "Event Log — Audit Coverage"
+    }
+    if ($zbCmdlBlind) {
+        Out-Typewriter ("  -> [!] 4688 COMMAND-LINE CAPTURE: OFF (ProcessCreationIncludeCmdLine_Enabled = {0}) — 4688 RECORDS CARRY NO ARGUMENTS." -f $(if ($null -eq $zbAudit.CmdLineRaw) { 'not set' } else { $zbAudit.CmdLineRaw })) "WARN"
+        Add-Finding -ID "EVT4688_CMDLINE_BLIND" -Phase "PHASE 107" -ThreatType "Audit Visibility Gap" `
+            -Severity $SEV_INFO `
+            -Description ("BLIND CHECK: 4688 command-line capture is disabled (HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit\ProcessCreationIncludeCmdLine_Enabled = {0}). Process-creation records therefore contain the image path but NO arguments, so every argument-based detection in this phase (encoded PowerShell, certutil decode, bitsadmin transfer, rundll32 exports, ...) is structurally unable to match. A zero result here is a visibility gap, not a clean bill of health. To enable it (operator action): reg add ""HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit"" /v ProcessCreationIncludeCmdLine_Enabled /t REG_DWORD /d 1 /f" -f $(if ($null -eq $zbAudit.CmdLineRaw) { 'absent' } else { $zbAudit.CmdLineRaw })) `
+            -Target "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System\Audit\ProcessCreationIncludeCmdLine_Enabled" `
+            -FixAction "Info" -Group "Event Log — Audit Coverage"
+    }
+    # LOLBIN/abuse command-line vocabulary: data-driven when the key exists, otherwise the
+    # already-shipped literal (an absent key must never silently disable the detection).
+    $zb4688Re = if (@(Get-Sig 'evt4688_suspicious_cmdline_regex').Count) { @(Get-Sig 'evt4688_suspicious_cmdline_regex')[0] } `
+                else { "(powershell.*-enc|cmd.*\/c.*DownloadString|certutil.*-decode|bitsadmin.*\/transfer|mshta.*vbscript|wscript.*\.js|cscript.*\.vbs|regsvr32.*\/s.*\/n.*\/u|rundll32.*,|installutil.*\/logfile|msiexec.*\/q.*http)" }
+    $zb4688Q    = Get-ZbEvtQuery @{LogName='Security'; Id=4688} 20000 3000
+    $zb4688Evts = @(Get-WinEventSafe $zb4688Q.Filter -MaxEvents $zb4688Q.Max)
+    if ($zb4688Evts.Count -ge $zb4688Q.Max) {
+        Out-Typewriter ("  -> [INFO] 4688 RECORD CAP REACHED ({0}) — OLDER EVENTS IN THE WINDOW WERE NOT EXAMINED." -f $zb4688Q.Max) "WARN"
+    }
+    $zbSuspProcs = New-Object System.Collections.ArrayList
+    $zb4688Sw = [System.Diagnostics.Stopwatch]::StartNew(); $zb4688Cut = $false
+    foreach ($zbEv in $zb4688Evts) {
+        if ($zb4688Sw.Elapsed.TotalSeconds -gt $zbEvtDeadlineS) { $zb4688Cut = $true; break }
+        $zbXml = ''
+        try { $zbXml = $zbEv.ToXml() } catch { continue }
+        $zbCmdl  = Get-ZbEvtField $zbXml 'CommandLine'
+        $zbPName = Get-ZbEvtField $zbXml 'NewProcessName'
+        $zbSubj  = Get-ZbEvtField $zbXml 'SubjectUserName'
+        # Match the EventData fields, not $_.Message: the rendered message is localised and
+        # laden with template prose, so a regex over it matches decoration on an English box
+        # and nothing at all on a German one.
+        $zbMatchText = ("{0} {1}" -f $zbPName, $zbCmdl).Trim()
+        if ($zbMatchText -match $zb4688Re) {
+            [void]$zbSuspProcs.Add([pscustomobject]@{
+                RecordId = $zbEv.RecordId; Cmdl = $zbCmdl; PName = $zbPName; Subj = $zbSubj
+            })
         }
-        foreach ($ev in ($suspProcs | Select-Object -First 30)) {
-            try {
-                $xml   = [xml]$ev.ToXml()
-                $cmdl  = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'CommandLine'      }).'#text'
-                $pname = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'NewProcessName'   }).'#text'
-                $subj  = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'SubjectUserName'  }).'#text'
-                if (-not $cmdl) { $cmdl = $pname }
-                Add-Finding -ID "EVT4688_$($ev.RecordId)" -Phase "PHASE 107" -ThreatType "Suspicious Process Creation" `
-                    -Severity $SEV_HIGH -Description "Suspicious 4688: $subj ran: $($cmdl.Substring(0,[Math]::Min(150,$cmdl.Length)))" `
-                    -Target "EventID:4688 Record:$($ev.RecordId)" -FixAction "Info" -Group "Event Log — Suspicious Processes"
-                $global:TrojanHits++
-            } catch {}
-        }
-        Out-Typewriter "  -> $($suspProcs.Count) SUSPICIOUS 4688 PROCESS EVENTS." $(if ($suspProcs.Count -gt 0) {"WARN"} else {"GOOD"})
-    } catch { Out-Typewriter "  -> 4688 QUERY FAILED (AUDIT NOT ENABLED OR ACCESS DENIED)." "WARN" }
+    }
+    if ($zb4688Cut) { Out-Typewriter ("  -> [INFO] 4688 ANALYSIS DEADLINE ({0}s) REACHED — RESULT IS PARTIAL." -f $zbEvtDeadlineS) "WARN" }
+    foreach ($zbHit in ($zbSuspProcs | Select-Object -First 30)) {
+        $zbShown = if ($zbHit.Cmdl) { $zbHit.Cmdl } else { $zbHit.PName }
+        $zbCmdNote = if (-not $zbHit.Cmdl) { ' [NOTE: command-line capture is disabled on this host — image path only, arguments unknown]' } else { '' }
+        Add-Finding -ID "EVT4688_$($zbHit.RecordId)" -Phase "PHASE 107" -ThreatType "Suspicious Process Creation" `
+            -Severity $SEV_HIGH -Description "Suspicious 4688: $($zbHit.Subj) ran: $("$zbShown".Substring(0,[Math]::Min(150,"$zbShown".Length)))$zbCmdNote" `
+            -Target "EventID:4688 Record:$($zbHit.RecordId)" -FixAction "Info" -Group "Event Log — Suspicious Processes"
+        $global:TrojanHits++
+    }
+    if ($zbSuspProcs.Count -gt 0) {
+        Out-Typewriter "  -> $($zbSuspProcs.Count) SUSPICIOUS 4688 PROCESS EVENTS." "WARN"
+    } elseif ($zbAuditBlind -or $zbCmdlBlind) {
+        # Never a green "0 events" line for a check that was structurally unable to fire.
+        Out-Typewriter ("  -> [!] 4688 CHECK WAS BLIND (AUDIT: {0} / CMDLINE CAPTURE: {1}) — NO CONCLUSION CAN BE DRAWN FROM ITS ZERO RESULT." -f $zbAudit.Audit, $zbAudit.CmdLine) "WARN"
+    } else {
+        Out-Typewriter "  -> 0 SUSPICIOUS 4688 PROCESS EVENTS (OF $($zb4688Evts.Count) IN WINDOW; AUDIT + COMMAND-LINE CAPTURE BOTH ON, SO THIS RESULT IS MEANINGFUL)." "GOOD"
+    }
 
     # 7045 — New service installed
     Out-Typewriter "  -> SCANNING EVENT 7045 (NEW SERVICE) FOR ROGUE INSTALLS..." "INFO"
-    try {
-        $svc7045 = Get-WinEvent -FilterHashtable @{LogName='System'; Id=7045} -MaxEvents 500 -ErrorAction Stop |
-            Where-Object { Test-InScope $_.TimeCreated }
-        foreach ($ev in $svc7045) {
-            try {
-                $xml      = [xml]$ev.ToXml()
-                $svcName  = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'ServiceName'   }).'#text'
-                $svcFile  = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'ImagePath'     }).'#text'
-                $svcType  = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'ServiceType'   }).'#text'
-                # WS9: literal PsExec/PAExec/RemCom/WinExeSvc service-name match, checked ALONGSIDE
-                # (not replacing) the shape-regex heuristic below — the shape regex requires 6-10
-                # lowercase letters before "svc", which does NOT match "psexesvc" (psexe is only 5
-                # chars), so the single most common lateral-movement tool family was previously
-                # invisible to this phase. Near-zero legitimate software installs a service
-                # literally named PSEXESVC, so this alone justifies CRITICAL — but stays FixAction
-                # Info: this is a historical event-log correlation, nothing live to safely act on.
-                $isLateralTool = $false
-                foreach ($lm in $LATERAL_MOVEMENT_SVC_NAMES) {
-                    if ($lm -and $svcName -and "$svcName".ToLower().StartsWith($lm)) { $isLateralTool = $true; break }
-                }
-                $isSusp = ($svcFile -match "AppData|Temp|powershell|cmd\.exe|wscript|mshta|\.dll.*,|rundll32") -or
-                          ($svcName -match "^[a-z]{6,10}svc$|^svc[a-z]{5,}$") -or $isLateralTool
-                $sev = if ($isSusp) { $SEV_CRITICAL } else { $SEV_POSSIBLE }
-                $svcNote = if ($isLateralTool) { 'KNOWN LATERAL-MOVEMENT TOOL SERVICE NAME (PsExec/PAExec/RemCom-class)' } elseif ($isSusp) { 'SUSPICIOUS' } else { 'review' }
-                Add-Finding -ID "EVT7045_$($ev.RecordId)" -Phase "PHASE 107" -ThreatType "Rogue Service Install" `
-                    -Severity $sev -Description "New service (7045): $svcName | Path: $svcFile | Type: $svcType | $svcNote" `
-                    -Target "EventID:7045 Record:$($ev.RecordId)" -FixAction "Info" -Group "Event Log — New Services"
-            } catch {}
-        }
-        Out-Typewriter "  -> $($svc7045.Count) NEW SERVICE EVENTS IN TIME WINDOW." $(if ($svc7045.Count -gt 0) {"WARN"} else {"GOOD"})
-    } catch { Out-Typewriter "  -> 7045 QUERY FAILED." "WARN" }
+    $zb7045Q    = Get-ZbEvtQuery @{LogName='System'; Id=7045} 5000 500
+    $zb7045Evts = @(Get-WinEventSafe $zb7045Q.Filter -MaxEvents $zb7045Q.Max)
+    if ($zb7045Evts.Count -ge $zb7045Q.Max) {
+        Out-Typewriter ("  -> [INFO] 7045 RECORD CAP REACHED ({0}) — OLDER EVENTS IN THE WINDOW WERE NOT EXAMINED." -f $zb7045Q.Max) "WARN"
+    }
+    $zb7045Sw = [System.Diagnostics.Stopwatch]::StartNew(); $zb7045Cut = $false
+    foreach ($zbEv in $zb7045Evts) {
+        if ($zb7045Sw.Elapsed.TotalSeconds -gt $zbEvtDeadlineS) { $zb7045Cut = $true; break }
+        try {
+            $zbXml    = $zbEv.ToXml()
+            $svcName  = Get-ZbEvtField $zbXml 'ServiceName'
+            $svcFile  = Get-ZbEvtField $zbXml 'ImagePath'
+            $svcType  = Get-ZbEvtField $zbXml 'ServiceType'
+            # WS9: literal PsExec/PAExec/RemCom/WinExeSvc service-name match, checked ALONGSIDE
+            # (not replacing) the shape-regex heuristic below — the shape regex requires 6-10
+            # lowercase letters before "svc", which does NOT match "psexesvc" (psexe is only 5
+            # chars), so the single most common lateral-movement tool family was previously
+            # invisible to this phase. Near-zero legitimate software installs a service
+            # literally named PSEXESVC, so this alone justifies CRITICAL — but stays FixAction
+            # Info: this is a historical event-log correlation, nothing live to safely act on.
+            $isLateralTool = $false
+            foreach ($lm in $LATERAL_MOVEMENT_SVC_NAMES) {
+                if ($lm -and $svcName -and "$svcName".ToLower().StartsWith($lm)) { $isLateralTool = $true; break }
+            }
+            $isSusp = ($svcFile -match "AppData|Temp|powershell|cmd\.exe|wscript|mshta|\.dll.*,|rundll32") -or
+                      ($svcName -match "^[a-z]{6,10}svc$|^svc[a-z]{5,}$") -or $isLateralTool
+            $sev = if ($isSusp) { $SEV_CRITICAL } else { $SEV_POSSIBLE }
+            $svcNote = if ($isLateralTool) { 'KNOWN LATERAL-MOVEMENT TOOL SERVICE NAME (PsExec/PAExec/RemCom-class)' } elseif ($isSusp) { 'SUSPICIOUS' } else { 'review' }
+            Add-Finding -ID "EVT7045_$($zbEv.RecordId)" -Phase "PHASE 107" -ThreatType "Rogue Service Install" `
+                -Severity $sev -Description "New service (7045): $svcName | Path: $svcFile | Type: $svcType | $svcNote" `
+                -Target "EventID:7045 Record:$($zbEv.RecordId)" -FixAction "Info" -Group "Event Log — New Services"
+        } catch {}
+    }
+    if ($zb7045Cut) { Out-Typewriter ("  -> [INFO] 7045 ANALYSIS DEADLINE ({0}s) REACHED — RESULT IS PARTIAL." -f $zbEvtDeadlineS) "WARN" }
+    Out-Typewriter "  -> $($zb7045Evts.Count) NEW SERVICE EVENTS IN TIME WINDOW." $(if ($zb7045Evts.Count -gt 0) {"WARN"} else {"GOOD"})
     Out-Typewriter "  -> PHASE 107 COMPLETE." "VER"
 }
 

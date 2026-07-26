@@ -85,9 +85,29 @@ struct ServerStatus {
 
 // Bundled builds get the server tree copied under the resource dir (tauri.conf.json's
 // bundle.resources -> "engine-root/"). `cargo tauri dev` does not copy resources every
-// run, so fall back to the real project root two levels up from this crate — native-app
-// deliberately lives INSIDE the zerobreach-main checkout for exactly this reason.
+// run, so a debug build reads the real project root two levels up from this crate —
+// native-app deliberately lives INSIDE the zerobreach-main checkout for exactly this reason.
 fn find_engine_root(app: &AppHandle) -> Option<PathBuf> {
+    // Debug builds probe the live checkout FIRST, before the staged resource copy.
+    // `cargo tauri dev` does not re-stage bundle.resources, so a target/debug/engine-root/
+    // left behind by an earlier `tauri build` would otherwise win the probe below and the dev
+    // run would silently execute an OUTDATED engine — outdated signature-loading code, stale
+    // phase modules, none of it obvious from the UI. That copy has been observed differing
+    // from source (EVIDENCE_ENGINE_PLAN.md P13). A dev build must always run live source.
+    // Gated behind debug_assertions so a release binary never carries (or acts on) the build
+    // machine's own absolute checkout path — a release build with no staged resources should
+    // report the real "can't find the engine" error, not silently probe a path that only ever
+    // existed on whoever compiled it.
+    #[cfg(debug_assertions)]
+    {
+        let dev_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        if dev_root.join("ZeroBreach-Server.ps1").is_file() {
+            dlog("find_engine_root: debug build -> live checkout root (staged copy ignored)");
+            return Some(dev_root);
+        }
+    }
     if let Ok(res) = app.path().resource_dir() {
         // dunce::simplified strips the \\?\ extended-length-path prefix that resource_dir()
         // returns on Windows. ZeroBreach-Server.ps1 derives $PSScriptRoot/relative paths from
@@ -97,20 +117,6 @@ fn find_engine_root(app: &AppHandle) -> Option<PathBuf> {
         let candidate = res.join("engine-root").join("ZeroBreach-Server.ps1");
         if candidate.is_file() {
             return Some(res.join("engine-root"));
-        }
-    }
-    // Debug-only: `cargo tauri dev` doesn't stage bundle.resources, so fall back to the real
-    // checkout root. Gated behind debug_assertions so a release binary never carries (or acts
-    // on) the build machine's own absolute checkout path — a release build with no staged
-    // resources should report the real "can't find the engine" error, not silently probe a
-    // path that only ever existed on whoever compiled it.
-    #[cfg(debug_assertions)]
-    {
-        let dev_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..");
-        if dev_root.join("ZeroBreach-Server.ps1").is_file() {
-            return Some(dev_root);
         }
     }
     None

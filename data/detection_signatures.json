@@ -2502,5 +2502,17 @@
   "_comment_abe_bypass": "Phase 100.5: known Chrome/Edge App-Bound-Encryption-bypass cookie-theft tool names (2024-2025 stealer generation that reads cookies/tokens via IPC to the browser's elevation service instead of touching the credential DB, so Phase 100's access-time check is blind to it). COVERAGE GAP, NOTED ON PURPOSE: publicly-documented tool names for this technique are sparse and often polymorphic/renamed per campaign, so this list is intentionally minimal rather than guessed — seeded with the one consistently-named public PoC (ChromeKatz). Matched only against unsigned processes/files sitting in a user-writable path (never a bare name match anywhere) to keep FP risk low; POSSIBLE + Info.",
   "abe_bypass_tool_names": [
     "chromekatz.exe"
+  ],
+  "_comment_audit_policy_disabled_regex": "Phase 107 (P3): values `auditpol /get /subcategory:` prints when Process Creation auditing is OFF. Localised — auditpol output is translated, so an English-only match silently reads a German box as 'enabled' and prints a clean result for a check that could not have fired. Matching is a VETO only: auditpol may push the determination to OFF, never to ON (the empirical 'does the Security log hold any 4688 at all' signal decides that), and an unrecognised value degrades to UNKNOWN rather than to a clean result. Absent key falls back to `^(no auditing|none)$`.",
+  "audit_policy_disabled_regex": [
+    "(?i)^(no auditing|none|keine überwachung|sin auditoría|aucun audit|nessun controllo|監査なし)$"
+  ],
+  "_comment_evt4688_suspicious_cmdline_regex": "Phase 107 (P2/P3): suspicious process-creation command lines, matched against 4688 EventData NewProcessName + CommandLine (NOT the rendered .Message, which is localised human-readable prose — a regex over it matches template decoration on an English box and nothing at all on a German one). Externalised from the .ps1 per the AMSI rule; the engine keeps a literal fallback identical to this list so an absent key can never silently disable a shipped detection.",
+  "evt4688_suspicious_cmdline_regex": [
+    "(powershell.*-enc|cmd.*\\/c.*DownloadString|certutil.*-decode|bitsadmin.*\\/transfer|mshta.*vbscript|wscript.*\\.js|cscript.*\\.vbs|regsvr32.*\\/s.*\\/n.*\\/u|rundll32.*,|installutil.*\\/logfile|msiexec.*\\/q.*http)"
+  ],
+  "_comment_motw_benign_origin_host_regex": "Phase 91 (P6): FP-tuning lever for Mark-of-the-Web origin evidence. The Zone.Identifier stream carries HostUrl/ReferrerUrl — the download source, one of the few places a payload's provenance survives its deletion — so the phase now reads it instead of only noticing the stream's absence. A match here demotes an executable-class hit from POSSIBLE to INFO and drops non-executable hits entirely, keeping an all-time DEEP report from filling with ordinary vendor downloads. Anchored `^https?://` with a component-bounded host so a lookalike domain (microsoft.com.evil.tld) cannot self-allowlist. NOT a signature — absent key falls back to `(?!)`, which suppresses nothing.",
+  "motw_benign_origin_host_regex": [
+    "(?i)^https?://([a-z0-9-]+\\.)*(microsoft\\.com|windowsupdate\\.com|office\\.com|sharepoint\\.com|live\\.com|github\\.com|githubusercontent\\.com|google\\.com|googleapis\\.com|mozilla\\.org|adobe\\.com)/"
   ]
 }

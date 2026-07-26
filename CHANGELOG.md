@@ -6,6 +6,94 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-26 — EVIDENCE_ENGINE_PLAN P2 · P3 · P6 · P13: the checks that lied about being clean
+
+Three of these are the same defect wearing different clothes: **a check that could not have fired
+still printed a clean result.** The fourth is a build-path trap that made a dev run execute an
+engine nobody had edited.
+
+### P2 — the `-Hours` window silently collapsed (`engine/Phases-3.ps1`, Phase 107)
+
+`Get-WinEvent -FilterHashtable @{...} -MaxEvents 2000 | Where-Object { Test-InScope $_.TimeCreated }`
+takes the **newest N and then** filters by time. On a busy box the requested window quietly shrinks
+to whatever 2000 records happen to span. `StartTime` now goes **inside** the FilterHashtable, where
+the EventLog service evaluates it as server-side XPath — correct *and* far cheaper.
+
+**This was not theoretical on this machine.** The Security log holds 585,612 records over 24.05 h of
+retention; the newest 2000 × 4624 span 24.02 h. The shipped code was sitting exactly on the
+boundary — a `-Hours 48` scan was **already** being cut short. Sweeping MaxEvents against a real 24 h
+window reproduces the mechanism directly: `50→50 (lost 501)`, `100→100 (lost 451)`,
+`250→250 (lost 301)`, `500→500 (lost 51)`. The fixed form returns all 551.
+
+Also fixed at the same three sites: they called `Get-WinEvent` **raw**, bypassing the
+`Get-WinEventSafe` wrapper (a `CLAUDE.md` rule breach), and `[xml]$_.ToXml()` was parsed **twice per
+event**. Now one `ToXml()` string per record with name-anchored field extraction.
+
+**Two of the plan's own premises turned out to be wrong, and are corrected here rather than
+implemented as written:**
+- *"`$_.Message` renders at 1–3 ms/event"* — measured, it is ~0.01 ms; 200 events render in 2–3 ms.
+  The real cost was the `[xml]` DOM at ~26 ms/event, a ~50× difference. Moving off `.Message` was
+  still right, but for a **better reason**: it is localised human-readable prose, so a regex over it
+  matches template decoration on an English box and nothing at all on a German one.
+- *"use `.Properties[n].Value`"* — rejected despite being fastest (73 ms vs 124 ms per 400).
+  Positional indices into 4624/4688 EventData are not a documented cross-build contract, and a
+  silent off-by-one reads the wrong field with **no error**. Name-anchored extraction costs ~50 ms
+  per 400 events and is version-proof. Verified identical to the `[xml]` DOM across 300 real 4624
+  records, 0 mismatches, at 194 ms vs 7897 ms.
+
+### P3 — the 4688 check was structurally blind and said "0 suspicious events"
+
+"Audit Process Creation" is **off by default** on Win10/11, and command-line capture is a **second,
+independent** policy (`ProcessCreationIncludeCmdLine_Enabled`). Without it 4688 carries no
+arguments, so regexes like `powershell.*-enc` **cannot match** — yet the phase printed a green
+`0 SUSPICIOUS 4688 PROCESS EVENTS`. That is a clean bill of health from a check that never ran.
+
+The determination is now tri-state and **empirical first**: does the Security log contain *any* 4688
+at all — a signal that is immune to both localisation and audit-policy plumbing quirks. `auditpol` is
+consulted only as a **veto** (matched on the subcategory **GUID**, not its localised name), so it can
+push the answer to OFF but never to ON, and an unrecognised non-English value degrades to `UNKNOWN`
+rather than to a clean result. Two `INFO` + `FixAction Info` findings (`EVT4688_AUDIT_BLIND`,
+`EVT4688_CMDLINE_BLIND`) carry the enable commands in their descriptions, and the misleading clean
+line is suppressed.
+
+### P6 — Phase 91 opened the right stream and threw the answer away
+
+It checked only for the *absence* of `Zone.Identifier`. When present, that stream carries `HostUrl`
+and `ReferrerUrl` — the download source and referring page, one of the very few places a payload's
+provenance **survives its own deletion**. Now parsed and surfaced: POSSIBLE for executable-class +
+`ZoneId ≥ 3` + a `HostUrl`, INFO otherwise, nothing when no URL is present. Live on this box: **59
+Zone.Identifier streams in Downloads/Desktop, 59 with HostUrl, 44 with ReferrerUrl, 11
+executable-class.** New `motw_benign_origin_host_regex` is the FP lever (component-bounded hosts, so
+`microsoft.com.evil.tld` cannot self-allowlist). MoTW-stripped detection behaviour is byte-identical,
+and the pre-existing `MOTW_` finding ID is unchanged so baseline diffs do not break.
+
+### P13 — `cargo tauri dev` silently ran a stale engine (`native-app/src-tauri/src/main.rs`)
+
+`find_engine_root` probed the staged resource copy **before** the live checkout. Since
+`cargo tauri dev` never re-stages `bundle.resources`, a `target/debug/engine-root/` left behind by an
+earlier `tauri build` won the probe — and that copy was confirmed to **differ from source**. Every
+dev run was executing outdated signature-loading code and stale phase modules, with nothing in the UI
+to suggest it. Debug builds now resolve the live checkout first and log that they did so; the release
+path is untouched, still `debug_assertions`-gated so a shipped binary never probes the build
+machine's own checkout path.
+
+### Validation
+
+Parse-clean on real `powershell.exe` 5.1.26100 **and** `pwsh` 7, BOM intact, `Show-PhaseHeader`
+count unchanged at **30** in `Phases-3.ps1`. All three new findings are `FixAction Info`; the 29
+pre-existing destructive FixActions in the file are untouched; no local shadows a loader `param()`
+name. **56/56 unit assertions** against the live box, including: StartTime equality at H=1/6/24/72
+with the new form returning ≥ the old every time; `-Hours 0` correctly omitting StartTime; the
+caller's hashtable not mutated; extraction identical to the DOM over 300 real records; the blind-path
+forced to fire with the clean line suppressed; and `auditpol` reporting `Success` correctly **vetoed**
+by the absence of any 4688 record. `cargo check` clean.
+
+**Open FP-tuning item:** Phase 91 now emits up to ~59 INFO findings on an all-time DEEP on this box.
+They are INFO — never auto-selected — and are exactly the evidence collection the plan asks for, but
+the volume wants a live re-grade against a healthy-box baseline (plan §7.8).
+
+---
+
 ## 2026-07-26 — EVIDENCE_ENGINE_PLAN P7 + P8: the Wacatac match failure and the uncorroborated Defender residual
 
 The two items §8 of `EVIDENCE_ENGINE_PLAN.md` flagged as *"actively producing wrong output today"*.
