@@ -512,9 +512,14 @@ foreach ($sf in $recentSysFiles) {
         Out-Decrypt -Text $sf.FullName -Prefix "  [UNSIGNED SYS32 BINARY] "
         if ($sigStatus -eq "HashMismatch" -or $sigStatus -eq "NotTrusted") {
             $newName = "$($sf.FullName).kraken"
+            # Currently non-exploitable only because every $sf.FullName here is under System32,
+            # which Test-ProtectedTarget hard-blocks regardless — escape anyway so this doesn't
+            # become the exploitable case the day that guard's regex is ever loosened.
+            $sys32PathEsc = "$($sf.FullName)" -replace "'","''"
+            $newNameEsc   = "$newName" -replace "'","''"
             Add-Finding -ID "SYS32_UNSIGNED_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 15" -ThreatType "Rootkit/Trojan" `
                 -Severity $SEV_CRITICAL -Description "Tampered/untrusted binary in System32 ($sigStatus): $($sf.Name) — possible rootkit/trojan dropper" `
-                -Target $sf.FullName -FixAction "RunCmd" -FixParam "Rename-Item -LiteralPath '$($sf.FullName)' -NewName '$newName' -Force -ErrorAction SilentlyContinue" -Group "Unsigned System32 Binaries"
+                -Target $sf.FullName -FixAction "RunCmd" -FixParam "Rename-Item -LiteralPath '$sys32PathEsc' -NewName '$newNameEsc' -Force -ErrorAction SilentlyContinue" -Group "Unsigned System32 Binaries"
             $global:RootkitHits++
         } else {
             Add-Finding -ID "SYS32_UNSIGNED_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 15" -ThreatType "Rootkit/Trojan" `
@@ -1636,9 +1641,12 @@ $suspectRules = Get-NetFirewallRule -ErrorAction SilentlyContinue |
                    ($_.Profile -match "Public" -or $_.LocalPort -eq "Any") }
 foreach ($rule in $suspectRules) {
     Out-Typewriter "  -> SUSPECT FW RULE: $($rule.DisplayName)" "WARN"
+    # Rule -Name (not DisplayName) is attacker-settable when the rule was created
+    # programmatically and is interpolated into a single-quoted RunCmd string — escape it.
+    $fwRuleNameEsc = "$($rule.Name)" -replace "'","''"
     Add-Finding -ID "FW_$($rule.Name -replace '[^a-z0-9]','')" -Phase "PHASE 38" -ThreatType "Firewall Hole" -Severity $SEV_POSSIBLE `
         -Description "Suspicious inbound firewall rule: $($rule.DisplayName) — Public profile or Any port" `
-        -Target "Firewall Rule: $($rule.Name)" -FixAction "RunCmd" -FixParam "Disable-NetFirewallRule -Name '$($rule.Name)'" -Group "Firewall Audit"
+        -Target "Firewall Rule: $($rule.Name)" -FixAction "RunCmd" -FixParam "Disable-NetFirewallRule -Name '$fwRuleNameEsc'" -Group "Firewall Audit"
 }
 if ($suspectRules.Count -eq 0) { Out-Typewriter "  -> [OK] FIREWALL RULES APPEAR CLEAN." "GOOD" }
 Add-Finding -ID "FW_RESET_OPT" -Phase "PHASE 38" -ThreatType "Hardening" -Severity $SEV_INFO `

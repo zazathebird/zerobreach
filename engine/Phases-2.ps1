@@ -166,9 +166,13 @@ foreach ($proc in $highCpuProcs) {
     foreach ($m in $KNOWN_MINER_PROCS) {
         if ($pn -match [regex]::Escape($m)) {
             Out-ThreatBanner "CRYPTOMINER (CPU ABUSE)" "Name: $($proc.Name) CPU: $($proc.PercentProcessorTime)%"
+            # Process name is attacker-chosen (whoever named the binary) and interpolated into a
+            # single-quoted RunCmd string an auto-selected CRITICAL finding can execute unattended
+            # via PURGE — escape the embedded quote the same way Phase 29/ADS/LNK findings already do.
+            $procNameEsc = "$($proc.Name)" -replace "'","''"
             Add-Finding -ID "MINER_CPU_$($proc.Name -replace '[^a-z0-9]','')" -Phase "PHASE 63" -ThreatType "Cryptominer" `
                 -Severity $SEV_CRITICAL -Description "Miner process using $($proc.PercentProcessorTime)% CPU: $($proc.Name)" `
-                -Target "Process: $($proc.Name)" -FixAction "RunCmd" -FixParam "Stop-Process -Name '$($proc.Name)' -Force" `
+                -Target "Process: $($proc.Name)" -FixAction "RunCmd" -FixParam "Stop-Process -Name '$procNameEsc' -Force" `
                 -Group "Live Cryptominer"
             $global:MinerHits++; $minerFound = $true
         }
@@ -213,9 +217,13 @@ foreach ($task in $allTasks) {
     if (-not $isMinerTask) { $isMinerTask = ($exe -match "xmr|stratum|pool\.|mining|coin|hashrate") }
     if ($isMinerTask) {
         Out-ThreatBanner "MINER SCHEDULED TASK" $task.TaskName
+        # Task name is attacker-chosen and interpolated into a single-quoted RunCmd string an
+        # auto-selected CRITICAL finding can execute unattended via PURGE — same escaping already
+        # used by the Phase 29 hidden-task RunCmd (CLAUDE.md rule #1: fail closed on injection).
+        $taskNameEsc = "$($task.TaskName)" -replace "'","''"
         Add-Finding -ID "MINERTASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 64" -ThreatType "Cryptominer" `
             -Severity $SEV_CRITICAL -Description "Miner persistence via scheduled task: $($task.TaskName)" `
-            -Target "Task: $($task.TaskName)" -FixAction "RunCmd" -FixParam "Unregister-ScheduledTask -TaskName '$($task.TaskName)' -Confirm:`$false" `
+            -Target "Task: $($task.TaskName)" -FixAction "RunCmd" -FixParam "Unregister-ScheduledTask -TaskName '$taskNameEsc' -Confirm:`$false" `
             -Group "Miner Persistence"
         $global:MinerHits++
     }
@@ -1036,18 +1044,22 @@ try {
             # posture and can break the excluded software (Defender may then quarantine its files).
             # So POSSIBLE + opt-in RunCmd: shown for operator review, never auto-selected/removed.
             Out-Typewriter "  -> DEFENDER PATH EXCLUSION: $exc" "CRIT"
+            # $exc is live Defender config an attacker with prior admin access could have set —
+            # a path containing a single quote breaks out of this RunCmd string. Escape it.
+            $excEsc = "$exc" -replace "'","''"
             Add-Finding -ID "DEFENDER_EXC_$($exc -replace '[^a-z0-9]','')" -Phase "PHASE 75" -ThreatType "Defender Tampering" `
                 -Severity $SEV_POSSIBLE -Description "Defender path exclusion (review — could be a malware hiding spot or a legit RMM/dev exclusion): $exc" `
-                -Target "Defender Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionPath '$exc'" `
+                -Target "Defender Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionPath '$excEsc'" `
                 -Group "Defender Exclusions"
         }
     }
     if ($prefs.ExclusionProcess.Count -gt 0) {
         foreach ($exc in $prefs.ExclusionProcess) {
             Out-Typewriter "  -> DEFENDER PROCESS EXCLUSION: $exc" "WARN"
+            $excEsc = "$exc" -replace "'","''"
             Add-Finding -ID "DEFENDER_PROC_EXC_$($exc -replace '[^a-z0-9]','')" -Phase "PHASE 75" -ThreatType "Defender Tampering" `
                 -Severity $SEV_POSSIBLE -Description "Defender process exclusion (review — could aid evasion or be a legit RMM/dev exclusion): $exc" `
-                -Target "Defender Process Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionProcess '$exc'" `
+                -Target "Defender Process Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionProcess '$excEsc'" `
                 -Group "Defender Exclusions"
         }
     }
