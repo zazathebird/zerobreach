@@ -396,6 +396,51 @@ if ($PhasePlan.Advanced) {
     }
     if ($coHits -eq 0) { Out-Typewriter "  -> [OK] NO CLICKONCE PAYLOADS." "GOOD" }
 
+    # ── PHASE 97.5: MSIX / APP INSTALLER SIDELOADING ABUSE ────────────────────
+    # WS9: enterprise LOB apps and Intune legitimately sideload MSIX (SignatureKind
+    # Developer/Enterprise/None instead of Store), so this is gated on publisher trust, not
+    # sideload status alone — moderate FP risk, POSSIBLE + Info only, never escalated. To
+    # suppress this for an org's own Intune-sideloaded LOB apps, add the internal PKI cert's
+    # publisher Subject substring to trusted_signers in data/permission_baseline.json (the same
+    # customization path used for every other allowlist in this codebase — no code change needed).
+    Show-PhaseHeader "PHASE 97.5" "MSIX / APP INSTALLER SIDELOADING ABUSE" "MSIX SIDELOAD"
+    Out-Typewriter "AUDITING SIDELOADED MSIX/APPX PACKAGES FOR UNTRUSTED PUBLISHERS..." "HUNT"
+    $msixHits = 0
+    try {
+        $trustedPubSigners = @(Get-Perm 'trusted_signers')
+        # Get-AppxPackage is a documented source of long stalls when the AppX StateRepository
+        # database is locked/corrupted or AppXSvc is degraded — a real-world occurrence a bare
+        # try/catch does NOT protect against (a blocking call, not a throwing one). Bounded via
+        # Start-Job + Wait-Job -Timeout, same convention as the WSL probe and Get-AuthSig budget
+        # used elsewhere in this module, so a bad AppX repository state can't stall Phase 98-115.
+        $msixJobTimeoutS = 20
+        $appxJob = Start-Job -ScriptBlock {
+            Get-AppxPackage -ErrorAction SilentlyContinue | Where-Object {
+                $_.SignatureKind -and $_.SignatureKind -ne 'Store'
+            } | Select-Object -First 100 -Property PackageFullName, Publisher, SignatureKind, InstallDate
+        }
+        $appxPkgs = @()
+        if (Wait-Job -Job $appxJob -Timeout $msixJobTimeoutS) {
+            $appxPkgs = @(Receive-Job -Job $appxJob -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.InstallDate })
+        } else {
+            Out-Typewriter "  -> APPX ENUMERATION TIMED OUT (${msixJobTimeoutS}s, StateRepository likely locked/corrupted) — SKIPPING." "WARN"
+        }
+        Stop-Job -Job $appxJob -ErrorAction SilentlyContinue; Remove-Job -Job $appxJob -Force -ErrorAction SilentlyContinue
+        foreach ($pkg in $appxPkgs) {
+            $pub = "$($pkg.Publisher)"
+            $trusted = $false
+            foreach ($ts in $trustedPubSigners) { if ($pub -like "*$ts*") { $trusted = $true; break } }
+            if ($trusted) { continue }
+            $msixHits++
+            Out-Typewriter "  -> SIDELOADED MSIX: $($pkg.PackageFullName) [$($pkg.SignatureKind)] Pub: $pub" "WARN"
+            Add-Finding -ID "MSIX975_$(Get-StableId $pkg.PackageFullName)" -Phase "PHASE 97.5" `
+                -ThreatType "MSIX Sideload Abuse" -Severity $SEV_POSSIBLE `
+                -Description "Sideloaded MSIX/Appx package from a publisher not on the trusted-signer allowlist (SignatureKind=$($pkg.SignatureKind)): $($pkg.PackageFullName) | Publisher: $pub — enterprise LOB apps legitimately sideload via Intune/App Installer, so this is review-only; verify against your MDM's approved app list, or add the publisher substring to trusted_signers in data/permission_baseline.json to suppress it going forward." `
+                -Target $pkg.PackageFullName -FixAction "Info" -Group "MSIX / App Installer Sideload"
+        }
+    } catch {}
+    if ($msixHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPICIOUS SIDELOADED MSIX PACKAGES." "GOOD" }
+
     # ── PHASE 98: STOLEN/LEAKED CODE-SIGNING CERT ─────────────────────────────
     Show-PhaseHeader "PHASE 98" "STOLEN / LEAKED CODE-SIGNING CERT DETECTION" "STOLEN CERT"
     Out-Typewriter "AUDITING SIGNED BINARIES IN USER PATHS FOR KNOWN-LEAKED ISSUERS..." "HUNT"
@@ -559,17 +604,122 @@ if ($PhasePlan.Advanced) {
     }
     if ($tokHits -eq 0) { Out-Typewriter "  -> [OK] NO TOKEN-THEFT STAGING ARTIFACTS." "GOOD" }
 
+    # WS9: App-Bound-Encryption bypass / cookie-theft tooling. This 2024-2025 stealer generation
+    # reads Chrome/Edge cookies+tokens via IPC to the browser's OWN elevation service instead of
+    # touching Login Data/Cookies on disk, so the DB-access-time check above (and Phase 100) never
+    # sees it. Seeded conservatively (see data/detection_signatures.json comment — public tool
+    # names for this technique are sparse); gated on unsigned + user-writable path, never a bare
+    # name match, to keep FP risk low. Checks BOTH currently-running processes and recently-present
+    # files (a tool that already ran and exited leaves no process, only the dropped binary).
+    $abeHits = 0
+    if ($ABE_BYPASS_TOOL_NAMES.Count -gt 0) {
+        $abeSigSeen = 0; $abeSigSw = [System.Diagnostics.Stopwatch]::StartNew()
+        foreach ($p in (Get-ProcSnapshot)) {
+            if ($abeSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or $abeSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) { break }
+            $pname = "$($p.Name)".ToLower()
+            if (-not $pname -or $ABE_BYPASS_TOOL_NAMES -notcontains $pname) { continue }
+            $pexe = "$($p.ExecutablePath)"
+            if (-not $pexe -or $pexe -notmatch $global:USER_PATH_WIDE_RE) { continue }   # must be user-writable
+            $abeSigSeen++
+            if ((Get-AuthSig $pexe).Status -eq 'Valid') { continue }   # signed -> not the bypass tool
+            Out-ThreatBanner "APP-BOUND ENCRYPTION BYPASS TOOL (RUNNING)" "$($p.Name) PID:$($p.ProcessId) @ $pexe"
+            Add-Finding -ID "ABEBYPASS_$($p.ProcessId)_$($p.Name -replace '[^a-z0-9]','')" -Phase "PHASE 100.5" `
+                -ThreatType "Info-Stealer / Token Theft" -Severity $SEV_POSSIBLE `
+                -Description "Running process matches a known Chrome/Edge App-Bound-Encryption-bypass cookie-theft tool name, unsigned, from a user-writable path: $pexe (PID $($p.ProcessId)) — this stealer generation reads cookies/tokens via IPC to the browser's elevation service, bypassing the credential-DB entirely." `
+                -Target "PID:$($p.ProcessId)" -FixAction "Info" -Group "Cloud Credential Exposure"
+            $abeHits++; $global:SpywareHits++
+        }
+        foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
+            if ($abeSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) { break }
+            if (-not (Test-Path $root)) { continue }
+            $abeFiles = (Get-ScanFiles -Path $root -TimeScoped) | Where-Object { $ABE_BYPASS_TOOL_NAMES -contains $_.Name.ToLower() }
+            foreach ($af in $abeFiles) {
+                if ($abeSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or $abeSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) { break }
+                $abeSigSeen++
+                if ((Get-AuthSig $af.FullName).Status -eq 'Valid') { continue }
+                Out-ThreatBanner "APP-BOUND ENCRYPTION BYPASS TOOL (FILE)" $af.FullName
+                Add-Finding -ID "ABEBYPASSFILE_$(Get-StableId $af.FullName)" -Phase "PHASE 100.5" `
+                    -ThreatType "Info-Stealer / Token Theft" -Severity $SEV_POSSIBLE `
+                    -Description "File matches a known Chrome/Edge App-Bound-Encryption-bypass cookie-theft tool name, unsigned, in a user-writable path: $($af.FullName) — this stealer generation reads cookies/tokens via IPC to the browser's elevation service, bypassing the credential-DB entirely." `
+                    -Target $af.FullName -FixAction "Info" -Group "Cloud Credential Exposure"
+                $abeHits++; $global:SpywareHits++
+            }
+        }
+    }
+    if ($abeHits -eq 0) { Out-Typewriter "  -> [OK] NO APP-BOUND-ENCRYPTION-BYPASS TOOLS DETECTED." "GOOD" }
+
 Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     Out-Typewriter "CHECKING WSL DISTROS AND DOCKER DAEMON..." "HUNT"
     if (Get-Command wsl -ErrorAction SilentlyContinue) {
+        # WS9: best-effort Linux-side persistence probe (cron + dotfiles). `wsl.exe` can hang
+        # indefinitely against a stopped/broken distro that needs to initialize, so each call runs
+        # in a background job with a hard per-call timeout, AND the whole probe (across every
+        # distro) is capped by a shared wall-clock budget — mirrors the Get-AuthSig SIG_AUDIT
+        # deadline+cap convention used elsewhere in this module (see Phase 90/93/96/98).
+        function Get-WslBoundedOutput {
+            param([string]$Distro, [string[]]$Cmd, [int]$TimeoutSec = 6)
+            $job = $null
+            try {
+                $job = Start-Job -ScriptBlock {
+                    param($d, $c) & wsl -d $d -- @c 2>$null
+                } -ArgumentList $Distro, $Cmd
+                if (Wait-Job -Job $job -Timeout $TimeoutSec) {
+                    return Receive-Job -Job $job -ErrorAction SilentlyContinue
+                }
+                return $null
+            } catch { return $null }
+            finally { if ($job) { Stop-Job -Job $job -ErrorAction SilentlyContinue; Remove-Job -Job $job -Force -ErrorAction SilentlyContinue } }
+        }
+        function Test-PrivateOrLoopbackIp {
+            param([string]$Ip)
+            if ($Ip -match '^127\.') { return $true }
+            if ($Ip -match '^10\.') { return $true }
+            if ($Ip -match '^192\.168\.') { return $true }
+            if ($Ip -match '^172\.(1[6-9]|2[0-9]|3[0-1])\.') { return $true }
+            if ($Ip -eq '0.0.0.0') { return $true }
+            return $false
+        }
         $wslList = (wsl --list --quiet 2>$null)
+        $wslHits = 0
+        $wslProbeDeadlineS = 20
+        $wslSw = [System.Diagnostics.Stopwatch]::StartNew()
         foreach ($d in $wslList) {
             if ($d -and $d.Trim()) {
-                Add-Finding -ID "WSL_$($d.Trim() -replace '[^a-z0-9]','')" -Phase "PHASE 101" -ThreatType "Container Surface" `
-                    -Severity $SEV_INFO -Description "WSL distro present (potential lateral surface): $($d.Trim())" `
-                    -Target "WSL: $($d.Trim())" -FixAction "Info" -Group "WSL / Container"
+                $distroName = $d.Trim()
+                Add-Finding -ID "WSL_$($distroName -replace '[^a-z0-9]','')" -Phase "PHASE 101" -ThreatType "Container Surface" `
+                    -Severity $SEV_INFO -Description "WSL distro present (potential lateral surface): $distroName" `
+                    -Target "WSL: $distroName" -FixAction "Info" -Group "WSL / Container"
+                if ($wslSw.Elapsed.TotalSeconds -ge $wslProbeDeadlineS) { continue }   # budget exhausted — inventory only for the rest
+                $cronOut = Get-WslBoundedOutput -Distro $distroName -Cmd @('crontab','-l')
+                $dotOut  = Get-WslBoundedOutput -Distro $distroName -Cmd @('cat','.bashrc','.profile')
+                $wslLines = @(@($cronOut) + @($dotOut) | Where-Object { $_ -and "$_".Trim() })
+                # Suspicious pattern matched PER LINE (never the whole blob) — a benign line
+                # elsewhere in the crontab/dotfile must not suppress a malicious line next to it.
+                # Benign-allowlist check is likewise per-line and full-line-anchored (rule #13):
+                # an attacker can't smuggle a chained malicious command past the anchor, and an
+                # unrelated benign line can't blanket-suppress the whole file.
+                # Raw-IP downloads to loopback/RFC1918 addresses are excluded outright — a dev
+                # box's .bashrc/cron routinely health-checks a locally-running service or a
+                # docker-compose container's bridge IP (curl http://127.0.0.1:8080/health), which
+                # is a routine local workflow, not exfil/staging to an attacker-controlled host.
+                $wslRealHits = @($wslLines | Where-Object {
+                    $curlIpMatch = $false
+                    if ($_ -match '(curl|wget)\b.*https?://(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})') {
+                        $curlIpMatch = -not (Test-PrivateOrLoopbackIp $Matches[2])
+                    }
+                    ($curlIpMatch -or ($_ -match '/mnt/c/[^\s]*\.exe\b')) -and ($_ -notmatch $WSL_DEV_BENIGN_RE)
+                })
+                if ($wslRealHits.Count -gt 0) {
+                    $wslHits++
+                    $sample = ($wslRealHits | Select-Object -First 2) -join ' | '
+                    Add-Finding -ID "WSLPERSIST_$(Get-StableId $distroName)" -Phase "PHASE 101" `
+                        -ThreatType "WSL Linux-Side Persistence" -Severity $SEV_POSSIBLE `
+                        -Description "WSL distro '$distroName' crontab/.bashrc/.profile references a raw-IP download or a /mnt/c/...exe cross-launch into Windows: $($sample.Substring(0,[Math]::Min(160,$sample.Length))) — moderate FP risk (developer boxes routinely run npm/pip/yarn installers or call Windows utilities from cron/profile scripts), so review-only, never auto-acted." `
+                        -Target "WSL: $distroName" -FixAction "Info" -Group "WSL / Container"
+                }
             }
         }
+        if ($wslHits -gt 0) { Out-Typewriter "  -> $wslHits WSL DISTRO(S) WITH SUSPICIOUS CRON/DOTFILE CONTENT (REVIEW)." "WARN" }
     }
     if (Get-Command docker -ErrorAction SilentlyContinue) {
         Add-Finding -ID "DOCKER_PRESENT" -Phase "PHASE 101" -ThreatType "Container Surface" `
@@ -628,6 +778,9 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     Out-Typewriter "PARSING TASK XML FOR Hidden=true AND SDDL LOCKS..." "HUNT"
     Invoke-QuantumBar "TASK XML INTROSPECTION" 12 90
     $taskDeepHits = 0
+    # WS9: ComHandler <ClassId> actions, consumed by Phase 105's correlation against Phase 24's
+    # COM-hijack findings. Reset per-scan (script-scope, not accumulated across runs).
+    $global:ZB_ComHandlerTasks = @()
     if (Test-Path "$env:WINDIR\System32\Tasks") {
         Get-ChildItem -Path "$env:WINDIR\System32\Tasks" -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
             try {
@@ -651,6 +804,27 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
                         -Description "Task uses restrictive SDDL ACL (anti-forensic): $($_.FullName)" `
                         -Target $_.FullName -FixAction "Info" -Group "Hidden Scheduled Tasks"
                     $taskDeepHits++
+                }
+                # WS9: ComHandler action — the task invokes a COM object by CLSID (a mechanism this
+                # phase did not previously parse at all — it only checked Hidden=true/SDDL), which
+                # blends in with tooling that only logs plain process-creation actions. Same
+                # Microsoft-task-path skip as the Hidden check above (FP-round-5): first-party
+                # maintenance tasks legitimately use built-in Microsoft ComHandler CLSIDs under
+                # \Tasks\Microsoft\. On its own this is weak signal (POSSIBLE + Info); it becomes a
+                # real finding only if Phase 105 correlates the SAME CLSID against a genuine Phase 24
+                # COM-hijack.
+                if ($c -match '(?is)<ComHandler>.*?<ClassId>\s*(\{[0-9A-Fa-f-]{36}\})\s*</ClassId>') {
+                    # Capture $matches immediately on the successful -match, before any other
+                    # regex op (incl. the -notmatch below) can touch the automatic variable.
+                    $chClsid = $matches[1].ToUpper()
+                    if ($_.FullName -notmatch $HIDDEN_TASK_BENIGN_RE) {
+                        Add-Finding -ID "COMHANDLERTASK_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 104" `
+                            -ThreatType "ComHandler Task Trigger" -Severity $SEV_POSSIBLE `
+                            -Description "Scheduled task action invokes a COM object via ComHandler (ClassId $chClsid) rather than a plain process launch: $($_.FullName)" `
+                            -Target $_.FullName -FixAction "Info" -Group "Hidden Scheduled Tasks"
+                        $taskDeepHits++
+                        $global:ZB_ComHandlerTasks += [pscustomobject]@{ TaskPath = $_.FullName; ClassId = $chClsid }
+                    }
                 }
             } catch {}
         }
@@ -685,6 +859,29 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
         Add-Finding -ID "MULTI_PERSIST" -Phase "PHASE 105" -ThreatType "Multi-Vector Persistence" `
             -Severity $SEV_CRITICAL -Description "Threat using $($hitTypes.Count) persistence vectors: $($hitTypes -join ', ')" `
             -Target "Cross-vector correlation" -FixAction "Info" -Group "Multi-Vector Correlation"
+    }
+
+    # WS9: ComHandler-task <-> COM-hijack cross-correlation. A scheduled task invoking a CLSID via
+    # ComHandler (Phase 104) is unremarkable by itself — plenty of first-party/vendor tasks do this.
+    # It becomes a real finding only when that SAME CLSID is also the target of a genuine HKCU
+    # CLSID hijack Phase 24 already flagged (HKLM-shadowing WITH a server override — Phase 24's
+    # own real-hijack bar, not its per-user-registration-only review case). Sourced from Phase 24's
+    # dedicated $global:ZB_ComHijackConfirmedClsids feed — NOT from re-checking stored finding
+    # Severity, because a PARANOID-mode run promotes every POSSIBLE finding to HIGH (Add-Finding's
+    # own escalation rule), which would otherwise make Phase 24's benign "per-user CLSID, no HKLM
+    # twin" case storage-indistinguishable from a confirmed hijack right when PARANOID operators
+    # are relying most on this correlation's precision.
+    $hijackedClsids = if ($global:ZB_ComHijackConfirmedClsids) { $global:ZB_ComHijackConfirmedClsids } else { @{} }
+    if ($hijackedClsids.Count -gt 0) {
+        foreach ($ct in @($global:ZB_ComHandlerTasks)) {
+            $hjPath = $hijackedClsids[$ct.ClassId]
+            if (-not $hjPath) { continue }
+            Out-ThreatBanner "COMHANDLER TASK <-> COM HIJACK CORRELATION" "$($ct.TaskPath) -> $($ct.ClassId)"
+            Add-Finding -ID "COMCORR_$(Get-StableId ("$($ct.TaskPath)|$($ct.ClassId)"))" -Phase "PHASE 105" `
+                -ThreatType "Multi-Vector Correlation" -Severity $SEV_POSSIBLE `
+                -Description "Scheduled task '$($ct.TaskPath)' triggers CLSID $($ct.ClassId) via ComHandler, and that SAME CLSID is a confirmed HKLM-shadowing COM hijack Phase 24 already flagged ($hjPath) — a scheduled task wired to fire a hijacked COM object is a stronger persistence signal than either finding alone; review both artifacts together." `
+                -Target $ct.TaskPath -FixAction "Info" -Group "Multi-Vector Correlation"
+        }
     }
 
     # Baseline diff
@@ -770,7 +967,13 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
             $logonType = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'LogonType' }).'#text'
             $ipAddr    = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'IpAddress'  }).'#text'
             $user      = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'TargetUserName' }).'#text'
-            ($logonType -in @('3','10') -and $ipAddr -and $ipAddr -notmatch '(^-$|^::1$|^127\.)') -or
+            # WS9: LogonType 9 (NewCredentials — e.g. `runas /netonly`, and how Mimikatz-class
+            # Pass-the-Hash tooling stages a token) added alongside 3/10. Reuses the SAME
+            # non-local-IP gate as the existing types, which is deliberately conservative here:
+            # a NewCredentials logon is generated LOCALLY on the source box, so IpAddress is
+            # typically blank/local for it — this stays POSSIBLE (the else branch below), never
+            # escalated, and a genuinely remote-sourced Type 9 is the strong, low-FP case.
+            ($logonType -in @('3','9','10') -and $ipAddr -and $ipAddr -notmatch '(^-$|^::1$|^127\.)') -or
             ($user -match '\$' -and $logonType -eq '3')
         }
         foreach ($ev in ($suspLogons | Select-Object -First 50)) {
@@ -780,8 +983,9 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
                 $ipAddr   = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'IpAddress'     }).'#text'
                 $logonType= ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'LogonType'     }).'#text'
                 $sev = if ($logonType -eq '10') { $SEV_HIGH } else { $SEV_POSSIBLE }
+                $typeNote = if ($logonType -eq '9') { ' [NewCredentials — possible Pass-the-Hash / runas /netonly]' } else { '' }
                 Add-Finding -ID "EVT4624_$($ev.RecordId)" -Phase "PHASE 107" -ThreatType "Anomalous Logon" `
-                    -Severity $sev -Description "Suspicious logon: User=$user Type=$logonType From=$ipAddr @ $($ev.TimeCreated.ToString('HH:mm:ss yyyy-MM-dd'))" `
+                    -Severity $sev -Description "Suspicious logon: User=$user Type=$logonType From=$ipAddr @ $($ev.TimeCreated.ToString('HH:mm:ss yyyy-MM-dd'))$typeNote" `
                     -Target "EventID:4624 Record:$($ev.RecordId)" -FixAction "Info" -Group "Event Log — Anomalous Logons"
             } catch {}
         }
@@ -823,11 +1027,23 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
                 $svcName  = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'ServiceName'   }).'#text'
                 $svcFile  = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'ImagePath'     }).'#text'
                 $svcType  = ($xml.Event.EventData.Data | Where-Object { $_.Name -eq 'ServiceType'   }).'#text'
+                # WS9: literal PsExec/PAExec/RemCom/WinExeSvc service-name match, checked ALONGSIDE
+                # (not replacing) the shape-regex heuristic below — the shape regex requires 6-10
+                # lowercase letters before "svc", which does NOT match "psexesvc" (psexe is only 5
+                # chars), so the single most common lateral-movement tool family was previously
+                # invisible to this phase. Near-zero legitimate software installs a service
+                # literally named PSEXESVC, so this alone justifies CRITICAL — but stays FixAction
+                # Info: this is a historical event-log correlation, nothing live to safely act on.
+                $isLateralTool = $false
+                foreach ($lm in $LATERAL_MOVEMENT_SVC_NAMES) {
+                    if ($lm -and $svcName -and "$svcName".ToLower().StartsWith($lm)) { $isLateralTool = $true; break }
+                }
                 $isSusp = ($svcFile -match "AppData|Temp|powershell|cmd\.exe|wscript|mshta|\.dll.*,|rundll32") -or
-                          ($svcName -match "^[a-z]{6,10}svc$|^svc[a-z]{5,}$")
+                          ($svcName -match "^[a-z]{6,10}svc$|^svc[a-z]{5,}$") -or $isLateralTool
                 $sev = if ($isSusp) { $SEV_CRITICAL } else { $SEV_POSSIBLE }
+                $svcNote = if ($isLateralTool) { 'KNOWN LATERAL-MOVEMENT TOOL SERVICE NAME (PsExec/PAExec/RemCom-class)' } elseif ($isSusp) { 'SUSPICIOUS' } else { 'review' }
                 Add-Finding -ID "EVT7045_$($ev.RecordId)" -Phase "PHASE 107" -ThreatType "Rogue Service Install" `
-                    -Severity $sev -Description "New service (7045): $svcName | Path: $svcFile | Type: $svcType | $(if($isSusp){'SUSPICIOUS'}else{'review'})" `
+                    -Severity $sev -Description "New service (7045): $svcName | Path: $svcFile | Type: $svcType | $svcNote" `
                     -Target "EventID:7045 Record:$($ev.RecordId)" -FixAction "Info" -Group "Event Log — New Services"
             } catch {}
         }

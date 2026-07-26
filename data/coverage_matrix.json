@@ -1,8 +1,8 @@
 {
-  "_comment": "WS0 coverage matrix (re-audited 2026-07-02 against the split engine on main; comment corrected 2026-07-22 after the full-repo review): phase -> MITRE ATT&CK technique -> data source. Engine = ZeroBreach-V23.ps1 thin loader + dot-sourced engine/Phases-1.ps1 (phases 1-58 incl. 55.5), Phases-2.ps1 (59-89 incl. 74.5/.6/.7), Phases-3.ps1 (90-107 incl. 99.5 + integrity 108-115). Per-phase fields: module, mode_gate, severities, fix_actions; data_source also lists allow:<key> FP-allowlist consumption. mode_gate truth: QUICK IS a real 30-phase gate (shipped 2026-07-02/03 - $global:QUICK_MODE plus `if(-not $QUICK_MODE){...}` wraps; the earlier 'QUICK Max=30 is a plan label only' note was true of the pre-gate engine and is now WRONG). Phases 81-89 are gated by $PhasePlan.Universal, 90-107 by .Advanced, 108-115 by .Integrity (all true only in DEEP/PARANOID/STEALTH). signature_source: externalized=data/*.json only; partial=mixed data+inline literals; inline=signature literals live in the .ps1; n/a=behavioral/registry/cmdlet, no signature strings. ORPHANED-KEY LIST REMOVED: all 15 formerly-orphaned detection_signatures.json keys were wired up on 2026-07-02 (commit bbc2d9d), and the last five loaded-but-unused loader vars (trojan_file_patterns, auto_elevate_bins, email_phishing_trojans, proactive_persistence_regs, proactive_lure_extensions) were wired on 2026-07-22. permission_baseline.json's unquoted_path_whitelist is now read by Phase 111.",
-  "generated": "2026-07-02",
+  "_comment": "WS0 coverage matrix (re-audited 2026-07-02 against the split engine on main; comment corrected 2026-07-22 after the full-repo review): phase -> MITRE ATT&CK technique -> data source. Engine = ZeroBreach-V23.ps1 thin loader + dot-sourced engine/Phases-1.ps1 (phases 1-58 incl. 55.5), Phases-2.ps1 (59-89 incl. 74.5/.6/.7), Phases-3.ps1 (90-107 incl. 99.5 + integrity 108-115). Per-phase fields: module, mode_gate, severities, fix_actions; data_source also lists allow:<key> FP-allowlist consumption. mode_gate truth: QUICK IS a real 30-phase gate (shipped 2026-07-02/03 - $global:QUICK_MODE plus `if(-not $QUICK_MODE){...}` wraps; the earlier 'QUICK Max=30 is a plan label only' note was true of the pre-gate engine and is now WRONG). Phases 81-89 are gated by $PhasePlan.Universal, 90-107 by .Advanced, 108-115 by .Integrity (all true only in DEEP/PARANOID/STEALTH). signature_source: externalized=data/*.json only; partial=mixed data+inline literals; inline=signature literals live in the .ps1; n/a=behavioral/registry/cmdlet, no signature strings. ORPHANED-KEY LIST REMOVED: all 15 formerly-orphaned detection_signatures.json keys were wired up on 2026-07-02 (commit bbc2d9d), and the last five loaded-but-unused loader vars (trojan_file_patterns, auto_elevate_bins, email_phishing_trojans, proactive_persistence_regs, proactive_lure_extensions) were wired on 2026-07-22. permission_baseline.json's unquoted_path_whitelist is now read by Phase 111. WS7 (2026-07-25) added 4 new phases to Phases-1.ps1 — 10.6 (npm/pip postinstall exfil), 32.5 (DLL side-loading), 36.5 (cloud IMDS credential theft), 49.5 (clipboard clipper) — and extended Phase 10 (.lnk downloader payloads) and Phase 8 (extension update_url) in place; phase_count/techniques_referenced updated for the new entries only, the rest of this matrix is still the pending WS0 re-audit. WS8 (2026-07-25) added 3 new phases to Phases-2.ps1 — 87.5 (GPP cpassword), 88.5 (Kerberoasting/AS-REP roasting), 74.8 (Outlook forward+hide BEC) — and extended Phase 77 (SSH authorized_keys) and Phase 74 (Office add-in sideload) in place; phase_count/techniques_referenced updated for the new entries only, the rest of this matrix is still the pending WS0 re-audit. WS9 (2026-07-26) added 1 new phase to Phases-3.ps1 — 97.5 (MSIX/App Installer sideloading abuse) — added the previously-missing PHASE 100.5 entry (Cloud & Session Token Theft Staging, engine-present since WS6 but never added to this matrix), and extended Phase 107 (PsExec/PAExec/RemCom literal service-name match on the 7045 handler + Pass-the-Hash/NewCredentials LogonType 9 on the 4624 handler), Phase 101 (WSL Linux-side cron/dotfile persistence), and Phase 104+105 (ComHandler scheduled-task trigger cross-correlated with Phase 24 COM hijack findings) in place; phase_count/techniques_referenced updated for the new/closed entries only, the rest of this matrix is still the pending WS0 re-audit.",
+  "generated": "2026-07-25",
   "engine": "ZeroBreach-V23.ps1 (thin loader) + engine/Phases-1.ps1 + engine/Phases-2.ps1 + engine/Phases-3.ps1",
-  "phase_count": 121,
+  "phase_count": 130,
   "techniques_referenced": [
     "T1003.001",
     "T1003.002",
@@ -42,9 +42,11 @@
     "T1083",
     "T1090",
     "T1091",
+    "T1098.004",
     "T1105",
     "T1112",
     "T1113",
+    "T1114.003",
     "T1115",
     "T1127",
     "T1134",
@@ -52,6 +54,7 @@
     "T1137",
     "T1176",
     "T1185",
+    "T1195.002",
     "T1197",
     "T1203",
     "T1204.002",
@@ -79,8 +82,12 @@
     "T1547.001",
     "T1547.004",
     "T1547.006",
+    "T1547.009",
     "T1547.012",
     "T1548.002",
+    "T1550.002",
+    "T1552.001",
+    "T1552.005",
     "T1553.002",
     "T1553.004",
     "T1553.005",
@@ -90,6 +97,8 @@
     "T1555.003",
     "T1556",
     "T1558.001",
+    "T1558.003",
+    "T1558.004",
     "T1559",
     "T1562.001",
     "T1562.002",
@@ -100,10 +109,12 @@
     "T1564.004",
     "T1565.001",
     "T1566.001",
+    "T1570",
     "T1571",
     "T1572",
     "T1574",
     "T1574.001",
+    "T1574.002",
     "T1574.007",
     "T1574.009",
     "T1574.010",
@@ -392,7 +403,7 @@
       "name": "BROWSER EXTENSION SANITIZATION (HEURISTIC)",
       "module": "engine/Phases-1.ps1",
       "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
-      "detects": "Walks Chrome/Edge/Brave extension dirs via Get-ExtensionRisk; flags CRIT/HIGH/POSSIBLE.",
+      "detects": "Walks Chrome/Edge/Brave extension dirs via Get-ExtensionRisk; flags CRIT/HIGH/POSSIBLE. WS7: Get-ExtensionRisk also reads manifest.json update_url and flags POSSIBLE when set to a host outside the browser vendors' own official updater endpoints.",
       "threat_types": [
         "Browser Extension/Hijacker"
       ],
@@ -416,9 +427,10 @@
       ],
       "data_source": [
         "filewalk",
-        "heuristic:Get-ExtensionRisk"
+        "heuristic:Get-ExtensionRisk",
+        "allow:trusted_extension_update_hosts"
       ],
-      "signature_source": "n/a"
+      "signature_source": "partial"
     },
     {
       "phase": "PHASE 9",
@@ -467,16 +479,18 @@
       "name": "TEMP / DOWNLOAD DIRECTORY ANOMALY SWEEP",
       "module": "engine/Phases-1.ps1",
       "mode_gate": "all modes (incl. QUICK)",
-      "detects": "Time-scoped scan of TEMP/Downloads/INetCache for executable/script files.",
+      "detects": "Time-scoped scan of TEMP/Downloads/INetCache for executable/script files. WS7: also resolves .lnk shortcuts in Downloads/Desktop/Startup via WScript.Shell and flags TargetPath/Arguments containing encoded-command flags, DownloadString/IEX, a hidden window style, or an mshta/wscript download cradle.",
       "threat_types": [
-        "Suspicious File"
+        "Suspicious File",
+        "Malicious LNK/Downloader"
       ],
       "severities": [
         "HIGH",
         "POSSIBLE"
       ],
       "fix_actions": [
-        "DeleteFile"
+        "DeleteFile",
+        "Info"
       ],
       "mitre_techniques": [
         {
@@ -494,12 +508,64 @@
             "Command and Control"
           ],
           "url": "https://attack.mitre.org/techniques/T1105/"
+        },
+        {
+          "id": "T1547.009",
+          "name": "Boot or Logon Autostart Execution: Shortcut Modification",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1547/009/"
         }
       ],
       "data_source": [
-        "filewalk"
+        "filewalk",
+        "com:WScript.Shell",
+        "inline-regex"
       ],
-      "signature_source": "n/a"
+      "signature_source": "partial"
+    },
+    {
+      "phase": "PHASE 10.6",
+      "name": "NPM/PIP POSTINSTALL SUPPLY-CHAIN EXFIL SWEEP",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
+      "detects": "Scans package.json files MODIFIED within the current scan time window (fresh npm install, not the whole node_modules tree) for a scripts.postinstall/preinstall value that runs a download command (curl/wget/Invoke-WebRequest/DownloadString/iwr/irm) aimed at a raw IP or a host not on the known-benign install-time host allowlist.",
+      "threat_types": [
+        "Supply Chain Compromise"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1195.002",
+          "name": "Supply Chain Compromise: Compromise Software Supply Chain",
+          "tactics": [
+            "Initial Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1195/002/"
+        },
+        {
+          "id": "T1105",
+          "name": "Ingress Tool Transfer",
+          "tactics": [
+            "Command and Control"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1105/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "inline-regex",
+        "allow:npm_postinstall_trusted_hosts"
+      ],
+      "signature_source": "partial",
+      "notes": "single highest-FP-risk item in the WS7 batch — narrowest possible trigger by design (time-scoped package.json only, postinstall/preinstall string only, allowlisted-host gate)"
     },
     {
       "phase": "PHASE 11",
@@ -1238,6 +1304,42 @@
       "signature_source": "n/a"
     },
     {
+      "phase": "PHASE 32.5",
+      "name": "DLL SIDE-LOADING — SEARCH-ORDER HIJACK TARGET AUDIT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
+      "detects": "For signed EXEs in user-writable roots (AppData/Temp/ProgramData/Downloads), checks the SAME directory for an unsigned DLL named from sideload_target_dll_names (well-known search-order-hijack targets: version.dll, dbghelp.dll, wintrust.dll, ...). Escalates to HIGH only when BOTH the DLL name AND the sibling EXE's own filename match their respective name lists AND the pair sits directly in an AppData/Temp/ProgramData root (not a nested legitimate install path) — name-list-both-sides gate is mandatory to avoid flagging portable apps (7-Zip/VLC) that legitimately ship DLLs beside their EXE.",
+      "threat_types": [
+        "DLL Hijack"
+      ],
+      "severities": [
+        "HIGH",
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1574.002",
+          "name": "Hijack Execution Flow: DLL Side-Loading",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation",
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1574/002/"
+        }
+      ],
+      "data_source": [
+        "filewalk",
+        "authenticode",
+        "sig:sideload_target_dll_names",
+        "sig:commonly_sideloaded_exe_names"
+      ],
+      "signature_source": "externalized"
+    },
+    {
       "phase": "PHASE 33",
       "name": "HOSTS FILE INTEGRITY AUDIT",
       "module": "engine/Phases-1.ps1",
@@ -1381,6 +1483,38 @@
         "inline-regex"
       ],
       "signature_source": "partial"
+    },
+    {
+      "phase": "PHASE 36.5",
+      "name": "CLOUD INSTANCE METADATA SERVICE (IMDS) CREDENTIAL THEFT",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
+      "detects": "Flags established connections to 169.254.169.254:80 (AWS/Azure IMDS) whose owning process is NOT on cloud_agent_allowlist_names/cloud_agent_allowlist_path_regex (SSM/Azure/GCE guest agents, Docker Desktop, common backup/RMM agents). HIGH-FP-RISK detection — allowlist gate is a hard requirement, POSSIBLE + Info only, never auto-actionable.",
+      "threat_types": [
+        "Cloud Credential Theft"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1552.005",
+          "name": "Unsecured Credentials: Cloud Instance Metadata API",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1552/005/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-NetTCPConnection",
+        "sig:cloud_agent_allowlist_names",
+        "allow:cloud_agent_allowlist_path_regex"
+      ],
+      "signature_source": "externalized"
     },
     {
       "phase": "PHASE 37",
@@ -1833,6 +1967,41 @@
       ],
       "signature_source": "inline",
       "notes": "shallow name-only"
+    },
+    {
+      "phase": "PHASE 49.5",
+      "name": "CLIPBOARD CRYPTOCURRENCY ADDRESS-SWAP (CLIPPER) DETECTION",
+      "module": "engine/Phases-1.ps1",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
+      "detects": "Scans Run/RunOnce values, scheduled-task command lines and recently-dropped scripts for CO-OCCURRENCE, in the SAME content, of a clipboard-API reference (clipper_clipboard_api_regex) AND a hardcoded crypto address literal (clipper_crypto_address_regex — BTC bech32/legacy, ETH 0x). Neither list alone is a finding. Excludes infostealer_benign_paths via Test-BenignPath.",
+      "threat_types": [
+        "Clipper/Crypto Hijacker"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1115",
+          "name": "Clipboard Data",
+          "tactics": [
+            "Collection"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1115/"
+        }
+      ],
+      "data_source": [
+        "registry",
+        "cmdlet:Get-ScheduledTask",
+        "filewalk",
+        "sig:clipper_clipboard_api_regex",
+        "sig:clipper_crypto_address_regex",
+        "allow:infostealer_benign_paths"
+      ],
+      "signature_source": "externalized"
     },
     {
       "phase": "PHASE 50",
@@ -2756,10 +2925,11 @@
       "name": "MACRO / OFFICE / OUTLOOK PERSISTENCE AUDIT",
       "module": "engine/Phases-2.ps1",
       "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
-      "detects": "Flags VBAWarnings=1 + Outlook WebView HTML auto-exec regkey.",
+      "detects": "Flags VBAWarnings=1 + Outlook WebView HTML auto-exec regkey. WS8: also audits HKCU Office Addins (LoadBehavior) resolved to their on-disk DLL via ProgID->CLSID->InprocServer32, and the %APPDATA%\\Microsoft\\AddIns folder for .wll/.xll binaries, flagging unsigned or AppData/Temp-hosted add-ins (POSSIBLE/Info only — add-ins are a common legitimate mechanism).",
       "threat_types": [
         "Macro Abuse",
-        "Outlook Persistence"
+        "Outlook Persistence",
+        "Office Add-in Sideload"
       ],
       "severities": [
         "HIGH",
@@ -2788,7 +2958,9 @@
         }
       ],
       "data_source": [
-        "registry"
+        "registry",
+        "authenticode",
+        "filewalk"
       ],
       "signature_source": "n/a"
     },
@@ -3008,9 +3180,10 @@
       "name": "SSH & WINRM REMOTE MANAGEMENT AUDIT",
       "module": "engine/Phases-2.ps1",
       "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
-      "detects": "Flags running WinRM/sshd as remote-access vector.",
+      "detects": "Flags running WinRM/sshd as remote-access vector. WS8: also audits administrators_authorized_keys + per-user .ssh\\authorized_keys for a durable SSH login backdoor (unconditional — checked whether or not sshd is running).",
       "threat_types": [
-        "Remote Management"
+        "Remote Management",
+        "SSH Key Backdoor"
       ],
       "severities": [
         "POSSIBLE"
@@ -3034,10 +3207,20 @@
             "Lateral Movement"
           ],
           "url": "https://attack.mitre.org/techniques/T1021/006/"
+        },
+        {
+          "id": "T1098.004",
+          "name": "Account Manipulation: SSH Authorized Keys",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1098/004/"
         }
       ],
       "data_source": [
-        "cmdlet:Get-Service"
+        "cmdlet:Get-Service",
+        "filewalk"
       ],
       "signature_source": "n/a"
     },
@@ -3792,6 +3975,38 @@
       "notes": "POSSIBLE"
     },
     {
+      "phase": "PHASE 97.5",
+      "name": "MSIX / APP INSTALLER SIDELOADING ABUSE",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
+      "detects": "Sideloaded MSIX/Appx packages (SignatureKind != Store) from a publisher not in the trusted-signer allowlist, installed in the scan time window.",
+      "threat_types": [
+        "MSIX Sideload Abuse"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1553.002",
+          "name": "Subvert Trust Controls: Code Signing",
+          "tactics": [
+            "Defense Evasion"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1553/002/"
+        }
+      ],
+      "data_source": [
+        "cmdlet:Get-AppxPackage",
+        "allow:trusted_signers (permission_baseline.json)"
+      ],
+      "signature_source": "n/a",
+      "notes": "WS9 (2026-07-26), new phase. Moderate FP risk — Intune/enterprise LOB apps legitimately sideload MSIX, so POSSIBLE-only, never escalated."
+    },
+    {
       "phase": "PHASE 98",
       "name": "STOLEN / LEAKED CODE-SIGNING CERT DETECTION",
       "module": "engine/Phases-3.ps1",
@@ -3932,16 +4147,75 @@
       "signature_source": "inline"
     },
     {
+      "phase": "PHASE 100.5",
+      "name": "CLOUD & SESSION TOKEN THEFT STAGING",
+      "module": "engine/Phases-3.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
+      "detects": "Cloud/session token store inventory (INFO); loot-shaped archive/dump names in staging locations (POSSIBLE/HIGH); WS9 (2026-07-26) adds known Chrome/Edge App-Bound-Encryption-bypass cookie-theft tool names matched against unsigned running processes AND recently-present files in user-writable paths (the DB-access-time check in Phase 100 is blind to this stealer generation, which reads cookies via IPC to the browser elevation service instead of touching the DB).",
+      "threat_types": [
+        "Cloud Credential Exposure",
+        "Info-Stealer / Token Theft"
+      ],
+      "severities": [
+        "INFO",
+        "POSSIBLE",
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info",
+        "Quarantine"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1528",
+          "name": "Steal Application Access Token",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1528/"
+        },
+        {
+          "id": "T1539",
+          "name": "Steal Web Session Cookie",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1539/"
+        },
+        {
+          "id": "T1552.001",
+          "name": "Unsecured Credentials: Credentials In Files",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1552/001/"
+        }
+      ],
+      "data_source": [
+        "wmi",
+        "filewalk",
+        "sig:cloud_token_paths_raw",
+        "sig:token_staging_name_patterns",
+        "sig:abe_bypass_tool_names",
+        "authenticode",
+        "allow:yara_benign_paths"
+      ],
+      "signature_source": "externalized",
+      "notes": "Entry added 2026-07-26 (WS9) — phase was engine-present since WS6 but had no coverage_matrix entry; this closes that gap and documents the new ABE-bypass detection (T1528/T1539/T1552.001 match the existing PHASE 100.5 phase_map wiring in mitre_mapping.json) in the same pass."
+    },
+    {
       "phase": "PHASE 101",
       "name": "WSL / DOCKER CONTAINER ESCAPE SURFACE",
       "module": "engine/Phases-3.ps1",
       "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
-      "detects": "Enumerates WSL distros + Docker presence (lateral surface).",
+      "detects": "Enumerates WSL distros + Docker presence (lateral surface). WS9 (2026-07-26) adds a best-effort, bounded (20s total wall-clock budget) probe of each distro's crontab + ~/.bashrc/~/.profile for a raw-IP download command or a /mnt/c/...exe cross-launch into Windows.",
       "threat_types": [
-        "Container Surface"
+        "Container Surface",
+        "WSL Linux-Side Persistence"
       ],
       "severities": [
-        "INFO"
+        "INFO",
+        "POSSIBLE"
       ],
       "fix_actions": [
         "Info"
@@ -3958,10 +4232,12 @@
       ],
       "data_source": [
         "cmdlet:wsl",
-        "cmdlet:docker"
+        "cmdlet:docker",
+        "cmdlet:wsl crontab/cat (bounded via Start-Job/Wait-Job)",
+        "allow:wsl_dev_benign_commands"
       ],
-      "signature_source": "n/a",
-      "notes": "INFO"
+      "signature_source": "partial",
+      "notes": "Container inventory is INFO; the new persistence heuristic is POSSIBLE-only — moderate-to-high FP risk on real developer boxes (npm/pip installers commonly run from cron/profile scripts), never escalated."
     },
     {
       "phase": "PHASE 102",
@@ -4038,13 +4314,15 @@
       "name": "SCHEDULED TASK XML DEEP PARSE / HIDDEN TASKS",
       "module": "engine/Phases-3.ps1",
       "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
-      "detects": "System32\\Tasks XML for Hidden=true + SDDL D:P ACL locks (anti-forensic).",
+      "detects": "System32\\Tasks XML for Hidden=true + SDDL D:P ACL locks (anti-forensic). WS9 (2026-07-26) adds a ComHandler <ClassId> parse (task actions that invoke a COM object rather than a plain process launch — a mechanism this phase did not previously parse at all), feeding Phase 105's correlation against Phase 24's COM-hijack findings; excluded on the same \\Tasks\\Microsoft\\ path allowlist as the Hidden-task check.",
       "threat_types": [
         "Hidden Scheduled Task",
-        "SDDL-Locked Task"
+        "SDDL-Locked Task",
+        "ComHandler Task Trigger"
       ],
       "severities": [
-        "HIGH"
+        "HIGH",
+        "POSSIBLE"
       ],
       "fix_actions": [
         "Info"
@@ -4073,12 +4351,14 @@
       "name": "PERSISTENCE HEATMAP & CROSS-VECTOR CORRELATION",
       "module": "engine/Phases-3.ps1",
       "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
-      "detects": "Aggregates findings by ThreatType; flags >=3 persistence vectors as multi-vector CRIT.",
+      "detects": "Aggregates findings by ThreatType; flags >=3 persistence vectors as multi-vector CRIT. WS9 (2026-07-26) adds a second correlation: a Phase 104 ComHandler task ClassId that matches the SAME CLSID as a genuine (HKLM-shadowing) Phase 24 COM-hijack finding.",
       "threat_types": [
-        "Multi-Vector Persistence"
+        "Multi-Vector Persistence",
+        "Multi-Vector Correlation"
       ],
       "severities": [
-        "CRITICAL"
+        "CRITICAL",
+        "POSSIBLE"
       ],
       "fix_actions": [
         "Info"
@@ -4111,6 +4391,15 @@
             "Privilege Escalation"
           ],
           "url": "https://attack.mitre.org/techniques/T1543/003/"
+        },
+        {
+          "id": "T1546.015",
+          "name": "Event Triggered Execution: Component Object Model Hijacking",
+          "tactics": [
+            "Persistence",
+            "Privilege Escalation"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1546/015/"
         }
       ],
       "data_source": [
@@ -4175,14 +4464,16 @@
       "name": "EVENT LOG THREAT HUNTING (4624/4688/7045)",
       "module": "engine/Phases-3.ps1",
       "mode_gate": "DEEP/PARANOID/STEALTH (Advanced)",
-      "detects": "4624 anomalous logons; 4688 suspicious process creation; 7045 rogue service installs.",
+      "detects": "4624 anomalous logons (Type 3/10, WS9 2026-07-26 adds Type 9 NewCredentials/Pass-the-Hash); 4688 suspicious process creation; 7045 rogue service installs (WS9 adds a literal PsExec/PAExec/RemCom/WinExeSvc service-name check alongside the existing shape-regex heuristic — CRITICAL, since near-zero legitimate software installs a service literally named PSEXESVC, but still FixAction Info: nothing live to safely act on from a historical event-log correlation).",
       "threat_types": [
         "Anomalous Logon",
         "Suspicious Process Creation",
         "Rogue Service Install"
       ],
       "severities": [
-        "HIGH"
+        "CRITICAL",
+        "HIGH",
+        "POSSIBLE"
       ],
       "fix_actions": [
         "Info"
@@ -4215,13 +4506,31 @@
             "Lateral Movement"
           ],
           "url": "https://attack.mitre.org/techniques/T1021/002/"
+        },
+        {
+          "id": "T1570",
+          "name": "Lateral Tool Transfer",
+          "tactics": [
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1570/"
+        },
+        {
+          "id": "T1550.002",
+          "name": "Use Alternate Authentication Material: Pass the Hash",
+          "tactics": [
+            "Defense Evasion",
+            "Lateral Movement"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1550/002/"
         }
       ],
       "data_source": [
         "eventlog",
-        "inline-regex"
+        "inline-regex",
+        "sig:lateral_movement_service_names"
       ],
-      "signature_source": "inline"
+      "signature_source": "partial"
     },
     {
       "phase": "PHASE 108",
@@ -4580,6 +4889,111 @@
         "perm:weak_write_identities"
       ],
       "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 74.8",
+      "name": "OUTLOOK MAILBOX FORWARD+HIDE (BEC) AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "FULL/DEEP/PARANOID/STEALTH (not in the QUICK 30-phase set)",
+      "detects": "Only inspects an ALREADY-RUNNING Outlook via Marshal.GetActiveObject (never launches a new instance). Enumerates the default Store's rules via Store.GetRules(); flags a rule ONLY when it BOTH forwards/redirects to an address outside the profile's own configured account domains AND deletes or moves the message out of the Inbox in the SAME rule (forward+hide co-occurrence — a bare external-forward rule alone is common/legitimate and is not flagged).",
+      "threat_types": [
+        "BEC / Mailbox Persistence"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1114.003",
+          "name": "Email Collection: Email Forwarding Rule",
+          "tactics": [
+            "Collection"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1114/003/"
+        }
+      ],
+      "data_source": [
+        "com:Outlook.Application (GetActiveObject only)"
+      ],
+      "signature_source": "n/a",
+      "notes": "CRITICAL CONSTRAINT honored: never New-Object -ComObject Outlook.Application — only attaches to an already-running instance, so a technician's own session is never disturbed and no profile/MFA prompt can be triggered."
+    },
+    {
+      "phase": "PHASE 87.5",
+      "name": "GPP CACHED PASSWORD (CPASSWORD) AUDIT",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal)",
+      "detects": "Walks SYSVOL Policies (domain-joined only) plus the local System32/GroupPolicy and ProgramData\\Microsoft\\Group Policy\\History caches for the 6 GPP Preferences XML filenames, regex-matches a non-empty cpassword attribute, and AES-256-CBC-decrypts it with the single key Microsoft published in MS-GPPREF §2.2.1.1 (zero IV). A non-empty cpassword is an unambiguous, fully realized credential exposure — CRITICAL, FixAction Info (this is a live GPO artifact; only a domain admin can actually remediate it in GPMC).",
+      "threat_types": [
+        "GPP Cached Credential"
+      ],
+      "severities": [
+        "CRITICAL"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1552.001",
+          "name": "Unsecured Credentials: Credentials In Files",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1552/001/"
+        }
+      ],
+      "data_source": [
+        "sig:gpp_cpassword_regex",
+        "sig:gpp_preference_xml_names",
+        "sig:gpp_cpassword_aes_key_bytes",
+        "filewalk"
+      ],
+      "signature_source": "externalized"
+    },
+    {
+      "phase": "PHASE 88.5",
+      "name": "KERBEROASTING / AS-REP ROASTING TRIAGE",
+      "module": "engine/Phases-2.ps1",
+      "mode_gate": "DEEP/PARANOID/STEALTH (Universal); domain-joined only",
+      "detects": "(a) Kerberoasting: Event 4769, RC4 ticket encryption, non-krbtgt/non-computer-account SPN, flags an account ONLY when it requests tickets for 3+ DISTINCT SPNs within a 5-minute rolling window (burst/distinct-SPN threshold is mandatory — a single RC4 request is routine legacy-app-compat noise). (b) AS-REP Roasting: Event 4768 with Kerberos pre-authentication Type 0 or absent from the event.",
+      "threat_types": [
+        "Kerberoasting",
+        "AS-REP Roasting"
+      ],
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "mitre_techniques": [
+        {
+          "id": "T1558.003",
+          "name": "Steal or Forge Kerberos Tickets: Kerberoasting",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1558/003/"
+        },
+        {
+          "id": "T1558.004",
+          "name": "Steal or Forge Kerberos Tickets: AS-REP Roasting",
+          "tactics": [
+            "Credential Access"
+          ],
+          "url": "https://attack.mitre.org/techniques/T1558/004/"
+        }
+      ],
+      "data_source": [
+        "eventlog",
+        "inline-regex"
+      ],
+      "signature_source": "inline",
+      "notes": "Message-text regex parsing shares the same locale-dependent limitation as Phase 88's existing Golden Ticket check (both parse Get-WinEvent .Message text rather than structured EventData)."
     }
   ]
 }

@@ -620,6 +620,56 @@ if (Test-Path $outlookPath) {
         -Severity $SEV_POSSIBLE -Description "Outlook WebView registry key present — possible HTML auto-execute persistence" `
         -Target $outlookPath -FixAction "Info" -Group "Office / Macro Security"
 }
+# WS8 (T1137): VSTO/COM add-in sideload persistence. Add-ins are a legitimate, extremely common
+# Office extensibility mechanism (Bloomberg/Reuters/CRM/PDF plugins all register exactly this
+# way), so this is inventory + review, never HIGH/CRITICAL — POSSIBLE + Info only (rule #1: this
+# heuristic alone must never drive an auto-select). Two vectors: (a) registered COM/VSTO add-ins
+# under HKCU Office Addins (LoadBehavior), resolved to their on-disk DLL via
+# ProgID -> CLSID -> InprocServer32 (same resolution pattern as the Phase 24 COM hijack audit);
+# (b) directly-loadable .wll/.xll binaries dropped into the standard per-user AddIns folder —
+# %APPDATA%\Microsoft\AddIns IS the documented install location for legitimate Excel/Word XLL/WLL
+# add-ins, so a hit there is routine, not proof of sideloading; still surfaced for review.
+$addinFound = $false
+$officeAddinKeys = @(Get-ChildItem -Path 'HKCU:\SOFTWARE\Microsoft\Office\*\Addins\*' -ErrorAction SilentlyContinue)
+foreach ($aik in $officeAddinKeys) {
+    $lb = Get-RegVal -Path $aik.PSPath -Name 'LoadBehavior'
+    if ($null -eq $lb) { continue }   # key exists but was never actually loaded — nothing to resolve
+    $progId = $aik.PSChildName
+    $clsidVal = $null; $clsidRoot = $null
+    foreach ($clsRoot in @('HKCU:\SOFTWARE\Classes','HKLM:\SOFTWARE\Classes','HKLM:\SOFTWARE\WOW6432Node\Classes')) {
+        $cv = Get-RegVal -Path "$clsRoot\$progId\CLSID" -Name '(default)'
+        if ($cv) { $clsidVal = $cv; $clsidRoot = $clsRoot; break }
+    }
+    if (-not $clsidVal) { continue }   # can't resolve ProgID -> CLSID — fail closed, no finding
+    $dllPath = Get-RegVal -Path "$clsidRoot\CLSID\$clsidVal\InprocServer32" -Name '(default)'
+    if (-not $dllPath) { continue }
+    $dllPath = [System.Environment]::ExpandEnvironmentVariables($dllPath)
+    if (-not (Test-Path -LiteralPath $dllPath -ErrorAction SilentlyContinue)) { continue }
+    $addinSig = Get-AuthSig $dllPath
+    $addinUserPath = ($dllPath -match $global:USER_PATH_RE -and $dllPath -notmatch $global:WINDOWSAPPS_RE)
+    if ($addinSig.Status -ne "Valid" -or $addinUserPath) {
+        $addinFound = $true
+        $addinWhy = if ($addinSig.Status -ne "Valid") { "unsigned" } else { "signed but AppData/Temp-hosted" }
+        Out-Typewriter "  -> OFFICE ADD-IN (review, $addinWhy): $progId LoadBehavior=$lb @ $dllPath" "WARN"
+        Add-Finding -ID "ADDIN_$(Get-StableId "$progId|$dllPath")" -Phase "PHASE 74" -ThreatType "Office Add-in Sideload" `
+            -Severity $SEV_POSSIBLE -Description "Registered Office add-in '$progId' (LoadBehavior=$lb) resolves to a $addinWhy binary: $dllPath — legitimate add-ins (Bloomberg/CRM/PDF plugins) commonly register this exact way too; verify it is an add-in you installed." `
+            -Target $dllPath -FixAction "Info" -Group "Office Add-in Persistence"
+    }
+}
+$officeAddinFolder = Join-Path $env:APPDATA 'Microsoft\AddIns'
+if (Test-Path -LiteralPath $officeAddinFolder) {
+    $officeAddinFiles = (Get-ScanFiles -Path $officeAddinFolder -TimeScoped) | Where-Object { $_.Extension -match '\.(wll|xll)$' }
+    foreach ($oaf in $officeAddinFiles) {
+        $oafSig = Get-AuthSig $oaf.FullName
+        $addinFound = $true
+        $oafWhy = if ($oafSig.Status -ne "Valid") { "Unsigned" } else { "Signed" }
+        Out-Typewriter "  -> XLL/WLL ADD-IN BINARY ($oafWhy): $($oaf.FullName)" "WARN"
+        Add-Finding -ID "ADDINFILE_$(Get-StableId $oaf.FullName)" -Phase "PHASE 74" -ThreatType "Office Add-in Sideload" `
+            -Severity $SEV_POSSIBLE -Description "$oafWhy XLL/WLL Office add-in binary in the standard per-user AddIns folder (legitimate install location for user-installed add-ins — review, do not assume malicious): $($oaf.FullName)" `
+            -Target $oaf.FullName -FixAction "Info" -Group "Office Add-in Persistence"
+    }
+}
+if (-not $addinFound) { Out-Typewriter "  -> [OK] NO SUSPICIOUS OFFICE ADD-IN BINARIES." "GOOD" }
 Out-Typewriter "  -> MACRO/OUTLOOK AUDIT COMPLETE." "VER"
 
 Show-PhaseHeader "PHASE 74.5" "EMAIL ATTACHMENT MALWARE SCAN (OUTLOOK CACHE)" "PHISHING"
@@ -870,6 +920,108 @@ if ($hardenHits -eq 0) { Out-Typewriter "  -> [OK] PROACTIVE HARDENING ALREADY I
 else { Out-Typewriter "  -> $hardenHits PROACTIVE HARDENING RECOMMENDATION(S) ADDED." "DATA" }
 Out-Typewriter "  -> PROACTIVE HARDENING AUDIT COMPLETE." "VER"
 
+Show-PhaseHeader "PHASE 74.8" "OUTLOOK MAILBOX FORWARD+HIDE (BEC) AUDIT" "PHISHING"
+Out-Typewriter "INSPECTING LIVE OUTLOOK SESSION FOR FORWARD+HIDE RULES..." "HUNT"
+# WS8 (T1114.003): after landing via BEC, an attacker adds an inbox rule that silently
+# forwards/redirects incoming mail to an external address AND deletes or moves the message out
+# of the Inbox — the actual evidence-hiding signature. A bare external-forward rule alone is
+# common and legitimate (assistants, shared-inbox routing, personal-to-work forwarding), so only
+# the CO-OCCURRENCE of forward+hide fires here. This is a broad net BY DESIGN — it does NOT
+# require the rule to be scoped to invoice/wire-transfer subject matter (real "forward everything
+# + hide" BEC rules often carry no subject/sender condition at all, to intercept the widest
+# possible correspondence) — so it can also legitimately fire on a delegate/assistant workflow
+# that forwards to a different domain and files the copy out of the Inbox. POSSIBLE + Info,
+# review-only; the finding description says so explicitly.
+# CRITICAL CONSTRAINT: only ever inspect an ALREADY-RUNNING Outlook via Marshal.GetActiveObject —
+# never New-Object -ComObject Outlook.Application, which launches a fresh instance and can
+# trigger a profile/MFA prompt on the technician's own interactive session.
+# BOUNDED, like every other synchronous COM/native call in this codebase (Get-AuthSig's
+# SIG_AUDIT budget, the WSL probe two phases earlier in this same diff): Outlook is routinely
+# "Not Responding" on a real MSP endpoint (large PST/OST reindex, a modal dialog on the
+# technician's own session, a hung add-in) while OUTLOOK.exe is still alive, so GetActiveObject
+# succeeds and every subsequent property/method call is a synchronous out-of-process COM RPC
+# that can block for as long as Outlook is unresponsive. The entire inspection runs in a
+# background job with a hard wall-clock timeout so a hung Outlook cannot stall Phase 75-115.
+$becHits = 0
+$outlookRunning = [bool](Get-Process -Name 'OUTLOOK' -ErrorAction SilentlyContinue)
+$becJobTimeoutS = 25
+$becResults = $null
+if ($outlookRunning) {
+    $becJob = $null
+    try {
+        $becJob = Start-Job -ScriptBlock {
+            $found = @()
+            $outlookApp = $null
+            try { $outlookApp = [Runtime.InteropServices.Marshal]::GetActiveObject('Outlook.Application') } catch { $outlookApp = $null }
+            if (-not $outlookApp) { return $found }
+            try {
+                $olNs = $outlookApp.GetNamespace('MAPI')
+                # Best-effort "corporate domain" set: every SMTP domain across the profile's own
+                # configured accounts. A forward target outside this set counts as external.
+                $ownDomains = @{}
+                foreach ($acct in @($olNs.Accounts)) {
+                    $sa = "$($acct.SmtpAddress)"
+                    if ($sa -match '@([^@]+)$') { $ownDomains[$Matches[1].ToLower()] = $true }
+                }
+                $olStore = $olNs.DefaultStore
+                $olRules = $olStore.GetRules()
+                foreach ($rule in @($olRules)) {
+                    if (-not $rule.Enabled) { continue }
+                    $acts = $rule.Actions
+                    $fwdTargets = @()
+                    foreach ($actName in @('Forward','Redirect','ForwardAsAttachment')) {
+                        try {
+                            $a = $acts.$actName
+                            if ($a -and $a.Enabled) { foreach ($rcp in @($a.Recipients)) { $fwdTargets += "$($rcp.Address)" } }
+                        } catch {}
+                    }
+                    if ($fwdTargets.Count -eq 0) { continue }
+                    $externalTargets = @($fwdTargets | Where-Object {
+                        if ($_ -match '@([^@]+)$') { -not $ownDomains.ContainsKey($Matches[1].ToLower()) } else { $false }
+                    })
+                    if ($externalTargets.Count -eq 0) { continue }   # forwards, but only internally — not the BEC pattern
+                    $hides = $false; $hideWhy = ""
+                    try { if ($acts.Delete -and $acts.Delete.Enabled) { $hides = $true; $hideWhy = "deletes the message" } } catch {}
+                    if (-not $hides) {
+                        try {
+                            if ($acts.MoveToFolder -and $acts.MoveToFolder.Enabled) {
+                                $destName = "$($acts.MoveToFolder.Folder.Name)"
+                                if ($destName -and $destName -ne 'Inbox') { $hides = $true; $hideWhy = "moves the message out of the Inbox to '$destName'" }
+                            }
+                        } catch {}
+                    }
+                    if (-not $hides) { continue }   # forward-only rule — common/legitimate, not flagged
+                    $found += [PSCustomObject]@{ RuleName = "$($rule.Name)"; ExternalTargets = ($externalTargets -join ', '); HideWhy = $hideWhy }
+                }
+            } catch {} finally {
+                try { [Runtime.InteropServices.Marshal]::ReleaseComObject($outlookApp) | Out-Null } catch {}
+            }
+            return $found
+        }
+        if (Wait-Job -Job $becJob -Timeout $becJobTimeoutS) {
+            $becResults = @(Receive-Job -Job $becJob -ErrorAction SilentlyContinue)
+        } else {
+            Out-Typewriter "  -> OUTLOOK RULE INSPECTION TIMED OUT (${becJobTimeoutS}s, Outlook likely unresponsive) — SKIPPING." "WARN"
+        }
+    } catch {
+        Out-Typewriter "  -> OUTLOOK RULE INSPECTION FAILED (JOB ERROR — SKIPPING)." "WARN"
+    } finally {
+        if ($becJob) { Stop-Job -Job $becJob -ErrorAction SilentlyContinue; Remove-Job -Job $becJob -Force -ErrorAction SilentlyContinue }
+    }
+} else {
+    Out-Typewriter "  -> OUTLOOK NOT RUNNING — SKIPPING LIVE MAILBOX RULE AUDIT." "INFO"
+}
+foreach ($br in @($becResults)) {
+    $becHits++
+    Out-ThreatBanner "BEC FORWARD+HIDE RULE" "$($br.RuleName) -> $($br.ExternalTargets)"
+    Add-Finding -ID "BEC_RULE_$(Get-StableId $br.RuleName)" -Phase "PHASE 74.8" -ThreatType "BEC / Mailbox Persistence" `
+        -Severity $SEV_POSSIBLE -Description "Outlook inbox rule '$($br.RuleName)' BOTH forwards/redirects mail to an external address ($($br.ExternalTargets)) AND $($br.HideWhy) — this forward+hide combination is the actual BEC evidence-hiding signature (a bare external-forward rule alone is common and NOT flagged). This heuristic does not check what mail the rule targets, so a legitimate delegate/assistant rule (forward to a different domain, then file out of the Inbox) can also match — confirm with the mailbox owner before treating as compromise. Review in Outlook > Rules and remove if unauthorized." `
+        -Target "Outlook Rule: $($br.RuleName)" -FixAction "Info" -Group "Outlook Rule Abuse (BEC)"
+    $global:TrojanHits++
+}
+if ($outlookRunning -and $null -ne $becResults -and $becHits -eq 0) { Out-Typewriter "  -> [OK] NO FORWARD+HIDE RULES FOUND." "GOOD" }
+Out-Typewriter "  -> OUTLOOK FORWARD+HIDE AUDIT COMPLETE." "VER"
+
 }   # end QUICK-skip block
 Show-PhaseHeader "PHASE 75" "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT"
 Out-Typewriter "CHECKING DEFENDER EXCLUSION LIST FOR MALWARE HIDING SPOTS..." "HUNT"
@@ -932,6 +1084,43 @@ foreach ($svcName in @("WinRM","sshd")) {
             -Group "Remote Management Services"
     } else { Out-Typewriter "  -> [OK] $svcName NOT RUNNING." "GOOD" }
 }
+# WS8 (T1098.004): SSH authorized_keys backdoor entry audit. A key added to
+# administrators_authorized_keys or a user's .ssh\authorized_keys is a durable SSH login
+# backdoor that survives password resets and is invisible to the account-lockout/password-audit
+# phases — and it persists whether or not sshd happens to be running right now, so this check is
+# unconditional. Surface only the key COMMENT labels (never the key material — the base64 blob
+# itself is not evidence of who added it; the trailing "user@host" comment is the readable clue).
+# FixAction Info: an authorized_keys line can be a legitimate admin/dev key, so this is triage
+# evidence for the operator, never auto-removed.
+$sshKeyFiles = @()
+$adminAuthKeysPath = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
+if (Test-Path -LiteralPath $adminAuthKeysPath) { $sshKeyFiles += @{ Path = $adminAuthKeysPath; Owner = "SYSTEM (all administrators)" } }
+$sshUsersRoot = Split-Path $env:USERPROFILE -Parent
+if ($sshUsersRoot -and (Test-Path -LiteralPath $sshUsersRoot)) {
+    $sshUserDirs = Get-ChildItem -LiteralPath $sshUsersRoot -Directory -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notin @('Public','Default','Default User','All Users') }
+    foreach ($sud in $sshUserDirs) {
+        $uak = Join-Path $sud.FullName '.ssh\authorized_keys'
+        if (Test-Path -LiteralPath $uak) { $sshKeyFiles += @{ Path = $uak; Owner = $sud.Name } }
+    }
+}
+$sshBackdoorFound = $false
+foreach ($skf in $sshKeyFiles) {
+    $skLines = @(Get-Content -LiteralPath $skf.Path -ErrorAction SilentlyContinue | Where-Object { $_ -and $_.Trim() -and $_.Trim() -notmatch '^#' })
+    if ($skLines.Count -eq 0) { continue }
+    # Pull the trailing comment (typically "user@host") off each key line for a readable label;
+    # fall back to the key type token if no comment is present.
+    $skLabels = @($skLines | ForEach-Object {
+        $skParts = $_.Trim() -split '\s+'
+        if ($skParts.Count -ge 3) { $skParts[2] } elseif ($skParts.Count -ge 1) { $skParts[0] } else { "(unlabeled)" }
+    })
+    $sshBackdoorFound = $true
+    Out-ThreatBanner "SSH AUTHORIZED_KEYS ENTRY" "$($skf.Owner): $($skLines.Count) key(s) — $($skLabels -join ', ')"
+    Add-Finding -ID "SSHKEYS_$(Get-StableId $skf.Path)" -Phase "PHASE 77" -ThreatType "SSH Key Backdoor" `
+        -Severity $SEV_POSSIBLE -Description "authorized_keys present for $($skf.Owner) with $($skLines.Count) key(s) — a durable SSH login backdoor that survives password resets. Key label(s): $($skLabels -join ', '). Verify every entry is a known admin/dev key: $($skf.Path)" `
+        -Target $skf.Path -FixAction "Info" -Group "Remote Management Services"
+}
+if (-not $sshBackdoorFound) { Out-Typewriter "  -> [OK] NO SSH AUTHORIZED_KEYS FILES PRESENT." "GOOD" }
 
 Show-PhaseHeader "PHASE 78" "SYSMON / LAPS / APPLOCKER STATUS AUDIT"
 Out-Typewriter "CHECKING ENDPOINT VISIBILITY TOOLS..." "INFO"
@@ -1139,6 +1328,74 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
         }
     }
 
+    Show-PhaseHeader "PHASE 87.5" "GPP CACHED PASSWORD (CPASSWORD) AUDIT" "UNIVERSAL"
+    Out-Typewriter "SCANNING GROUP POLICY PREFERENCES XML FOR CACHED CPASSWORD..." "HUNT"
+    # WS8 (T1552.001 / MS14-025): Group Policy Preferences let an admin push a local account,
+    # mapped drive, scheduled task, service, printer or ODBC data source with a
+    # plaintext-equivalent password embedded in the Preferences XML, "encrypted" with a single
+    # AES-256 key Microsoft published in MS-GPPREF §2.2.1.1 — the same key for every domain
+    # everywhere, so there is no secret to protect. Any authenticated domain user can read
+    # SYSVOL, so a non-empty cpassword attribute is a fully realized credential exposure, not a
+    # heuristic — CRITICAL, unambiguous. FixAction stays Info (rule #1): this is a live GPO
+    # artifact edited via Group Policy Management, not a file this endpoint scan should ever
+    # touch — the real fix ("rotate the credential, delete the Preference item in GPMC") needs a
+    # domain admin, not this box.
+    function Get-GppDecryptedPassword {
+        param([string]$CipherB64)
+        if (-not $CipherB64) { return $null }
+        try {
+            $gppPad = (4 - ($CipherB64.Length % 4)) % 4
+            $gppCipherBytes = [Convert]::FromBase64String($CipherB64 + ('=' * $gppPad))
+            $gppAes = [System.Security.Cryptography.Aes]::Create()
+            try {
+                $gppAes.Key = $GPP_AES_KEY_BYTES
+                $gppAes.IV  = New-Object byte[] 16   # MS-GPPREF specifies an all-zero IV
+                $gppAes.Mode = [System.Security.Cryptography.CipherMode]::CBC
+                $gppAes.Padding = [System.Security.Cryptography.PaddingMode]::PKCS7
+                $gppDecryptor = $gppAes.CreateDecryptor()
+                $gppPlainBytes = $gppDecryptor.TransformFinalBlock($gppCipherBytes, 0, $gppCipherBytes.Length)
+                return [System.Text.Encoding]::Unicode.GetString($gppPlainBytes)
+            } finally { $gppAes.Dispose() }
+        } catch { return $null }
+    }
+    $gppRoots = @()
+    if (Test-Path -LiteralPath "$env:WINDIR\System32\GroupPolicy\Machine\Preferences") { $gppRoots += "$env:WINDIR\System32\GroupPolicy\Machine\Preferences" }
+    if (Test-Path -LiteralPath "$env:WINDIR\System32\GroupPolicy\User\Preferences") { $gppRoots += "$env:WINDIR\System32\GroupPolicy\User\Preferences" }
+    if (Test-Path -LiteralPath "$env:ProgramData\Microsoft\Group Policy\History") { $gppRoots += "$env:ProgramData\Microsoft\Group Policy\History" }
+    # SYSVOL is only reachable when domain-joined; the local caches above are checked regardless.
+    $gppDomainJoined = $false
+    try { $gppDomainJoined = [bool](Get-WmiObject Win32_ComputerSystem -ErrorAction Stop).PartOfDomain } catch {}
+    if ($gppDomainJoined -and $env:USERDNSDOMAIN) {
+        $gppSysvolPath = "\\$env:USERDNSDOMAIN\SYSVOL\$env:USERDNSDOMAIN\Policies"
+        if (Test-Path -LiteralPath $gppSysvolPath -ErrorAction SilentlyContinue) { $gppRoots += $gppSysvolPath }
+    }
+    $gppFound = $false
+    if ($gppRoots.Count -gt 0 -and $GPP_PREF_XML_NAMES.Count -gt 0) {
+        foreach ($gppXmlName in $GPP_PREF_XML_NAMES) {
+            $gppFiles = (Get-ScanFiles -Path $gppRoots -Filter $gppXmlName -MaxFiles 500 -DeadlineSecs 15)
+            foreach ($gf in $gppFiles) {
+                $gppContent = Get-Content -LiteralPath $gf.FullName -Raw -ErrorAction SilentlyContinue
+                if (-not $gppContent) { continue }
+                $gppMatches = [regex]::Matches($gppContent, $GPP_CPASSWORD_RE)
+                foreach ($gm in $gppMatches) {
+                    if ($gm.Groups.Count -lt 2 -or -not $gm.Groups[1].Value) { continue }   # empty cpassword="" — not a real exposure
+                    $gppCipherVal = $gm.Groups[1].Value
+                    $gppPlain = Get-GppDecryptedPassword $gppCipherVal
+                    $gppFound = $true
+                    Out-ThreatBanner "GPP CACHED PASSWORD (CPASSWORD)" $gf.FullName
+                    $gppDetail = if ($gppPlain) { "decrypted credential present (redacted from console — see report)" } else { "cpassword present but could not be decoded automatically — verify manually" }
+                    Add-Finding -ID "GPPCPW_$(Get-StableId "$($gf.FullName)|$gppCipherVal")" -Phase "PHASE 87.5" -ThreatType "GPP Cached Credential" `
+                        -Severity $SEV_CRITICAL -Description "Group Policy Preferences file contains a cpassword attribute — $gppDetail. GPP encrypts with a single AES key Microsoft published for ALL domains (MS14-025); any authenticated user can decrypt it. File: $($gf.FullName)$(if ($gppPlain) { " || DECRYPTED VALUE (rotate this credential immediately): $gppPlain" })" `
+                        -Target $gf.FullName -FixAction "Info" -Group "GPP Cached Credentials"
+                    # No $global:*Hits bucket increment — matches Phase 88's DCSync/Golden Ticket
+                    # precedent: AD/credential-access findings don't map cleanly onto the legacy
+                    # RAT/Rootkit/Trojan/... risk-score buckets, so they're left uncounted there.
+                }
+            }
+        }
+    }
+    if (-not $gppFound) { Out-Typewriter "  -> [OK] NO GPP CACHED PASSWORDS FOUND." "GOOD" }
+
     Show-PhaseHeader "PHASE 88" "ACTIVE DIRECTORY / DOMAIN TRUST INDICATORS" "UNIVERSAL"
     $domain = (Get-WmiObject Win32_ComputerSystem).PartOfDomain
     if ($domain) {
@@ -1160,6 +1417,79 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
                 -Target "Security EventLog (4769)" -FixAction "Info" -Group "Active Directory Attacks"
         } else { Out-Typewriter "  -> [OK] NO GOLDEN TICKET INDICATORS." "GOOD" }
     } else { Out-Typewriter "  -> NOT DOMAIN-JOINED. AD CHECKS SKIPPED." "INFO" }
+
+    Show-PhaseHeader "PHASE 88.5" "KERBEROASTING / AS-REP ROASTING TRIAGE" "UNIVERSAL"
+    # WS8: two independent Kerberos ticket-abuse queries. Computed separately from Phase 88's own
+    # 4769 fetch (which filters straight down to krbtgt-only Golden Ticket candidates and
+    # discards everything else) so this phase can see the FULL 4769 stream. Domain-joined gate
+    # re-checked locally rather than trusting Phase 88's $domain to still be in scope, so this
+    # phase stays correct even if the surrounding code is ever reordered.
+    $roastDomainJoined = $false
+    try { $roastDomainJoined = [bool](Get-WmiObject Win32_ComputerSystem -ErrorAction Stop).PartOfDomain } catch {}
+    if ($roastDomainJoined) {
+        Out-Typewriter "CHECKING FOR KERBEROASTING / AS-REP ROASTING BURSTS..." "HUNT"
+        # (a) Kerberoasting — Event 4769, RC4 ticket encryption, non-krbtgt SPN, non-computer-account
+        # requester. A single RC4 service-ticket request is completely normal (legacy app compat);
+        # the actual signal is one account requesting tickets for 3+ DISTINCT SPNs inside a 5-minute
+        # rolling window — the burst/distinct-SPN shape of Rubeus/GetUserSPNs, not routine use.
+        $roastEvents = New-Object System.Collections.Generic.List[object]
+        foreach ($ev in @(Get-WinEventSafe @{LogName='Security'; ID=4769} -MaxEvents 5000)) {
+            if (-not (Test-InScope $ev.TimeCreated)) { continue }
+            if ($ev.Message -notmatch 'Ticket Encryption Type:\s*0x17') { continue }   # RC4 only
+            $svcM = [regex]::Match($ev.Message, '(?m)^\s*Service Name:\s*(\S+)')
+            $usrM = [regex]::Match($ev.Message, '(?m)^\s*Account Name:\s*(\S+)')
+            if (-not $svcM.Success -or -not $usrM.Success) { continue }
+            $rSvc = $svcM.Groups[1].Value.Trim(); $rUsr = $usrM.Groups[1].Value.Trim()
+            if (-not $rSvc -or $rSvc -eq '-' -or $rSvc.ToLower() -eq 'krbtgt' -or $rSvc.EndsWith('$')) { continue }   # exclude krbtgt + computer-account SPNs
+            if (-not $rUsr -or $rUsr.EndsWith('$')) { continue }   # exclude computer-account requesters (noisy, not user-driven)
+            $roastEvents.Add([pscustomobject]@{ User = $rUsr; Svc = $rSvc; Time = $ev.TimeCreated })
+        }
+        $roastHits = 0
+        if ($roastEvents.Count -gt 0) {
+            foreach ($rGrp in ($roastEvents | Group-Object User)) {
+                $rSorted = @($rGrp.Group | Sort-Object Time)
+                $rFlagged = $false
+                for ($ri = 0; $ri -lt $rSorted.Count -and -not $rFlagged; $ri++) {
+                    $rWindowEnd = $rSorted[$ri].Time.AddMinutes(5)
+                    $rInWindow = @($rSorted | Where-Object { $_.Time -ge $rSorted[$ri].Time -and $_.Time -le $rWindowEnd })
+                    $rDistinctSpns = @($rInWindow.Svc | Select-Object -Unique)
+                    if ($rDistinctSpns.Count -ge 3) {
+                        $rFlagged = $true
+                        Out-ThreatBanner "POSSIBLE KERBEROASTING" "$($rGrp.Name): $($rDistinctSpns.Count) distinct SPNs in 5min"
+                        Add-Finding -ID "KERBEROAST_$(Get-StableId "$($rGrp.Name)|$($rSorted[$ri].Time.Ticks)")" -Phase "PHASE 88.5" `
+                            -ThreatType "Kerberoasting" -Severity $SEV_POSSIBLE `
+                            -Description "Account '$($rGrp.Name)' requested RC4 service tickets for $($rDistinctSpns.Count) distinct SPNs within a 5-minute window starting $($rSorted[$ri].Time.ToString('yyyy-MM-dd HH:mm:ss')) — SPNs: $($rDistinctSpns -join ', '). Burst/distinct-SPN pattern consistent with a Kerberoasting tool (Rubeus/GetUserSPNs); a normal user does not request many services in this pattern." `
+                            -Target "Security EventLog (4769) | $($rGrp.Name)" -FixAction "Info" -Group "Kerberos Ticket Abuse"
+                        # No $global:*Hits bucket increment — matches Phase 88's DCSync/Golden
+                        # Ticket precedent (AD/credential-access findings aren't bucketed there).
+                        $roastHits++
+                    }
+                }
+            }
+        }
+        # (b) AS-REP Roasting — Event 4768, Kerberos pre-authentication disabled or absent. Each
+        # hit is single-event (no burst threshold needed — a preauth-disabled account is a static
+        # AD attribute an attacker exploits, not a live burst pattern), so this stays POSSIBLE +
+        # Info per-account rather than any auto-actionable severity.
+        $asrepHits = 0
+        foreach ($ev in @(Get-WinEventSafe @{LogName='Security'; ID=4768} -MaxEvents 5000)) {
+            if (-not (Test-InScope $ev.TimeCreated)) { continue }
+            $usrM2 = [regex]::Match($ev.Message, '(?m)^\s*Account Name:\s*(\S+)')
+            if (-not $usrM2.Success) { continue }
+            $aUsr = $usrM2.Groups[1].Value.Trim()
+            if (-not $aUsr -or $aUsr -eq '-' -or $aUsr.EndsWith('$')) { continue }   # exclude computer accounts
+            $preM = [regex]::Match($ev.Message, '(?m)^\s*Pre-Authentication Type:\s*(\S+)')
+            $preAbsentOrZero = (-not $preM.Success) -or ($preM.Groups[1].Value.Trim() -eq '0')
+            if (-not $preAbsentOrZero) { continue }
+            $asrepHits++
+            Out-ThreatBanner "POSSIBLE AS-REP ROASTING" "$aUsr @ $($ev.TimeCreated)"
+            Add-Finding -ID "ASREPROAST_$(Get-StableId "$aUsr|$($ev.RecordId)")" -Phase "PHASE 88.5" `
+                -ThreatType "AS-REP Roasting" -Severity $SEV_POSSIBLE `
+                -Description "AS-REQ for '$aUsr' at $($ev.TimeCreated.ToString('yyyy-MM-dd HH:mm:ss')) shows Kerberos pre-authentication $(if ($preM.Success) { 'disabled (Pre-Authentication Type: 0)' } else { 'absent from the event' }) — consistent with an AS-REP Roasting attempt (Rubeus/GetNPUsers-class tooling) OR a legitimately preauth-disabled account. Verify the account's 'Do not require Kerberos preauthentication' setting." `
+                -Target "Security EventLog (4768) | $aUsr" -FixAction "Info" -Group "Kerberos Ticket Abuse"
+        }
+        if ($roastHits -eq 0 -and $asrepHits -eq 0) { Out-Typewriter "  -> [OK] NO KERBEROASTING/AS-REP INDICATORS." "GOOD" }
+    } else { Out-Typewriter "  -> NOT DOMAIN-JOINED. KERBEROASTING/AS-REP CHECKS SKIPPED." "INFO" }
 
     Show-PhaseHeader "PHASE 89" "FINAL SWEEP — EXFIL CHANNELS & STEGO TOOLS" "UNIVERSAL"
     Out-Typewriter "CHECKING EXFIL VIA FTP/SMTP/ICMP AND STEGO TOOLS..." "HUNT"

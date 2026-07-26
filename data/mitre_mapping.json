@@ -1026,6 +1026,57 @@
         "Credential Access"
       ],
       "url": "https://attack.mitre.org/techniques/T1552/001/"
+    },
+    "T1552.005": {
+      "name": "Unsecured Credentials: Cloud Instance Metadata API",
+      "tactics": [
+        "Credential Access"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1552/005/"
+    },
+    "T1195.002": {
+      "name": "Supply Chain Compromise: Compromise Software Supply Chain",
+      "tactics": [
+        "Initial Access"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1195/002/"
+    },
+    "T1558.003": {
+      "name": "Steal or Forge Kerberos Tickets: Kerberoasting",
+      "tactics": [
+        "Credential Access"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1558/003/"
+    },
+    "T1558.004": {
+      "name": "Steal or Forge Kerberos Tickets: AS-REP Roasting",
+      "tactics": [
+        "Credential Access"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1558/004/"
+    },
+    "T1114.003": {
+      "name": "Email Collection: Email Forwarding Rule",
+      "tactics": [
+        "Collection"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1114/003/"
+    },
+    "T1098.004": {
+      "name": "Account Manipulation: SSH Authorized Keys",
+      "tactics": [
+        "Persistence",
+        "Privilege Escalation"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1098/004/"
+    },
+    "T1550.002": {
+      "name": "Use Alternate Authentication Material: Pass the Hash",
+      "tactics": [
+        "Defense Evasion",
+        "Lateral Movement"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1550/002/"
     }
   },
   "threat_type_map": {
@@ -1299,7 +1350,13 @@
     "archive": "T1204.002",
     "suspicious file": "T1204.002",
     "temp": "T1204.002",
-    "download": "T1105"
+    "download": "T1105",
+    "psexesvc": "T1570",
+    "paexec": "T1570",
+    "remcomsvc": "T1570",
+    "winexesvc": "T1570",
+    "lateral-movement tool service": "T1570",
+    "type=9": "T1550.002"
   },
   "phase_map": {
     "_comment": "Primary ATT&CK technique(s) for each scan phase. First id is the dominant technique. Use as a fallback when keyword_map/threat_type_map do not resolve a line.",
@@ -1789,7 +1846,8 @@
       "name": "SSH & WinRM Remote Management Audit",
       "techniques": [
         "T1021.004",
-        "T1021.006"
+        "T1021.006",
+        "T1098.004"
       ]
     },
     "PHASE 78": {
@@ -1923,6 +1981,12 @@
         "T1127"
       ]
     },
+    "PHASE 97.5": {
+      "name": "MSIX / App Installer Sideloading Abuse",
+      "techniques": [
+        "T1553.002"
+      ]
+    },
     "PHASE 98": {
       "name": "Stolen / Leaked Code-Signing Cert Detection",
       "techniques": [
@@ -1971,7 +2035,8 @@
       "techniques": [
         "T1547",
         "T1053.005",
-        "T1543.003"
+        "T1543.003",
+        "T1546.015"
       ]
     },
     "PHASE 106": {
@@ -1985,7 +2050,9 @@
       "techniques": [
         "T1078",
         "T1543.003",
-        "T1021.002"
+        "T1021.002",
+        "T1570",
+        "T1550.002"
       ]
     },
     "PHASE 74.5": {
@@ -2151,6 +2218,57 @@
         "T1528",
         "T1539",
         "T1552.001"
+      ]
+    },
+    "PHASE 10.5": {
+      "name": "Malicious LNK/Shortcut Downloader Sweep",
+      "techniques": [
+        "T1204.002",
+        "T1105"
+      ]
+    },
+    "PHASE 10.6": {
+      "name": "npm/pip Postinstall Supply-Chain Exfil Sweep",
+      "techniques": [
+        "T1195.002",
+        "T1105"
+      ]
+    },
+    "PHASE 32.5": {
+      "name": "DLL Side-Loading — Search-Order Hijack Target Audit",
+      "techniques": [
+        "T1574.002"
+      ]
+    },
+    "PHASE 36.5": {
+      "name": "Cloud Instance Metadata Service (IMDS) Credential Theft",
+      "techniques": [
+        "T1552.005"
+      ]
+    },
+    "PHASE 49.5": {
+      "name": "Clipboard Cryptocurrency Address-Swap (Clipper) Detection",
+      "techniques": [
+        "T1115"
+      ]
+    },
+    "PHASE 87.5": {
+      "name": "GPP Cached Password (cpassword) Audit",
+      "techniques": [
+        "T1552.001"
+      ]
+    },
+    "PHASE 88.5": {
+      "name": "Kerberoasting / AS-REP Roasting Triage",
+      "techniques": [
+        "T1558.003",
+        "T1558.004"
+      ]
+    },
+    "PHASE 74.8": {
+      "name": "Outlook Mailbox Forward+Hide (BEC) Audit",
+      "techniques": [
+        "T1114.003"
       ]
     }
   }

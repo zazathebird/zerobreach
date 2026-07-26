@@ -896,6 +896,14 @@ function Get-ExtensionRisk {
         if ($perms -match "<all_urls>|webRequestBlocking|nativeMessaging") {
             return @{Risk="POSSIBLE"; Name=$name; Reason="Broad host/network access permissions"}
         }
+        # POSSIBLE (WS7): a manifest update_url pointing away from the browser vendor's own
+        # official update endpoint means the extension is (or was) side-loaded/distributed
+        # outside the store's normal update channel. A self-hosted enterprise update server is
+        # also legitimate, so this stays review-only — never escalated above POSSIBLE, never
+        # auto-removed. $TRUSTED_EXT_UPDATE_RE is DATA (trusted_extension_update_hosts).
+        if ($mData.update_url -and "$($mData.update_url)" -notmatch $TRUSTED_EXT_UPDATE_RE) {
+            return @{Risk="POSSIBLE"; Name=$name; Reason="update_url points outside known browser-vendor update endpoints: $($mData.update_url)"}
+        }
         return @{Risk="CLEAN"; Name=$name; Reason=""}
     } catch {
         return @{Risk="POSSIBLE"; Name="Parse Error"; Reason="Could not read manifest"}
@@ -1037,6 +1045,39 @@ $C2_CONFIG_RULES           = Get-Sig 'c2_config_rules'               # Phase 68 
 $LOADER_DROP_PATH_RULES    = Get-Sig 'loader_drop_path_rules'        # Phase 68 (family drop-path rules)
 $BYOVD_CERT_TBS_HASHES     = Get-Sig 'byovd_cert_tbs_hashes'         # Phase 55.5 (cert-TBS confirm)
 $INFOSTEALER_TARGET_PATHS  = @((Get-Sig 'infostealer_target_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 100
+
+# ── WS7 (2026-07-25) detection expansion — DLL side-loading, .lnk downloader payloads,
+# extension update_url, clipboard clipper, cloud IMDS theft, npm/pip postinstall exfil.
+# All DATA. Every detection here is POSSIBLE/HIGH + FixAction Info unless a literal-name-only
+# match justifies more (see each phase body for the exact gating — CLAUDE.md rule #1).
+$SIDELOAD_TARGET_DLLS      = @((Get-Sig 'sideload_target_dll_names') | ForEach-Object { "$_".ToLower() })       # Phase 32.5
+$SIDELOAD_TARGET_EXES      = @((Get-Sig 'commonly_sideloaded_exe_names') | ForEach-Object { "$_".ToLower() })   # Phase 32.5
+$TRUSTED_EXT_UPDATE_RE     = Join-AllowRegex 'trusted_extension_update_hosts'                                   # Phase 8 (Get-ExtensionRisk)
+$CLIPPER_CLIPBOARD_API_RULES = Get-Sig 'clipper_clipboard_api_regex'   # Phase 49.5
+$CLIPPER_CRYPTO_ADDR_RULES   = Get-Sig 'clipper_crypto_address_regex' # Phase 49.5
+$CLOUD_AGENT_ALLOW_NAMES   = @((Get-Sig 'cloud_agent_allowlist_names') | ForEach-Object { "$_".ToLower() })     # Phase 36.5
+$CLOUD_AGENT_ALLOW_PATH_RE = if (@(Get-Sig 'cloud_agent_allowlist_path_regex').Count) { @(Get-Sig 'cloud_agent_allowlist_path_regex')[0] } else { '(?!)' }  # Phase 36.5
+$NPM_POSTINSTALL_TRUSTED_RE = Join-AllowRegex 'npm_postinstall_trusted_hosts'                                   # Phase 10.6
+
+# ── WS8 (2026-07-25) detection expansion — GPP cached-password (cpassword) decrypt, Kerberoasting
+# / AS-REP roasting event triage, Outlook forward+hide (BEC) rule audit, SSH authorized_keys
+# backdoor audit, Office add-in sideload. All DATA. The GPP regex + AES key below are exactly what
+# every GPP-password-harvesting tool (PowerSploit Get-GPPPassword, CrackMapExec gpp_autologin)
+# embeds inline — precisely the AMSI trip-wire CLAUDE.md rule #1 exists to keep out of the .ps1.
+$GPP_CPASSWORD_RE       = if (@(Get-Sig 'gpp_cpassword_regex').Count) { @(Get-Sig 'gpp_cpassword_regex')[0] } else { '(?!)' }  # Phase 87.5
+$GPP_PREF_XML_NAMES     = Get-Sig 'gpp_preference_xml_names'        # Phase 87.5
+$GPP_AES_KEY_BYTES      = [byte[]]@((Get-Sig 'gpp_cpassword_aes_key_bytes') | ForEach-Object { [byte]$_ })  # Phase 87.5 (MS-GPPREF published key)
+
+# ── WS9 (2026-07-26) detection expansion — PsExec/PAExec/RemCom literal service-name match
+# (Phase 107 7045 extension), WSL Linux-side cron/dotfile persistence staging (Phase 101
+# extension), MSIX/App Installer sideloading abuse (Phase 97.5, new), Chrome/Edge
+# App-Bound-Encryption-bypass cookie-theft tooling (Phase 100.5 extension), Pass-the-Hash /
+# NewCredentials logon triage (Phase 107 4624 extension), ComHandler scheduled-task trigger
+# cross-correlated with COM hijack (Phase 104 extension + Phase 105 correlation). All DATA.
+$LATERAL_MOVEMENT_SVC_NAMES = @((Get-Sig 'lateral_movement_service_names') | ForEach-Object { "$_".ToLower() })  # Phase 107 (7045)
+$WSL_DEV_BENIGN_RE          = Join-AllowRegex 'wsl_dev_benign_commands'   # Phase 101 (cron/dotfile FP suppression)
+$ABE_BYPASS_TOOL_NAMES      = @((Get-Sig 'abe_bypass_tool_names') | ForEach-Object { "$_".ToLower() })            # Phase 100.5
+
 # TWO C2 domain sets — kept separate ON PURPOSE (rule #1):
 #  * $MALWARE_C2_DOMAINS = point-in-time loader/infostealer C2 (scifimond.com, polse.us …) —
 #    odd unique strings, ~zero FP surface, SAFE for the Phase 34 DNS-cache HIGH+RunCmd path.

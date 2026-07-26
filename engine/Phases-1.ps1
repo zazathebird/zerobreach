@@ -312,9 +312,89 @@ $sigSw.Stop()
 if ($sigBudgetHit) {
     Out-Typewriter ("  -> [INFO] TEMP-EXE SIG BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
 }
-
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+# WS7: malicious .lnk downloader payload detection. Given its own fractional phase (10.5) and
+# placed inside the non-QUICK wrap — Phase 10 itself is a member of the 30-phase QUICK set, and
+# this adds real new work (a WScript.Shell COM object per candidate .lnk) plus new FP surface, so
+# per the "new detections get a fractional phase inside an existing non-QUICK block" rule it must
+# NOT silently ride along inside QUICK's Phase 10 body. Downloads/Desktop/Startup are walked
+# because that is where a downloader lure/persistence .lnk lands. Resolves target+args via the
+# same WScript.Shell COM approach Phase 9 uses for browser-shortcut hijacks, then requires the
+# actual download/execute CRADLE shape (encoded command, DownloadString/DownloadFile/IEX, or a
+# LOLBIN-with-URL invocation) — a bare "-windowstyle hidden" is a routine flag for countless
+# benign silent background launchers (vendor updaters, tray helpers, IT maintenance scripts) and
+# is deliberately NOT sufficient on its own to fire this. HIGH + Info (never auto-deleted — the
+# user may have just legitimately clicked something and this needs a human look first).
+Show-PhaseHeader "PHASE 10.5" "MALICIOUS LNK/SHORTCUT DOWNLOADER SWEEP"
+Out-Typewriter "SCANNING SHORTCUTS FOR DOWNLOADER/LOADER PAYLOADS..." "HUNT"
+$lnkDownloaderRe = '(?i)(-e(nc(odedcommand)?)?\s+[A-Za-z0-9+/=]{20,})|(DownloadString|DownloadFile|\bIEX\b|Invoke-Expression)|((mshta|wscript|cscript)(\.exe)?\b[^\r\n]*https?://)'
+$lnkDirs = @(
+    "$env:USERPROFILE\Downloads",
+    "$env:USERPROFILE\Desktop",
+    "$env:PUBLIC\Desktop",
+    "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup",
+    "$env:ALLUSERSPROFILE\Microsoft\Windows\Start Menu\Programs\Startup"
+)
+$lnkFiles = (Get-ScanFiles -Path $lnkDirs -Filter '*.lnk' -TimeScoped)
+$lnkFound = $false
+foreach ($lf in $lnkFiles) {
+    try {
+        $lnkShell = New-Object -ComObject WScript.Shell -ErrorAction Stop
+        $lnkSc = $lnkShell.CreateShortcut($lf.FullName)
+        $lnkBlob = "$($lnkSc.TargetPath) $($lnkSc.Arguments)"
+        if ($lnkBlob -match $lnkDownloaderRe) {
+            $lnkFound = $true
+            Out-ThreatBanner "MALICIOUS LNK DOWNLOADER" "$($lf.Name) | $lnkBlob"
+            Add-Finding -ID "LNKDL_$(Get-StableId $lf.FullName)" -Phase "PHASE 10.5" -ThreatType "Malicious LNK/Downloader" `
+                -Severity $SEV_HIGH -Description "Shortcut resolves to an encoded-command / download-cradle payload (review — the user may have just clicked something legitimate, so this is not auto-deleted): $($lf.Name) -> $lnkBlob" `
+                -Target $lf.FullName -FixAction "Info" -Group "Malicious LNK Payloads"
+        }
+    } catch {}
+}
+if (-not $lnkFound) { Out-Typewriter "  -> [OK] NO MALICIOUS LNK DOWNLOADER PAYLOADS." "GOOD" }
+
+Show-PhaseHeader "PHASE 10.6" "NPM/PIP POSTINSTALL SUPPLY-CHAIN EXFIL SWEEP"
+Out-Typewriter "CHECKING FRESHLY-MODIFIED package.json FOR POSTINSTALL EXFIL CRADLES..." "HUNT"
+# WS7: single highest-FP-risk item in this batch — deliberately the NARROWEST possible trigger.
+# Only package.json files MODIFIED within the current scan time window (a fresh `npm install`,
+# not a walk of the whole node_modules tree every run — Test-InScope on LastWriteTime does
+# that). Within an in-scope file, only the literal scripts.postinstall / scripts.preinstall
+# string values are checked (never the rest of the manifest) for a download command aimed at a
+# raw IP or a host NOT on the known-benign install-time host allowlist (electron-builder,
+# playwright, puppeteer and node-gyp all legitimately fetch prebuilt binaries at install time).
+$npmDownloadCmdRe   = '(?i)\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b'
+$npmDownloadTargetRe = '(?i)(https?://)([^\s"''\\]+)'
+$npmRawIpRe         = '^(\d{1,3}\.){3}\d{1,3}([:/]|$)'
+$npmPkgFiles = (Get-ScanFiles -Path @($env:USERPROFILE,"$env:USERPROFILE\Documents","$env:USERPROFILE\Desktop","$env:USERPROFILE\Downloads") -Filter 'package.json' -TimeScoped)
+$npmHits = 0
+foreach ($pf in $npmPkgFiles) {
+    # node_modules/*/package.json is dependency metadata, not the project being installed — the
+    # SCAN_PRUNE_DIRS list already prunes node_modules from the walk, but guard explicitly in
+    # case a caller ever widens PruneDirs, since THIS is the exact tree this phase must not scan.
+    if ($pf.FullName -match '\\node_modules\\') { continue }
+    $pkgJson = $null
+    try { $pkgJson = Get-Content -LiteralPath $pf.FullName -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop } catch { continue }
+    foreach ($scriptKey in @('postinstall','preinstall')) {
+        $scriptVal = $null
+        if ($pkgJson.scripts -and $pkgJson.scripts.PSObject.Properties[$scriptKey]) { $scriptVal = "$($pkgJson.scripts.$scriptKey)" }
+        if (-not $scriptVal -or $scriptVal -notmatch $npmDownloadCmdRe) { continue }
+        $urlMatch = [regex]::Match($scriptVal, $npmDownloadTargetRe)
+        if (-not $urlMatch.Success) { continue }
+        $urlHost = ($urlMatch.Groups[2].Value -split '[/:]')[0]
+        if (-not $urlHost) { continue }
+        $isRawIp = ($urlHost -match $npmRawIpRe)
+        $isTrusted = (-not $isRawIp) -and ($urlHost -match $NPM_POSTINSTALL_TRUSTED_RE)
+        if ($isTrusted) { continue }
+        $npmHits++
+        Out-Decrypt -Text "$($pf.FullName) [$scriptKey] -> $urlHost" -Prefix "  [NPM POSTINSTALL EXFIL] "
+        Add-Finding -ID "NPMPOST_$(Get-StableId "$($pf.FullName)|$scriptKey")" -Phase "PHASE 10.6" -ThreatType "Supply Chain Compromise" `
+            -Severity $SEV_POSSIBLE -Description "package.json $scriptKey runs a download command against $(if ($isRawIp) { 'a raw IP address' } else { "an untrusted host ($urlHost)" }) — review before running npm/pip install again: $($pf.FullName) | $scriptKey = $scriptVal" `
+            -Target $pf.FullName -FixAction "Info" -Group "Supply Chain / Postinstall Exfil"
+    }
+}
+if ($npmHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPICIOUS NPM/PIP POSTINSTALL SCRIPTS." "GOOD" }
+
 Show-PhaseHeader "PHASE 11" "RECENT DOCUMENTS & JUMP LIST SCRUB"
 $recentPaths = @(
     "$env:APPDATA\Microsoft\Windows\Recent",
@@ -874,6 +954,11 @@ Show-PhaseHeader "PHASE 24" "COM OBJECT HIJACK AUDIT (HKCU CLSID OVERRIDES)"
 Out-Typewriter "SCANNING HKCU COM OVERRIDES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
 $hkcuClsid = "HKCU:\SOFTWARE\Classes\CLSID"
+# WS9 correlation feed (Phase 105): confirmed-hijack CLSIDs, keyed independent of Severity — a
+# PARANOID-mode run promotes every stored POSSIBLE finding to HIGH (Add-Finding's own escalation
+# rule), which would make the benign "per-user CLSID, no HKLM twin" branch below storage-
+# indistinguishable from a genuine HKLM-shadowing hijack if Phase 105 keyed off $f.Severity.
+$global:ZB_ComHijackConfirmedClsids = @{}
 if (Test-Path $hkcuClsid) {
     # Per-user COM registration (HKCU\Classes\CLSID) is NORMAL — Teams add-ins, Office, OneDrive,
     # .NET and shell extensions all register here. The actual COM-hijack technique (T1546.015) is an
@@ -897,6 +982,7 @@ if (Test-Path $hkcuClsid) {
             # CLSID key holding only settings/sub-keys (e.g. {031E4825-...}/{86ca1aa0-...}) — review only.
             Out-Decrypt -Text $k.PSPath -Prefix "  [COM HIJACK] "
             $comShadow++
+            $global:ZB_ComHijackConfirmedClsids[$guid.ToUpper()] = $k.PSPath
             Add-Finding -ID "COM_$($guid -replace '[^a-z0-9]','')" -Phase "PHASE 24" -ThreatType "COM Hijack" `
                 -Severity $SEV_HIGH -Description "HKCU COM override SHADOWS an HKLM-registered CLSID with a per-user server override (COM hijack persistence): $guid -> $inproc" `
                 -Target $k.PSPath -FixAction "DeleteRegKey" -FixParam $k.PSPath -Group "COM Object Hijacks"
@@ -1268,6 +1354,66 @@ foreach ($pd in $pathDirs) {
 if ($dllSigBudgetHit) { Out-Typewriter "  -> SIGNATURE BUDGET REACHED — remaining PATH DLLs not signature-verified." "WARN" }
 Out-Typewriter "  -> DLL PATH AUDIT COMPLETE." "VER"
 
+Show-PhaseHeader "PHASE 32.5" "DLL SIDE-LOADING — SEARCH-ORDER HIJACK TARGET AUDIT"
+Out-Typewriter "CHECKING SIGNED EXES FOR A CO-LOCATED HIJACK-TARGET DLL..." "HUNT"
+# WS7 (T1574.002) — Phase 32 audits writable PATH dirs; this is the sibling technique: a
+# well-known DLL-search-order-hijack TARGET filename (version.dll, dbghelp.dll, ...) dropped
+# beside a legitimately-SIGNED EXE so the OS loader picks up the attacker DLL first instead of
+# the real one. A bare unsigned-DLL-with-a-known-name hit is NOT enough on its own — portable
+# apps (7-Zip/VLC/etc.) legitimately ship their own DLLs beside their EXE — so escalation to
+# HIGH requires BOTH the DLL name AND the sibling EXE's own name to be on their respective
+# lists AND the pair to sit directly in an AppData/Temp/ProgramData ROOT (not a nested,
+# legitimate per-app install subfolder). Everything else stays POSSIBLE + Info (review only).
+$sideloadRoots = @($env:LOCALAPPDATA, $env:APPDATA, $env:TEMP, $env:ProgramData, "$env:USERPROFILE\Downloads") | Where-Object { $_ }
+$sideloadHardRoots = @($env:LOCALAPPDATA, $env:APPDATA, $env:TEMP, $env:ProgramData) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\').ToLower() }
+$candidateDlls = (Get-ScanFiles -Path $sideloadRoots -Filter '*.dll' -TimeScoped) | Where-Object { $SIDELOAD_TARGET_DLLS -contains $_.Name.ToLower() }
+$sideloadSigSeen = 0; $sideloadSigBudgetHit = $false; $sideloadSigSw = [System.Diagnostics.Stopwatch]::StartNew()
+$sideloadHits = 0
+foreach ($cd in $candidateDlls) {
+    if ($sideloadSigBudgetHit) { break }
+    if ($sideloadSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or $sideloadSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+        $sideloadSigBudgetHit = $true; break
+    }
+    $sideloadSigSeen++
+    $dllSig = Get-AuthSig $cd.FullName
+    if ($dllSig -and $dllSig.Status -eq 'Valid') { continue }   # a validly-signed same-named DLL is a real vendor file, not a hijack
+    $dirPath = $cd.DirectoryName
+    $siblingExes = Get-ChildItem -LiteralPath $dirPath -Filter '*.exe' -File -ErrorAction SilentlyContinue
+    foreach ($se in $siblingExes) {
+        if ($sideloadSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or $sideloadSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+            $sideloadSigBudgetHit = $true; break
+        }
+        $sideloadSigSeen++
+        $exeSig = Get-AuthSig $se.FullName
+        if (-not ($exeSig -and $exeSig.Status -eq 'Valid')) { continue }   # base condition requires a SIGNED sibling EXE
+        $exeNameLower  = $se.Name.ToLower()
+        $isRootDir     = $sideloadHardRoots -contains $dirPath.TrimEnd('\').ToLower()
+        $exeNameMatch  = $SIDELOAD_TARGET_EXES -contains $exeNameLower
+        # A bare unsigned-DLL-with-a-known-name hit next to ANY signed EXE is not enough on its
+        # own (portable/Electron apps routinely ship a same-named helper DLL beside a vendor EXE
+        # the tool has never heard of) — require at least ONE corroborating signal (the sibling
+        # EXE itself is a commonly-abused sideload target, OR the pair sits directly in an
+        # AppData/Temp/ProgramData ROOT rather than a nested per-app install subfolder) before
+        # emitting even the review-only POSSIBLE tier. HIGH still requires BOTH.
+        if (-not ($exeNameMatch -or $isRootDir)) { continue }
+        $sideloadHits++
+        if ($exeNameMatch -and $isRootDir) {
+            Out-ThreatBanner "DLL SIDE-LOAD CANDIDATE" "$($se.Name) + $($cd.Name) in $dirPath"
+            Add-Finding -ID "SIDELOAD_$(Get-StableId "$($cd.FullName)|$($se.FullName)")" -Phase "PHASE 32.5" -ThreatType "DLL Hijack" `
+                -Severity $SEV_HIGH -Description "Unsigned hijack-target DLL '$($cd.Name)' sits beside signed, commonly-abused EXE '$($se.Name)' directly in $dirPath (not a nested install path) — classic DLL search-order side-load staging. Review, then quarantine the DLL by hand if confirmed malicious." `
+                -Target $cd.FullName -FixAction "Info" -Group "DLL Side-Loading"
+        } else {
+            Out-Decrypt -Text "$($se.Name) + $($cd.Name) in $dirPath" -Prefix "  [SIDELOAD?] "
+            Add-Finding -ID "SIDELOAD_$(Get-StableId "$($cd.FullName)|$($se.FullName)")" -Phase "PHASE 32.5" -ThreatType "DLL Hijack" `
+                -Severity $SEV_POSSIBLE -Description "Unsigned DLL named '$($cd.Name)' (a common search-order-hijack target) sits beside signed EXE '$($se.Name)' in $dirPath ($(if ($exeNameMatch) { "EXE is on the commonly-abused sideload-target list" } else { "pair sits directly in an AppData/Temp/ProgramData root" })) — review; many portable/third-party apps legitimately ship their own DLLs beside their EXE, so this is not auto-acted on: $($cd.FullName)" `
+                -Target $cd.FullName -FixAction "Info" -Group "DLL Side-Loading"
+        }
+    }
+    if ($sideloadSigBudgetHit) { break }
+}
+if ($sideloadSigBudgetHit) { Out-Typewriter "  -> SIGNATURE BUDGET REACHED — remaining side-load candidates not fully verified." "WARN" }
+if ($sideloadHits -eq 0) { Out-Typewriter "  -> [OK] NO DLL SIDE-LOAD CANDIDATES FOUND." "GOOD" }
+
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 6: NETWORK & C2
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1445,6 +1591,32 @@ foreach ($conn in ($conns | Select-Object -First 30)) {
     } catch { }
 }
 if (-not $foundConn) { Out-Typewriter "  -> [OK] NO MALICIOUS OUTBOUND CONNECTIONS." "GOOD" }
+
+Show-PhaseHeader "PHASE 36.5" "CLOUD INSTANCE METADATA SERVICE (IMDS) CREDENTIAL THEFT"
+Out-Typewriter "CHECKING FOR NON-AGENT CONNECTIONS TO THE CLOUD METADATA ENDPOINT..." "HUNT"
+# WS7 (T1552.005) — 169.254.169.254:80 is the AWS/Azure Instance Metadata Service; a process
+# with access to it can pull the instance's IAM role / managed-identity credentials straight
+# out of a plaintext HTTP response. HIGH-FP-RISK BY DESIGN: SSM/Azure/GCE guest agents, backup
+# and RMM/monitoring agents poll this constantly on a healthy cloud VM — so this is graded
+# ONLY against the owning process identity and is POSSIBLE + Info regardless of anything else,
+# hard-gated on the allowlist (cloud_agent_allowlist_names / cloud_agent_allowlist_path_regex,
+# plus the already-vetted rmm_tool_binaries list). Never auto-actionable.
+$imdsConns = Get-NetTCPConnection -RemoteAddress '169.254.169.254' -RemotePort 80 -ErrorAction SilentlyContinue
+$imdsHits = 0
+foreach ($ic in @($imdsConns)) {
+    $iproc = Get-Process -Id $ic.OwningProcess -ErrorAction SilentlyContinue
+    if (-not $iproc) { continue }
+    $iprocExeName = if ($iproc.Path) { (Split-Path -Leaf $iproc.Path).ToLower() } else { "$($iproc.Name)".ToLower() + '.exe' }
+    $isAllowedName = ($CLOUD_AGENT_ALLOW_NAMES -contains $iprocExeName) -or ($RMM_TOOL_BINARIES -contains $iprocExeName)
+    $isAllowedPath = ($iproc.Path -and "$($iproc.Path)" -match $CLOUD_AGENT_ALLOW_PATH_RE)
+    if ($isAllowedName -or $isAllowedPath) { continue }
+    $imdsHits++
+    Out-Typewriter "  -> NON-AGENT PROCESS TALKING TO IMDS: $($iproc.Name) PID:$($iproc.Id) @ $($iproc.Path)" "WARN"
+    Add-Finding -ID "IMDS_$($iproc.Id)" -Phase "PHASE 36.5" -ThreatType "Cloud Credential Theft" -Severity $SEV_POSSIBLE `
+        -Description "Connection to the cloud Instance Metadata Service (169.254.169.254:80) from a process not on the cloud-agent allowlist — verify this is an authorized agent before assuming credential theft (deliberately high-FP-risk without a name/path allowlist match, so this is review-only): $($iproc.Name) PID:$($iproc.Id) @ $(if ($iproc.Path) { $iproc.Path } else { '?' })" `
+        -Target "PID:$($iproc.Id)" -FixAction "Info" -Group "Cloud Credential Theft"
+}
+if ($imdsHits -eq 0) { Out-Typewriter "  -> [OK] NO NON-AGENT IMDS CONNECTIONS." "GOOD" }
 
 Show-PhaseHeader "PHASE 37" "IPC NULL SESSION / SMB / PORTPROXY AUDIT"
 $proxies = netsh interface portproxy show all
@@ -1990,6 +2162,128 @@ foreach ($cp in $capProcs) {
     $global:SpywareHits++
 }
 if ($capProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO OBVIOUS CAPTURE PROCESSES." "GOOD" }
+
+Show-PhaseHeader "PHASE 49.5" "CLIPBOARD CRYPTOCURRENCY ADDRESS-SWAP (CLIPPER) DETECTION" "KEYLOGGER"
+Out-Typewriter "CHECKING FOR CO-OCCURRING CLIPBOARD-API + CRYPTO-ADDRESS CONTENT..." "HUNT"
+# WS7 (T1115) — clipper malware silently swaps a copied crypto address for the attacker's own.
+# NEITHER a clipboard-API reference NOR a hardcoded crypto address literal is a finding alone
+# (clipboard APIs are used by countless legitimate tools; a crypto address can legitimately
+# appear in a wallet/browser cache) — this requires BOTH regex families to match NEAR each other
+# in the SAME piece of content (proximity window, not "anywhere in up to a 2MB file" — a large
+# deployment/diagnostic script can legitimately contain an unrelated clipboard helper thousands
+# of lines away from an unrelated long alphanumeric token). The bare base58-shaped legacy-BTC
+# pattern has no inherent checksum, so a plain character-class match can hit ordinary long
+# alphanumeric identifiers (license keys, correlation IDs); validate it against Base58Check
+# before counting it as an address hit.
+$CLIPPER_PROXIMITY_CHARS = 500
+function Test-Base58CheckAddress {
+    param([string]$Addr)
+    try {
+        $alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+        $num = [System.Numerics.BigInteger]::Zero
+        foreach ($c in $Addr.ToCharArray()) {
+            $idx = $alphabet.IndexOf($c)
+            if ($idx -lt 0) { return $false }
+            $num = $num * 58 + $idx
+        }
+        $bytes = $num.ToByteArray()
+        [Array]::Reverse($bytes)   # BigInteger.ToByteArray is little-endian
+        if ($bytes.Length -gt 0 -and $bytes[0] -eq 0) { $bytes = $bytes[1..($bytes.Length - 1)] }
+        $leadingOnes = 0
+        foreach ($c in $Addr.ToCharArray()) { if ($c -eq '1') { $leadingOnes++ } else { break } }
+        $fullBytes = (@([byte]0) * $leadingOnes) + @($bytes)
+        if ($fullBytes.Length -lt 25) { return $false }
+        $payload  = $fullBytes[0..($fullBytes.Length - 5)]
+        $checksum = $fullBytes[($fullBytes.Length - 4)..($fullBytes.Length - 1)]
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        $calcChecksum = ($sha256.ComputeHash($sha256.ComputeHash($payload)))[0..3]
+        for ($i = 0; $i -lt 4; $i++) { if ($calcChecksum[$i] -ne $checksum[$i]) { return $false } }
+        return $true
+    } catch {
+        # Validation infra unavailable (e.g. BigInteger not loadable) — fail OPEN on the checksum
+        # check specifically so this hardening pass never makes the underlying detection weaker
+        # than before; the proximity requirement below still applies.
+        return $true
+    }
+}
+function Test-ClipperCoOccurrence {
+    param([string]$Content)
+    if (-not $Content) { return $false }
+    $apiPositions = New-Object System.Collections.Generic.List[int]
+    foreach ($r in $CLIPPER_CLIPBOARD_API_RULES) {
+        foreach ($m in [regex]::Matches($Content, $r)) { $apiPositions.Add($m.Index) }
+    }
+    if ($apiPositions.Count -eq 0) { return $false }
+    foreach ($r in $CLIPPER_CRYPTO_ADDR_RULES) {
+        foreach ($m in [regex]::Matches($Content, $r)) {
+            if ($m.Value -match '^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$' -and -not (Test-Base58CheckAddress $m.Value)) { continue }
+            foreach ($ap in $apiPositions) {
+                if ([Math]::Abs($m.Index - $ap) -le $CLIPPER_PROXIMITY_CHARS) { return $true }
+            }
+        }
+    }
+    return $false
+}
+$clipperHits = 0
+# 1) Run / RunOnce values (HKCU + HKLM, 64/32)
+$clipperRunPaths = @(
+    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+    "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce"
+)
+foreach ($crp in $clipperRunPaths) {
+    if (-not (Test-Path $crp)) { continue }
+    $crKeys = Get-ItemProperty -Path $crp -ErrorAction SilentlyContinue
+    if (-not $crKeys) { continue }
+    foreach ($prop in ($crKeys.psobject.properties | Where-Object { $_.Name -notmatch "^PS" })) {
+        $crVal = "$($prop.Value)"
+        if (-not (Test-ClipperCoOccurrence $crVal)) { continue }
+        $clipperHits++
+        Out-ThreatBanner "CLIPPER CO-OCCURRENCE (RUN KEY)" "$crp|$($prop.Name)"
+        Add-Finding -ID "CLIPPER_RUN_$(Get-StableId "$crp|$($prop.Name)")" -Phase "PHASE 49.5" -ThreatType "Clipper/Crypto Hijacker" `
+            -Severity $SEV_POSSIBLE -Description "Run key value references BOTH a clipboard API and a hardcoded crypto address literal (possible clipboard-hijacking clipper — review): [$crp] $($prop.Name) = $crVal" `
+            -Target "$crp|$($prop.Name)" -FixAction "Info" -Group "Clipboard Clipper Detection"
+    }
+}
+# 2) Scheduled task command lines
+$clipperTasks = Get-ScheduledTask -ErrorAction SilentlyContinue
+foreach ($ct in $clipperTasks) {
+    $ctCmd = (@($ct.Actions) | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' '
+    if (-not (Test-ClipperCoOccurrence $ctCmd)) { continue }
+    $clipperHits++
+    Out-ThreatBanner "CLIPPER CO-OCCURRENCE (SCHEDULED TASK)" $ct.TaskName
+    Add-Finding -ID "CLIPPER_TASK_$(Get-StableId $ct.TaskName)" -Phase "PHASE 49.5" -ThreatType "Clipper/Crypto Hijacker" `
+        -Severity $SEV_POSSIBLE -Description "Scheduled task action references BOTH a clipboard API and a hardcoded crypto address literal (possible clipboard-hijacking clipper — review): $($ct.TaskName) | $ctCmd" `
+        -Target "Task: $($ct.TaskName)" -FixAction "Info" -Group "Clipboard Clipper Detection"
+}
+# 3) Recently-dropped scripts — excludes existing wallet/password-manager benign paths
+# (infostealer_benign_paths) via Test-BenignPath so this does not re-flag what that
+# allowlist already covers (CLAUDE.md: reuse, don't duplicate, an existing FP allowlist).
+$clipperScriptExts  = @('.ps1','.vbs','.js','.bat','.cmd','.hta','.wsf','.py')
+$clipperScriptRoots = @($env:TEMP, $env:LOCALAPPDATA, $env:APPDATA, "$env:USERPROFILE\Downloads", "$env:USERPROFILE\Desktop", $env:ProgramData) | Where-Object { $_ }
+$clipperScriptFiles = (Get-ScanFiles -Path $clipperScriptRoots -TimeScoped) | Where-Object { $clipperScriptExts -contains $_.Extension.ToLower() }
+$clipperFileSeen = 0
+foreach ($csf in $clipperScriptFiles) {
+    if ($clipperFileSeen -ge 500) { break }   # content-read volume cap — a bounded, fast check, not a signature-audit budget
+    $clipperFileSeen++
+    if (Test-BenignPath $csf.FullName $INFOSTEALER_BENIGN_RE) { continue }
+    $csContent = $null
+    try {
+        $csFi = Get-Item -LiteralPath $csf.FullName -ErrorAction Stop
+        if ($csFi.Length -eq 0 -or $csFi.Length -gt 2097152) { continue }   # 2MB cap
+        $csContent = [System.IO.File]::ReadAllText($csf.FullName)
+    } catch { continue }
+    if (-not (Test-ClipperCoOccurrence $csContent)) { continue }
+    $clipperHits++
+    Out-ThreatBanner "CLIPPER CO-OCCURRENCE (DROPPED SCRIPT)" $csf.FullName
+    Add-Finding -ID "CLIPPER_FILE_$(Get-StableId $csf.FullName)" -Phase "PHASE 49.5" -ThreatType "Clipper/Crypto Hijacker" `
+        -Severity $SEV_POSSIBLE -Description "Script references BOTH a clipboard API and a hardcoded crypto address literal (possible clipboard-hijacking clipper — review): $($csf.FullName)" `
+        -Target $csf.FullName -FixAction "Info" -Group "Clipboard Clipper Detection"
+}
+if ($clipperHits -eq 0) { Out-Typewriter "  -> [OK] NO CLIPBOARD/CRYPTO CO-OCCURRENCE HITS." "GOOD" }
 
 Show-PhaseHeader "PHASE 50" "ACCESSIBILITY API / UIAUTOMATION KEYLOGGER CHECK" "KEYLOGGER"
 Out-Typewriter "AUDITING UIAutomation HOOK REGISTRATIONS..." "HUNT"
