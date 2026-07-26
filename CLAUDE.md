@@ -384,6 +384,35 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Apply benign-path allowlists through `Test-BenignPath`, not a bare `-match`.** Those lists key
   on folder names (`node_modules`, `site-packages`) that an attacker can simply create to
   self-allowlist; `Test-BenignPath` additionally vetoes a match found in a staging dir.
+  **But know its blind spot: `$global:ALLOW_VETO_RE` vetoes every allowlist match found under
+  `\Temp\` or `\Downloads\`,** so in a phase whose entire scope is those directories (Phase 10),
+  `Test-BenignPath` **cannot downgrade anything** — it is structurally incapable, and a fix that
+  merely "routes through it" will silently do nothing. Call it first and unchanged, then add a
+  separate, deliberately narrow, component-anchored, **downgrade-only** list to override the veto.
+  And state the trade-off in the data comment: any allowlist scoped to `%TEMP%` is by definition
+  attacker-satisfiable, because whoever can write there can create the directory. Keep such a hit a
+  **downgrade to INFO, never a suppression** — the file stays a reported finding and only leaves the
+  auto-destructive set (2026-07-26).
+- **Never print a clean result for a check that could not have fired.** A green
+  "0 SUSPICIOUS 4688 PROCESS EVENTS" from a box where Audit Process Creation is off — or where
+  command-line capture (a *second, independent* policy) is off, so 4688 carries no arguments for the
+  regexes to match — is worse than no output: it is a false all-clear on an incident host. Every
+  check whose visibility depends on policy, log retention, file access or a mounted hive must
+  determine that precondition and, when it fails, emit an explicit **"this check was blind"** finding
+  instead of a clean line. Prefer an **empirical** precondition test over a configuration one
+  (*does the log actually contain any 4688?* beats parsing `auditpol`, which is localised); where a
+  config source is consulted it may act only as a **veto** — able to push the verdict toward
+  "blind", never toward "clean" — and an unrecognised value degrades to UNKNOWN. This is the same
+  principle as the remediation rule above: "couldn't check" and "nothing there" are different
+  answers, and the plan's whole verdict layer depends on `UNPROVEN` being distinguishable from
+  `CLEAN` (2026-07-26, Phases 12/91/107).
+- **A written plan's premises are claims, not facts — measure them before implementing.**
+  `EVIDENCE_ENGINE_PLAN.md` asserted `$_.Message` renders at 1–3 ms/event (it is ~0.01 ms; the real
+  50× cost was a double `[xml]` DOM parse), recommended `.Properties[n].Value` (rejected — positional
+  EventData indices are not a documented cross-build contract, and an off-by-one reads the wrong
+  field with **no error**), and scoped P1 at "~6 phases" (a real audit found ~50 call sites). Fixing
+  the stated symptom without checking the stated cause produces a change that is defensible on paper
+  and wrong in the engine.
 
 ### GUI
 - **Adding a cinematic effect = one `CINE_FX` entry in `app.js` + the matching `body.zbfx-<id>` CSS**

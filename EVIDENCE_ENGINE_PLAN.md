@@ -523,16 +523,40 @@ Non-negotiable, from `CLAUDE.md` and the session-16 lessons:
 7. **Audit-only during scanning.** The one item that would violate this (VSS for Amcache) is
    excluded.
 8. **A new detection is not done until graded against a fresh DEEP baseline on a healthy box.**
-   Current healthy-box auto-destructive baseline: **7**.
+   **The "7" figure this document originally quoted is stale and must not be used as a regression
+   signal.** It dates from FP round 5 (2026-06-28) on a `-Hours 1` scan. Measured 2026-07-26 on an
+   all-time QUICK run, this dev box reported **94** — of which **92 were Phase 10** alone (executable
+   extensions in `%TEMP%`, almost entirely accumulated Claude Code harness debris). After the
+   2026-07-26 Phase 10 and Phase 30 fixes the same run should report roughly **50**, essentially all
+   still Phase 10. **Always attribute an auto-destructive count by phase before treating a change in
+   it as a regression** — a single noisy phase dominates the total and makes the headline number
+   meaningless on its own. This machine is no longer a clean baseline reference.
 
 ---
 
 ## 8. Sequencing
 
-0. **P7 + P8 first** — they are actively producing wrong output today (a proven auto-selected FP on
-   the operator's own machine, and their most common alert name failing to match).
+> **Status as of 2026-07-26 (session 18).** Step 0 and all of step 1 **except P1** are DONE and
+> committed on `session12/review-remediation-ws6`. See `CHANGELOG.md` for the four entries.
+> **P1 is the next task**, and has its own committed implementation spec:
+> **`P1_MULTIUSER_HIVE_SPEC.md`** — read that, not §2's P1 paragraph, which underestimates the work
+> by roughly 8× (~50 call sites, not "~6 phases") and whose line numbers are stale.
+
+0. ~~**P7 + P8 first**~~ — **DONE** (`7d61932`). Defender verdict normaliser + Phase 74.6 rebuilt
+   around corroboration; 24 auto-selected FPs → 0.
 1. **P1–P6, P9–P13** remaining prerequisite fixes (P1 before anything user-scoped; **P10 before §4**,
    since no verdict can be expressed without the schema).
+   - ~~P2, P3, P6, P13~~ **DONE** (`391b6c4`) — event-log truncation, 4688 blindness, Zone.Identifier
+     origin, stale-engine dev build.
+   - ~~P9, P10~~ **DONE** (`675c957`) — TRIAGE mode (71 phases), 18-field finding schema.
+   - ~~P4, P5, P11, P12~~ **DONE** (`1a852af`) — plus the Phase 10 FP tune. Closed a live rule-#1
+     violation: Phase 30 auto-selected stock Windows' own `SCM Event Log Consumer` for
+     `Remove-WmiObject` on every healthy box.
+   - **P1 — OUTSTANDING. This is the next task.** Spec: `P1_MULTIUSER_HIVE_SPEC.md`. Its §0.0 records
+     three operator decisions already made (opt-in `-LoadUserHives` **off by default** with a named
+     honesty finding per skipped profile; a one-time `-Baseline` re-capture accepted; test account
+     approved) and its §0.1 documents the `zbtest2` acceptance-test profile **already created on the
+     dev box** — do not re-ask any of these, and do not tear that account down before sign-off.
 2. **A1** log-availability census (makes all later results interpretable).
 3. **A2–A3** Defender evidence (the primary use case).
 4. **A4–A8** default-on Security/RDP/BITS/PowerShell-400 evidence.
