@@ -16,8 +16,55 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
+#[cfg(windows)]
+use std::os::windows::io::AsRawHandle;
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::CloseHandle;
+#[cfg(windows)]
+use windows_sys::Win32::System::JobObjects::{
+    AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+    SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+    JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+};
+
+// A Windows Job Object with JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE ties the elevated PS server
+// child's lifetime to THIS process at the OS level — unlike the WindowEvent/RunEvent hooks
+// below, this also covers a force-kill (Task Manager "End Task"), a panic, or a crash, none of
+// which run any of our cooperative cleanup code. Stored as `usize` (not the raw HANDLE pointer
+// type) purely so it can live in a `Mutex` shared across threads without an unsafe Send/Sync
+// impl — HANDLE is just an opaque numeric value from the Win32 API's point of view.
+#[cfg(windows)]
+fn create_kill_on_close_job() -> Option<usize> {
+    unsafe {
+        let job = CreateJobObjectW(std::ptr::null(), std::ptr::null());
+        if job.is_null() {
+            return None;
+        }
+        let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+        info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        let ok = SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            &info as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        );
+        if ok == 0 {
+            CloseHandle(job);
+            return None;
+        }
+        Some(job as usize)
+    }
+}
+
+#[cfg(windows)]
+fn assign_child_to_job(job: usize, child: &Child) -> bool {
+    unsafe { AssignProcessToJobObject(job as _, child.as_raw_handle() as _) != 0 }
+}
+
 struct ServerState {
     child: Mutex<Option<Child>>,
+    #[cfg(windows)]
+    job: Mutex<Option<usize>>,
     status: Mutex<ServerStatus>,
 }
 
@@ -44,20 +91,32 @@ fn find_engine_root(app: &AppHandle) -> Option<PathBuf> {
             return Some(res.join("engine-root"));
         }
     }
-    let dev_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..");
-    if dev_root.join("ZeroBreach-Server.ps1").is_file() {
-        return Some(dev_root);
+    // Debug-only: `cargo tauri dev` doesn't stage bundle.resources, so fall back to the real
+    // checkout root. Gated behind debug_assertions so a release binary never carries (or acts
+    // on) the build machine's own absolute checkout path — a release build with no staged
+    // resources should report the real "can't find the engine" error, not silently probe a
+    // path that only ever existed on whoever compiled it.
+    #[cfg(debug_assertions)]
+    {
+        let dev_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..");
+        if dev_root.join("ZeroBreach-Server.ps1").is_file() {
+            return Some(dev_root);
+        }
     }
     None
 }
 
 fn pick_free_port() -> u16 {
-    // Bind to port 0 to ask the OS for a free one, then drop the listener before the
-    // PS server binds it. Small TOCTOU window (acceptable for a localhost-only dev
-    // tool); ZeroBreach-Server.ps1 itself falls back to Get-FreePort if this one is
-    // somehow already gone by the time it tries to listen.
+    // Bind to port 0 to ask the OS for a free one, then drop the listener before the PS
+    // server binds it. Small TOCTOU window (acceptable for a localhost-only dev tool run by
+    // its own operator). NOTE this app always passes an explicit -Port, so
+    // ZeroBreach-Server.ps1's own `if ($Port -eq 0) { $Port = Get-FreePort }` fallback never
+    // runs for launches from here — if the port really is gone by the time the script tries
+    // to bind it, $Listener.Start() throws, the script attempts a netsh url-acl retry, and on
+    // failure exits 1 (caught by the try_wait() early-exit check below, not silently retried
+    // with a different port).
     std::net::TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
         .map(|a| a.port())
@@ -74,7 +133,7 @@ fn port_is_open(port: u16) -> bool {
 
 fn set_status(app: &AppHandle, status: ServerStatus) {
     let state = app.state::<ServerState>();
-    *state.status.lock().unwrap() = status.clone();
+    *lock_or_recover(&state.status) = status.clone();
     if let Some(err) = &status.error {
         let _ = app.emit("zerobreach://server-error", err.clone());
     } else if status.ready {
@@ -148,6 +207,19 @@ fn spawn_server(app: AppHandle) {
         let child = match cmd.spawn() {
             Ok(c) => {
                 dlog(&format!("powershell.exe spawned, pid={}", c.id()));
+                #[cfg(windows)]
+                {
+                    if let Some(job) = create_kill_on_close_job() {
+                        if assign_child_to_job(job, &c) {
+                            dlog("child assigned to kill-on-close job object");
+                            *lock_or_recover(&app.state::<ServerState>().job) = Some(job);
+                        } else {
+                            dlog("AssignProcessToJobObject failed — falling back to cooperative-only cleanup");
+                        }
+                    } else {
+                        dlog("CreateJobObjectW failed — falling back to cooperative-only cleanup");
+                    }
+                }
                 c
             }
             Err(e) => {
@@ -163,7 +235,7 @@ fn spawn_server(app: AppHandle) {
                 return;
             }
         };
-        *app.state::<ServerState>().child.lock().unwrap() = Some(child);
+        *lock_or_recover(&app.state::<ServerState>().child) = Some(child);
 
         emit_progress(&app, "waiting for the local engine to come online…");
         let deadline = Instant::now() + Duration::from_secs(45);
@@ -176,7 +248,7 @@ fn spawn_server(app: AppHandle) {
             // instead of burning the full 45s timeout on a process that's already gone.
             {
                 let server_state = app.state::<ServerState>();
-                let mut guard = server_state.child.lock().unwrap();
+                let mut guard = lock_or_recover(&server_state.child);
                 if let Some(c) = guard.as_mut() {
                     if let Ok(Some(exit)) = c.try_wait() {
                         dlog(&format!("powershell.exe exited early: {exit}"));
@@ -203,10 +275,10 @@ fn spawn_server(app: AppHandle) {
                     ServerStatus {
                         ready: false,
                         url: None,
-                        error: Some(
-                            "Timed out waiting for the local engine to start (45s). Check reports/ for a launch error log."
-                                .into(),
-                        ),
+                        error: Some(format!(
+                            "Timed out waiting for the local engine to start (45s). See {} for details.",
+                            std::env::temp_dir().join("zerobreach_native_debug.log").display()
+                        )),
                     },
                 );
                 return;
@@ -252,9 +324,16 @@ fn spawn_server(app: AppHandle) {
                     }
                 }
                 Err(e) => {
-                    let _ = app2.emit(
-                        "zerobreach://server-error",
-                        format!("Engine is up but the console window failed to open: {e}"),
+                    // Window creation failed after we already told everyone ready=true — undo
+                    // that, or a caller of get_server_status() after this point would see
+                    // ready:true + a URL while no "main" window actually exists.
+                    set_status(
+                        &app2,
+                        ServerStatus {
+                            ready: false,
+                            url: None,
+                            error: Some(format!("Engine is up but the console window failed to open: {e}")),
+                        },
                     );
                 }
             }
@@ -264,13 +343,33 @@ fn spawn_server(app: AppHandle) {
 
 #[tauri::command]
 fn get_server_status(app: AppHandle) -> ServerStatus {
-    app.state::<ServerState>().status.lock().unwrap().clone()
+    lock_or_recover(&app.state::<ServerState>().status).clone()
+}
+
+// A Mutex poisoned by an unrelated panic elsewhere must not also take down kill_child — that's
+// exactly the cleanup path that most needs to still run when something has already gone wrong.
+// The lock is only ever held for plain data-copy/assignment (never across a fallible operation
+// that could itself panic mid-guard), so recovering the possibly-stale-but-structurally-fine
+// inner value is safe here.
+fn lock_or_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn kill_child(app: &AppHandle) {
-    if let Some(mut child) = app.state::<ServerState>().child.lock().unwrap().take() {
+    dlog("kill_child called");
+    if let Some(mut child) = lock_or_recover(&app.state::<ServerState>().child).take() {
         let _ = child.kill();
         let _ = child.wait();
+    }
+    #[cfg(windows)]
+    {
+        // Closing the job handle also fires KILL_ON_JOB_CLOSE — redundant with child.kill()
+        // above on the happy path, but it's the real backstop for a force-kill/panic/crash of
+        // THIS process, which never runs this function at all (that's the whole reason the job
+        // object exists — see create_kill_on_close_job's doc comment).
+        if let Some(job) = lock_or_recover(&app.state::<ServerState>().job).take() {
+            unsafe { CloseHandle(job as _) };
+        }
     }
 }
 
@@ -282,6 +381,8 @@ fn main() {
     tauri::Builder::default()
         .manage(ServerState {
             child: Mutex::new(None),
+            #[cfg(windows)]
+            job: Mutex::new(None),
             status: Mutex::new(ServerStatus::default()),
         })
         .invoke_handler(tauri::generate_handler![get_server_status])
