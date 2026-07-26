@@ -1401,6 +1401,175 @@ function Get-SignatureVerdict { param([string]$FilePath)
     return $result
 }
 
+# ══════════════════════════════════════════════════════════════════════════════
+#  DEFENDER VERDICT NORMALISER  (EVIDENCE_ENGINE_PLAN P7/P8 + §5.0)
+# ══════════════════════════════════════════════════════════════════════════════
+# Microsoft's verdict grammar is  Type:Platform/Family.Variant!suffix .  Two shipped
+# defects came from treating that string as opaque:
+#   P7  Phase 74.6 matched the phishing-family list with StartsWith on the WHOLE
+#       label, so the operator's single most common alert — Trojan:Win32/Wacatac.B!ml
+#       — could never match the list entry Trojan:Script/Wacatac.  Different platform,
+#       same family.  Matching on the FAMILY component fixes it for every platform and
+#       every variant at once.
+#   P8  the '!suffix' says HOW Defender decided.  '!ml'/'!MTB' are machine-learning /
+#       automated-triage verdicts with a large false-positive share (cracked software,
+#       keygens, NSIS installers, unsigned scripts, developer build output).  Grading
+#       one of those CRITICAL + Quarantine with no corroboration auto-selected a
+#       freshly-compiled obj\Debug\ build artifact on the operator's own machine.
+# Everything the parser keys on lives in data/detection_signatures.json (AMSI rule),
+# and the object returned here is the same normalised shape the alert-ingestion
+# framework consumes — build it once, use it in both places.
+$global:DEF_SUFFIX_RANK = @{}   # 'ml' -> 1 (rank 3 == signature-grade, the escalation gate)
+$global:DEF_SUFFIX_TIER = @{}   # 'ml' -> 'machine-learning'
+foreach ($dsx in (Get-Sig 'defender_confidence_suffixes')) {
+    if ($dsx -and $dsx.suffix) {
+        $global:DEF_SUFFIX_RANK["$($dsx.suffix)".ToLower()] = [int]$dsx.rank
+        $global:DEF_SUFFIX_TIER["$($dsx.suffix)".ToLower()] = "$($dsx.tier)"
+    }
+}
+$global:DEF_TYPE_CLASS = @{}
+foreach ($dtc in (Get-Sig 'defender_type_classes')) {
+    if ($dtc -and $dtc.type) { $global:DEF_TYPE_CLASS["$($dtc.type)".ToLower()] = "$($dtc.class)" }
+}
+$global:DEF_STATUS = @{}
+foreach ($dst in (Get-Sig 'defender_threat_status')) {
+    if ($dst -and $null -ne $dst.id) { $global:DEF_STATUS[[int]$dst.id] = @{ Name = "$($dst.name)"; State = "$($dst.state)" } }
+}
+$global:DEF_SOURCE_TYPE = @{}
+foreach ($dso in (Get-Sig 'defender_source_types')) {
+    if ($dso -and $null -ne $dso.id) { $global:DEF_SOURCE_TYPE[[int]$dso.id] = "$($dso.name)" }
+}
+$global:DEF_GENERIC_FAMILY = @{}
+foreach ($dgf in (Get-Sig 'defender_generic_family_tokens')) { if ($dgf) { $global:DEF_GENERIC_FAMILY["$dgf".ToLower()] = $true } }
+$global:DEF_DUALUSE_CLASS = @{}
+foreach ($ddc in (Get-Sig 'defender_dual_use_classes')) { if ($ddc) { $global:DEF_DUALUSE_CLASS["$ddc".ToLower()] = $true } }
+$global:DEF_FILE_RES_PREFIX = @{}
+foreach ($dfp in (Get-Sig 'defender_resource_file_prefixes')) { if ($dfp) { $global:DEF_FILE_RES_PREFIX["$dfp".ToLower()] = $true } }
+$global:DEF_CONTENT_RES_PREFIX = @{}
+foreach ($dcp in (Get-Sig 'defender_resource_content_prefixes')) { if ($dcp) { $global:DEF_CONTENT_RES_PREFIX["$dcp".ToLower()] = $true } }
+# @(...)[0] not (...)[0] — PS 5.1 unwraps a single-element return to a scalar and bare
+# indexing would take the first CHARACTER of the string (CLAUDE.md Get-Sig rule).
+$global:DEF_NO_SUFFIX_RANK      = if (@(Get-Sig 'defender_no_suffix_rank').Count)      { [int]@(Get-Sig 'defender_no_suffix_rank')[0] }      else { 3 }
+$global:DEF_UNKNOWN_SUFFIX_RANK = if (@(Get-Sig 'defender_unknown_suffix_rank').Count) { [int]@(Get-Sig 'defender_unknown_suffix_rank')[0] } else { 2 }
+$global:DEF_ESCALATE_MIN_RANK   = 3   # only signature-grade confidence may reach a destructive FixAction
+$DEF_DEV_PATH_RE       = Join-AllowRegex 'defender_dev_build_paths'
+$DEF_STAGING_PATH_RE   = Join-AllowRegex 'defender_staging_paths'
+$DEF_WORKSPACE_MARKERS = Get-Sig 'defender_dev_workspace_markers'
+
+# Decompose a vendor threat label. Never throws: an unparseable label returns a record
+# with Parsed=$false and a confidence rank BELOW the escalation gate, so an unfamiliar
+# grammar fails safe rather than fails loud.
+function Get-DefenderVerdict {
+    param([string]$ThreatName)
+    $dv = [ordered]@{
+        Raw = "$ThreatName"; Type = ''; Platform = ''; Family = ''; Variant = ''
+        Suffix = ''; Tier = 'signature'; Rank = [int]$global:DEF_NO_SUFFIX_RANK
+        Class = 'unknown'; DualUse = $false; Parsed = $false; Generic = $false
+    }
+    $dvRest = "$ThreatName".Trim()
+    if (-not $dvRest) {
+        $dv.Tier = 'unknown'; $dv.Rank = 0
+        return ([pscustomobject]$dv)
+    }
+    if ($dvRest -match '^\s*([A-Za-z][A-Za-z0-9_+-]*)\s*:\s*(.+)$') { $dv.Type     = $Matches[1]; $dvRest = $Matches[2] }
+    if ($dvRest -match '^\s*([A-Za-z][A-Za-z0-9_+-]*)\s*/\s*(.+)$') { $dv.Platform = $Matches[1]; $dvRest = $Matches[2] }
+    if ($dvRest -match '^([^!]*)!(.*)$')                            { $dv.Suffix   = $Matches[2]; $dvRest = $Matches[1] }
+    $dvRest = "$dvRest".Trim()
+    if ($dvRest -match '^([^.]+)\.(.+)$') { $dv.Family = $Matches[1]; $dv.Variant = $Matches[2] }
+    else                                  { $dv.Family = $dvRest }
+    $dv.Family  = "$($dv.Family)".Trim()
+    $dv.Variant = "$($dv.Variant)".Trim()
+    if ($dv.Suffix) {
+        $dvKey = "$($dv.Suffix)".ToLower()
+        if ($global:DEF_SUFFIX_RANK.ContainsKey($dvKey)) {
+            $dv.Rank = [int]$global:DEF_SUFFIX_RANK[$dvKey]
+            $dv.Tier = "$($global:DEF_SUFFIX_TIER[$dvKey])"
+        } else {
+            $dv.Rank = [int]$global:DEF_UNKNOWN_SUFFIX_RANK
+            $dv.Tier = 'unrecognised-suffix'
+        }
+    }
+    $dvType = "$($dv.Type)".ToLower()
+    if ($dvType -and $global:DEF_TYPE_CLASS.ContainsKey($dvType)) { $dv.Class = "$($global:DEF_TYPE_CLASS[$dvType])" }
+    $dv.DualUse = [bool]$global:DEF_DUALUSE_CLASS.ContainsKey("$($dv.Class)".ToLower())
+    $dv.Generic = [bool]$global:DEF_GENERIC_FAMILY.ContainsKey("$($dv.Family)".ToLower())
+    # Only a label carrying BOTH a Type: and a Platform/ is Defender grammar. Mixed-vendor
+    # entries (HTML/Phish, Trojan.Generic.Phishing, PUA/W32.PUP) parse to something, but
+    # callers must fall back to whole-label prefix matching for them.
+    $dv.Parsed = [bool]($dv.Type -and $dv.Platform)
+    return ([pscustomobject]$dv)
+}
+
+# Does an ancestor directory carry a source-repo / project marker? Deliberately
+# STRUCTURAL rather than a list of one operator's folders, so it generalises to any
+# client box: a developer's working tree is where Defender's ML tier throws most of
+# its false positives, and it is not where an IR tool should be deleting things.
+$global:DEF_WORKSPACE_CACHE = @{}
+function Test-DevWorkspacePath {
+    param([string]$Path, [int]$MaxUp = 6)
+    if (-not $Path) { return $false }
+    $dwDir = $null
+    try { $dwDir = Split-Path -Parent $Path } catch { return $false }
+    $dwHops = 0
+    while ($dwDir -and $dwHops -lt $MaxUp) {
+        $dwKey = "$dwDir".ToLower()
+        if ($global:DEF_WORKSPACE_CACHE.ContainsKey($dwKey)) {
+            if ($global:DEF_WORKSPACE_CACHE[$dwKey]) { return $true }
+        } else {
+            $dwHit = $false
+            # Test-Path THROWS a terminating IOException on an unreachable UNC path —
+            # -ErrorAction SilentlyContinue does not suppress it, and unhandled it would
+            # unwind to the phase module's trap and skip every remaining phase in that
+            # module (CLAUDE.md engine-split rule). Caught by the unit test, not by review.
+            try {
+                if (Test-Path -LiteralPath $dwDir -PathType Container -ErrorAction SilentlyContinue) {
+                    foreach ($dwM in $DEF_WORKSPACE_MARKERS) {
+                        if (-not $dwM) { continue }
+                        if ("$dwM".Contains('*')) {
+                            $dwFound = @(Get-ChildItem -LiteralPath $dwDir -Filter "$dwM" -Force -ErrorAction SilentlyContinue | Select-Object -First 1)
+                            if ($dwFound.Count) { $dwHit = $true; break }
+                        } elseif (Test-Path -LiteralPath (Join-Path $dwDir "$dwM") -ErrorAction SilentlyContinue) {
+                            $dwHit = $true; break
+                        }
+                    }
+                }
+            } catch { $dwHit = $false }
+            $global:DEF_WORKSPACE_CACHE[$dwKey] = $dwHit
+            if ($dwHit) { return $true }
+        }
+        $dwNext = $null
+        try { $dwNext = Split-Path -Parent $dwDir } catch { $dwNext = $null }
+        if (-not $dwNext -or $dwNext -eq $dwDir) { break }
+        $dwDir = $dwNext
+        $dwHops++
+    }
+    return $false
+}
+
+# Path class used to demote Defender-derived grading.
+#   dev       build output / dependency tree / any path under a source repo   -> demote
+#   removable any non-system volume, plus UNC — data and archive drives       -> demote
+#   system    %WinDir% / Program Files                                        -> may escalate
+#   staging   Downloads/Documents/Desktop/Temp/Startup — the drop zones       -> may escalate
+#   other     everything else                                                 -> may escalate
+function Get-DefenderPathClass {
+    param([string]$Path)
+    if (-not $Path) { return 'other' }
+    # Order matters: the purely textual tests run FIRST so a UNC or off-system path never
+    # reaches the filesystem walk below. Both 'dev' and 'removable' demote identically,
+    # so classifying an off-system source tree as 'removable' changes no grading.
+    if ($Path -match $DEF_DEV_PATH_RE) { return 'dev' }
+    if ($Path -match '^\\\\')          { return 'removable' }
+    if ($Path -match '^([A-Za-z]:)\\') {
+        $dpSys = "$env:SystemDrive"
+        if ($dpSys -and $Matches[1] -ne $dpSys) { return 'removable' }
+    }
+    if (Test-DevWorkspacePath $Path) { return 'dev' }
+    if ($Path -match '^[A-Za-z]:\\(Windows|Program Files( \(x86\))?)\\') { return 'system' }
+    if ($Path -match $DEF_STAGING_PATH_RE) { return 'staging' }
+    return 'other'
+}
+
 # Classify a finding for the remediation selection-mode presets:
 #   Recommended = high-confidence, worth acting on (CRIT/HIGH with a concrete fix)
 #   Safe        = remediation will not delete user data / break the OS (reversible)

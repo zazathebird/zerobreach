@@ -6,6 +6,119 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-26 — EVIDENCE_ENGINE_PLAN P7 + P8: the Wacatac match failure and the uncorroborated Defender residual
+
+The two items §8 of `EVIDENCE_ENGINE_PLAN.md` flagged as *"actively producing wrong output today"*.
+Both live in Phase 74.6 (Defender threat-history correlation). Graded against this box's real
+Defender history — **82 detection resources across 43 distinct threat labels** — not against
+reasoning about what the code ought to do.
+
+### The measured starting state
+
+Replaying the shipped logic over live `Get-MpThreatDetection` output produced **24 CRITICAL +
+Quarantine findings, every one a false positive, every one auto-selected** (CRITICAL + Quarantine
+is in the auto-destructive set). Three independent defects stacked:
+
+| # | Defect | Evidence |
+|---|---|---|
+| 1 | **Resource prefix discarded.** The regex stripped `amsi:_`/`behavior:_`/`process:_` along with `file:_`, then called `Test-Path`. An AMSI resource names the script whose *content* was blocked at execution — the file surviving is expected. | 22 of the 24 were `amsi:` resources: the operator's own `PirateLife-GUI.ps1` (×11) and Claude scratchpad `probe.ps1` (×10). |
+| 2 | **`ThreatStatusID` never read.** Status was inferred purely from `Test-Path`. | 72 of 82 resources report `3 = Quarantined, ActionSuccess=True` — Defender saying it handled the threat, ignored. Only 2 said `103 = Remove Failed`, and they graded identically to the other 22. |
+| 3 | **Confidence suffix ignored.** | 17 of the 24 were `!MTB`, 2 were `!ml` — ML/emulator-derived verdicts, the tier §5.0 of the plan says may never auto-select destructively. |
+
+The proven false positive from §0.1 of the plan (`obj\Debug\net8.0-…\PirateLifeNative.dll`) was
+exonerated by a *fourth* independent signal nobody had looked for: its `LastWriteTime` is **newer
+than both remediation timestamps** — it was rebuilt after Defender acted, so it is not the file
+Defender flagged.
+
+### P7 — the operator's most common alert could not match (`Phases-2.ps1`)
+
+`email_phishing_trojans` contains `Trojan:Script/Wacatac`; the match was
+`"$tname".StartsWith("$pf")`. `Trojan:Win32/Wacatac.B!ml` does not start with that string — same
+family, different platform. Matching now happens on the **Family** component, which fixes every
+platform/variant/suffix of a listed family at once.
+
+The trap avoided: `Phish:HTML/Generic` is in that list, and naive family matching would have made it
+swallow `Trojan:Win32/Generic!rfn` (live on this box). Generic family tokens are excluded from
+family matching and fall back to whole-label prefix matching, as do mixed-vendor entries
+(`HTML/Phish`, `Trojan.Generic.Phishing`, `PUA/W32.PUP`) that are not Defender grammar at all.
+
+### P8 — grading rebuilt around what Defender actually reports
+
+`Get-MpThreatDetection` already returned `ThreatStatusID`, `ActionSuccess`, `CleaningActionID`,
+`RemediationTime`, `LastThreatStatusChangeTime`, `DetectionSourceTypeID` and `ProcessName` (the
+process Defender attributed the drop to). None were read. All are now.
+
+**CRITICAL + Quarantine requires every one of these to hold** — otherwise POSSIBLE/INFO + `Info`:
+
+1. the resource is a **file** resource, not `amsi:`/`behavior:`/`process:` (unrecognised prefixes are
+   treated as content, i.e. the non-escalating side — fail safe);
+2. the file is present;
+3. Defender reports remediation **failed** or **pending** (`102/103/105/106`, or `ActionSuccess=False`);
+4. confidence is **signature-grade** (rank ≥ 3; an unrecognised suffix scores below the gate);
+5. the path class is not `dev` (build output / source tree) or `removable` (non-system volume);
+6. the class is not dual-use (`hacktool`/`pup`/`adware` — the technician's own toolkit);
+7. the file has not been **written since** Defender's action.
+
+Every demotion reason is written into the finding description (`NOT auto-selected because: …`), so
+an operator sees *why* something was not escalated rather than a bare severity.
+
+Also fixed: **findings are now aggregated by path before grading.** Defender emits one record per
+event, so the same path recurs with different outcomes; grading each independently let
+`Add-Finding`'s ID dedup keep an arbitrary one, and a `Remove Failed` could be masked by a later
+`Quarantined` for the same file. Aggregate first, grade once, from the row with the most recent
+status change.
+
+### `Get-DefenderVerdict` — the normaliser
+
+New loader helper decomposing `Type:Platform/Family.Variant!suffix` into
+`(Type, Platform, Family, Variant, Suffix, Tier, Rank, Class, DualUse, Parsed, Generic)`. This is the
+same normalised object §5.0 of the plan needs for alert ingestion — built once, used in both places.
+All vocabulary is in `data/detection_signatures.json` (AMSI rule): suffix→confidence tiers, type→class
+map, threat-status map, resource-prefix classes, generic family tokens, and the dev/staging path
+classes. Grading is tunable without touching a `.ps1`.
+
+`Get-DefenderPathClass` is deliberately **structural, not a list of one operator's folders**: build
+output and dependency trees by regex, plus a bounded memoised walk up the directory tree looking for
+source-repo markers (`.git`, `*.sln`, `package.json`, `Cargo.toml`, …). It generalises to any client
+box.
+
+### A bug the tests caught that review did not
+
+`Test-Path` against a UNC path to an unreachable host throws a **terminating** `IOException` that
+`-ErrorAction SilentlyContinue` does not suppress. Unhandled inside a phase module it would unwind to
+the module trap and skip every remaining phase in that module — the exact failure mode that once
+dropped phases 17–58. Found by the `\\fileserver\share\` unit-test case, not by reading the code.
+Fixed twice over: the textual path tests now run before any filesystem access, and the workspace walk
+is wrapped in `try/catch`.
+
+### Validation
+
+- `Get-DefenderVerdict` grammar: **17/17**, including every dual-use, PUA-bundler and suffix form.
+- P7 family matching: **9/9** — `Wacatac.B!ml` and `Wacatac.C!ml` now match; `Trojan:Win32/Generic!rfn`
+  correctly does **not**.
+- Path classification: **9/9** (dev / staging / system / removable / UNC / other).
+- All **43** live threat labels on this box parse, 0 unclassified.
+- Gate matrix: **9/9** — escalation fires on signature-grade + `Remove Failed` + Downloads, and on
+  `ActionSuccess=False`; each of the seven suppression conditions independently blocks it.
+- Live replay of the real phase body: auto-destructive **24 → 0**; 82 resources aggregate to 59 paths
+  (58 INFO, 1 POSSIBLE — the `obj\Debug\` artifact, now carrying its full rationale).
+- Headless QUICK scan, all-time window: exit 0, **0 recovered errors**, Phase 74.6 contributes **0**
+  auto-destructive. Parse-clean on `powershell.exe` 5.1.26100 **and** `pwsh` 7.6.4, all BOMs intact.
+- No `Show-PhaseHeader` line added or removed — phase counts unchanged at 70 · 40 · 30, QUICK gate
+  provably untouched.
+
+**Caveat on the whole-scan number:** that run reported 94 auto-destructive, against the "7 on a
+healthy box" reference in `CLAUDE.md`. 92 are **Phase 10** (executable-extension-in-`%TEMP%`) hits on
+accumulated harness debris under `%TEMP%\claude\…`, 1 is the documented Run-key tripwire, 1 is Phase 41
+`RunAsPPL`. None come from this change — but **this machine is no longer a clean baseline reference**,
+and the Phase-10 `%TEMP%\claude\` flood is a separate FP-tuning candidate.
+
+**Not addressed here** (still open in `EVIDENCE_ENGINE_PLAN.md` §2): P1–P6 and P9–P13.
+`$global:EMAIL_PHISH_SEEN` was found to be **set but read nowhere** — a latent orphan in the style of
+the review-#51 keys, so the broadened P7 match has no downstream effect today.
+
+---
+
 ## 2026-07-26 — documentation audit + the sandbox/harness lessons that produced new rules
 
 ### Documentation audit (`.md` only — no code or data files touched)

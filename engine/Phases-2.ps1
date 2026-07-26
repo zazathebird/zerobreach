@@ -757,43 +757,225 @@ try {
     $threatNames = @{}
     foreach ($t in (Get-MpThreat -ErrorAction SilentlyContinue)) { $threatNames[[string]$t.ThreatID] = $t.ThreatName }
     $dets = @(Get-MpThreatDetection -ErrorAction Stop | Sort-Object InitialDetectionTime -Descending)
-    $defHits = 0
+
+    # ── P7: phishing-family recognition, matched on the FAMILY component ──────────
+    # $EMAIL_PHISHING_TROJANS was loaded but never read (review #51), and when it was
+    # finally wired the match was StartsWith on the WHOLE label — so the operator's
+    # single most common alert, Trojan:Win32/Wacatac.B!ml, could never match the list
+    # entry Trojan:Script/Wacatac. Same family, different platform. Precompute the
+    # family set once; generic families (Phish:HTML/Generic) are excluded so they
+    # cannot swallow every Trojan:Win32/Generic!rfn on the box.
+    $zbPhishFams = @{}
+    $zbPhishRaw  = @()
+    foreach ($pf in $EMAIL_PHISHING_TROJANS) {
+        if (-not $pf) { continue }
+        $zbLv = Get-DefenderVerdict $pf
+        if ($zbLv.Parsed -and -not $zbLv.Generic -and $zbLv.Family) { $zbPhishFams["$($zbLv.Family)".ToLower()] = $true }
+        $zbPhishRaw += "$pf"        # mixed-vendor labels keep whole-label prefix matching
+    }
+
+    # ── P8 pass 1: aggregate BY PATH ─────────────────────────────────────────────
+    # Defender records one detection per event, so the same path appears many times
+    # with different outcomes. Grading each row independently let Add-Finding's ID
+    # dedup keep an arbitrary one — a "Remove Failed" could be masked by a later
+    # "Quarantined" for the same file, or vice versa. Aggregate first, grade once,
+    # from the row with the most recent status change (what is true NOW).
+    $zbByPath = @{}
     foreach ($d in $dets) {
         if (-not (Test-InScope $d.InitialDetectionTime)) { continue }
         $tname = if ($threatNames.ContainsKey([string]$d.ThreatID)) { $threatNames[[string]$d.ThreatID] } else { "ThreatID $($d.ThreatID)" }
-        $when  = try { ([datetime]$d.InitialDetectionTime).ToString('yyyy-MM-dd HH:mm') } catch { "unknown" }
-        # $EMAIL_PHISHING_TROJANS was loaded but never read (review #51). Recognising the
-        # phishing/redirector families by Defender's own family name lets an already-handled
-        # detection still say "this box was phished", which is what drives the 74.7 hardening
-        # recommendations — otherwise it reads as one anonymous cleaned file.
-        $isPhishFam = $false
-        foreach ($pf in $EMAIL_PHISHING_TROJANS) {
-            if ($pf -and "$tname".StartsWith("$pf", [StringComparison]::OrdinalIgnoreCase)) { $isPhishFam = $true; break }
-        }
-        if ($isPhishFam) { $global:EMAIL_PHISH_SEEN = $true }
-        $emitted = $false
-        foreach ($res in @($d.Resources)) {
-            $path = ([string]$res) -replace '^(file|webfile|containerfile|amsi|behavior|process|regkey|fixpath|runkey):_?',''
-            $onDisk = ($path -match '^[A-Za-z]:\\') -and (Test-Path -LiteralPath $path -ErrorAction SilentlyContinue)
-            if ($onDisk) {
-                Out-Typewriter "  -> RESIDUAL FILE STILL ON DISK: $path" "CRIT"
-                Add-Finding -ID "DEFRES_$(Get-StableId $path)" -Phase "PHASE 74.6" `
-                    -ThreatType "Defender-Flagged Residual ($tname)" -Severity $SEV_CRITICAL `
-                    -Description "Defender flagged '$tname' on $when but the file is STILL PRESENT: $path" `
-                    -Target $path -FixAction "Quarantine" -FixParam $path -Group "Defender History / Residual Threats"
-                $global:TrojanHits++; $emitted = $true
-            } elseif ($path -match '^[A-Za-z]:\\') {
-                Add-Finding -ID "DEFHIST_$(Get-StableId ("$tname|$path"))" -Phase "PHASE 74.6" `
-                    -ThreatType $(if ($isPhishFam) { "Defender Detection — Phishing/Redirector family (handled)" } else { "Defender Detection (handled)" }) -Severity $SEV_INFO `
-                    -Description "Defender detected '$tname' on $when at $path (no longer on disk — verify quarantine).$(if ($isPhishFam) { ' This is a known email-phishing/redirector family: treat the mailbox as the entry point and apply the Phase 74.7 hardening.' })" `
-                    -Target $path -FixAction "Info" -Group "Defender History / Residual Threats"
-                $emitted = $true
+        $zbVerdict = Get-DefenderVerdict $tname
+
+        $zbIsPhish = $false
+        if ($zbVerdict.Family -and $zbPhishFams.ContainsKey("$($zbVerdict.Family)".ToLower())) { $zbIsPhish = $true }
+        if (-not $zbIsPhish) {
+            foreach ($pf in $zbPhishRaw) {
+                if ("$tname".StartsWith("$pf", [StringComparison]::OrdinalIgnoreCase)) { $zbIsPhish = $true; break }
             }
         }
-        if ($emitted) { $defHits++ }
+        if ($zbIsPhish) { $global:EMAIL_PHISH_SEEN = $true }
+
+        # Defender's own account of what it did — read, not inferred from Test-Path.
+        $zbStatId = 0
+        try { $zbStatId = [int]$d.ThreatStatusID } catch { $zbStatId = 0 }
+        $zbStatName = "status $zbStatId"
+        $zbState    = 'unknown'
+        if ($global:DEF_STATUS.ContainsKey($zbStatId)) {
+            $zbStatName = "$($global:DEF_STATUS[$zbStatId].Name)"
+            $zbState    = "$($global:DEF_STATUS[$zbStatId].State)"
+        }
+        $zbActionOk = $true
+        if ($null -ne $d.ActionSuccess) { $zbActionOk = [bool]$d.ActionSuccess }
+        if (-not $zbActionOk -and $zbState -eq 'remediated') { $zbState = 'failed' }
+        $zbSrcId = -1
+        try { $zbSrcId = [int]$d.DetectionSourceTypeID } catch { $zbSrcId = -1 }
+        $zbSrcName = if ($global:DEF_SOURCE_TYPE.ContainsKey($zbSrcId)) { "$($global:DEF_SOURCE_TYPE[$zbSrcId])" } else { "source type $zbSrcId" }
+        $zbRemTime = $null
+        try { if ($d.RemediationTime) { $zbRemTime = [datetime]$d.RemediationTime } } catch { $zbRemTime = $null }
+        $zbDetTime = $null
+        try { if ($d.InitialDetectionTime) { $zbDetTime = [datetime]$d.InitialDetectionTime } } catch { $zbDetTime = $null }
+        # Most recent evidence of state for this row.
+        $zbSort = $null
+        foreach ($zbT in @($d.LastThreatStatusChangeTime, $d.RemediationTime, $d.InitialDetectionTime)) {
+            if (-not $zbT) { continue }
+            $zbTd = $null
+            try { $zbTd = [datetime]$zbT } catch { $zbTd = $null }
+            if ($zbTd -and ((-not $zbSort) -or $zbTd -gt $zbSort)) { $zbSort = $zbTd }
+        }
+
+        foreach ($res in @($d.Resources)) {
+            $zbRaw = [string]$res
+            if (-not $zbRaw) { continue }
+            # The resource PREFIX says what was detected and must not be discarded:
+            # 'file:' means Defender acted on a file, so the file still being there is
+            # meaningful; 'amsi:'/'behavior:'/'process:' means the CONTENT was blocked at
+            # execution and the file surviving is expected. Stripping the prefix and
+            # calling Test-Path is what graded 22 of this box's own scripts CRITICAL.
+            $zbPfx = ''
+            if ($zbRaw -match '^([A-Za-z]+):_?') { $zbPfx = "$($Matches[1])".ToLower() }
+            $zbPath = $zbRaw -replace '^(file|webfile|containerfile|amsi|behavior|process|regkey|fixpath|runkey|internal):_?',''
+            if ($zbPath -notmatch '^[A-Za-z]:\\') { continue }
+            $zbFileRes = $global:DEF_FILE_RES_PREFIX.ContainsKey($zbPfx)
+            # An absent or unrecognised prefix is treated as CONTENT — the non-escalating
+            # side — so an unfamiliar Defender resource form fails safe.
+            $zbKey = "$zbPath".ToLower()
+            if (-not $zbByPath.ContainsKey($zbKey)) {
+                $zbByPath[$zbKey] = @{
+                    Path = $zbPath; Count = 0; Names = @{}; Procs = @{}; Sources = @{}; Statuses = @{}
+                    Phish = $false; FileRes = $false; MaxRemTime = $null; FirstSeen = $null
+                    LatestSort = $null; Verdict = $null; State = 'unknown'; StatusName = ''; SrcName = ''
+                    Proc = ''; RemTime = $null; DetTime = $null
+                }
+            }
+            $zbAgg = $zbByPath[$zbKey]
+            $zbAgg.Count++
+            $zbAgg.Names["$tname"] = $true
+            $zbAgg.Statuses["$zbStatName"] = $true
+            $zbAgg.Sources["$zbSrcName"] = $true
+            if ($d.ProcessName) { $zbAgg.Procs["$($d.ProcessName)"] = $true }
+            if ($zbIsPhish) { $zbAgg.Phish = $true }
+            if ($zbFileRes) { $zbAgg.FileRes = $true }
+            if ($zbRemTime -and ((-not $zbAgg.MaxRemTime) -or $zbRemTime -gt $zbAgg.MaxRemTime)) { $zbAgg.MaxRemTime = $zbRemTime }
+            if ($zbDetTime -and ((-not $zbAgg.FirstSeen) -or $zbDetTime -lt $zbAgg.FirstSeen)) { $zbAgg.FirstSeen = $zbDetTime }
+            if ((-not $zbAgg.LatestSort) -or ($zbSort -and $zbSort -gt $zbAgg.LatestSort)) {
+                $zbAgg.LatestSort = $zbSort
+                $zbAgg.Verdict    = $zbVerdict
+                $zbAgg.State      = $zbState
+                $zbAgg.StatusName = $zbStatName
+                $zbAgg.SrcName    = $zbSrcName
+                $zbAgg.Proc       = "$($d.ProcessName)"
+                $zbAgg.RemTime    = $zbRemTime
+                $zbAgg.DetTime    = $zbDetTime
+            }
+        }
     }
+
+    # ── P8 pass 2: grade each path once ──────────────────────────────────────────
+    $defHits = 0; $defResid = 0; $defDemoted = 0
+    foreach ($zbKey in @($zbByPath.Keys)) {
+        $zbAgg  = $zbByPath[$zbKey]
+        $zbPath = "$($zbAgg.Path)"
+        $zbV    = $zbAgg.Verdict
+        if (-not $zbV) { $zbV = Get-DefenderVerdict '' }
+        $zbNames = @($zbAgg.Names.Keys) -join ', '
+        $when = if ($zbAgg.DetTime) { $zbAgg.DetTime.ToString('yyyy-MM-dd HH:mm') } else { 'unknown' }
+
+        $zbOnDisk = $false
+        try { $zbOnDisk = [bool](Test-Path -LiteralPath $zbPath -ErrorAction SilentlyContinue) } catch { $zbOnDisk = $false }
+        $zbWrite = $null
+        if ($zbOnDisk) {
+            try {
+                $zbFi = Get-Item -LiteralPath $zbPath -Force -ErrorAction SilentlyContinue
+                if ($zbFi) { $zbWrite = $zbFi.LastWriteTime }
+            } catch { $zbWrite = $null }
+        }
+        # A file written AFTER Defender acted is not the file Defender flagged — it was
+        # rebuilt/recreated since. This is what a rebuilt obj\Debug\ artifact looks like.
+        $zbRewritten = [bool]($zbWrite -and $zbAgg.MaxRemTime -and $zbWrite -gt $zbAgg.MaxRemTime)
+        $zbPathClass = Get-DefenderPathClass $zbPath
+
+        # Grading rationale, always carried in the description so the operator can see
+        # WHY a finding was or was not escalated rather than trusting a bare severity.
+        $zbCtx = @()
+        $zbCtx += "Defender status: $($zbAgg.StatusName)"
+        $zbCtx += "detection source: $($zbAgg.SrcName)"
+        $zbCtx += if ($zbV.Suffix) { "confidence: !$($zbV.Suffix) ($($zbV.Tier))" } else { "confidence: signature-grade" }
+        if ($zbV.Class -ne 'unknown') { $zbCtx += "class: $($zbV.Class)" }
+        if ($zbPathClass -ne 'other') { $zbCtx += "path class: $zbPathClass" }
+        if ($zbAgg.Count -gt 1)  { $zbCtx += "$($zbAgg.Count) detections on this path" }
+        if ($zbAgg.Proc)         { $zbCtx += "Defender attributed the drop to: $($zbAgg.Proc)" }
+
+        $zbSev = $SEV_INFO; $zbFix = 'Info'; $zbLvl = 'DATA'; $zbHead = ''; $zbBlockers = @()
+
+        if (-not $zbAgg.FileRes) {
+            # Content-only resource (AMSI / behaviour / process). Nothing was supposed to
+            # be deleted; the file existing proves nothing. Report it as what it is.
+            $zbHead = "script/process content blocked at execution"
+            $zbSev  = if ($zbAgg.State -eq 'failed') { $SEV_POSSIBLE } else { $SEV_INFO }
+            if ($zbSev -eq $SEV_POSSIBLE) { $zbLvl = 'WARN' }
+        } elseif (-not $zbOnDisk) {
+            $zbHead = "no longer on disk"
+            $zbSev  = $SEV_INFO
+        } elseif ($zbAgg.State -eq 'allowed') {
+            # Somebody told Defender to permit this. Benign when an admin added the
+            # exclusion; a classic defence-evasion step when the malware did.
+            $zbHead = "Defender was told to ALLOW this threat and the file is present"
+            $zbSev  = $SEV_POSSIBLE; $zbLvl = 'WARN'
+            $zbBlockers += "verify who created this exclusion — an attacker-added allow is defence evasion"
+        } else {
+            # File resource, still present. Escalation requires EVERY gate to pass.
+            if (-not ($zbAgg.State -eq 'failed' -or $zbAgg.State -eq 'pending')) {
+                $zbBlockers += "Defender reports the threat was $("$($zbAgg.StatusName)".ToLower()) — remediation did not fail"
+            }
+            if ([int]$zbV.Rank -lt [int]$global:DEF_ESCALATE_MIN_RANK) {
+                $zbBlockers += "verdict is $($zbV.Tier)-derived$(if ($zbV.Suffix) { " (!$($zbV.Suffix))" }), not signature-grade — this tier has a large false-positive share and may not auto-select a destructive action"
+            }
+            if ($zbV.DualUse) {
+                $zbBlockers += "'$($zbV.Class)' is a dual-use class — commonly the technician's own tooling; confirm ownership before removing"
+            }
+            if ($zbPathClass -eq 'dev') {
+                $zbBlockers += "path is developer build output or a source tree"
+            }
+            if ($zbPathClass -eq 'removable') {
+                $zbBlockers += "path is on a non-system volume — not auto-actioned"
+            }
+            if ($zbRewritten) {
+                $zbBlockers += "file was written $($zbWrite.ToString('yyyy-MM-dd HH:mm')) AFTER Defender's action at $($zbAgg.MaxRemTime.ToString('yyyy-MM-dd HH:mm')) — this is not the file Defender flagged"
+            }
+            if ($zbBlockers.Count -eq 0) {
+                $zbHead = "RESIDUAL FILE STILL ON DISK — Defender's remediation FAILED"
+                $zbSev = $SEV_CRITICAL; $zbFix = 'Quarantine'; $zbLvl = 'CRIT'
+                $defResid++
+            } else {
+                $zbHead = "file remains at a Defender-flagged path"
+                $zbSev = $SEV_POSSIBLE; $zbLvl = 'WARN'
+                $defDemoted++
+            }
+        }
+
+        $zbDesc = "Defender detected '$zbNames' on $when at $zbPath — $zbHead. [$($zbCtx -join '; ')]"
+        if ($zbBlockers.Count) { $zbDesc += " NOT auto-selected because: $($zbBlockers -join '; ')." }
+        if ($zbAgg.Phish) { $zbDesc += " Known email-phishing/redirector family: treat the mailbox as the entry point and apply the Phase 74.7 hardening." }
+        $zbType = if ($zbAgg.Phish) { "Defender Detection — Phishing/Redirector family ($zbNames)" }
+                  elseif ($zbSev -eq $SEV_CRITICAL) { "Defender-Flagged Residual ($zbNames)" }
+                  else { "Defender Detection ($zbNames)" }
+        # ID prefixes preserved from the pre-2026-07-26 grading so -Baseline diffs stay
+        # continuous: DEFRES_ for a file-resource still present, DEFHIST_ otherwise.
+        $zbId = if ($zbAgg.FileRes -and $zbOnDisk) { "DEFRES_$(Get-StableId $zbPath)" } else { "DEFHIST_$(Get-StableId ("$zbNames|$zbPath"))" }
+
+        if ($zbSev -ne $SEV_INFO) { Out-Typewriter "  -> [$zbSev] $zbHead`: $zbPath" $zbLvl }
+        Add-Finding -ID $zbId -Phase "PHASE 74.6" -ThreatType $zbType -Severity $zbSev `
+            -Description $zbDesc -Target $zbPath -FixAction $zbFix `
+            -FixParam $(if ($zbFix -eq 'Quarantine') { $zbPath } else { "" }) `
+            -Group "Defender History / Residual Threats"
+        if ($zbSev -eq $SEV_CRITICAL) { $global:TrojanHits++ }
+        $defHits++
+    }
+
     if ($defHits -eq 0) { Out-Typewriter "  -> [OK] NO DEFENDER DETECTIONS IN TIME WINDOW." "GOOD" }
-    else { Out-Typewriter "  -> CORRELATED $defHits DEFENDER DETECTION(S)." "DATA" }
+    else {
+        Out-Typewriter "  -> CORRELATED $defHits DEFENDER-FLAGGED PATH(S): $defResid UNREMEDIATED RESIDUAL(S), $defDemoted PRESENT BUT NOT CORROBORATED." "DATA"
+    }
 } catch {
     Out-Typewriter "  -> Defender history unavailable (module/cmdlet absent): $($_.Exception.Message)" "WARN"
 }
