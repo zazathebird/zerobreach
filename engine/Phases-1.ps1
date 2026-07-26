@@ -1,5 +1,95 @@
 ﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT phase in THIS module, not the next dot-sourced module (see CLAUDE.md engine-split rule)
 # ══════════════════════════════════════════════════════════════════════════════
+#  MODULE-LOCAL HELPERS
+#  (EVIDENCE_ENGINE_PLAN P4/P5 + A13/A14, and the Phase-10 false-positive tune)
+#  Defined here, after the module trap and before any phase body, so they exist in every
+#  mode — Phase 10 is a member of the 30-phase QUICK set and uses Test-ZbP10BenignPath.
+#  All locals are $zb*-prefixed: the engine is ONE dot-sourced scope and PowerShell
+#  variables are case-insensitive, so an unprefixed local can silently reassign the
+#  loader's param() switches (a local $auto once disabled the whole engine).
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Phase 10 benign-path gate (user-approved 2026-07-26) ─────────────────────────────────
+# Phase 10 flagged EVERY executable-extension file under %TEMP% as HIGH + DeleteFile and
+# consulted no benign-path list at all. On this workstation that was 92 of the box's 94
+# AUTO-SELECTED destructive findings, every one of them inert tool debris under
+# %TEMP%\claude\ — a live rule #1 exposure (a destructive action auto-firing on a healthy box).
+#
+# Test-BenignPath is the project-standard gate and is called FIRST, unchanged. Read what its
+# veto actually does before touching this: $global:ALLOW_VETO_RE deliberately IGNORES an
+# allowlist match found anywhere under \Temp\ or \Downloads\, because those allowlists key on
+# folder names an attacker can simply create. Phase 10's entire scope IS \Temp\ / \Downloads\ /
+# INetCache, so Test-BenignPath on its own can never downgrade anything in this phase. A second,
+# deliberately narrow list is therefore permitted to override the veto, and three things keep
+# that honest:
+#   * every pattern is anchored to whole path COMPONENTS ('\temp\claude\', never bare 'claude'),
+#   * a hit only ever DOWNGRADES to INFO + FixAction Info — the file is still reported, so an
+#     attacker who mkdir's %TEMP%\claude\ loses auto-SELECTION, not detection (the standing
+#     "downgrade, never delete the detection" rule), and
+#   * the phase's content-based PE-masquerade sniff is NOT gated on this at all, so a renamed
+#     payload parked in an allowlisted cache is still identified by its bytes.
+# Both keys live in data\detection_signatures.json (AMSI rule). A missing key yields '(?!)'
+# from Join-AllowRegex, which matches nothing — i.e. the pre-fix behaviour, never a wider one.
+$global:ZB_P10_BENIGN_RE     = Join-AllowRegex 'temp_exe_benign_paths'
+$global:ZB_P10_STAGING_OK_RE = Join-AllowRegex 'temp_exe_staging_toolcache_paths'
+function Test-ZbP10BenignPath {
+    param([string]$zbPath)
+    if (-not $zbPath) { return $false }
+    if (Test-BenignPath -Path $zbPath -AllowRegex $global:ZB_P10_BENIGN_RE) { return $true }
+    return ($zbPath -match $global:ZB_P10_STAGING_OK_RE)
+}
+
+# ── Shared .lnk resolver (EVIDENCE_ENGINE_PLAN P4 / A13) ────────────────────────────────
+# Phase 10.5 built a NEW WScript.Shell COM object per shortcut; Phase 11 now parses the whole
+# Recent folder (hundreds of shortcuts), so the COM object is created once and reused.
+# Returns $null on ANY failure — callers must treat $null as "unknown", never as "clean".
+$global:ZB_LNK_SHELL = $null
+function Get-ZbLnkInfo {
+    param([string]$zbLnkPath)
+    if (-not $zbLnkPath) { return $null }
+    if ($null -eq $global:ZB_LNK_SHELL) {
+        try { $global:ZB_LNK_SHELL = New-Object -ComObject WScript.Shell -ErrorAction Stop } catch { return $null }
+    }
+    try {
+        $zbSc = $global:ZB_LNK_SHELL.CreateShortcut($zbLnkPath)
+        if ($null -eq $zbSc) { return $null }
+        return [pscustomobject]@{
+            LnkPath    = $zbLnkPath
+            TargetPath = "$($zbSc.TargetPath)"
+            Arguments  = "$($zbSc.Arguments)"
+            WorkingDir = "$($zbSc.WorkingDirectory)"
+        }
+    } catch { return $null }
+}
+
+# ── Fail-closed "is this path still on disk?" probe (EVIDENCE_ENGINE_PLAN P4) ────────────
+# Returns 'present' | 'missing' | 'unknown'. It NEVER Test-Path's a UNC path or a volume that
+# is not attached: Test-Path against an unreachable UNC throws a TERMINATING IOException that
+# -ErrorAction SilentlyContinue does NOT suppress, and inside a dot-sourced module that unwinds
+# to the module trap and skips every remaining phase (CLAUDE.md). Textual tests come first, and
+# anything that cannot be answered locally is 'unknown' — it is never reported as evidence of
+# deletion, because "couldn't read it" is not "gone" (fail-closed rule).
+$global:ZB_READY_DRIVES = $null
+function Get-ZbPathPresence {
+    param([string]$zbTarget)
+    if (-not $zbTarget) { return 'unknown' }
+    if ($zbTarget -match '^\\\\')     { return 'unknown' }   # UNC — do not touch it
+    if ($zbTarget -notmatch '^[A-Za-z]:\\') { return 'unknown' }   # shell folder / relative / KNOWNFOLDER GUID
+    if ($null -eq $global:ZB_READY_DRIVES) {
+        $global:ZB_READY_DRIVES = @{}
+        try {
+            foreach ($zbDrv in [System.IO.DriveInfo]::GetDrives()) {
+                try { if ($zbDrv.IsReady) { $global:ZB_READY_DRIVES[$zbDrv.Name.Substring(0,1).ToUpper()] = "$($zbDrv.DriveType)" } } catch {}
+            }
+        } catch {}
+    }
+    $zbLetter = $zbTarget.Substring(0,1).ToUpper()
+    if (-not $global:ZB_READY_DRIVES.ContainsKey($zbLetter)) { return 'unknown' }   # removable/absent volume
+    if ("$($global:ZB_READY_DRIVES[$zbLetter])" -eq 'Network')  { return 'unknown' }   # mapped drive — same hazard as UNC
+    try { if (Test-Path -LiteralPath $zbTarget) { return 'present' } else { return 'missing' } } catch { return 'unknown' }
+}
+
+# ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 1: PRE-FLIGHT
 # ══════════════════════════════════════════════════════════════════════════════
 Show-SectionBanner "PRE-FLIGHT SYSTEMS & LOG AUDIT"
@@ -317,11 +407,22 @@ $sigBudgetHit = $false
 $masqSeen = 0
 $masqSw   = [System.Diagnostics.Stopwatch]::StartNew()
 $masqBudgetHit = $false
+# On a default Windows profile $env:TEMP and "$env:LOCALAPPDATA\Temp" are the SAME directory, so
+# the sweep walked it twice and spent HALF the shared SIG_AUDIT budget re-verifying files it had
+# already graded — which is why a TEMP full of debris meant Downloads and INetCache were never
+# reached at all (measured on this box 2026-07-26). Skip a target whose resolved path was
+# already covered.
+$tdSeen = @{}
 foreach ($td in $targetDirs) {
     if ($sigBudgetHit) { break }
     Out-Typewriter "SCANNING: $($td.L)" "INFO"
     if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
     if (-not (Test-Path $td.P)) { Out-Typewriter "  -> [OK] ABSENT." "GOOD"; continue }
+    $tdKey = "$($td.P)"
+    try { $tdKey = (Convert-Path -LiteralPath $td.P) } catch {}
+    $tdKey = "$tdKey".TrimEnd('\').ToLowerInvariant()
+    if ($tdSeen.ContainsKey($tdKey)) { Out-Typewriter "  -> [OK] SAME DIRECTORY AS AN EARLIER TARGET — ALREADY SWEPT." "GOOD"; continue }
+    $tdSeen[$tdKey] = $true
     $recentFiles = Get-ScanFiles -Path $td.P -TimeScoped
     if ($recentFiles.Count -eq 0) { Out-Typewriter "  -> [OK] CLEAN." "GOOD"; continue }
     # Group into executable vs other
@@ -329,7 +430,22 @@ foreach ($td in $targetDirs) {
     $otherFiles = $recentFiles | Where-Object { $malExt -notcontains $_.Extension.ToLower() }
     if ($exeFiles.Count -gt 0) {
         $exeGroup = "$($td.L) — Executables ($($exeFiles.Count) files)"
+        $benignGroup = "$($td.L) — Allowlisted tool/runtime caches"
+        $benignSeen = 0
         foreach ($f in $exeFiles) {
+            # Benign-path gate FIRST, before the signature budget is spent (2026-07-26, user-
+            # approved). Two reasons for the ordering: an allowlisted file is graded INFO
+            # regardless of its signature, so the Authenticode call is pure waste; and with 500+
+            # tool-cache files in %TEMP% the 150-file SIG_AUDIT budget was being burned entirely
+            # on debris, which then set $sigBudgetHit and aborted the sweep of the REMAINING
+            # target directories before Downloads/INetCache were ever reached.
+            if (Test-ZbP10BenignPath $f.FullName) {
+                $benignSeen++
+                Add-Finding -ID "TEMPEXEOK_$(Get-StableId $f.FullName)" -Phase "PHASE 10" -ThreatType "Suspicious File" `
+                    -Severity $SEV_INFO -Description "Executable-extension file inside a known tool/runtime cache tree in $($td.L) — reported, but downgraded out of the auto-selected set by the Phase 10 benign-path allowlist (still reviewable; the content-based PE-masquerade sniff below is NOT gated on this): $($f.FullName)" `
+                    -Target $f.FullName -FixAction "Info" -Group $benignGroup
+                continue
+            }
             if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
                 $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
                 $sigBudgetHit = $true; break
@@ -342,7 +458,7 @@ foreach ($td in $targetDirs) {
                 -Severity $sev -Description "$(if($isMalicious){'Unsigned executable'} else {'Executable'}) in $($td.L): $($f.Name)" `
                 -Target $f.FullName -FixAction "DeleteFile" -FixParam $f.FullName -Group $exeGroup
         }
-        Out-Typewriter "  -> FLAGGED $($exeFiles.Count) EXECUTABLES IN $($td.L)." "WARN"
+        Out-Typewriter "  -> FLAGGED $($exeFiles.Count - $benignSeen) EXECUTABLES IN $($td.L)$(if ($benignSeen) { " ($benignSeen allowlisted tool-cache files downgraded to INFO)" })." "WARN"
     }
     if ($otherFiles.Count -gt 0) {
         Out-Typewriter "  -> $($otherFiles.Count) NON-EXECUTABLE FILES IN $($td.L) — WITHIN TIME SCOPE." "DATA"
@@ -477,42 +593,221 @@ foreach ($pf in $npmPkgFiles) {
 }
 if ($npmHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPICIOUS NPM/PIP POSTINSTALL SCRIPTS." "GOOD" }
 
-Show-PhaseHeader "PHASE 11" "RECENT DOCUMENTS & JUMP LIST SCRUB"
+Show-PhaseHeader "PHASE 11" "RECENT ITEMS / JUMP LIST EXECUTION EVIDENCE"
+# EVIDENCE_ENGINE_PLAN P4 / A13. This phase used to open the Recent + JumpList folders, COUNT
+# the files, and emit one INFO finding whose ONLY action was a RunCmd that DELETED them — an
+# incident-response tool shipping a one-click evidence-destruction button. Those .lnk files
+# carry TargetPath, Arguments and WorkingDirectory, and they SURVIVE deletion of the file they
+# point at, which makes Recent one of the few places "this executable ran and is now gone" is
+# still recoverable after a payload self-deletes or a tech "cleans" the box.
+#
+# The deletion action is gone. The shortcuts are now PARSED, through the same WScript.Shell
+# resolver Phase 10.5 uses (factored into Get-ZbLnkInfo at the top of this module).
+#
+# Grading — every outcome is non-destructive, and nothing here can be auto-selected:
+#   * executable/script target, MISSING from disk, in a user-writable path -> POSSIBLE + Info.
+#     "It ran, then it was deleted" is real evidence, but an uninstalled or portable app looks
+#     identical, so it is corroboration, never a verdict.
+#   * executable/script target that is still present -> INFO + Info (context for the timeline).
+#   * ordinary documents -> not itemised; counted in the summary finding.
+#   * target on a UNC path or a volume that is not attached -> counted as UNCHECKABLE, never
+#     as "missing" (Get-ZbPathPresence refuses to Test-Path those; see its comment).
+# Bounded by a deadline + count budget: Recent can hold thousands of entries.
 $recentPaths = @(
     "$env:APPDATA\Microsoft\Windows\Recent",
     "$env:APPDATA\Microsoft\Windows\Recent\AutomaticDestinations",
     "$env:APPDATA\Microsoft\Windows\Recent\CustomDestinations"
 )
+# Executable/script extensions worth escalating on. These are ordinary Windows extensions, not
+# malware signatures, so they stay inline (no AMSI exposure).
+$zbRecentExecRe   = '\.(exe|com|bat|cmd|ps1|psm1|vbs|vbe|js|jse|wsf|wsh|hta|scr|pif|cpl|msi|msp|jar|dll)$'
+# Staging paths where a deleted executable is actually interesting. Anchored to whole path
+# COMPONENTS (never bare substrings — a bare 'Desktop' once matched 'WhatsAppDesktop' under
+# WindowsApps and got healthy signed apps killed). Desktop/Documents are deliberately NOT here:
+# deleting an installer off your own Desktop is the single most ordinary thing a user does.
+$zbRecentStagingRe = '\\(AppData|Temp|Downloads|Public)\\'
+$zbRecentParsed = 0; $zbRecentExec = 0; $zbRecentGone = 0; $zbRecentUncheckable = 0; $zbRecentTotal = 0
+$zbRecentSw = [System.Diagnostics.Stopwatch]::StartNew()
+$zbRecentBudgetHit = $false
 foreach ($rp in $recentPaths) {
-    if (Test-Path $rp) {
-        $ri = Get-ChildItem -Path $rp -File -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime }
-        if ($ri.Count -gt 0) {
-            Out-Typewriter "  -> $($ri.Count) RECENT ITEMS IN: $rp" "INFO"
-            Add-Finding -ID "RECENT_DOCS_$($rp -replace '[^a-z0-9]','')" -Phase "PHASE 11" -ThreatType "Browser/File Artifact" `
-                -Severity $SEV_INFO -Description "Recent docs/jump lists found in $rp ($($ri.Count) items)" `
-                -Target $rp -FixAction "RunCmd" -FixParam "Get-ChildItem -LiteralPath '$rp' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue" `
-                -Group "Recent Files / Jump Lists"
-        } else { Out-Typewriter "  -> [OK] RECENT ITEMS CLEAN." "GOOD" }
+    if ($zbRecentBudgetHit) { break }
+    if (-not (Test-Path -LiteralPath $rp)) { continue }
+    $ri = @(Get-ChildItem -LiteralPath $rp -File -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.LastWriteTime })
+    $zbRecentTotal += $ri.Count
+    if ($ri.Count -eq 0) { Out-Typewriter "  -> [OK] NO IN-SCOPE RECENT ITEMS: $rp" "GOOD"; continue }
+    Out-Typewriter "  -> $($ri.Count) RECENT ITEMS IN: $rp" "INFO"
+    foreach ($zbLnk in $ri) {
+        if ($zbRecentParsed -ge 1500 -or $zbRecentSw.Elapsed.TotalSeconds -ge 25) { $zbRecentBudgetHit = $true; break }
+        # Only genuine .lnk shortcuts resolve through WScript.Shell. The jump-list containers
+        # (*.automaticDestinations-ms / *.customDestinations-ms) are OLE compound files —
+        # parsing those is Tier B in EVIDENCE_ENGINE_PLAN and explicitly out of scope here.
+        if ("$($zbLnk.Extension)" -notmatch '^\.lnk$') { continue }
+        $zbRecentParsed++
+        $zbInfo = Get-ZbLnkInfo $zbLnk.FullName
+        if ($null -eq $zbInfo) { continue }
+        $zbTgt = "$($zbInfo.TargetPath)"
+        if (-not $zbTgt) { continue }
+        $zbPresence = Get-ZbPathPresence $zbTgt
+        if ($zbPresence -eq 'unknown') { $zbRecentUncheckable++ }
+        if ("$zbTgt" -notmatch $zbRecentExecRe) { continue }
+        $zbRecentExec++
+        $zbLnkDesc = "Recent-items shortcut '$($zbLnk.Name)' (last used $($zbLnk.LastWriteTime)) -> target: $zbTgt | args: $($zbInfo.Arguments) | workdir: $($zbInfo.WorkingDir) | target on disk: $zbPresence"
+        if ($zbPresence -eq 'missing' -and $zbTgt -match $zbRecentStagingRe) {
+            $zbRecentGone++
+            Out-Decrypt -Text "$($zbLnk.Name) -> $zbTgt" -Prefix "  [EXECUTED, NOW DELETED] "
+            Add-Finding -ID "RECENTGONE_$(Get-StableId $zbTgt)" -Phase "PHASE 11" -ThreatType "Execution Trace" `
+                -Severity $SEV_POSSIBLE -Description "EXECUTION EVIDENCE — an executable/script in a user-writable staging path was opened from Explorer and is NO LONGER on disk. This survives the payload, but an uninstalled or portable app produces the identical artifact, so corroborate before acting. Nothing is deleted by this finding. $zbLnkDesc" `
+                -Target $zbLnk.FullName -FixAction "Info" -Group "Recent Items — Execution Evidence"
+        } else {
+            Add-Finding -ID "RECENTEXE_$(Get-StableId $zbLnk.FullName)" -Phase "PHASE 11" -ThreatType "Execution Trace" `
+                -Severity $SEV_INFO -Description "Executable/script opened from Explorer (timeline context). $zbLnkDesc" `
+                -Target $zbLnk.FullName -FixAction "Info" -Group "Recent Items — Executable Targets"
+        }
     }
 }
+$zbRecentSw.Stop()
+if ($zbRecentTotal -gt 0) {
+    Add-Finding -ID "RECENT_EVIDENCE_SUMMARY" -Phase "PHASE 11" -ThreatType "Browser/File Artifact" -Severity $SEV_INFO `
+        -Description "Recent-items evidence: $zbRecentTotal in-scope item(s), $zbRecentParsed .lnk shortcut(s) parsed, $zbRecentExec with executable/script targets, $zbRecentGone whose target is missing from a user-writable staging path, $zbRecentUncheckable whose target could not be checked (UNC path or a volume that is not attached — often removable media). These artifacts are EVIDENCE and are deliberately never deleted by this tool.$(if ($zbRecentBudgetHit) { ' PARTIAL RESULT — parse budget reached; more shortcuts remain unparsed.' })" `
+        -Target $recentPaths[0] -FixAction "Info" -Group "Recent Items — Execution Evidence"
+}
+if ($zbRecentGone -eq 0) { Out-Typewriter "  -> [OK] NO 'RAN THEN DELETED' EXECUTABLE TARGETS IN RECENT ITEMS." "GOOD" }
 
-Show-PhaseHeader "PHASE 12" "PREFETCH & SHIMCACHE ARTIFACT AUDIT"
-Out-Typewriter "SCANNING PREFETCH FOR MALICIOUS EXECUTION TRACES..." "INFO"
+# EVIDENCE_ENGINE_PLAN P5. The old title was "PREFETCH & SHIMCACHE ARTIFACT AUDIT" but the body
+# only ever read Prefetch — nothing in the engine parses the AppCompatCache. ShimCache binary
+# parsing is Tier B in the plan and explicitly out of scope, so the TITLE is corrected rather
+# than the check faked; a phase must never advertise a check it did not run.
+Show-PhaseHeader "PHASE 12" "PREFETCH EXECUTION-TRACE AUDIT"
+Out-Typewriter "SCANNING PREFETCH FOR EXECUTION TRACES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
-if (Test-Path "$env:WINDIR\Prefetch") {
-    $malPf = Get-ChildItem -Path "$env:WINDIR\Prefetch" -Filter "*.pf" -ErrorAction SilentlyContinue |
-        Where-Object { Test-InScope $_.LastWriteTime -and $_.Name -match "WSCRIPT|CSCRIPT|MSHTA|MSIEXEC|INSTALLUTIL|REGASM|CERTUTIL|BITSADMIN|RUNDLL32.*APPDATA|POWERSHELL.*-ENC" }
-    if ($malPf.Count -gt 0) {
-        foreach ($pf in $malPf) {
-            Out-Decrypt -Text $pf.Name -Prefix "  [PREFETCH HIT] "
-            # LOLBIN prefetch only proves the binary ran at some point — legit on most machines — so
-            # this is corroborating evidence, not a standalone HIGH. POSSIBLE (shown, not auto-selected).
-            Add-Finding -ID "PREFETCH_$($pf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 12" -ThreatType "Execution Trace" `
-                -Severity $SEV_POSSIBLE -Description "LOLBIN execution trace in prefetch: $($pf.Name) (corroborating evidence — verify context)" `
-                -Target $pf.FullName -FixAction "Info" -Group "Execution Artifacts"
+# P5: two alternatives in the old regex COULD NOT MATCH — 'RUNDLL32.*APPDATA' and
+# 'POWERSHELL.*-ENC'. A prefetch filename is NAME.EXE-<8 hex>.pf: it carries no path and no
+# command line, so nothing containing APPDATA or -ENC can ever appear in one. They are DELETED
+# rather than "repaired" to bare RUNDLL32|POWERSHELL, because rundll32 and powershell run on
+# every healthy Windows box (this scanner is itself a powershell.exe execution) — a bare name
+# match would be a guaranteed false positive, not a detection. These are Microsoft binary
+# names, not malware signatures, so the list stays inline: pushing it to data would add a
+# silent-total-detection-loss failure mode if the key were ever missing.
+$zbPfLolbinRe = 'WSCRIPT|CSCRIPT|MSHTA|MSIEXEC|INSTALLUTIL|REGASM|CERTUTIL|BITSADMIN'
+if (Test-Path -LiteralPath "$env:WINDIR\Prefetch") {
+    $zbPfAll = @(Get-ChildItem -LiteralPath "$env:WINDIR\Prefetch" -Filter "*.pf" -ErrorAction SilentlyContinue)
+    if ($zbPfAll.Count -eq 0) {
+        # Never print a clean result for a check that could not have fired. An empty/unreadable
+        # Prefetch folder means either the prefetcher is disabled or purged (an anti-forensic
+        # signal in its own right) or this process cannot read it — not "no executions".
+        Out-Typewriter "  -> PREFETCH DIRECTORY PRESENT BUT NO .pf FILES READABLE — RESULT IS NOT 'CLEAN'." "WARN"
+        Add-Finding -ID "PREFETCH_UNAVAILABLE" -Phase "PHASE 12" -ThreatType "Execution Trace" `
+            -Severity $SEV_INFO -Description "Prefetch directory exists but contains no readable .pf files. Execution-trace evidence for this box is UNAVAILABLE, not clean: the prefetcher may be disabled (EnablePrefetcher=0, common on servers), the folder may have been purged (anti-forensic), or this process may lack read access. Treat any 'no execution trace' conclusion for this scan as unproven." `
+            -Target "$env:WINDIR\Prefetch" -FixAction "Info" -Group "Execution Artifacts"
+    } else {
+        $zbPfScoped = @($zbPfAll | Where-Object { Test-InScope $_.LastWriteTime })
+        # ── (1) LOLBIN execution traces (existing detection, dead alternatives removed) ──────
+        $malPf = @($zbPfScoped | Where-Object { $_.Name -match $zbPfLolbinRe })
+        if ($malPf.Count -gt 0) {
+            foreach ($pf in $malPf) {
+                Out-Decrypt -Text $pf.Name -Prefix "  [PREFETCH HIT] "
+                # LOLBIN prefetch only proves the binary ran at some point — legit on most machines — so
+                # this is corroborating evidence, not a standalone HIGH. POSSIBLE (shown, not auto-selected).
+                Add-Finding -ID "PREFETCH_$($pf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 12" -ThreatType "Execution Trace" `
+                    -Severity $SEV_POSSIBLE -Description "LOLBIN execution trace in prefetch: $($pf.Name) — last execution approx $($pf.LastWriteTime) (corroborating evidence — verify context)" `
+                    -Target $pf.FullName -FixAction "Info" -Group "Execution Artifacts"
+            }
+            Out-Typewriter "  -> PREFETCH ARTIFACTS LOGGED. PRESERVING AS EVIDENCE." "WARN"
+        } else { Out-Typewriter "  -> [OK] NO SUSPICIOUS LOLBIN PREFETCH ENTRIES." "GOOD" }
+
+        # ── (2) A14: prefetch <-> filesystem correlation ("it ran, and it is now gone") ─────
+        # No binary parsing needed: the .pf FILENAME carries the image name and LastWriteTime is
+        # approximately the last execution. If that image is nowhere on disk, something executed
+        # here that no longer exists. The caveat is large and stays in every finding: uninstalled
+        # software, portable apps run from removable media, installer stubs and per-user tools all
+        # produce this legitimately. Graded INFO + Info — evidence for the timeline, never a
+        # verdict, never auto-selectable.
+        #
+        # DEEP+ ONLY ($PhasePlan.Advanced). Establishing "nowhere on disk" honestly needs a full
+        # executable index of System32/SysWOW64/Program Files x2/ProgramData/the user profile,
+        # measured on this box at ~40s through Get-ScanFiles. That is a real cost, so it is
+        # confined to the modes that already budget for deep work rather than being paid on every
+        # FULL scan. QUICK never reaches this phase at all (Phase 12 is inside the non-QUICK wrap).
+        $zbPfCand = New-Object System.Collections.Generic.List[object]
+        if (-not $PhasePlan.Advanced) {
+            Out-Typewriter "  -> PREFETCH/FILESYSTEM CORRELATION SKIPPED (DEEP+ ONLY — needs a full executable index)." "INFO"
+        } else {
+        if ($null -eq $global:ZB_PROCNAME_SET) {
+            $global:ZB_PROCNAME_SET = @{}
+            foreach ($zbSp in (Get-ProcSnapshot)) { $global:ZB_PROCNAME_SET["$($zbSp.Name)".ToLower()] = $true }
         }
-        Out-Typewriter "  -> PREFETCH ARTIFACTS LOGGED. PRESERVING AS EVIDENCE." "WARN"
-    } else { Out-Typewriter "  -> [OK] NO SUSPICIOUS PREFETCH ENTRIES." "GOOD" }
+        # Explicit [regex]::Match rather than -match/$Matches: $Matches is an AUTOMATIC variable
+        # shared across this module's single dot-sourced scope, so a later phase reading it would
+        # see whatever the last operator here left behind.
+        $zbPfNameRx = [regex]'^(.+)-[0-9A-Fa-f]{7,16}\.pf$'
+        foreach ($zbPf in $zbPfScoped) {
+            if ($zbPfCand.Count -ge 400) { break }
+            $zbPfM = $zbPfNameRx.Match("$($zbPf.Name)")
+            if (-not $zbPfM.Success) { continue }
+            $zbImg = $zbPfM.Groups[1].Value
+            # Only .exe images: the presence index below is built with an '*.exe' filter, and
+            # widening it to every file class would turn a bounded walk into a whole-disk one.
+            if ("$zbImg" -notmatch '\.exe$') { continue }
+            $zbImgLc = "$zbImg".ToLower()
+            if ($global:ZB_PROCNAME_SET.ContainsKey($zbImgLc)) { continue }   # running right now
+            $zbSysHit = $false
+            foreach ($zbProbe in @("$env:WINDIR\System32\$zbImg", "$env:WINDIR\SysWOW64\$zbImg", "$env:WINDIR\$zbImg")) {
+                try { if (Test-Path -LiteralPath $zbProbe) { $zbSysHit = $true; break } } catch {}
+            }
+            if ($zbSysHit) { continue }
+            $zbPfCand.Add($zbPf)
+        }
+        if ($zbPfCand.Count -gt 0) {
+            # One bounded index of executable NAMES, built lazily and only when a candidate
+            # survived the cheap probes above. $env:WINDIR is deliberately not a root: it would
+            # re-walk System32/SysWOW64 (already indexed) and doubled the measured cost.
+            $zbIdxMax      = 60000
+            $zbIdxDeadline = 60   # measured 40.2s on a dev box with a large user profile
+            $zbIdxSw = [System.Diagnostics.Stopwatch]::StartNew()
+            $zbIdxFiles = Get-ScanFiles -Path @(
+                    "$env:WINDIR\System32", "$env:WINDIR\SysWOW64",
+                    $env:ProgramFiles, ${env:ProgramFiles(x86)},
+                    $env:ProgramData, $env:USERPROFILE
+                ) -Filter '*.exe' -MaxFiles $zbIdxMax -DeadlineSecs $zbIdxDeadline
+            $zbIdxSw.Stop()
+            # Fail closed. If the walk was truncated by either budget the index is INCOMPLETE, so
+            # "not in the index" no longer means "not on disk" — reporting it would manufacture
+            # evidence out of a budget hit. Skip the whole correlation and say so.
+            $zbIdxTrunc = ($zbIdxFiles.Count -ge $zbIdxMax) -or ($zbIdxSw.Elapsed.TotalSeconds -ge $zbIdxDeadline)
+            if ($zbIdxTrunc) {
+                Out-Typewriter "  -> PREFETCH/FILESYSTEM CORRELATION SKIPPED — EXECUTABLE INDEX INCOMPLETE." "WARN"
+                Add-Finding -ID "PREFETCH_CORR_SKIPPED" -Phase "PHASE 12" -ThreatType "Execution Trace" `
+                    -Severity $SEV_INFO -Description "Prefetch-to-filesystem correlation was SKIPPED: the executable index hit its budget ($($zbIdxFiles.Count) files / $([Math]::Round($zbIdxSw.Elapsed.TotalSeconds,1))s) and is incomplete, so 'executable no longer on disk' could not be established without guessing. $($zbPfCand.Count) prefetch entries went unchecked." `
+                    -Target "$env:WINDIR\Prefetch" -FixAction "Info" -Group "Execution Artifacts"
+            } else {
+                $zbIdxNames = @{}
+                foreach ($zbIf in $zbIdxFiles) { $zbIdxNames["$($zbIf.Name)".ToLower()] = $true }
+                $zbGone = 0
+                foreach ($zbPf in $zbPfCand) {
+                    if ($zbGone -ge 60) { break }
+                    $zbPfM = $zbPfNameRx.Match("$($zbPf.Name)")
+                    if (-not $zbPfM.Success) { continue }
+                    $zbImg = $zbPfM.Groups[1].Value
+                    if ($zbIdxNames.ContainsKey("$zbImg".ToLower())) { continue }
+                    $zbGone++
+                    Add-Finding -ID "PFGONE_$(Get-StableId $zbPf.Name)" -Phase "PHASE 12" -ThreatType "Execution Trace" `
+                        -Severity $SEV_INFO -Description "EXECUTION EVIDENCE — '$zbImg' executed on this box (last run approx $($zbPf.LastWriteTime), per its prefetch entry) but no file of that name now exists in System32, SysWOW64, Program Files, Program Files (x86), ProgramData or the user profile. CAVEAT: uninstalled software, installer stubs, portable apps run from removable media and per-user tools all produce this legitimately — this is timeline context, not a verdict. Evidence only; nothing is deleted." `
+                        -Target $zbPf.FullName -FixAction "Info" -Group "Execution Artifacts — Vanished Executables"
+                }
+                if ($zbGone -gt 0) {
+                    Out-Typewriter "  -> $zbGone PREFETCH ENTRIES REFER TO EXECUTABLES NO LONGER ON DISK (evidence, not a verdict)." "DATA"
+                } else {
+                    Out-Typewriter "  -> [OK] EVERY IN-SCOPE PREFETCH ENTRY STILL HAS ITS EXECUTABLE ON DISK." "GOOD"
+                }
+            }
+        }
+        }   # end DEEP+ ($PhasePlan.Advanced) prefetch/filesystem correlation
+    }
+} else {
+    Out-Typewriter "  -> PREFETCH DIRECTORY ABSENT — EXECUTION-TRACE EVIDENCE UNAVAILABLE." "WARN"
+    Add-Finding -ID "PREFETCH_ABSENT" -Phase "PHASE 12" -ThreatType "Execution Trace" `
+        -Severity $SEV_INFO -Description "No $env:WINDIR\Prefetch directory. Prefetch-based execution evidence is UNAVAILABLE for this box (prefetcher disabled, or the folder was removed) — any 'no execution trace' conclusion from this scan is unproven, not clean." `
+        -Target "$env:WINDIR\Prefetch" -FixAction "Info" -Group "Execution Artifacts"
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1285,28 +1580,104 @@ Out-Typewriter "  -> TASK AUDIT COMPLETE." "VER"
 Show-PhaseHeader "PHASE 30" "WMI EVENT FILTER / CONSUMER / BINDING AUDIT"
 Out-Typewriter "ANALYZING ROOT\SUBSCRIPTION NAMESPACE..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
-$wmiFilters   = Get-WmiObject -Namespace root\subscription -Class __EventFilter     -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "BVTFilter|SCM" }
-$wmiConsumers = Get-WmiObject -Namespace root\subscription -Class __EventConsumer    -ErrorAction SilentlyContinue
-$wmiBindings  = Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding -ErrorAction SilentlyContinue
+# EVIDENCE_ENGINE_PLAN P11 — this phase was a LIVE rule #1 violation, reproduced on this box:
+# every WMI subscription object was graded CRITICAL + RunCmd (Remove-WmiObject), i.e. AUTO-
+# SELECTED for destructive remediation. Filters were name-filtered by the substring test
+# `-notmatch "BVTFilter|SCM"` and consumers had no filter at all, so a stock Windows install —
+# which ships the "SCM Event Log Filter"/"SCM Event Log Consumer"/binding trio in
+# root\subscription — produced an auto-selected "delete this" finding for the CONSUMER on a
+# perfectly healthy machine. SCCM, Dell Command | Update, HP, Lenovo Vantage and several backup
+# agents register subscriptions too.
+#
+# Two changes, per the user's decision 2026-07-26:
+#  1. DEMOTED. An unallowlisted subscription is now POSSIBLE + FixAction Info, with the
+#     Remove-WmiObject teardown put in the DESCRIPTION for an operator to run by hand. Nothing
+#     in this phase can be auto-selected any more. There is no SCCM-managed box available to
+#     re-grade against, which is precisely why the demotion — not a bigger allowlist — is the
+#     safety mechanism.
+#  2. ALLOWLISTED, but anchored to the ENTIRE benign shape. The old substring test was itself a
+#     self-allowlisting hole: any filter named "SCM_Updater" was silently excluded. Each object
+#     is now flattened to a composite `name|namespace|query` / `class|name|action` /
+#     `filterRef|consumerRef` string and matched against ^...$-anchored patterns from
+#     data\detection_signatures.json, so an attacker cannot get allowlisted by NAMING itself
+#     after a vendor — the query/command line has to match too. "BVTFilter" is deliberately NOT
+#     allowlisted: BVTFilter/BVTConsumer is the MSDN sample WMI-persistence malware copy-pastes.
+#
+# Also fixed: $wmiBindings was fetched and used only in a zero-count test. The
+# __FilterToConsumerBinding is the object that actually ARMS the persistence — it now produces
+# its own finding, and every suggested teardown removes BINDING first, then CONSUMER, then
+# FILTER (the old generated fix deleted filter+consumer and orphaned the binding).
+$WMI_ALLOW_FILTER_RE   = Join-AllowRegex 'wmi_subscription_allow_filters'
+$WMI_ALLOW_CONSUMER_RE = Join-AllowRegex 'wmi_subscription_allow_consumers'
+$WMI_ALLOW_BINDING_RE  = Join-AllowRegex 'wmi_subscription_allow_bindings'
+# Flatten a WMI object's properties to a name->string map without touching a property that may
+# not exist on the derived class (ManagementObject throws on a missing property, and -EA
+# SilentlyContinue does not suppress that).
+function Get-ZbWmiProps {
+    param($zbObj)
+    $zbMap = @{}
+    try { foreach ($zbP in $zbObj.Properties) { $zbMap["$($zbP.Name)"] = "$($zbP.Value)" } } catch {}
+    return $zbMap
+}
+function ConvertTo-ZbWmiFlat { param([string]$zbText) return (("$zbText" -replace '[\r\n]+',' ') -replace '\s{2,}',' ').Trim() }
+$wmiFilters   = @(Get-WmiObject -Namespace root\subscription -Class __EventFilter               -ErrorAction SilentlyContinue)
+$wmiConsumers = @(Get-WmiObject -Namespace root\subscription -Class __EventConsumer             -ErrorAction SilentlyContinue)
+$wmiBindings  = @(Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding   -ErrorAction SilentlyContinue)
+$wmiAllowed = 0
+$wmiFlagged = 0
 if (($wmiFilters.Count + $wmiConsumers.Count + $wmiBindings.Count) -eq 0) {
-    Out-Typewriter "  -> [OK] WMI SUBSCRIPTIONS CLEAN." "GOOD"
+    Out-Typewriter "  -> [OK] NO WMI EVENT SUBSCRIPTIONS PRESENT." "GOOD"
 } else {
     foreach ($f in $wmiFilters) {
-        $fName = $f.Name -replace "'","''"
-        Out-ThreatBanner "WMI EVENT FILTER (PERSISTENCE)" "Name: $($f.Name)"
-        Add-Finding -ID "WMI_F_$($f.Name -replace '[^a-z0-9]','')" -Phase "PHASE 30" -ThreatType "WMI Persistence" `
-            -Severity $SEV_CRITICAL -Description "WMI EventFilter: $($f.Name) | Query: $($f.Query)" `
-            -Target "WMI Filter: $($f.Name)" -FixAction "RunCmd" `
-            -FixParam "Get-WmiObject -Namespace root\subscription -Class __EventFilter | Where-Object { `$_.Name -eq '$fName' } | Remove-WmiObject" `
-            -Group "WMI Persistence"
+        $fp    = Get-ZbWmiProps $f
+        $fName = "$($fp['Name'])"
+        $fFlat = ConvertTo-ZbWmiFlat "$fName|$($fp['EventNamespace'])|$($fp['Query'])"
+        if ($fFlat -match $WMI_ALLOW_FILTER_RE) { $wmiAllowed++; continue }
+        $wmiFlagged++
+        $fEsc = $fName -replace "'","''"
+        Out-ThreatBanner "WMI EVENT FILTER (PERSISTENCE)" "Name: $fName"
+        Add-Finding -ID "WMI_F_$(Get-StableId $fFlat)" -Phase "PHASE 30" -ThreatType "WMI Persistence" `
+            -Severity $SEV_POSSIBLE `
+            -Description "WMI EventFilter not on the known-good allowlist: '$fName' | namespace: $($fp['EventNamespace']) | query: $($fp['Query']). Management suites (SCCM, Dell/HP/Lenovo agents, backup products) DO register subscriptions legitimately, so this is review-only and is never auto-removed. If confirmed malicious, tear the subscription down in this order — BINDING first, then CONSUMER, then FILTER: Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding | Where-Object { `$_.Filter -like '*`"$fEsc`"*' } | Remove-WmiObject ; then remove the consumer it referenced ; then Get-WmiObject -Namespace root\subscription -Class __EventFilter | Where-Object { `$_.Name -eq '$fEsc' } | Remove-WmiObject" `
+            -Target "WMI Filter: $fName" -FixAction "Info" -Group "WMI Persistence"
     }
     foreach ($c in $wmiConsumers) {
-        $cName = $c.Name -replace "'","''"
-        Add-Finding -ID "WMI_C_$($c.Name -replace '[^a-z0-9]','')" -Phase "PHASE 30" -ThreatType "WMI Persistence" `
-            -Severity $SEV_CRITICAL -Description "WMI Consumer: $($c.Name)" `
-            -Target "WMI Consumer: $($c.Name)" -FixAction "RunCmd" `
-            -FixParam "Get-WmiObject -Namespace root\subscription -Class __EventConsumer | Where-Object { `$_.Name -eq '$cName' } | Remove-WmiObject" `
-            -Group "WMI Persistence"
+        $cp    = Get-ZbWmiProps $c
+        $cName = "$($cp['Name'])"
+        # The consumer's ACTION is what matters; the property differs per subclass. Pin all of
+        # them into the composite so an allowlist entry has to match the command line / script /
+        # event source too, not just the vendor-shaped name.
+        $cActParts = New-Object System.Collections.Generic.List[string]
+        foreach ($cKey in @('ExecutablePath','CommandLineTemplate','ScriptFileName','ScriptText','FileName','Text','SourceName','ToLine')) {
+            if ($cp.ContainsKey($cKey) -and "$($cp[$cKey])") { $cActParts.Add("$cKey=$($cp[$cKey])") }
+        }
+        $cFlat = ConvertTo-ZbWmiFlat "$($c.__CLASS)|$cName|$($cActParts -join ';')"
+        if ($cFlat -match $WMI_ALLOW_CONSUMER_RE) { $wmiAllowed++; continue }
+        $wmiFlagged++
+        $cEsc = $cName -replace "'","''"
+        Out-ThreatBanner "WMI EVENT CONSUMER (PERSISTENCE)" "Name: $cName"
+        Add-Finding -ID "WMI_C_$(Get-StableId $cFlat)" -Phase "PHASE 30" -ThreatType "WMI Persistence" `
+            -Severity $SEV_POSSIBLE `
+            -Description "WMI EventConsumer not on the known-good allowlist: [$($c.__CLASS)] '$cName' | action: $($cActParts -join '; '). Review-only — management/backup agents register consumers legitimately, so this is never auto-removed. If confirmed malicious, remove the BINDING that references it FIRST, then: Get-WmiObject -Namespace root\subscription -Class __EventConsumer | Where-Object { `$_.Name -eq '$cEsc' } | Remove-WmiObject ; then the filter." `
+            -Target "WMI Consumer: $cName" -FixAction "Info" -Group "WMI Persistence"
+    }
+    foreach ($b in $wmiBindings) {
+        $bp    = Get-ZbWmiProps $b
+        $bFlat = ConvertTo-ZbWmiFlat "$($bp['Filter'])|$($bp['Consumer'])"
+        if ($bFlat -match $WMI_ALLOW_BINDING_RE) { $wmiAllowed++; continue }
+        $wmiFlagged++
+        $bfEsc = "$($bp['Filter'])"   -replace "'","''"
+        $bcEsc = "$($bp['Consumer'])" -replace "'","''"
+        Out-ThreatBanner "WMI FILTER-TO-CONSUMER BINDING (ARMED PERSISTENCE)" $bFlat
+        Add-Finding -ID "WMI_B_$(Get-StableId $bFlat)" -Phase "PHASE 30" -ThreatType "WMI Persistence" `
+            -Severity $SEV_POSSIBLE `
+            -Description "WMI __FilterToConsumerBinding not on the known-good allowlist — this is the object that actually ARMS a WMI subscription; a filter or consumer on its own does nothing without it. Filter: $($bp['Filter']) -> Consumer: $($bp['Consumer']). Review-only, never auto-removed. Correct manual teardown order is BINDING, then CONSUMER, then FILTER: Get-WmiObject -Namespace root\subscription -Class __FilterToConsumerBinding | Where-Object { `$_.Filter -eq '$bfEsc' -and `$_.Consumer -eq '$bcEsc' } | Remove-WmiObject" `
+            -Target "WMI Binding: $($bp['Filter']) -> $($bp['Consumer'])" -FixAction "Info" -Group "WMI Persistence"
+    }
+    if ($wmiFlagged -eq 0) {
+        Out-Typewriter "  -> [OK] WMI SUBSCRIPTIONS CLEAN ($wmiAllowed known-good object(s) allowlisted)." "GOOD"
+    } else {
+        Out-Typewriter "  -> $wmiFlagged UNRECOGNISED WMI SUBSCRIPTION OBJECT(S) FLAGGED FOR REVIEW ($wmiAllowed allowlisted)." "WARN"
     }
 }
 
@@ -2096,21 +2467,51 @@ if ($credHits -eq 0) { Out-Typewriter "  -> [OK] NO CREDENTIAL-ACCESS ARTIFACTS.
 
 }   # end QUICK-skip block
 Show-PhaseHeader "PHASE 45" "ACCESSIBILITY SHELL BACKDOOR (STICKY KEYS / UTILMAN)"
-$accessFiles = @(
-    "$env:WINDIR\System32\sethc.exe","$env:WINDIR\System32\utilman.exe",
-    "$env:WINDIR\System32\osk.exe","$env:WINDIR\System32\magnify.exe",
-    "$env:WINDIR\System32\narrator.exe","$env:WINDIR\System32\displayswitch.exe"
-)
-foreach ($af in $accessFiles) {
-    if (Test-Path $af) {
-        $asig = Get-AuthSig $af
-        if ($asig.Status -ne "Valid") {
-            Out-Typewriter "  -> UNSIGNED ACCESSIBILITY BINARY: $af" "CRIT"
-            Add-Finding -ID "STICKY_$([IO.Path]::GetFileNameWithoutExtension($af))" -Phase "PHASE 45" `
-                -ThreatType "Sticky Keys / Accessibility Backdoor" -Severity $SEV_CRITICAL `
-                -Description "Unsigned accessibility binary: $af — classic sticky-keys shell backdoor" `
-                -Target $af -FixAction "RunCmd" -FixParam "Rename-Item '$af' '$af.kraken' -Force" -Group "Accessibility Shell Backdoors"
-        } else { Out-Typewriter "  -> [OK] VALID: $af" "GOOD" }
+# EVIDENCE_ENGINE_PLAN P12 — the accessibility binary set had THREE sources of truth: this
+# hardcoded inline list of 6, data\permission_baseline.json (7, read by Phase 109 via Get-Perm)
+# and data\detection_signatures.json (8, read by nothing at all). They had drifted, so hh.exe —
+# the HTML-Help IFEO backdoor — was listed in the JSON and checked by neither phase, and editing
+# that JSON had no effect on anything.
+#
+# The inline list is gone; this now reads data\detection_signatures.json via Get-Sig. That file
+# is the canonical home: this is a DETECTION list (which binaries are backdoor targets), whereas
+# permission_baseline.json is the ACL/owner baseline consumed by the perm-integrity phases
+# 108-115. Phase 109 (Phases-3.ps1:1321) still reads the permission_baseline copy and must be
+# migrated to Get-Sig in the same change — it is owned by another module, see the handoff notes.
+#
+# Two behaviour fixes that come with reading the full list: hh.exe lives in %WINDIR%, NOT
+# System32 (Phase 109 probes System32 only, so it could never have found it), so both locations
+# are probed; and grading is now the same tri-state Phase 109 uses — Get-AuthSig cannot see
+# CATALOG signatures, so a bare `Status -ne "Valid"` on a newly-added binary would manufacture a
+# CRITICAL + RunCmd auto-selected finding on a healthy box (rule #1). Only genuine tamper
+# (validly signed by a NON-Microsoft publisher, or a hash mismatch / untrusted chain) is
+# CRITICAL; merely unverifiable is POSSIBLE + Info.
+$accessNames = @(Get-Sig 'accessibility_binaries')
+if ($accessNames.Count -eq 0) {
+    Out-Typewriter "  -> ACCESSIBILITY BINARY LIST UNAVAILABLE (signature data missing) — CHECK SKIPPED, NOT CLEAN." "WARN"
+} else {
+    foreach ($an in $accessNames) {
+        # EVERY location the image exists in is checked, not just the first hit: hh.exe ships as
+        # BOTH %WINDIR%\hh.exe (native) and %WINDIR%\SysWOW64\hh.exe, and replacing either is a
+        # backdoor. IDs are path-derived so the three probes cannot collide.
+        foreach ($af in @("$env:WINDIR\System32\$an", "$env:WINDIR\$an", "$env:WINDIR\SysWOW64\$an")) {
+            $afExists = $false
+            try { $afExists = Test-Path -LiteralPath $af } catch {}
+            if (-not $afExists) { continue }
+            $averd = Get-SignatureVerdict -FilePath $af
+            if (($averd.Status -eq 'Valid' -and -not $averd.IsMs) -or $averd.Status -eq 'HashMismatch' -or $averd.Status -eq 'NotTrusted') {
+                Out-Typewriter "  -> TAMPERED ACCESSIBILITY BINARY: $af (Status=$($averd.Status))" "CRIT"
+                Add-Finding -ID "STICKY_$(Get-StableId $af)" -Phase "PHASE 45" `
+                    -ThreatType "Sticky Keys / Accessibility Backdoor" -Severity $SEV_CRITICAL `
+                    -Description "Accessibility binary is not a valid Microsoft-signed file (Status=$($averd.Status), Signer='$($averd.Signer)'): $af — classic sticky-keys/utilman shell backdoor giving a SYSTEM shell from the logon screen." `
+                    -Target $af -FixAction "RunCmd" -FixParam "Rename-Item '$af' '$af.kraken' -Force" -Group "Accessibility Shell Backdoors"
+            } elseif ($averd.Status -ne 'Valid') {
+                Add-Finding -ID "STICKYX_$(Get-StableId $af)" -Phase "PHASE 45" `
+                    -ThreatType "Sticky Keys / Accessibility Backdoor" -Severity $SEV_POSSIBLE `
+                    -Description "Accessibility binary signature unverifiable in-process (Status=$($averd.Status)) — usually means it is CATALOG-signed rather than embedded-signed, which Get-AuthSig cannot see. Review only; not treated as a backdoor: $af" `
+                    -Target $af -FixAction "Info" -Group "Accessibility Shell Backdoors"
+            } else { Out-Typewriter "  -> [OK] VALID: $af" "GOOD" }
+        }
     }
 }
 

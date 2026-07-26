@@ -2503,6 +2503,28 @@
   "abe_bypass_tool_names": [
     "chromekatz.exe"
   ],
+  "_comment_temp_exe_benign_paths": "Phase 10: package-manager/library trees whose executable-extension files are routine. Applied through Test-BenignPath, so the standard staging-dir veto ($global:ALLOW_VETO_RE) still applies to them. A hit downgrades to INFO + FixAction Info; it never suppresses the finding, and it does not gate the content-based PE-masquerade sniff.",
+  "temp_exe_benign_paths": [
+    "\\\\(lib\\\\)?site-packages\\\\",
+    "\\\\node_modules\\\\[^\\\\]+\\\\"
+  ],
+  "_comment_temp_exe_staging_toolcache_paths": "Phase 10 ONLY: well-known tool/runtime caches that genuinely live inside %TEMP%, and are therefore allowed to override Test-BenignPath's staging-dir veto (the veto ignores every allowlist match under \\Temp\\ / \\Downloads\\, and Phase 10's whole scope is those directories). Every pattern is anchored to whole path COMPONENTS, and a hit only DOWNGRADES to INFO + FixAction Info, so an attacker who mkdir's %TEMP%\\claude\\ loses auto-SELECTION, not detection. ACCEPTED TRADE-OFF, stated plainly: any path allowlist scoped to %TEMP% is by definition attacker-satisfiable, because an attacker who can write there can also create the directory. The mitigation is that the file remains a reported finding and only leaves the auto-destructive set. Keep this list short and evidence-based.",
+  "temp_exe_staging_toolcache_paths": [
+    "\\\\temp\\\\claude\\\\",
+    "\\\\temp\\\\[.]net\\\\",
+    "\\\\temp\\\\pip-[^\\\\]+\\\\",
+    "\\\\temp\\\\pip_[^\\\\]+\\\\"
+  ],
+  "_comment_wmi_subscription_allowlists": "Phase 30: known-good root\\subscription objects. Each object is flattened to a composite string and matched against these FULLY ANCHORED (^...$) patterns, so a vendor NAME alone can never allowlist a subscription - the query / command line / event source has to match too. Composites: filter = 'Name|EventNamespace|Query'; consumer = '__CLASS|Name|Prop=Value;Prop=Value' over ExecutablePath,CommandLineTemplate,ScriptFileName,ScriptText,FileName,Text,SourceName,ToLine in that order; binding = 'FilterRef|ConsumerRef'. Whitespace is collapsed and newlines become single spaces before matching. NOTE: 'BVTFilter'/'BVTConsumer' are deliberately NOT allowlisted - that is the MSDN WMI-persistence sample that malware copy-pastes verbatim, and the old `-notmatch \"BVTFilter|SCM\"` substring test was itself a self-allowlist hole (anything named SCM_Updater was silently excluded). Add real vendor entries (SCCM, Dell Command Update, HP, Lenovo Vantage, backup agents) only from an OBSERVED managed box, never from guesswork - a wrong anchored pattern is either useless or a hole.",
+  "wmi_subscription_allow_filters": [
+    "^SCM Event Log Filter\\|root\\\\cimv2\\|select \\* from MSFT_SCMEventLogEvent$"
+  ],
+  "wmi_subscription_allow_consumers": [
+    "^NTEventLogEventConsumer\\|SCM Event Log Consumer\\|SourceName=Service Control Manager$"
+  ],
+  "wmi_subscription_allow_bindings": [
+    "^__EventFilter\\.Name=\"SCM Event Log Filter\"\\|NTEventLogEventConsumer\\.Name=\"SCM Event Log Consumer\"$"
+  ],
   "_comment_audit_policy_disabled_regex": "Phase 107 (P3): values `auditpol /get /subcategory:` prints when Process Creation auditing is OFF. Localised — auditpol output is translated, so an English-only match silently reads a German box as 'enabled' and prints a clean result for a check that could not have fired. Matching is a VETO only: auditpol may push the determination to OFF, never to ON (the empirical 'does the Security log hold any 4688 at all' signal decides that), and an unrecognised value degrades to UNKNOWN rather than to a clean result. Absent key falls back to `^(no auditing|none)$`.",
   "audit_policy_disabled_regex": [
     "(?i)^(no auditing|none|keine überwachung|sin auditoría|aucun audit|nessun controllo|監査なし)$"

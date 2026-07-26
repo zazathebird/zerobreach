@@ -6,6 +6,124 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-26 — EVIDENCE_ENGINE_PLAN P4 · P5 · P11 · P12 + the Phase 10 FP tune
+
+### P11 — a live rule-#1 violation on every healthy Windows box
+
+Phase 30 graded **every** WMI event subscription CRITICAL + `RunCmd Remove-WmiObject`. On this box
+that included `SCM Event Log Consumer` — **a stock Windows subscription** — auto-selected for
+destructive removal on a completely clean machine. SCCM, Dell Command, HP, Lenovo Vantage and several
+backup agents register subscriptions legitimately too.
+
+The old guard was `-notmatch "BVTFilter|SCM"`, a bare substring test that was **itself a
+self-allowlist hole**: anything named `SCM_Updater` was silently excluded from the check entirely.
+And `BVTFilter` is the MSDN WMI-persistence sample that malware copy-pastes verbatim, so allowlisting
+it was backwards.
+
+Now: subscriptions grade **`POSSIBLE` + `FixAction Info`** with the teardown command in the
+description (user decision this session — there is no SCCM-managed box available to grade against,
+which is precisely why demotion rather than a guessed allowlist is the safe answer). Allowlists are
+**fully anchored `^…$` over a composite string** — filter is `Name|EventNamespace|Query`, consumer is
+`__CLASS|Name|Prop=Value…`, binding is `FilterRef|ConsumerRef` — so a vendor *name* alone can never
+allowlist anything; the query and command line have to match too. Verified: all four synthetic
+vendor-name impersonation attempts (right name + wrong query, right name + extra property, right name
++ wrong consumer class, vendor filter ref + attacker consumer ref) are still flagged.
+
+`$wmiBindings` was previously fetched and used only in a zero-count test — the
+`__FilterToConsumerBinding` is **the object that actually arms the persistence** and produced no
+finding at all, while the generated fix removed filter and consumer and left the binding orphaned. It
+now emits its own finding, and every suggested teardown is ordered **binding → consumer → filter**.
+
+Auto-destructive on this box: **1 → 0.**
+
+### P4 — Phase 11 was destroying evidence
+
+It opened `Recent`/JumpList, **counted** the files, and offered a `RunCmd` to **delete them**. Those
+`.lnk` files carry TargetPath, Arguments, WorkingDirectory and the original volume serial — and a
+working LNK parser already existed one phase away in 10.5. The deletion action is **gone**; shortcuts
+are parsed instead. An executable or script target that is *missing* from a user-writable staging path
+is real "this ran and is now deleted" evidence → `POSSIBLE`; still-present targets → `INFO`.
+
+Presence is deliberately **tri-state** (`present | missing | unknown`) via a fail-closed helper that
+refuses to `Test-Path` UNC paths, non-`X:\` targets, absent volumes and mapped network drives — so
+"couldn't read it" is never reported as "it's gone". A summary finding counts the uncheckable ones.
+The shared `WScript.Shell` COM object is now created once and reused; Phase 10.5 built a new one per
+file.
+
+### P5 — dead code and a false title in Phase 12
+
+Titled "PREFETCH & SHIMCACHE" while reading only Prefetch, with two regex alternatives —
+`RUNDLL32.*APPDATA` and `POWERSHELL.*-ENC` — that **could not match**, because a `.pf` filename is
+`NAME.EXE-<8 hex>` and carries no path and no arguments. Retitled to what it does (ShimCache is
+Tier B), dead alternatives **removed rather than "repaired"** to bare `RUNDLL32|POWERSHELL`, which
+would fire on every healthy box — this scanner *is* a `powershell.exe` execution.
+
+Added the plan's **A14** correlation for free: a `.pf` whose executable no longer exists anywhere =
+*"this ran and is now gone"*, with the uninstalled-software caveat stated in every description. Gated
+on `$PhasePlan.Advanced` because building the executable index costs ~40 s, and it **fails closed** —
+if the index hits its 60 s / 60,000-file budget the correlation is skipped and says so rather than
+reporting a partial index as fact. Unreadable or absent Prefetch now emits an explicit
+"evidence UNAVAILABLE, not clean" finding.
+
+### P12 — `accessibility_binaries` had three sources of truth
+
+`detection_signatures.json` (8 entries, **orphaned — never read**), `permission_baseline.json` (7,
+read by Phase 109) and a hardcoded inline list of 6 in Phase 45. They had drifted: the JSON copy has
+`hh.exe`, the baseline does not, so the HTML-Help IFEO backdoor was listed but never checked, and
+editing the JSON had no effect whatsoever.
+
+`detection_signatures.json` is now canonical — it is a *detection* list, whereas
+`permission_baseline.json` is the ACL/owner baseline for phases 108–115, a different purpose. Its 8
+entries are a strict superset of the other two copies, so no data change was needed. Phase 45 reads it
+via `Get-Sig`, now also probes `%WINDIR%` and `SysWOW64` (**`hh.exe` is not in System32, so it could
+never have been found**), and grades through Phase 109's tri-state signature verdict so a
+newly-added catalog-signed binary cannot manufacture a CRITICAL + `RunCmd` on a healthy box.
+
+### Phase 10 — the `%TEMP%` executable flood (user-approved FP tune)
+
+92 auto-selected `HIGH` + `DeleteFile` findings on this box, essentially all Claude Code harness
+debris under `%TEMP%\claude\`. Phase 10 consulted no benign-path list at all.
+
+**A structural obstacle surfaced during implementation and is worth recording.**
+`$global:ALLOW_VETO_RE` vetoes every `Test-BenignPath` allowlist match found under `\Temp\` or
+`\Downloads\` — which is Phase 10's *entire scope*. `Test-BenignPath` alone therefore **cannot**
+downgrade anything in this phase. The resolution: call `Test-BenignPath` first and unchanged, then let
+a second deliberately narrow, component-anchored, **downgrade-only** list override the veto for
+well-known tool caches that genuinely live inside `%TEMP%`.
+
+**Accepted trade-off, stated plainly rather than buried:** any path allowlist scoped to `%TEMP%` is by
+definition attacker-satisfiable, because an attacker who can write there can also create the
+directory. The mitigation is that a hit only **downgrades to `INFO`** — the file remains a reported
+finding and merely leaves the auto-destructive set. Near-misses were verified to fail closed
+(`\temp\claudex\`, `\temp\myclaude\`, `Downloads\claude\` all reject).
+
+Auto-destructive **92 → 50**. The residual 50 are genuine loose unsigned `.ps1`/`.bat` in the `%TEMP%`
+root, correctly flagged. Total findings rose 103 → 222 — **not a regression**: `$env:TEMP` and
+`$env:LOCALAPPDATA\Temp` are the same directory and were being swept twice, exhausting the shared
+`SIG_AUDIT` budget before the sweep ever reached Windows TEMP or Downloads. Deduping resolved paths
+means those directories are now actually examined for the first time.
+
+### Validation
+
+Parse-clean on `powershell.exe` 5.1 and `pwsh` 7, BOM intact, `Show-PhaseHeader` count unchanged at
+**70**. QUICK-ungated headers in this module = **23**, plus 7 in `Phases-2.ps1` = the documented
+30-phase QUICK set, unchanged; final QUICK block depth 0. 13/13 helper unit tests. Phase 30 graded
+against the box's real subscriptions (0 findings with allowlists, 3 `POSSIBLE` with the keys
+deliberately removed — safe degradation, never wider) plus 7 synthetic attack shapes. Phase 45: 13
+binary instances across 8 names, all valid Microsoft signatures, 0 findings.
+
+### Found but not fixed
+
+- **No SCCM/Dell/HP/Lenovo entries in the WMI allowlist.** Deliberately not invented — a wrong
+  anchored pattern is either useless or a hole. Add only from an observed managed box; the
+  `POSSIBLE`+`Info` demotion is the safety mechanism until then.
+- The `SIG_AUDIT` budget is still exhausted before `INetCache` on this box.
+- **Phase 12's A14 correlation does not run in TRIAGE**, because TRIAGE sets `QUICK_MODE = $true` and
+  Phase 12 sits inside the non-QUICK wrap. Worth revisiting when §5.3 lands.
+- A14 indexes `.exe` only; `.tmp`/`.com`/`.scr` prefetch entries are skipped rather than guessed at.
+
+---
+
 ## 2026-07-26 — EVIDENCE_ENGINE_PLAN P10 + P9: a finding record that can hold a verdict, and a TRIAGE plan
 
 ### P10 — the fixed 9-field schema that made §4 impossible
