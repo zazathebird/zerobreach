@@ -27,7 +27,9 @@
 .PARAMETER Paranoid    Lower thresholds — POSSIBLE escalated to HIGH
 .PARAMETER IocFile     Path to custom IOC text file
 .PARAMETER Baseline    Path to baseline JSON for diff
-.PARAMETER Mode        QUICK|FULL|DEEP|PARANOID|STEALTH (skip menu)
+.PARAMETER Mode        QUICK|FULL|DEEP|PARANOID|STEALTH|TRIAGE (skip menu)
+                       TRIAGE = alert-triage plan: the QUICK 30-phase core PLUS all of
+                       81-115 (evidence/correlation/Defender-tamper phases FULL gates out)
 .PARAMETER Hours       Scan window hours (skip menu; 0 = all time)
 .PARAMETER Auto        Skip all menus, use param defaults
 .PARAMETER Html        Generate HTML report in addition to TXT
@@ -44,7 +46,7 @@ param(
     [switch]$Paranoid,
     [string]$IocFile   = "",
     [string]$Baseline  = "",
-    [ValidateSet("","QUICK","FULL","DEEP","PARANOID","STEALTH")]
+    [ValidateSet("","QUICK","FULL","DEEP","PARANOID","STEALTH","TRIAGE")]
     [string]$Mode      = "",
     [int]   $Hours     = -1,
     [switch]$Auto,
@@ -495,6 +497,48 @@ function Show-ThreatCategoryHeader {
 # ══════════════════════════════════════════════════════════════════════════════
 #  AUDIT FINDING REGISTRATION
 # ══════════════════════════════════════════════════════════════════════════════
+#  P10 (EVIDENCE_ENGINE_PLAN §2) — the record used to be exactly 9 fields, so a phase
+#  that HAD a hash, a signer, a MoTW origin or a Defender confidence tier could only jam
+#  it into $Description prose, and the server then re-derived protected/vendor_trusted by
+#  regexing that prose. No structured benign/malicious verdict could be expressed at all,
+#  which blocked the §4 correlation/verdict layer outright.
+#
+#  Every field added below is an OPTIONAL named parameter with an empty default, and the
+#  record key + [FINDING] JSON key are BOTH omitted when the value is empty. A call that
+#  passes only the original 9 parameters therefore produces a byte-identical record and a
+#  byte-identical "[FINDING] {...}" line — all ~140 existing call sites are untouched.
+#
+#  Field                Why it is in the contract
+#  ─────────────────────────────────────────────────────────────────────────────────────
+#  Sha256               identity that survives a rename; §4 corroboration + §5.0 ZBAlert
+#  Signer               Authenticode subject — the #1 FP-suppression input (§4)
+#  SignatureStatus      Get-AuthSig vocabulary (Valid/NotSigned/HashMismatch/UnknownError):
+#                       "unsigned" and "could not be checked" must not look the same
+#  FileWriteTime        absolute, provable artifact timestamp
+#  FileAgeHours         derived age; the signal that would have demoted the obj\Debug\ FP
+#  FileSize             cheap corroboration / dropper-shape signal
+#  ZoneId               MoTW zone (3 = internet). §4 origin input
+#  HostUrl / ReferrerUrl  P6/A10 — the download source + referring page from Zone.Identifier
+#  ProcessName          the process this finding is ABOUT (structured, not prose)
+#  ParentProcess        the attributed actor (Defender's ProcessName / the real parent)
+#  EvidenceSource       WHICH artifact or log produced this (e.g. "Defender/Operational 1116",
+#                       "Zone.Identifier ADS", "Get-MpThreatDetection"). §4 timeline `source`
+#  EventTime            when the EVIDENCE happened, as distinct from Timestamp = when we
+#                       looked. §4 timeline assembly needs the former, not the latter
+#  ThreatName           the vendor label verbatim (§5.0 ZBAlert.threat_name)
+#  Confidence           HOW the verdict was reached. Vocabulary is Get-DefenderVerdict's
+#                       .Tier verbatim: signature | manual | heuristic | machine-learning |
+#                       reputation | cloud-heuristic | unrecognised-suffix | unknown
+#  Verdict              CONFIRMED | LIKELY | UNPROVEN | LIKELY-FALSE-POSITIVE (§4)
+#  Corroboration        which INDEPENDENT sources agreed (one ML alert alone is not evidence)
+#  Caveat               what could NOT be checked — §4 requires UNPROVEN to be distinguishable
+#                       from CLEAN, and that is only possible if the gap is recorded
+#
+#  SAFETY: none of these change grading. Severity/FixAction/Selected are computed exactly as
+#  before, so no new field can raise a finding into the auto-select set (CRITICAL/HIGH +
+#  destructive FixAction). The only behaviour any of them drives downstream is DEMOTION
+#  (Verdict LIKELY-FALSE-POSITIVE suppresses auto-selection in the GUI; Signer can only ADD
+#  a vendor-trusted tag; ProcessName can only ADD a protected hard-block).
 function Add-Finding {
     param(
         [string]$ID,
@@ -505,9 +549,33 @@ function Add-Finding {
         [string]$Target,
         [string]$FixAction,
         [string]$FixParam = "",
-        [string]$Group = ""
+        [string]$Group = "",
+        # ── P10 optional evidence / verdict fields (all default-empty) ────────
+        [string]$Sha256          = "",
+        [string]$Signer          = "",
+        [string]$SignatureStatus = "",
+        [string]$FileWriteTime   = "",
+        [double]$FileAgeHours    = -1,
+        [long]  $FileSize        = -1,
+        [string]$ZoneId          = "",
+        [string]$HostUrl         = "",
+        [string]$ReferrerUrl     = "",
+        [string]$ProcessName     = "",
+        [string]$ParentProcess   = "",
+        [string]$EvidenceSource  = "",
+        [string]$EventTime       = "",
+        [string]$ThreatName      = "",
+        [string]$Confidence      = "",
+        [string]$Verdict         = "",
+        [string]$Corroboration   = "",
+        [string]$Caveat          = ""
     )
     if ($global:PARANOID_MODE -and $Severity -eq "POSSIBLE") { $Severity = "HIGH" }
+    # Normalise the verdict token only (upper-case). Deliberately NOT a ValidateSet: an
+    # unexpected value from a future phase must not throw a terminating error that costs
+    # the whole finding — it is carried through as informational text instead, and the
+    # only value with behaviour attached is the exact string LIKELY-FALSE-POSITIVE.
+    if ($Verdict) { $Verdict = "$Verdict".Trim().ToUpper() }
     foreach ($existing in $global:AuditFindings) { if ($existing.ID -eq $ID) { return } }
     # ── Flood guard: cap individual findings per group; roll the rest into one
     #    summary so a noisy phase can't push 20k+ finding events to the web UI. ─
@@ -526,7 +594,42 @@ function Add-Finding {
             return
         }
     }
-    $global:AuditFindings.Add(@{
+    # ── P10: collect only the evidence fields that were actually supplied ──────
+    # Empty string / negative number == "not supplied". Both the persisted record and
+    # the [FINDING] JSON below omit the key entirely, so a DEEP run's hundreds of
+    # streamed lines do not bloat, and KrakenBaseline_*.json stays the same size for
+    # phases that provide nothing. $zb* prefix per the case-insensitive-shadow rule.
+    $zbEvRec  = [ordered]@{}
+    $zbEvJson = [ordered]@{}
+    foreach ($zbEv in @(
+        ,@('Sha256',          'sha256',  $Sha256)
+        ,@('Signer',          'signer',  $Signer)
+        ,@('SignatureStatus', 'sigstat', $SignatureStatus)
+        ,@('FileWriteTime',   'ftime',   $FileWriteTime)
+        ,@('FileAgeHours',    'fage',    $FileAgeHours)
+        ,@('FileSize',        'fsize',   $FileSize)
+        ,@('ZoneId',          'zone',    $ZoneId)
+        ,@('HostUrl',         'url',     $HostUrl)
+        ,@('ReferrerUrl',     'refurl',  $ReferrerUrl)
+        ,@('ProcessName',     'proc',    $ProcessName)
+        ,@('ParentProcess',   'pproc',   $ParentProcess)
+        ,@('EvidenceSource',  'esrc',    $EvidenceSource)
+        ,@('EventTime',       'etime',   $EventTime)
+        ,@('ThreatName',      'tname',   $ThreatName)
+        ,@('Confidence',      'conf',    $Confidence)
+        ,@('Verdict',         'verdict', $Verdict)
+        ,@('Corroboration',   'corrob',  $Corroboration)
+        ,@('Caveat',          'caveat',  $Caveat)
+    )) {
+        $zbVal = $zbEv[2]
+        if ($null -eq $zbVal) { continue }
+        if (($zbVal -is [double] -or $zbVal -is [long] -or $zbVal -is [int]) -and $zbVal -lt 0) { continue }
+        if ("$zbVal" -eq "") { continue }
+        $zbEvRec[$zbEv[0]]  = $zbVal
+        $zbEvJson[$zbEv[1]] = $zbVal
+    }
+
+    $zbRec = @{
         ID          = $ID
         Phase       = $Phase
         ThreatType  = $ThreatType
@@ -538,7 +641,12 @@ function Add-Finding {
         Group       = if ($Group) { $Group } else { $Phase }
         Selected    = ($Severity -ne "INFO")
         Timestamp   = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    })
+    }
+    # Merged AFTER the 9 core fields so the record is byte-identical when none were passed.
+    # These flow straight into Summary.ps1's `Findings = @($global:AuditFindings)`, i.e. into
+    # KrakenBaseline_*.json and the STEALTH audit blob, with no change needed there.
+    foreach ($zbK in $zbEvRec.Keys) { $zbRec[$zbK] = $zbEvRec[$zbK] }
+    $global:AuditFindings.Add($zbRec)
     $global:TotalAnomalies++
     # ── Structured finding stream (GUI runs) ─────────────────────────────────
     # Human-readable phase output carries no severity tags, so the web server
@@ -548,9 +656,12 @@ function Add-Finding {
     # stdout to the single audit blob.
     if ($global:NONINTERACTIVE -and -not $global:STEALTH_MODE) {
         try {
-            $fj = @{ id = $ID; sev = $Severity; phase = $Phase; tt = $ThreatType
-                     desc = $Description; target = $Target; fix = $FixAction; group = $grpKey } |
-                  ConvertTo-Json -Compress
+            $fjo = @{ id = $ID; sev = $Severity; phase = $Phase; tt = $ThreatType
+                      desc = $Description; target = $Target; fix = $FixAction; group = $grpKey }
+            # P10: supplied evidence/verdict keys only. With none supplied the hashtable is
+            # constructed exactly as before, so the emitted line is byte-for-byte identical.
+            foreach ($zbJ in $zbEvJson.Keys) { $fjo[$zbJ] = $zbEvJson[$zbJ] }
+            $fj = $fjo | ConvertTo-Json -Compress
             Write-Host "[FINDING] $fj"
         } catch {}
     }
@@ -1729,6 +1840,7 @@ if (-not ($global:STEALTH_MODE -or $Auto)) {
         Write-Host "  │   [3]  DEEP      — All 105 phases  (+ APT, YARA, memory analysis)     │" -ForegroundColor DarkCyan
         Write-Host "  │   [4]  PARANOID  — DEEP + lower thresholds (POSSIBLE→HIGH)            │" -ForegroundColor DarkCyan
         Write-Host "  │   [5]  STEALTH   — Silent, JSON-only, no banners                      │" -ForegroundColor DarkCyan
+        Write-Host "  │   [6]  TRIAGE    — Alert triage: QUICK core + ALL of 81-115           │" -ForegroundColor DarkCyan
         Write-Host "  │   [B]  Baseline diff   [I]  Import IOC file                           │" -ForegroundColor DarkCyan
         Write-Host "  └─────────────────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
         Write-Host ""
@@ -1743,6 +1855,7 @@ if (-not ($global:STEALTH_MODE -or $Auto)) {
                 "3"  { $global:ScanMode="DEEP";     $THREAT="Deep 105-Phase APT Hunt";           break }
                 "4"  { $global:ScanMode="PARANOID"; $global:PARANOID_MODE=$true; $THREAT="Paranoid 105-Phase"; break }
                 "5"  { $global:ScanMode="STEALTH";  $global:STEALTH_MODE=$true;  $THREAT="Stealth JSON";       break }
+                "6"  { $global:ScanMode="TRIAGE";   $THREAT="Alert Triage (core + 81-115)";     break }
                 "b"  {
                     Write-Host "  BASELINE PATH> " -NoNewline -ForegroundColor Yellow
                     $bp = (Read-Host).Trim('"')
@@ -1771,20 +1884,45 @@ if (-not $global:TW_LABEL) { $global:TIME_LIMIT=[datetime]::MinValue; $global:TW
 $PhasePlan = switch ($global:ScanMode) {
     "QUICK"    { @{ Min=1; Max=30;  Universal=$false; Advanced=$false; Integrity=$false } }
     "FULL"     { @{ Min=1; Max=80;  Universal=$false; Advanced=$false; Integrity=$false } }
+    "TRIAGE"   { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
     "DEEP"     { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
     "PARANOID" { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
     "STEALTH"  { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
     default    { @{ Min=1; Max=80;  Universal=$false; Advanced=$false; Integrity=$false } }
 }
-# QUICK is now a REAL gate (BLUEPRINT §7.8). Every mode except QUICK runs the full 1-80 span
-# (DEEP+ add the Universal 81-89 + Advanced 90-115). QUICK runs a reduced 30-phase triage set;
-# the other 54 phases in 1-80 are wrapped `if (-not $global:QUICK_MODE) { ... }` in
+# QUICK is now a REAL gate (BLUEPRINT §7.8). FULL/DEEP/PARANOID/STEALTH run the full 1-80 span
+# (DEEP+ add the Universal 81-89 + Advanced 90-115). QUICK runs a reduced 30-phase triage set,
+# and TRIAGE deliberately REUSES that same 30-phase gate (see the TRIAGE note below) while
+# forcing 81-115 on; the other 54 phases in 1-80 are wrapped `if (-not $global:QUICK_MODE) { ... }` in
 # engine/Phases-1/2.ps1. The KEPT QUICK set (MUST stay exactly $PhasePlan.Max = 30 phases —
 # phase_total honesty; the server mirrors QUICK=30):
 #   1,3,4,5,6,10,20,21,23,27,28,29,30,31,33,35,41,42,45,51,53,54,56,62,64,69,70,72,74.6,75
 # Invariant baked into the wraps: 51 is KEPT because 53 reuses its $ransomScanFiles walk.
 # If you change the wrap set, update Max above AND the server's $MODE_PHASES QUICK entry.
-$global:QUICK_MODE = ($global:ScanMode -eq 'QUICK')
+# ── TRIAGE (EVIDENCE_ENGINE_PLAN P9 / §5.3) ───────────────────────────────────
+# FULL stops at 80, which gates OUT every phase a technician actually needs when a
+# Defender/EDR ticket lands: the hash+YARA sweep (90), MoTW origin (91), UAC-bypass
+# staging (92), malware command-line heuristics (99.5), browser-credential access
+# (100), token staging (100.5), svchost masquerade (102), hidden tasks (104), the
+# cross-vector correlation heatmap (105), memory-dump artifacts (106), event-log
+# hunting (107) and the Defender-tamper / security-control-health consolidation (114).
+# DEEP has them all but pays for 54 extra phases across 1-80 that add nothing to an
+# alert triage.
+#
+# TRIAGE is therefore "the QUICK 30-phase core PLUS everything from 81 upward":
+#   • reuses the QUICK gate to drop the 54 non-triage phases in 1-80
+#     ($global:QUICK_MODE is what engine/Phases-1/2.ps1 wrap those in),
+#   • forces Universal (81-89), Advanced (90-107) and Integrity (108-115) ON,
+#     which is the ONLY way to reach 114 — the Defender-tamper phase — because
+#     engine/Phases-3.ps1 gates 108-115 as one Integrity block.
+# Max stays the LABEL ceiling 115 (the run really does end at PHASE 115), matching
+# the phase_total honesty rule; the server's $MODE_PHASES mirrors it.
+#
+# $global:TRIAGE_MODE is set for §5.3's alert-ingestion entry point to key off, and
+# so a future phase-module change can trim 108-113/115 out of TRIAGE without needing
+# a new PhasePlan flag. No phase module reads it yet — it is inert today by design.
+$global:QUICK_MODE  = ($global:ScanMode -eq 'QUICK' -or $global:ScanMode -eq 'TRIAGE')
+$global:TRIAGE_MODE = ($global:ScanMode -eq 'TRIAGE')
 
 # ── Full console transcript (interactive runs) ────────────────────────────────
 # Captures EVERYTHING printed to the console to reports/KrakenConsole_<stamp>.log so

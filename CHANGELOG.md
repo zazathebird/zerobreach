@@ -6,6 +6,101 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-26 — EVIDENCE_ENGINE_PLAN P10 + P9: a finding record that can hold a verdict, and a TRIAGE plan
+
+### P10 — the fixed 9-field schema that made §4 impossible
+
+`Add-Finding`'s record was `ID, Phase, ThreatType, Severity, Description, Target, FixAction, FixParam,
+Group`. No field for hash, signer, file age, MoTW origin, parent process or evidence source — so
+phases jammed context into `Description` **prose**, and the server re-derived `protected` /
+`vendor_trusted` by regexing that prose. No structured benign/malicious verdict could be expressed at
+all, which blocked the entire correlation/verdict layer in §4 of the plan.
+
+**18 optional named parameters added**, all default-empty, all omitted from both the record and the
+`[FINDING]` JSON line when unset: `Sha256`, `Signer`, `SignatureStatus`, `FileWriteTime`,
+`FileAgeHours`, `FileSize`, `ZoneId`, `HostUrl`, `ReferrerUrl`, `ProcessName`, `ParentProcess`,
+`EvidenceSource`, `EventTime`, `ThreatName`, `Confidence`, `Verdict`, `Corroboration`, `Caveat`.
+
+Three departures from the plan's suggested set, each for a reason:
+- **`Md5`/`Sha1` dropped** — the engine only ever computes SHA256 (`Get-FileHashSafe`). A field
+  nothing can populate is a lie in the schema.
+- **`EventTime` added** — distinct from `Timestamp`. `Timestamp` is when *we looked*; `EventTime` is
+  when the *evidence* happened. §4's timeline assembly needs the latter and cannot derive it.
+- **`SignatureStatus` added alongside `Signer`** — "unsigned" and "could not be checked" must not
+  collapse to the same empty string. That distinction is the whole point of the honesty rule.
+
+`Confidence` deliberately reuses **`Get-DefenderVerdict`'s `Tier` vocabulary verbatim** (from the P7
+work) rather than inventing a parallel one.
+
+**Carried through the whole pipeline**: record → `[FINDING]` JSON → scan runspace → SSE `finding`
+event → `/api/report` → GUI, plus the STEALTH blob path. `Summary.ps1` needed no change —
+`Findings = @($global:AuditFindings)` carries the new keys into `KrakenBaseline_*.json` for free.
+
+**The prose-regex migration is additive, not a replacement.** The existing prose call runs first and
+verbatim in both places; the structured pass is OR-only and can only *add* a block or trust.
+`vendor_trusted` ← `Signer` (routed through the existing function so its malicious-signal veto still
+applies); `protected` ← `ProcessName`/`ParentProcess`, which is the precise structured replacement for
+the one branch of `Test-ProtectedTarget` that genuinely has to read prose (the critical-process test,
+because `FixParam` is a bare PID). **That migration is mirrored inside `$script:REMEDIATE_SCRIPT`** —
+without the mirror, a finding protected only by `ProcessName` would be disabled in the GUI but sail
+straight through the hard-block backstop on a direct POST. A runspace cannot see the parent's
+functions; this is exactly the failure mode that rule exists for.
+
+**Rule #1 compliance:** nothing new touches `Severity`, `FixAction` or `Selected`. The only behaviour
+attached to any new field is *demotion* — `Verdict === 'LIKELY-FALSE-POSITIVE'` is excluded from
+auto-select and from every bulk selector, while remaining individually tickable.
+
+### P9 — the triage-relevant phases were DEEP-only
+
+FULL stops at 80, which gates out MoTW (91), the YARA/hash sweep (90), UAC-bypass staging (92),
+command-line heuristics (99.5), browser-credential access (100), token staging (100.5), svchost
+masquerade (102), hidden tasks (104), correlation (105), memory dumps (106), event-log hunting (107)
+**and all Defender-tamper / security-control-health checks (114)**. A technician running FULL on a
+Defender ticket got none of it.
+
+New **`TRIAGE`** mode — expressible purely through loader flags, **no phase-module change required**:
+`$global:QUICK_MODE = $true` (which drops the 54 non-triage phases in 1–80) plus `Universal`,
+`Advanced` and `Integrity` all on, `Max = 115`. `Integrity` is the only way to reach 114, because
+`Phases-3.ps1` gates 108–115 as a single block. Wired through the loader `ValidateSet`, the
+interactive menu, the server's `$MODE_PHASES` mirror and both mode allowlists, plus a new
+`Alert Triage (TRIAGE, 24h)` built-in scan profile.
+
+Measured: **71 distinct phases in 441.8 s**, versus DEEP's full span — QUICK's core 30, then 81–89
+(incl. 82.5/87.5/88.5), 90–107 (incl. 97.5/99.5/100.5, every phase P9 names), and 108–115.
+`$global:TRIAGE_MODE` is set but intentionally read nowhere yet: it is the hook §5.3's alert-ingestion
+entry point will use, and it lets a future module change trim 108–113/115 without a new PhasePlan flag.
+
+### Validation
+
+Parse-clean on real `powershell.exe` 5.1.26100 **and** `pwsh` 7 for both `.ps1` files, BOMs intact,
+`node --check` silent. **All three `@'...'@` runspace here-strings extracted and `ParseInput`-checked
+separately** (2,751 / 27,907 / 22,065 chars) — a syntax error in one is invisible to `ParseFile`.
+
+Backwards compatibility proven, not assumed: an `Add-Finding` call using only the old 9 parameters
+produces a **byte-identical** `[FINDING]` line against the pre-P10 implementation (249 bytes vs 249
+bytes), with an identical record key set. A finding carrying no evidence fields produces the pre-P10
+SSE payload with **zero** extra keys.
+
+Live: `-Mode QUICK -Auto` → exit 0, **30 distinct phases**, 0 recovered errors, 239 findings, 59.8 s,
+phase list exactly the documented QUICK set, auto-destructive **94 — matching the documented dev-box
+figure exactly**, so grading is provably unchanged. `-Mode TRIAGE -Auto` → exit 0, 71 phases, 0
+recovered errors. Round-trip of all 18 fields verified through the **verbatim-extracted real**
+`SCAN_SCRIPT`, not a re-implementation.
+
+### Known follow-ups recorded here rather than silently carried
+
+- **Phase 90 YARA-lite flags signed Sysinternals binaries HIGH + `DeleteFile`** — 20 auto-destructive
+  on this box, and the dominant contributor to TRIAGE's auto-destructive delta over QUICK.
+  Pre-existing, not introduced here, but a live rule-#1 candidate. Tracked separately.
+- No phase passes any P10 field yet — the schema is live but unexercised. Whoever builds
+  `engine/Evidence.ps1` should pass `EvidenceSource`, `Confidence`, `Verdict` and `Caveat`.
+- `defender_confidence_suffixes` has no `signature` entry; that tier arises only from
+  `DEF_NO_SUFFIX_RANK`, so the `Confidence` vocabulary is defined half in data, half in code.
+- The new GUI badges carry inline theme-var-tinted styling because no `.item-verdict` /
+  `.item-evidence` CSS rule exists yet.
+
+---
+
 ## 2026-07-26 — EVIDENCE_ENGINE_PLAN P2 · P3 · P6 · P13: the checks that lied about being clean
 
 Three of these are the same defect wearing different clothes: **a check that could not have fired

@@ -459,7 +459,28 @@ function ensureViewFxLayer() {
 }
 
 // ── Launch Pad ────────────────────────────────────────────────────────────────
+// TRIAGE deployment mode (EVIDENCE_ENGINE_PLAN P9). Injected here rather than added to
+// index.html so the tile picks up the existing click/sound/profile wiring below with no
+// duplicated markup, and so it stays next to the comment explaining what the mode is.
+// Runs the QUICK 30-phase core PLUS every phase from 81-115 — the evidence, correlation
+// and Defender-tamper phases FULL (ceiling 80) gates out of an alert-ticket triage.
+function ensureTriageModeTile() {
+  const host = document.getElementById('mode-tiles');
+  if (!host || host.querySelector('[data-mode="TRIAGE"]')) return;
+  const tile = document.createElement('div');
+  tile.className = 'mode-tile';
+  tile.dataset.mode = 'TRIAGE';
+  tile.innerHTML =
+    '<div class="mode-tile-icon">🎯</div>' +
+    '<div class="mode-tile-name">TRIAGE</div>' +
+    '<div class="mode-tile-phases">CORE + 81-115</div>' +
+    '<div class="mode-tile-desc">Alert ticket triage · evidence + Defender tamper</div>';
+  const full = host.querySelector('[data-mode="FULL"]');
+  if (full) host.insertBefore(tile, full); else host.appendChild(tile);
+}
+
 function initLaunchPad() {
+  ensureTriageModeTile();
   $$('.mode-tile').forEach(tile => {
     tile.addEventListener('click', () => {
       $$('.mode-tile').forEach(t => t.classList.remove('active'));
@@ -1234,7 +1255,8 @@ function initFindingsView() {
     // while the tree showed a filtered subset meant "select all" could queue ~200 findings —
     // including destructive CRITICALs — when the operator was looking at 3 POSSIBLEs. SELECT
     // GROUP was already scoped to its group; these two now agree about what "all" means.
-    const allowed = visibleFindings().filter(f => !f.protected && !f.vendor_trusted);
+    // P10: same rule for a LIKELY-FALSE-POSITIVE verdict — bulk-select skips it.
+    const allowed = visibleFindings().filter(f => !f.protected && !f.vendor_trusted && !isLikelyFalsePositive(f));
     allowed.forEach(f => STATE.selectedFindings.add(f.id));            // native id type (str|num)
     const allowedStr = new Set(allowed.map(f => String(f.id)));         // dataset.id is always a string
     $$('#findings-tree input[type=checkbox]').forEach(cb => { if (allowedStr.has(cb.dataset.id)) cb.checked = true; });
@@ -1303,7 +1325,7 @@ function initFindingsView() {
       // !vendor_trusted like every other bulk selector: Test-VendorTrusted is a SOFT signal
       // that must never be bulk-selected (it stays individually tickable). Omitting it here
       // let one click bypass the vendor guard for exactly this button.
-      const picks = STATE.findings.filter(f => isHardeningFinding(f) && !f.protected && !f.vendor_trusted);
+      const picks = STATE.findings.filter(f => isHardeningFinding(f) && !f.protected && !f.vendor_trusted && !isLikelyFalsePositive(f));
       if (!picks.length) {
         showToast('No hardening actions in this scan — posture already good');
         ZBSound.play('error');
@@ -1341,8 +1363,12 @@ function visibleFindings() {
   return STATE.findings.filter(f => {
     if (!STATE.findingsSevFilter.has(f.severity)) return false;
     if (!q) return true;
+    // P10 fields join the haystack so an operator can filter by verdict, evidence source,
+    // hash or signer. Undefined entries are already dropped by the filter/join below.
     const hay = [f.line, f.threat_type, f.mitre_id, f.mitre && f.mitre.name,
-                 f.mitre && f.mitre.tactic, f.phase, f.severity]
+                 f.mitre && f.mitre.tactic, f.phase, f.severity,
+                 f.verdict, f.confidence, f.evidence_source, f.threat_name,
+                 f.sha256, f.signer, f.host_url, f.process_name]
       .filter(Boolean).join(' ').toLowerCase();
     return hay.includes(q);
   });
@@ -1466,7 +1492,7 @@ function renderFindingsTree() {
     // protected finding (the server refuses those anyway) or trusted RMM vendor tooling.
     groupEl.querySelector('.tree-group-selall').addEventListener('click', e => {
       e.stopPropagation();
-      const allowed = items.filter(f => !f.protected && !f.vendor_trusted);
+      const allowed = items.filter(f => !f.protected && !f.vendor_trusted && !isLikelyFalsePositive(f));
       allowed.forEach(f => STATE.selectedFindings.add(f.id));
       const allowedStr = new Set(allowed.map(f => String(f.id)));
       itemsEl.querySelectorAll('input[type=checkbox]').forEach(cb => {
@@ -1482,7 +1508,11 @@ function renderFindingsTree() {
       const shortText = (finding.line || '').substring(0, 120);
       // SAFETY: protected (system-critical) findings can NEVER be selected/auto-selected.
       // Vendor-trusted (RMM partner tooling) is NOT auto-selected, but stays manually selectable.
-      const autoEligible = (finding.severity === 'CRITICAL' || finding.severity === 'HIGH') && !finding.protected && !finding.vendor_trusted;
+      // P10: a LIKELY-FALSE-POSITIVE verdict demotes exactly like vendor-trusted does —
+      // shown, still manually tickable, never auto-selected. Demotion only; a verdict can
+      // never make a finding auto-eligible that was not already.
+      const autoEligible = (finding.severity === 'CRITICAL' || finding.severity === 'HIGH') &&
+                           !finding.protected && !finding.vendor_trusted && !isLikelyFalsePositive(finding);
       // First render: auto-select eligible items. Re-renders: mirror the operator's live selection.
       const autoCheck = firstPass ? autoEligible : STATE.selectedFindings.has(finding.id);
       if (finding.protected) item.classList.add('protected');
@@ -1493,6 +1523,8 @@ function renderFindingsTree() {
         <span class="item-text">${escapeHtml(shortText)}</span>
         ${protectedBadge(finding)}
         ${vendorBadge(finding)}
+        ${verdictBadge(finding)}
+        ${evidenceBadge(finding)}
         ${mitreBadge(finding)}
         <span class="item-phase">PH${escapeHtml(String(finding.phase))}</span>
       `;
@@ -1755,6 +1787,73 @@ function vendorBadge(finding) {
   if (!finding.vendor_trusted) return '';
   const title = escapeHtml(`TRUSTED VENDOR — not auto-selected: ${finding.vendor_reason || 'RMM partner tooling'}`);
   return `<span class="item-vendor" title="${title}">✔ TRUSTED</span>`;
+}
+
+// ── P10 structured evidence / verdict (EVIDENCE_ENGINE_PLAN §2 + §4) ──────────
+// Everything below is ADDITIVE and absence-tolerant: a finding carrying none of the
+// new fields renders exactly as it did before this change (every helper returns '').
+// No CSS file is touched — the badges carry inline, theme-var-tinted styling.
+
+// The one field with behaviour attached. It can only ever DEMOTE: a finding the engine's
+// verdict layer graded LIKELY-FALSE-POSITIVE is never auto-selected and never picked up
+// by a bulk selector, exactly like a trusted-vendor finding — but it stays individually
+// tickable, so the operator keeps the final call. Nothing here can promote a finding into
+// the auto-select set (rule #1).
+function isLikelyFalsePositive(finding) {
+  return String(finding.verdict || '').toUpperCase() === 'LIKELY-FALSE-POSITIVE';
+}
+
+const VERDICT_TINT = {
+  'CONFIRMED':             'var(--threat-critical, #ff5050)',
+  'LIKELY':                'var(--threat-high, #ffa000)',
+  'UNPROVEN':              'var(--text-dim, #8a8a8a)',
+  'LIKELY-FALSE-POSITIVE': 'var(--threat-clean, #40c060)',
+};
+
+function verdictBadge(finding) {
+  const v = String(finding.verdict || '').toUpperCase();
+  if (!v) return '';
+  const tint  = VERDICT_TINT[v] || 'var(--text-dim, #8a8a8a)';
+  const bits  = [`VERDICT: ${v}`];
+  if (finding.confidence)    bits.push(`confidence: ${finding.confidence}`);
+  if (finding.corroboration) bits.push(`corroborated by: ${finding.corroboration}`);
+  // §4: "UNPROVEN" must be distinguishable from "CLEAN" — the caveat is what makes it so.
+  if (finding.caveat)        bits.push(`NOT CHECKED: ${finding.caveat}`);
+  const short = v === 'LIKELY-FALSE-POSITIVE' ? 'LIKELY FP' : v;
+  return `<span class="item-verdict" title="${escapeHtml(bits.join(' · '))}"` +
+         ` style="font-size:9px;letter-spacing:.5px;padding:1px 5px;border-radius:2px;` +
+         `border:1px solid ${tint};color:${tint};white-space:nowrap">${escapeHtml(short)}</span>`;
+}
+
+// Compact provenance badge: WHICH artifact or log produced this finding (§4 timeline
+// `source`), with the corroborating identity fields in the tooltip.
+function evidenceBadge(finding) {
+  const src = String(finding.evidence_source || '');
+  const detail = [];
+  if (src)                        detail.push(`source: ${src}`);
+  if (finding.event_time)         detail.push(`when: ${finding.event_time}`);
+  if (finding.threat_name)        detail.push(`label: ${finding.threat_name}`);
+  if (finding.sha256)             detail.push(`sha256: ${finding.sha256}`);
+  if (finding.signer)             detail.push(`signer: ${finding.signer}`);
+  if (finding.signature_status)   detail.push(`signature: ${finding.signature_status}`);
+  if (finding.file_write_time)    detail.push(`written: ${finding.file_write_time}`);
+  if (finding.file_age_hours !== undefined && finding.file_age_hours !== null && finding.file_age_hours !== '') {
+    detail.push(`age: ${finding.file_age_hours}h`);
+  }
+  if (finding.file_size !== undefined && finding.file_size !== null && finding.file_size !== '') {
+    detail.push(`size: ${finding.file_size} bytes`);
+  }
+  if (finding.zone_id)            detail.push(`MoTW zone: ${finding.zone_id}`);
+  if (finding.host_url)           detail.push(`downloaded from: ${finding.host_url}`);
+  if (finding.referrer_url)       detail.push(`referrer: ${finding.referrer_url}`);
+  if (finding.process_name)       detail.push(`process: ${finding.process_name}`);
+  if (finding.parent_process)     detail.push(`parent: ${finding.parent_process}`);
+  if (!detail.length) return '';
+  const label = src ? src.substring(0, 28) : 'EVIDENCE';
+  return `<span class="item-evidence" title="${escapeHtml(detail.join('\n'))}"` +
+         ` style="font-size:9px;letter-spacing:.5px;padding:1px 5px;border-radius:2px;` +
+         `border:1px dashed var(--accent-2, #5aa9e6);color:var(--accent-2, #5aa9e6);` +
+         `white-space:nowrap">⌕ ${escapeHtml(label)}</span>`;
 }
 
 const FIX_ACTION_LABELS = {

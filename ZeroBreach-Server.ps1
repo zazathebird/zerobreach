@@ -97,6 +97,7 @@ if (Test-Path $mitrePath) {
 $script:PROFILE_BUILTINS = @(
     [pscustomobject]@{ name='Triage (QUICK, 24h)';        mode='QUICK';   hours=24; html_report=$true;  snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$false; builtin=$true },
     [pscustomobject]@{ name='Standard (FULL, all time)';  mode='FULL';    hours=0;  html_report=$true;  snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$false; builtin=$true },
+    [pscustomobject]@{ name='Alert Triage (TRIAGE, 24h)'; mode='TRIAGE';  hours=24; html_report=$true;  snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$false; builtin=$true },
     [pscustomobject]@{ name='Incident (DEEP, all time)';  mode='DEEP';    hours=0;  html_report=$true;  snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$false; builtin=$true },
     [pscustomobject]@{ name='Silent (STEALTH, all time)'; mode='STEALTH'; hours=0;  html_report=$false; snapshot=$true; baseline=$false; paranoid=$false; csv=$false; stealth=$true;  builtin=$true }
 )
@@ -449,6 +450,22 @@ function Test-ProtectedTarget {
     return ''
 }
 
+# ── P10 structured evidence / verdict schema (EVIDENCE_ENGINE_PLAN §2) ─────────
+# Engine record key (PascalCase, as written into KrakenBaseline_*.json by Add-Finding)
+# -> wire key served to the GUI. Every field is OPTIONAL: Add-Finding omits the key
+# entirely when a phase supplies nothing, and every consumer here skips absent keys, so
+# a pre-P10 report renders exactly as it did before. This table is the MAIN-THREAD copy;
+# the scan runspace carries its own (it cannot see this one — runspace isolation rule),
+# keyed on the compact stream names Add-Finding uses in the "[FINDING] {...}" line.
+$script:FINDING_EVIDENCE_FIELDS = [ordered]@{
+    Sha256='sha256'; Signer='signer'; SignatureStatus='signature_status'
+    FileWriteTime='file_write_time'; FileAgeHours='file_age_hours'; FileSize='file_size'
+    ZoneId='zone_id'; HostUrl='host_url'; ReferrerUrl='referrer_url'
+    ProcessName='process_name'; ParentProcess='parent_process'; EvidenceSource='evidence_source'
+    EventTime='event_time'; ThreatName='threat_name'; Confidence='confidence'
+    Verdict='verdict'; Corroboration='corroboration'; Caveat='caveat'
+}
+
 # Load the engine's rich report and normalize its findings to the frontend shape,
 # enriching each with a MITRE tag. Carries FixAction/FixParam so the GUI can remediate.
 # Findings touching a protected resource are tagged so the UI won't auto-select them and
@@ -466,9 +483,31 @@ function Get-EngineReportFindings {
         $phNum = 0; $pm = [regex]::Match("$($f.Phase)", '\d+(?:\.\d+)?'); if ($pm.Success) { $phNum = if ($pm.Value.Contains('.')) { [double]$pm.Value } else { [int]$pm.Value } }
         $line = if ($f.Target) { "$($f.Description) -> $($f.Target)" } else { "$($f.Description)" }
         $mit  = Resolve-MitreMain $line $tt $phNum
+        # ── protected / vendor_trusted derivation ─────────────────────────────────
+        # PROSE FALLBACK FIRST, UNCHANGED. Both guards are called with exactly the same
+        # four arguments they always were, so a finding that carries no P10 evidence
+        # fields grades byte-identically to before. Do not delete this call.
         $prot = Test-ProtectedTarget "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
         $vend = Test-VendorTrusted   "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
-        [void]$out.Add([ordered]@{
+        # STRUCTURED PASS (EVIDENCE_ENGINE_PLAN P10). Both are OR-only: they may add a
+        # protected hard-block or a vendor-trusted tag, never remove one. Both outcomes
+        # suppress auto-selection, so neither can escalate a finding (rule #1).
+        #   protected  — Test-ProtectedTarget's critical-process branch is the one test in
+        #                it that reads PROSE (it regexes the description for svchost/lsass/
+        #                explorer/... because FixParam is a bare PID). ProcessName /
+        #                ParentProcess give it the name structurally instead of by guess.
+        #   vendor     — Test-VendorTrusted keys on a vendor name appearing in the fix
+        #                target or the prose. The Authenticode Signer is the authoritative
+        #                version of that signal. Passed as the description slot so the
+        #                function's own "independent malicious signal" veto still applies
+        #                to it, and so it can only ever ADD trust to a finding that had none.
+        if (-not $prot -and ("$($f.ProcessName)" -or "$($f.ParentProcess)")) {
+            $prot = Test-ProtectedTarget "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.ProcessName) $($f.ParentProcess)"
+        }
+        if (-not $vend -and "$($f.Signer)") {
+            $vend = Test-VendorTrusted "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "signer: $($f.Signer)"
+        }
+        $rec = [ordered]@{
             id               = "$($f.ID)"
             line             = $line
             severity         = $sev
@@ -484,7 +523,15 @@ function Get-EngineReportFindings {
             mitre            = $mit
             mitre_id         = if ($mit) { $mit.id } else { $null }
             timestamp        = "$($f.Timestamp)"
-        })
+        }
+        # P10: carry the engine's structured evidence/verdict fields through to the
+        # remediation view. Absent keys stay absent, so a pre-P10 baseline JSON produces
+        # exactly the object shape it produced before.
+        foreach ($evk in $script:FINDING_EVIDENCE_FIELDS.Keys) {
+            $evp = $f.PSObject.Properties[$evk]
+            if ($evp -and "$($evp.Value)" -ne '') { $rec[$script:FINDING_EVIDENCE_FIELDS[$evk]] = $evp.Value }
+        }
+        [void]$out.Add($rec)
         $i++
     }
     return @($out)
@@ -755,12 +802,15 @@ $TKW = @{
 $PREX = [regex]'PHASE\s+(\d+(?:\.\d+)?)[^\d]'
 
 # Plan-derived ceilings — must mirror the engine loader's $PhasePlan switch
-# (FULL 1-80, DEEP/PARANOID/STEALTH 1-115). QUICK is a real gate: exactly 30
+# (FULL 1-80, DEEP/PARANOID/STEALTH/TRIAGE 1-115). QUICK is a real gate: exactly 30
 # phases run, but they are a NON-CONTIGUOUS subset (raw numbers climb to 75),
 # so QUICK progress is reported as $ScanState.PhaseIdx (1..30 count of distinct
 # headers) rather than the raw phase number. Fractional phases interpolate
 # within these bounds rather than adding to the total.
-$MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115 }
+# TRIAGE (EVIDENCE_ENGINE_PLAN P9) = the QUICK 30-phase core PLUS all of 81-115, so its
+# LABEL ceiling really is 115 and the run really does end on PHASE 115 — it uses the raw
+# phase number like DEEP, not QUICK's PhaseIdx (which would stall at ~73 of 115).
+$MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115; TRIAGE=115 }
 
 function Classify {
     param([string]$L)
@@ -834,7 +884,7 @@ function ConvertTo-Flag {
 # report out. Anything not on the allowlist falls back to FULL. (The cross-origin route into
 # here is now closed too — see Test-RequestAllowed — but this stays as defence in depth.)
 $mode     = if ($ScanConfig.mode) { ("$($ScanConfig.mode)").Trim().ToUpper() } else { 'FULL' }
-if ($mode -notin @('QUICK','FULL','DEEP','PARANOID','STEALTH')) { $mode = 'FULL' }
+if ($mode -notin @('QUICK','FULL','DEEP','PARANOID','STEALTH','TRIAGE')) { $mode = 'FULL' }
 # $hours is interpolated unquoted into the same argument string, and a raw [int] cast on a
 # non-numeric value throws — before $ScanState.Running was ever set, so the scan died with the
 # GUI still showing "starting" and no error anywhere. Parse defensively and fall back to 0
@@ -976,6 +1026,25 @@ try {
                         target      = "$($fobj.target)"
                         timestamp   = [datetime]::Now.ToString('HH:mm:ss')
                     }
+                    # ── P10 structured evidence / verdict passthrough ──────────────
+                    # Add-Finding emits these compact keys ONLY when the phase supplied
+                    # them, so a finding carrying none produces exactly the payload it
+                    # produced before this change. Keys are copied verbatim (no parsing,
+                    # no grading) — this layer classifies nothing; see the GUI for the
+                    # single behaviour attached to them (verdict LIKELY-FALSE-POSITIVE
+                    # suppresses auto-selection, which can only DEMOTE).
+                    $EVMAP = [ordered]@{
+                        sha256='sha256'; signer='signer'; sigstat='signature_status'
+                        ftime='file_write_time'; fage='file_age_hours'; fsize='file_size'
+                        zone='zone_id'; url='host_url'; refurl='referrer_url'
+                        proc='process_name'; pproc='parent_process'; esrc='evidence_source'
+                        etime='event_time'; tname='threat_name'; conf='confidence'
+                        verdict='verdict'; corrob='corroboration'; caveat='caveat'
+                    }
+                    foreach ($evk in $EVMAP.Keys) {
+                        $evp = $fobj.PSObject.Properties[$evk]
+                        if ($evp -and "$($evp.Value)" -ne '') { $f[$EVMAP[$evk]] = $evp.Value }
+                    }
                     [void]$ScanState.Findings.Add($f)
                     if ($ScanState.ThreatCounts.ContainsKey($tt2)) { $ScanState.ThreatCounts[$tt2]++ }
                     else { $ScanState.ThreatCounts['Other']++ }
@@ -1111,6 +1180,21 @@ try {
                             mitre       = $mit
                             mitre_id    = if ($mit) { $mit.id } else { $null }
                             timestamp   = [datetime]::Now.ToString('HH:mm:ss')
+                        }
+                        # P10: same evidence/verdict passthrough as the live [FINDING] path.
+                        # STEALTH buffers the engine's single audit blob, whose findings carry
+                        # the record's PascalCase keys rather than the compact stream keys.
+                        $EVMAPS = [ordered]@{
+                            Sha256='sha256'; Signer='signer'; SignatureStatus='signature_status'
+                            FileWriteTime='file_write_time'; FileAgeHours='file_age_hours'; FileSize='file_size'
+                            ZoneId='zone_id'; HostUrl='host_url'; ReferrerUrl='referrer_url'
+                            ProcessName='process_name'; ParentProcess='parent_process'; EvidenceSource='evidence_source'
+                            EventTime='event_time'; ThreatName='threat_name'; Confidence='confidence'
+                            Verdict='verdict'; Corroboration='corroboration'; Caveat='caveat'
+                        }
+                        foreach ($evsk in $EVMAPS.Keys) {
+                            $evsp = $ef.PSObject.Properties[$evsk]
+                            if ($evsp -and "$($evsp.Value)" -ne '') { $f[$EVMAPS[$evsk]] = $evsp.Value }
                         }
                         [void]$ScanState.Findings.Add($f)
                         if ($tt) {
@@ -1410,7 +1494,16 @@ try {
         $desc = "$($f.Description)"; if ($desc.Length -gt 70) { $desc = $desc.Substring(0,67) + '...' }
 
         # HARD BLOCK: never touch a protected resource, no matter what was selected.
+        # Prose call first and UNCHANGED (the fallback for every pre-P10 finding), then the
+        # P10 structured pass — the exact mirror of Get-EngineReportFindings in the main
+        # thread. Without this mirror a finding protected ONLY by its structured
+        # ProcessName would be tagged+disabled in the GUI but sail through this backstop on
+        # a direct POST, which is precisely the manual-override case the hard block exists
+        # for. OR-only: it can add a block, never lift one.
         $why = Test-RProtected "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
+        if (-not $why -and ("$($f.ProcessName)" -or "$($f.ParentProcess)")) {
+            $why = Test-RProtected "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.ProcessName) $($f.ParentProcess)"
+        }
         if ($why) {
             RLog "[BLOCKED] protected ($why) — refusing $($f.FixAction): $desc" 'POSSIBLE'
             Add-RAuditEntry -Id "$($f.ID)" -ThreatType "$($f.ThreatType)" -Severity "$($f.Severity)" -Action "$($f.FixAction)" `
@@ -1846,7 +1939,7 @@ function Handle-Request {
                     if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9 (),\-_.]{0,47}$') { Write-JsonResponse $Ctx '{"error":"invalid profile name (1-48 chars: letters, digits, space, (),-_.)"}' 400; return }
                     if ($script:PROFILE_BUILTINS.name -contains $name) { Write-JsonResponse $Ctx '{"error":"name is reserved by a built-in profile"}' 400; return }
                     $mode = "$($p.mode)".ToUpper()
-                    if (@('QUICK','FULL','DEEP','PARANOID','STEALTH') -notcontains $mode) { Write-JsonResponse $Ctx '{"error":"invalid mode"}' 400; return }
+                    if (@('QUICK','FULL','DEEP','PARANOID','STEALTH','TRIAGE') -notcontains $mode) { Write-JsonResponse $Ctx '{"error":"invalid mode"}' 400; return }
                     $hours = 0
                     if (-not [int]::TryParse("$($p.hours)", [ref]$hours) -or $hours -lt 0 -or $hours -gt 8760) {
                         # Reject rather than coerce: silently rewriting hours to 0 would turn a
