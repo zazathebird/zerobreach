@@ -207,13 +207,40 @@ if ($null -eq $amsiReg) {
         -Description "AMSI provider registry is empty — AMSI may be bypassed." `
         -Target "HKLM:\SOFTWARE\Microsoft\AMSI\Providers" -FixAction "Info" -Group "Security Tool Tampering"
 } else { Out-Typewriter "  -> [OK] AMSI PROVIDER REGISTRY INTACT." "GOOD" }
-$amsiDisable = Get-ItemProperty "HKCU:\SOFTWARE\Microsoft\Windows Script\Settings" -Name "AmsiEnable" -ErrorAction SilentlyContinue
-if ($amsiDisable.AmsiEnable -eq 0) {
-    Add-Finding -ID "AMSI_DISABLED" -Phase "PHASE 5" -ThreatType "AMSI Bypass" -Severity $SEV_CRITICAL `
-        -Description "AmsiEnable = 0 in HKCU Windows Script Settings — AMSI explicitly disabled." `
-        -Target "HKCU:\SOFTWARE\Microsoft\Windows Script\Settings\AmsiEnable" `
-        -FixAction "DeleteReg" -FixParam "HKCU:\SOFTWARE\Microsoft\Windows Script\Settings|AmsiEnable" -Group "Security Tool Tampering"
-} else { Out-Typewriter "  -> [OK] AMSI SCRIPT ENGINE ENABLED." "GOOD" }
+# P1 multi-user: this was a bare HKCU: read, so under the elevated technician session it
+# inspected the TECHNICIAN's hive and an AmsiEnable=0 planted in the victim's profile was
+# invisible — the exact false all-clear this workstream exists to remove. Walked per profile
+# now. The ID was the FIXED STRING "AMSI_DISABLED": Add-Finding's de-dupe would have kept only
+# the first user's hit, so it now carries the SID. Severity/FixAction are unchanged for a
+# normally-mounted hive; only the reg-loaded case is capped (see below).
+$zbAmsiOff = 0
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }   # not mounted and loading is off: we could not look
+    $zbAmsiKey = "$($zbHive.HivePath)\SOFTWARE\Microsoft\Windows Script\Settings"
+    if (-not (Test-Path $zbAmsiKey)) { continue }
+    $zbAmsiVal = Get-RegVal -Path $zbAmsiKey -Name "AmsiEnable"
+    if ($null -eq $zbAmsiVal -or $zbAmsiVal -ne 0) { continue }
+    $zbAmsiOff++
+    # A FixParam must never point into a ZB_UH_* mount: remediation runs later, in the server's
+    # remediation runspace, long after that mount is gone. Reg-loaded profiles get the operator
+    # commands in the description instead (rule #1's own prescription).
+    $zbAmsiAct = "DeleteReg"
+    $zbAmsiFp  = "$zbAmsiKey|AmsiEnable"
+    $zbAmsiExtra = ""
+    $zbAmsiSev = $SEV_CRITICAL
+    if ($zbHive.Source -eq 'RegLoad') {
+        $zbAmsiAct = "Info"
+        $zbAmsiFp  = ""
+        $zbAmsiSev = $SEV_HIGH   # contract: a reg-loaded (logged-off) hive caps at HIGH + Info
+        $zbAmsiExtra = " That profile's hive is only temporarily mounted by this scan, so remove it by hand: reg load HKU\ZBFIX '$($zbHive.NtUserDat)' ; Remove-ItemProperty -Path 'Registry::HKEY_USERS\ZBFIX\SOFTWARE\Microsoft\Windows Script\Settings' -Name AmsiEnable -Force ; reg unload HKU\ZBFIX"
+    }
+    Out-Typewriter "  -> AMSI DISABLED FOR USER: $($zbHive.User)" "CRIT"
+    Add-Finding -ID "AMSI_DISABLED_$(Get-StableId "$($zbHive.Sid)|$zbAmsiKey")" -Phase "PHASE 5" -ThreatType "AMSI Bypass" -Severity $zbAmsiSev `
+        -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: AmsiEnable = 0 in that user's Windows Script Settings — AMSI explicitly disabled for them.$zbAmsiExtra" `
+        -Target "[$($zbHive.User)] $zbAmsiKey\AmsiEnable" `
+        -FixAction $zbAmsiAct -FixParam $zbAmsiFp -Group "Security Tool Tampering"
+}
+if ($zbAmsiOff -eq 0) { Out-Typewriter "  -> [OK] AMSI SCRIPT ENGINE ENABLED (ALL READABLE PROFILES)." "GOOD" }
 $etw = Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\EventLog-System" -Name "Start" -ErrorAction SilentlyContinue
 if ($etw.Start -eq 0) {
     Out-Typewriter "  -> ETW SYSTEM LOGGER DISABLED." "CRIT"
@@ -1104,21 +1131,55 @@ Out-Typewriter "  -> SCRIPT HANDLER AUDIT COMPLETE." "VER"
 Show-SectionBanner "REGISTRY PERSISTENCE SCRUB"
 
 Show-PhaseHeader "PHASE 20" "RUN / RUNONCE HEURISTIC SCRUB"
-$runPaths = @(
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
+# P1 multi-user: the two HKLM roots (plus their WOW6432Node twins) are MACHINE scope and are
+# enumerated exactly ONCE — a box with 8 profiles must not report a machine-wide Run value 8
+# times. The former HKCU roots become hive-relative and are walked per profile, so a Run-key
+# persistence living in the victim's profile is finally visible from the technician's elevated
+# session. GRADING IS UNCHANGED: the $RUNKEY_BENIGN_RE allowlist branch and the AppData
+# POSSIBLE branch are byte-identical in behaviour to before.
+# ID: was "RUNKEY_<propname>", which already collided HKCU-vs-HKLM on a SINGLE-user box (one
+# "Updater" value in each hive kept only whichever was seen first) and would have collapsed
+# every user's copy into one. It now hashes SID|path|name.
+$zbRunTargets = @()
+foreach ($zbMp in @(
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
     "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
-    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce"
-)
-foreach ($rp in $runPaths) {
-    Out-Typewriter "AUDITING HIVE: $rp" "INFO"
-    if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce")) {
+    $zbRunTargets += @{ Path = $zbMp; User = 'MACHINE'; Sid = 'MACHINE'; Src = 'HKLM' }
+}
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }   # not mounted and loading is off: we could not look
+    foreach ($zbRel in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+                         'SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce')) {
+        $zbRunTargets += @{ Path = "$($zbHive.HivePath)\$zbRel"
+                            User = $zbHive.User; Sid = $zbHive.Sid; Src = $zbHive.Source }
+    }
+}
+$zbRunAudited = 0
+foreach ($zbT in $zbRunTargets) {
+    $rp = $zbT.Path
+    Out-Typewriter "AUDITING HIVE: [$($zbT.User)] $rp" "INFO"
+    # Cosmetic typewriter pacing only, capped at the original 6-root count: a terminal server
+    # with 25 profiles would otherwise add ~30s of pure Start-Sleep to an interactive run.
+    if ((-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) -and $zbRunAudited -lt 6) { Start-Sleep -Milliseconds 600 }
+    $zbRunAudited++
     if (Test-Path $rp) {
+        # A FixParam must never point into a ZB_UH_* mount — remediation runs later, in the
+        # server's remediation runspace, long after that mount is gone.
+        $zbRunAct    = "DeleteReg"
+        $zbRunHint   = ""
+        $zbRunSev    = $SEV_CRITICAL
+        $zbRunMounted = ($zbT.Src -eq 'RegLoad')
+        if ($zbRunMounted) {
+            $zbRunAct  = "Info"
+            $zbRunSev  = $SEV_HIGH   # contract: a reg-loaded (logged-off) hive caps at HIGH + Info
+            $zbRunHint = " That profile's hive is only temporarily mounted by this scan — remove by hand with reg load HKU\ZBFIX / Remove-ItemProperty / reg unload HKU\ZBFIX."
+        }
         $keys = Get-ItemProperty -Path $rp -ErrorAction SilentlyContinue
         foreach ($prop in ($keys.psobject.properties | Where-Object { $_.Name -notmatch "^PS" }).Name) {
             $val = $keys.$prop
+            $zbRunId = "RUNKEY_$(Get-StableId "$($zbT.Sid)|$rp|$prop")"
             # Strong indicators (Temp / script host / encoded / LOLBin / remote) = CRITICAL auto-deletable.
             # Bare 'AppData' is NOT a strong signal on its own — Discord, Teams, Slack, OneDrive, Logitech
             # and most updaters legitimately autostart from AppData\Local, so an AppData-only value is
@@ -1127,26 +1188,26 @@ foreach ($rp in $runPaths) {
                 # OS/OneDrive write their own cmd.exe+del cleanup RunOnce values — allowlisted
                 # name=value pairs are review-only, never auto-DeleteReg on a healthy box.
                 if ("$prop = $val" -match $RUNKEY_BENIGN_RE) {
-                    Out-Decrypt -Text "$prop = $val" -Prefix "  [RUN KEY?] "
-                    Add-Finding -ID "RUNKEY_$($prop -replace '[^a-z0-9]','')" -Phase "PHASE 20" -ThreatType "Registry Persistence" `
-                        -Severity $SEV_POSSIBLE -Description "Run key matches a known-benign OS cleanup entry (allowlisted — review only): [$rp] $prop = $val" `
-                        -Target "$rp|$prop" -FixAction "Info" -Group "Run Key Persistence"
+                    Out-Decrypt -Text "[$($zbT.User)] $prop = $val" -Prefix "  [RUN KEY?] "
+                    Add-Finding -ID $zbRunId -Phase "PHASE 20" -ThreatType "Registry Persistence" `
+                        -Severity $SEV_POSSIBLE -Description "User $($zbT.User) [hive source: $($zbT.Src)]: Run key matches a known-benign OS cleanup entry (allowlisted — review only): [$rp] $prop = $val" `
+                        -Target "[$($zbT.User)] $rp|$prop" -FixAction "Info" -Group "Run Key Persistence"
                 } else {
-                Out-Decrypt -Text "$prop = $val" -Prefix "  [RUN KEY] "
-                Add-Finding -ID "RUNKEY_$($prop -replace '[^a-z0-9]','')" -Phase "PHASE 20" -ThreatType "Registry Persistence" `
-                    -Severity $SEV_CRITICAL -Description "Malicious Run key: [$rp] $prop = $val" `
-                    -Target "$rp|$prop" -FixAction "DeleteReg" -FixParam "$rp|$prop" -Group "Run Key Persistence"
+                Out-Decrypt -Text "[$($zbT.User)] $prop = $val" -Prefix "  [RUN KEY] "
+                Add-Finding -ID $zbRunId -Phase "PHASE 20" -ThreatType "Registry Persistence" `
+                    -Severity $zbRunSev -Description "User $($zbT.User) [hive source: $($zbT.Src)]: malicious Run key: [$rp] $prop = $val$zbRunHint" `
+                    -Target "[$($zbT.User)] $rp|$prop" -FixAction $zbRunAct -FixParam $(if ($zbRunMounted) { "" } else { "$rp|$prop" }) -Group "Run Key Persistence"
                 }
             } elseif ($val -match "AppData") {
-                Out-Decrypt -Text "$prop = $val" -Prefix "  [RUN KEY?] "
-                Add-Finding -ID "RUNKEY_$($prop -replace '[^a-z0-9]','')" -Phase "PHASE 20" -ThreatType "Registry Persistence" `
-                    -Severity $SEV_POSSIBLE -Description "Run key launches from AppData (review — common for legitimate apps, so NOT auto-removed): [$rp] $prop = $val" `
-                    -Target "$rp|$prop" -FixAction "Info" -Group "Run Key Persistence"
+                Out-Decrypt -Text "[$($zbT.User)] $prop = $val" -Prefix "  [RUN KEY?] "
+                Add-Finding -ID $zbRunId -Phase "PHASE 20" -ThreatType "Registry Persistence" `
+                    -Severity $SEV_POSSIBLE -Description "User $($zbT.User) [hive source: $($zbT.Src)]: Run key launches from AppData (review — common for legitimate apps, so NOT auto-removed): [$rp] $prop = $val" `
+                    -Target "[$($zbT.User)] $rp|$prop" -FixAction "Info" -Group "Run Key Persistence"
             }
         }
     }
 }
-Out-Typewriter "  -> RUN/RUNONCE AUDIT COMPLETE." "VER"
+Out-Typewriter "  -> RUN/RUNONCE AUDIT COMPLETE ($zbRunAudited HIVE ROOT(S))." "VER"
 
 Show-PhaseHeader "PHASE 21" "IMAGE FILE EXECUTION OPTIONS (IFEO) SCRUB"
 $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"
@@ -1218,13 +1279,28 @@ foreach ($ifr in $IFEO_REG_ROOTS) {
 # COM TypeLib hijack: a per-user TypeLib entry shadowing a machine-wide one causes the
 # referenced script/DLL to load whenever the COM object is instantiated. A win32-path
 # TypeLib pointing at a script host or a user-writable path is the give-away.
+# P1 multi-user: $COM_TYPELIB_ROOTS is a pure-HKCU list, so under the elevated technician
+# session this walked the TECHNICIAN's class store and every other profile's TypeLib hijack was
+# invisible. The HKCU: prefix is stripped defensively at the CALL SITE (an already-relative
+# entry passes through unchanged, so old and new data both work and no data edit is needed),
+# and the remaining Software\Classes\ segment is dropped because the per-user class store is a
+# SEPARATE hive file (UsrClass.dat) exposed as ClassesHivePath — for a reg-loaded profile
+# NTUSER.DAT's own Software\Classes is nearly empty (measured: 1 CLSID subkey vs 6).
+# The LIVE-TUNED Teams Meeting Add-in exemption below is intact and now applies PER PROFILE:
+# every profile with Teams reproduces that same signed-binary-under-AppData shape, and each is
+# graded through the same $tlSigned test, so it stays POSSIBLE + Info for all of them.
 foreach ($tlRoot in $COM_TYPELIB_ROOTS) {
     if ($tlRoot -notmatch 'TypeLib$') { continue }   # only the TypeLib hive holds win32/win64 leaves
-    $tlPath = $tlRoot
-    if (-not (Test-Path -LiteralPath $tlPath)) { continue }
+    $zbTlRel = "$tlRoot" -replace '(?i)^HK(CU|EY_CURRENT_USER):?\\', ''
+    $zbTlRel = $zbTlRel  -replace '(?i)^SOFTWARE\\Classes\\', ''
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.ClassesHivePath) { continue }   # no per-user class store reachable: we could not look
+        $tlPath = "$($zbHive.ClassesHivePath)\$zbTlRel"
+        if (-not (Test-Path -LiteralPath $tlPath)) { continue }
+        $zbTlUp = Get-UserPaths $zbHive
     # Depth 4, not 3: the path is TypeLib\{GUID}\<ver>\<lcid>\win32 — a depth of 3 stops one level
-    # short and finds nothing. Scoped to HKCU deliberately: the per-user hive holds only overrides,
-    # so it stays small, and a per-user TypeLib shadowing a machine-wide one IS the hijack.
+    # short and finds nothing. Scoped to the per-user class store deliberately: that hive holds only
+    # overrides, so it stays small, and a per-user TypeLib shadowing a machine-wide one IS the hijack.
     foreach ($tl in (Get-ChildItem -Path $tlPath -Recurse -Depth 4 -ErrorAction SilentlyContinue)) {
         if ("$($tl.PSChildName)" -notmatch '^win(32|64)$') { continue }
         $tlVal = Get-RegVal -Path $tl.PSPath -Name '(default)'
@@ -1235,26 +1311,50 @@ foreach ($tlRoot in $COM_TYPELIB_ROOTS) {
         # validly signed. Everything else is review-only.
         $tlIsScript = ($tlVal -match '(?i)\.(js|jse|vbs|vbe|wsf|wsh|hta|sct|ps1)(\b|$)')
         if (-not $tlIsScript -and $tlVal -notmatch $global:USER_PATH_RE) { continue }
-        $tlResolved = [Environment]::ExpandEnvironmentVariables("$tlVal").Trim('"')
+        # Resolve %APPDATA%/%USERPROFILE%/... against the TARGET user, not the technician —
+        # otherwise the signature check would stat a path in the wrong profile (usually absent,
+        # which silently promotes a signed Teams add-in from POSSIBLE to HIGH + DeleteRegKey).
+        # Falls back to the old process-env expansion when the template resolver cannot help.
+        $tlResolved = $null
+        if ($zbTlUp) { $tlResolved = Expand-UserPathTemplate "$tlVal" $zbTlUp }
+        if (-not $tlResolved) { $tlResolved = [Environment]::ExpandEnvironmentVariables("$tlVal") }
+        $tlResolved = "$tlResolved".Trim('"')
         $tlSigned = $false
         if (-not $tlIsScript -and $tlResolved -and (Test-Path -LiteralPath $tlResolved)) {
             $tlSig = Get-AuthSig $tlResolved
             $tlSigned = ($tlSig -and $tlSig.Status -eq 'Valid')
         }
         $ifeoExtra++
+        # PSPath comes back provider-qualified ("Microsoft.PowerShell.Core\Registry::HKEY_USERS\...").
+        # Normalise to the short form: the server's Test-ProtectedTarget P1 guards (service hives,
+        # and the HARD block on ZB_UH_*/ZB_UC_* mounts that no longer exist at remediation time) are
+        # ANCHORED at '^Registry::', so a provider-qualified FixParam would slip straight past them.
+        $zbTlPs = "$($tl.PSPath)" -replace '^Microsoft\.PowerShell\.Core\\Registry::', 'Registry::'
+        $zbTlId = "TYPELIB_$(Get-StableId "$($zbHive.Sid)|$zbTlPs")"
         if ($tlSigned) {
-            Add-Finding -ID "TYPELIB_$(Get-StableId "$($tl.PSPath)")" -Phase "PHASE 21.5" `
+            Add-Finding -ID $zbTlId -Phase "PHASE 21.5" `
                 -ThreatType "COM TypeLib Hijack" -Severity $SEV_POSSIBLE `
-                -Description "Per-user COM TypeLib entry points into a user-writable path but the target is validly signed (normal for per-user Office/Teams add-ins) — review only: $tlVal" `
-                -Target "$($tl.PSPath)" -FixAction "Info" -Group "COM Hijack Persistence"
+                -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: per-user COM TypeLib entry points into a user-writable path but the target is validly signed (normal for per-user Office/Teams add-ins) — review only: $tlVal" `
+                -Target "[$($zbHive.User)] $zbTlPs" -FixAction "Info" -Group "COM Hijack Persistence"
             continue
         }
-        Out-Decrypt -Text "$($tl.PSPath) -> $tlVal" -Prefix "  [TYPELIB HIJACK] "
-        Add-Finding -ID "TYPELIB_$(Get-StableId "$($tl.PSPath)")" -Phase "PHASE 21.5" `
+        # A FixParam must never point into a ZB_UH_*/ZB_UC_* mount: remediation runs later, in
+        # the server's remediation runspace, long after that mount is gone.
+        $zbTlAct  = "DeleteRegKey"
+        $zbTlFp   = $zbTlPs
+        $zbTlHint = ""
+        if ($zbHive.Source -eq 'RegLoad') {
+            $zbTlAct  = "Info"
+            $zbTlFp   = ""
+            $zbTlHint = " That profile's class store is only temporarily mounted by this scan — remove by hand after re-mounting it (reg load / Remove-Item -Recurse / reg unload)."
+        }
+        Out-Decrypt -Text "[$($zbHive.User)] $zbTlPs -> $tlVal" -Prefix "  [TYPELIB HIJACK] "
+        Add-Finding -ID $zbTlId -Phase "PHASE 21.5" `
             -ThreatType "COM TypeLib Hijack" -Severity $SEV_HIGH `
-            -Description "Per-user COM TypeLib entry resolves to $(if ($tlIsScript) { 'a SCRIPT' } else { 'an unsigned binary' }) — loads on every instantiation of the COM object: $tlVal" `
-            -Target "$($tl.PSPath)" -FixAction "DeleteRegKey" -FixParam "$($tl.PSPath)" `
+            -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: per-user COM TypeLib entry resolves to $(if ($tlIsScript) { 'a SCRIPT' } else { 'an unsigned binary' }) — loads on every instantiation of the COM object: $tlVal$zbTlHint" `
+            -Target "[$($zbHive.User)] $zbTlPs" -FixAction $zbTlAct -FixParam $zbTlFp `
             -Group "COM Hijack Persistence"
+    }
     }
 }
 if ($ifeoExtra -eq 0) { Out-Typewriter "  -> [OK] NO SILENT-EXIT / EDR-BLINDING / TYPELIB HIJACKS." "GOOD" }
@@ -1365,24 +1465,39 @@ if ($wlKeys.Userinit -and $wlKeys.Userinit -notmatch "^C:\\Windows\\system32\\us
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
-Show-PhaseHeader "PHASE 24" "COM OBJECT HIJACK AUDIT (HKCU CLSID OVERRIDES)"
-Out-Typewriter "SCANNING HKCU COM OVERRIDES..." "INFO"
+Show-PhaseHeader "PHASE 24" "COM OBJECT HIJACK AUDIT (PER-USER CLSID OVERRIDES)"
+Out-Typewriter "SCANNING PER-USER COM OVERRIDES (ALL READABLE PROFILES)..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$hkcuClsid = "HKCU:\SOFTWARE\Classes\CLSID"
 # WS9 correlation feed (Phase 105): confirmed-hijack CLSIDs, keyed independent of Severity — a
 # PARANOID-mode run promotes every stored POSSIBLE finding to HIGH (Add-Finding's own escalation
 # rule), which would make the benign "per-user CLSID, no HKLM twin" branch below storage-
 # indistinguishable from a genuine HKLM-shadowing hijack if Phase 105 keyed off $f.Severity.
+# NOTE: still keyed by bare CLSID GUID, because Phase 105 looks it up as $hijackedClsids[$ct.ClassId]
+# from a ComHandler task's ClassId. If the SAME CLSID is hijacked in two profiles the map keeps the
+# last one — the FINDINGS are per-user and complete; only the correlation's example path is one of them.
 $global:ZB_ComHijackConfirmedClsids = @{}
-if (Test-Path $hkcuClsid) {
-    # Per-user COM registration (HKCU\Classes\CLSID) is NORMAL — Teams add-ins, Office, OneDrive,
-    # .NET and shell extensions all register here. The actual COM-hijack technique (T1546.015) is an
-    # HKCU CLSID that SHADOWS a CLSID already registered in HKLM (so the per-user one wins at load
+# P1 multi-user: this read a bare HKCU:\SOFTWARE\Classes\CLSID, i.e. the TECHNICIAN's class store,
+# so a COM hijack in the victim's profile was structurally invisible. Walked per profile via
+# ClassesHivePath — NOT "$HivePath\Software\Classes": for a reg-loaded profile the real class
+# registrations live in a separately mounted UsrClass.dat and NTUSER.DAT's own Software\Classes is
+# nearly empty (measured: 1 CLSID subkey vs 6 for a live user). The "must shadow HKLM AND have a
+# server override" gate is unchanged, as are both severities and both fix actions.
+$comTopSeen = 0
+$comShadow  = 0
+$comHivesLooked = 0
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.ClassesHivePath) { continue }   # no per-user class store reachable: we could not look
+    $hkcuClsid = "$($zbHive.ClassesHivePath)\CLSID"
+    if (-not (Test-Path $hkcuClsid)) { continue }
+    $comHivesLooked++
+    # Per-user COM registration (<user>\Classes\CLSID) is NORMAL — Teams add-ins, Office, OneDrive,
+    # .NET and shell extensions all register here. The actual COM-hijack technique (T1546.015) is a
+    # per-user CLSID that SHADOWS a CLSID already registered in HKLM (so the per-user one wins at load
     # time). So: only enumerate top-level {GUID} keys (NOT -Recurse, which flooded every InprocServer32/
     # ProgID/TypeLib subkey as a separate finding), and escalate ONLY when the same CLSID exists in
     # HKLM. A purely per-user CLSID with no HKLM twin is review-only (POSSIBLE + Info), never auto-acted.
     $comTopKeys = @(Get-ChildItem -Path $hkcuClsid -ErrorAction SilentlyContinue)
-    $comShadow = 0
+    $comTopSeen += $comTopKeys.Count
     foreach ($k in $comTopKeys) {
         $guid = $k.PSChildName
         if ($guid -notmatch '^\{[0-9A-Fa-f-]{36}\}$') { continue }   # only real CLSID GUID keys
@@ -1390,45 +1505,81 @@ if (Test-Path $hkcuClsid) {
                        (Test-Path "HKLM:\SOFTWARE\Wow6432Node\Classes\CLSID\$guid")
         $inproc = (Get-RegVal -Path "$($k.PSPath)\InprocServer32" -Name "(default)")
         if (-not $inproc) { $inproc = (Get-RegVal -Path "$($k.PSPath)\LocalServer32" -Name "(default)") }
+        # ID was "COM_<guid>", which collapsed every profile's copy of a CLSID into ONE finding
+        # via Add-Finding's de-dupe — it now carries the SID.
+        $zbComId = "COM_$($guid -replace '[^a-z0-9]','')_$(Get-StableId "$($zbHive.Sid)")"
+        # PSPath is provider-qualified; the server's Test-ProtectedTarget P1 guards (service hives,
+        # and the HARD block on ZB_UC_* mounts that no longer exist at remediation time) are ANCHORED
+        # at '^Registry::', so a provider-qualified FixParam would slip straight past them.
+        $zbComPs = "$($k.PSPath)" -replace '^Microsoft\.PowerShell\.Core\\Registry::', 'Registry::'
         if ($shadowsHklm -and $inproc) {
             # Real hijack: a per-user CLSID overriding a system-registered COM object WITH an actual
             # server path (Inproc/LocalServer32). A CLSID that merely shadows HKLM but has NO server
             # override (null Inproc/Local) is not a functioning hijack — it's a benign per-user shell
             # CLSID key holding only settings/sub-keys (e.g. {031E4825-...}/{86ca1aa0-...}) — review only.
-            Out-Decrypt -Text $k.PSPath -Prefix "  [COM HIJACK] "
+            Out-Decrypt -Text "[$($zbHive.User)] $zbComPs" -Prefix "  [COM HIJACK] "
             $comShadow++
-            $global:ZB_ComHijackConfirmedClsids[$guid.ToUpper()] = $k.PSPath
-            Add-Finding -ID "COM_$($guid -replace '[^a-z0-9]','')" -Phase "PHASE 24" -ThreatType "COM Hijack" `
-                -Severity $SEV_HIGH -Description "HKCU COM override SHADOWS an HKLM-registered CLSID with a per-user server override (COM hijack persistence): $guid -> $inproc" `
-                -Target $k.PSPath -FixAction "DeleteRegKey" -FixParam $k.PSPath -Group "COM Object Hijacks"
+            $global:ZB_ComHijackConfirmedClsids[$guid.ToUpper()] = $zbComPs
+            # A FixParam must never point into a ZB_UC_* mount — remediation runs in a later process.
+            $zbComAct  = "DeleteRegKey"
+            $zbComFp   = $zbComPs
+            $zbComHint = ""
+            if ($zbHive.Source -eq 'RegLoad') {
+                $zbComAct  = "Info"
+                $zbComFp   = ""
+                $zbComHint = " That profile's class store is only temporarily mounted by this scan — remove by hand after re-mounting it (reg load / Remove-Item -Recurse / reg unload)."
+            }
+            Add-Finding -ID $zbComId -Phase "PHASE 24" -ThreatType "COM Hijack" `
+                -Severity $SEV_HIGH -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: per-user COM override SHADOWS an HKLM-registered CLSID with a per-user server override (COM hijack persistence): $guid -> $inproc$zbComHint" `
+                -Target "[$($zbHive.User)] $zbComPs" -FixAction $zbComAct -FixParam $zbComFp -Group "COM Object Hijacks"
         } else {
             # Pure per-user registration (no HKLM twin) — normal for add-ins; surface for review only.
-            Add-Finding -ID "COM_$($guid -replace '[^a-z0-9]','')" -Phase "PHASE 24" -ThreatType "COM Hijack" `
-                -Severity $SEV_POSSIBLE -Description "Per-user COM registration (review — usually a legit add-in): $guid -> $inproc" `
-                -Target $k.PSPath -FixAction "Info" -Group "COM Object Hijacks"
+            Add-Finding -ID $zbComId -Phase "PHASE 24" -ThreatType "COM Hijack" `
+                -Severity $SEV_POSSIBLE -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: per-user COM registration (review — usually a legit add-in): $guid -> $inproc" `
+                -Target "[$($zbHive.User)] $zbComPs" -FixAction "Info" -Group "COM Object Hijacks"
         }
     }
-    if ($comTopKeys.Count -eq 0) { Out-Typewriter "  -> [OK] NO HKCU COM OVERRIDES." "GOOD" }
-    else { Out-Typewriter ("  -> COM AUDIT: {0} per-user CLSID(s), {1} shadowing HKLM." -f $comTopKeys.Count, $comShadow) "VER" }
-} else { Out-Typewriter "  -> [OK] HKCU CLSID ABSENT." "GOOD" }
+}
+if ($comHivesLooked -eq 0) { Out-Typewriter "  -> [OK] NO PER-USER CLSID STORE READABLE." "GOOD" }
+elseif ($comTopSeen -eq 0) { Out-Typewriter "  -> [OK] NO PER-USER COM OVERRIDES." "GOOD" }
+else { Out-Typewriter ("  -> COM AUDIT: {0} per-user CLSID(s) across {1} profile(s), {2} shadowing HKLM." -f $comTopSeen, $comHivesLooked, $comShadow) "VER" }
 
 Show-PhaseHeader "PHASE 25" "GPO LOCKDOWN — TASKMGR/REGEDIT/CMD DISABLED"
-$gpoU = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Policies\System"
+# P1 multi-user: the per-user half read a bare HKCU:, i.e. the TECHNICIAN's hive — a
+# ransomware/RAT lockdown of the VICTIM's Task Manager / RegEdit / CMD reported clean. The
+# HKLM half is MACHINE scope and is still read exactly ONCE, outside the profile loop, so a
+# box with 8 profiles reports a machine-wide lockdown once, not 8 times.
+# ID: "GPO_<pol>" was per-policy only and would have collapsed every user's copy into one via
+# Add-Finding's de-dupe; it now carries the SID. The HKLM twin "GPO_M_<pol>" is genuinely
+# machine-unique and is left exactly as it was (baseline-stable).
 $gpoM = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+$gpoRel = "Software\Microsoft\Windows\CurrentVersion\Policies\System"
 foreach ($pol in @("DisableTaskMgr","DisableRegistryTools","DisableCMD")) {
-    $vU = (Get-RegVal -Path $gpoU -Name $pol)
-    $vM = (Get-RegVal -Path $gpoM -Name $pol)
-    if ($vU -eq 1) {
-        Out-Typewriter "  -> $pol DISABLED (HKCU)" "CRIT"
-        Add-Finding -ID "GPO_$pol" -Phase "PHASE 25" -ThreatType "GPO Lockdown (Malware)" -Severity $SEV_HIGH `
-            -Description "GPO policy $pol = 1 (HKCU) — malware commonly disables Task Manager/RegEdit/CMD" `
-            -Target "$gpoU|$pol" -FixAction "DeleteReg" -FixParam "$gpoU|$pol" -Group "GPO / Policy Lockdowns"
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.HivePath) { continue }   # not mounted and loading is off: we could not look
+        $gpoU = "$($zbHive.HivePath)\$gpoRel"
+        $vU = (Get-RegVal -Path $gpoU -Name $pol)
+        if ($vU -ne 1) { continue }
+        # A FixParam must never point into a ZB_UH_* mount — remediation runs in a later process.
+        $zbGpoAct  = "DeleteReg"
+        $zbGpoFp   = "$gpoU|$pol"
+        $zbGpoHint = ""
+        if ($zbHive.Source -eq 'RegLoad') {
+            $zbGpoAct  = "Info"
+            $zbGpoFp   = ""
+            $zbGpoHint = " That profile's hive is only temporarily mounted by this scan — clear by hand with reg load HKU\ZBFIX / Remove-ItemProperty / reg unload HKU\ZBFIX."
+        }
+        Out-Typewriter "  -> $pol DISABLED FOR USER $($zbHive.User)" "CRIT"
+        Add-Finding -ID "GPO_$($pol)_$(Get-StableId "$($zbHive.Sid)")" -Phase "PHASE 25" -ThreatType "GPO Lockdown (Malware)" -Severity $SEV_HIGH `
+            -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: GPO policy $pol = 1 in that user's hive — malware commonly disables Task Manager/RegEdit/CMD$zbGpoHint" `
+            -Target "[$($zbHive.User)] $gpoU|$pol" -FixAction $zbGpoAct -FixParam $zbGpoFp -Group "GPO / Policy Lockdowns"
     }
+    $vM = (Get-RegVal -Path $gpoM -Name $pol)
     if ($vM -eq 1) {
         Out-Typewriter "  -> $pol DISABLED (HKLM)" "CRIT"
         Add-Finding -ID "GPO_M_$pol" -Phase "PHASE 25" -ThreatType "GPO Lockdown (Malware)" -Severity $SEV_HIGH `
-            -Description "GPO policy $pol = 1 (HKLM) — may be malware-imposed lockdown" `
-            -Target "$gpoM|$pol" -FixAction "DeleteReg" -FixParam "$gpoM|$pol" -Group "GPO / Policy Lockdowns"
+            -Description "[MACHINE] GPO policy $pol = 1 (HKLM, applies to every user) — may be malware-imposed lockdown" `
+            -Target "[MACHINE] $gpoM|$pol" -FixAction "DeleteReg" -FixParam "$gpoM|$pol" -Group "GPO / Policy Lockdowns"
     }
 }
 Out-Typewriter "  -> GPO POLICY AUDIT COMPLETE." "VER"
@@ -1959,16 +2110,51 @@ Out-Typewriter "  -> [OK] DNS CACHE FLUSHED." "GOOD"
 }   # end QUICK-skip block
 Show-PhaseHeader "PHASE 35" "PROXY & WINHTTP POISON RESET"
 Out-Typewriter "AUDITING PROXY SETTINGS..." "INFO"
-$proxyPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings"
-$ps = Get-ItemProperty -Path $proxyPath -ErrorAction SilentlyContinue
-if ($ps.ProxyEnable -eq 1) {
-    Out-Typewriter "  -> ROGUE PROXY ENABLED: $($ps.ProxyServer)" "CRIT"
-    Add-Finding -ID "PROXY_ENABLE" -Phase "PHASE 35" -ThreatType "Proxy Hijack" -Severity $SEV_CRITICAL `
-        -Description "Rogue proxy configured: $($ps.ProxyServer)" `
-        -Target "$proxyPath|ProxyEnable" -FixAction "RunCmd" `
-        -FixParam "Set-ItemProperty -Path '$proxyPath' -Name ProxyEnable -Value 0 -Force; Remove-ItemProperty -Path '$proxyPath' -Name ProxyServer -Force; netsh winhttp reset proxy" `
+# P1 multi-user — THE WORST CASE IN THIS BATCH, now fixed. $proxyPath was a bare HKCU: read and
+# the SAME variable was embedded TWICE in the RunCmd FixParam, so on a standard-user endpoint the
+# remediation reset the TECHNICIAN's proxy and left the victim's hijack fully armed, while the
+# finding text claimed the hijack was handled. $proxyPath is now rebuilt PER HIVE and the FixParam
+# only ever names that user's own key.
+# SECOND FIX: `netsh winhttp reset proxy` is MACHINE scope. It was welded onto the end of every
+# per-user RunCmd, so on a multi-profile box it would have run once per profile. It is now a
+# SEPARATE machine-level finding emitted exactly ONCE, and only when at least one profile is
+# actually proxied — its blast radius is unchanged from today (it already fired whenever this
+# phase fired) but it is no longer multiplied.
+$zbProxyRel  = "Software\Microsoft\Windows\CurrentVersion\Internet Settings"
+$zbProxyHits = 0
+$zbProxyWho  = @()
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }   # not mounted and loading is off: we could not look
+    $proxyPath = "$($zbHive.HivePath)\$zbProxyRel"
+    if (-not (Test-Path $proxyPath)) { continue }
+    $ps = Get-ItemProperty -Path $proxyPath -ErrorAction SilentlyContinue
+    if ($ps.ProxyEnable -ne 1) { continue }
+    $zbProxyHits++
+    $zbProxyWho += "$($zbHive.User) -> $($ps.ProxyServer)"
+    # A FixParam must never point into a ZB_UH_* mount — remediation runs in a later process.
+    $zbPxAct  = "RunCmd"
+    $zbPxFp   = "Set-ItemProperty -Path '$proxyPath' -Name ProxyEnable -Value 0 -Force; Remove-ItemProperty -Path '$proxyPath' -Name ProxyServer -Force"
+    $zbPxHint = ""
+    $zbPxSev  = $SEV_CRITICAL
+    if ($zbHive.Source -eq 'RegLoad') {
+        $zbPxAct  = "Info"
+        $zbPxFp   = ""
+        $zbPxSev  = $SEV_HIGH   # contract: a reg-loaded (logged-off) hive caps at HIGH + Info
+        $zbPxHint = " That profile's hive is only temporarily mounted by this scan — clear by hand: reg load HKU\ZBFIX '$($zbHive.NtUserDat)' ; Set-ItemProperty -Path 'Registry::HKEY_USERS\ZBFIX\$zbProxyRel' -Name ProxyEnable -Value 0 -Force ; reg unload HKU\ZBFIX"
+    }
+    Out-Typewriter "  -> PROXY ENABLED FOR $($zbHive.User): $($ps.ProxyServer)" "CRIT"
+    Add-Finding -ID "PROXY_ENABLE_$(Get-StableId "$($zbHive.Sid)|$proxyPath")" -Phase "PHASE 35" -ThreatType "Proxy Hijack" -Severity $zbPxSev `
+        -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: proxy configured for that user: $($ps.ProxyServer). NOTE this fires on ANY configured proxy, including a legitimate corporate one — confirm the address is not an attacker relay before clearing it.$zbPxHint" `
+        -Target "[$($zbHive.User)] $proxyPath|ProxyEnable" -FixAction $zbPxAct -FixParam $zbPxFp `
         -Group "Proxy / Network Hijack"
-} else { Out-Typewriter "  -> [OK] NO ROGUE PROXY." "GOOD" }
+}
+if ($zbProxyHits -gt 0) {
+    # Emitted ONCE, machine-scope. Split out of the per-user RunCmd above so it cannot run N times.
+    Add-Finding -ID "PROXY_WINHTTP_MACHINE" -Phase "PHASE 35" -ThreatType "Proxy Hijack" -Severity $SEV_CRITICAL `
+        -Description "[MACHINE] $zbProxyHits user profile(s) have a proxy configured ($($zbProxyWho -join '; ')). The machine-wide WinHTTP proxy (used by services and the OS itself, NOT per-user) is reset separately and only once — confirm no legitimate corporate WinHTTP proxy is in use before applying." `
+        -Target "[MACHINE] WinHTTP proxy" -FixAction "RunCmd" -FixParam "netsh winhttp reset proxy" `
+        -Group "Proxy / Network Hijack"
+} else { Out-Typewriter "  -> [OK] NO ROGUE PROXY IN ANY READABLE PROFILE." "GOOD" }
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
@@ -2185,9 +2371,21 @@ function Get-CertStoreInstallTime {
     } catch {}
     return $null
 }
+# ── P1 SCOPE LIMIT — DELIBERATELY NOT MIGRATED TO MULTI-USER (operator decision, 2026-07-26) ──
+# Cert:\CurrentUser\Root is a PSDrive with no per-SID form, so covering every profile's personal
+# root store would mean parsing raw certificate blobs straight out of each user's
+# ...\SystemCertificates\Root\Certificates\<thumbprint>\Blob value — a large amount of new
+# parsing for an Info-only payoff. That was declined. What is NOT acceptable is letting the
+# result read as an all-users verdict when it is a single-user one, so the CurrentUser store's
+# label, every CurrentUser finding description and the phase's clean line all now state the
+# limit explicitly. (LocalMachine IS machine-wide and genuinely covers everyone.)
+# The Id values are UNCHANGED on purpose — they are baked into the finding IDs and therefore
+# into every -Baseline snapshot.
+$zbCertUserLabel = "CurrentUser ($env:USERNAME — THE SCAN-CONTEXT USER ONLY)"
+$zbCertScopeNote = " || SCOPE LIMIT: this store belongs ONLY to the account this scan runs as ($env:USERNAME). Because the engine self-elevates, that is the TECHNICIAN's account on a standard-user endpoint, NOT the logged-on victim's. Other profiles' personal root stores were NOT examined by this phase — a clean result here is not an all-users result."
 $certStores = @(
-    @{ Cert='Cert:\LocalMachine\Root'; Reg='HKLM:\SOFTWARE\Microsoft\SystemCertificates\Root\Certificates'; Label='LocalMachine'; Id='LM'   },
-    @{ Cert='Cert:\CurrentUser\Root';  Reg='HKCU:\SOFTWARE\Microsoft\SystemCertificates\Root\Certificates'; Label='CurrentUser'; Id='USER' }
+    @{ Cert='Cert:\LocalMachine\Root'; Reg='HKLM:\SOFTWARE\Microsoft\SystemCertificates\Root\Certificates'; Label='LocalMachine (machine-wide, applies to every user)'; Id='LM'   },
+    @{ Cert='Cert:\CurrentUser\Root';  Reg='HKCU:\SOFTWARE\Microsoft\SystemCertificates\Root\Certificates'; Label=$zbCertUserLabel; Id='USER' }
 )
 $certSeen = 0
 foreach ($cs in $certStores) {
@@ -2220,12 +2418,15 @@ foreach ($cs in $certStores) {
         # store is a Test-ProtectedTarget HARD block on all three layers anyway, so a RunCmd
         # here could never execute — this way the operator at least gets the exact command.
         Add-Finding -ID "CERT_$($cs.Id)_$($cert.Thumbprint.Substring(0,8))" -Phase "PHASE 39" -ThreatType "Rogue Certificate" `
-            -Severity $certSev -Description "$certDesc || To remove by hand after verifying: Remove-Item '$($cs.Cert)\$($cert.Thumbprint)' -Force" `
+            -Severity $certSev -Description "$certDesc || To remove by hand after verifying: Remove-Item '$($cs.Cert)\$($cert.Thumbprint)' -Force$(if ($cs.Id -eq 'USER') { $zbCertScopeNote })" `
             -Target "$($cs.Cert)\$($cert.Thumbprint)" -FixAction "Info" `
             -Group "Rogue Certificates"
     }
 }
-if ($certSeen -eq 0) { Out-Typewriter "  -> [OK] CERTIFICATE STORES CLEAN." "GOOD" }
+# Never print a clean result for a check that could not have fired for everyone: the per-user
+# half of this phase saw exactly ONE profile's store, so the "clean" line must say so.
+if ($certSeen -eq 0) { Out-Typewriter "  -> [OK] MACHINE ROOT STORE CLEAN; PER-USER ROOT STORE CLEAN FOR $env:USERNAME ONLY (OTHER PROFILES NOT EXAMINED)." "GOOD" }
+else { Out-Typewriter "  -> NOTE: THE PER-USER ROOT STORE WAS READ FOR $env:USERNAME ONLY — OTHER PROFILES' PERSONAL ROOT STORES WERE NOT EXAMINED." "WARN" }
 
 Show-PhaseHeader "PHASE 40" "BCD STORE — DRIVER SIGNING / TESTSIGNING AUDIT"
 Out-Typewriter "AUDITING BCD STORE FOR SIGNING BYPASS..." "INFO"
@@ -2674,12 +2875,33 @@ foreach ($hit in $klHits) {
     $global:KeyloggerHits++; $klFound = $true
 }
 $klRegPaths = $KEYLOGGER_REG_PATHS   # DATA (WS5) — commercial-keylogger vendor keys, see data\detection_signatures.json
+# P1 multi-user: every entry in that list is HKCU:\SOFTWARE\<vendor>, so under the elevated
+# technician session this probed the TECHNICIAN's hive and a commercial keylogger installed in
+# the victim's profile reported clean. The HKCU: prefix is stripped defensively at the CALL SITE
+# (an already-relative entry passes through unchanged, so no data-file change is needed and old
+# and new data both work), then each remainder is walked per profile.
+# ID: "KLREG_<flattened path>" was identical for every user; it now carries the SID.
 foreach ($kr in $klRegPaths) {
-    if (Test-Path $kr) {
-        Out-ThreatBanner "KEYLOGGER REGISTRY KEY" $kr
-        Add-Finding -ID "KLREG_$($kr -replace '[^a-z0-9]','')" -Phase "PHASE 48" -ThreatType "Keylogger" `
-            -Severity $SEV_CRITICAL -Description "Known keylogger registry key found: $kr" `
-            -Target $kr -FixAction "DeleteRegKey" -FixParam $kr -Group "Keylogger Artifacts"
+    $zbKlRel = "$kr" -replace '(?i)^HK(CU|EY_CURRENT_USER):?\\', ''
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.HivePath) { continue }   # not mounted and loading is off: we could not look
+        $zbKlPath = "$($zbHive.HivePath)\$zbKlRel"
+        if (-not (Test-Path $zbKlPath)) { continue }
+        # A FixParam must never point into a ZB_UH_* mount — remediation runs in a later process.
+        $zbKlAct  = "DeleteRegKey"
+        $zbKlFp   = $zbKlPath
+        $zbKlHint = ""
+        $zbKlSev  = $SEV_CRITICAL
+        if ($zbHive.Source -eq 'RegLoad') {
+            $zbKlAct  = "Info"
+            $zbKlFp   = ""
+            $zbKlSev  = $SEV_HIGH   # contract: a reg-loaded (logged-off) hive caps at HIGH + Info
+            $zbKlHint = " That profile's hive is only temporarily mounted by this scan — remove by hand: reg load HKU\ZBFIX '$($zbHive.NtUserDat)' ; Remove-Item -LiteralPath 'Registry::HKEY_USERS\ZBFIX\$zbKlRel' -Recurse -Force ; reg unload HKU\ZBFIX"
+        }
+        Out-ThreatBanner "KEYLOGGER REGISTRY KEY" "[$($zbHive.User)] $zbKlPath"
+        Add-Finding -ID "KLREG_$($zbKlRel -replace '[^a-z0-9]','')_$(Get-StableId "$($zbHive.Sid)")" -Phase "PHASE 48" -ThreatType "Keylogger" `
+            -Severity $zbKlSev -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: known commercial-keylogger registry key found in that user's hive: $zbKlRel$zbKlHint" `
+            -Target "[$($zbHive.User)] $zbKlPath" -FixAction $zbKlAct -FixParam $zbKlFp -Group "Keylogger Artifacts"
         $global:KeyloggerHits++; $klFound = $true
     }
 }

@@ -586,15 +586,61 @@ if ($PhasePlan.Advanced) {
     # ── PHASE 92: UAC AUTO-ELEVATE BYPASS DETECTION ───────────────────────────
     Show-PhaseHeader "PHASE 92" "UAC AUTO-ELEVATE BYPASS REGISTRY STAGING" "UAC BYPASS"
     Out-Typewriter "CHECKING UAC BYPASS REGISTRY KEYS (FODHELPER / COMPUTERDEFAULTS)..." "HUNT"
+    # P1 multi-user: UAC-bypass staging lives in the VICTIM's per-user CLASSES store BY
+    # DEFINITION (Software\Classes\<handler>\shell\open\command). Pre-P1 this read HKCU:, which
+    # inside the RunAs-elevated process is the TECHNICIAN's hive on a standard-user endpoint — so
+    # the check was structurally incapable of firing on a real incident and always printed clean.
+    #
+    # ClassesHivePath, NOT "$($zbHive.HivePath)\Software\Classes": for a reg-loaded profile the
+    # real per-user class registrations live in a SEPARATELY mounted UsrClass.dat, while the
+    # NTUSER.DAT's own Software\Classes is nearly empty (measured: 1 CLSID subkey vs 6 for a live
+    # user). Getting that wrong makes this blind for exactly the logged-off profiles P1 exists to
+    # reach. The two shapes the helper hands back are:
+    #   mounted (HKU)  -> Registry::HKEY_USERS\<SID>\Software\Classes   (segment ALREADY included)
+    #   RegLoad        -> Registry::HKEY_USERS\ZB_UC_<hex>              (UsrClass.dat's root IS
+    #                                                                    the classes root)
+    # so each data entry is stripped of BOTH "HKCU:\" AND the leading "Software\Classes\" segment
+    # before it is joined on — otherwise the mounted form would address
+    # ...\Software\Classes\Software\Classes\ms-settings\... and silently never match.
     $uacFound = $false
-    foreach ($ub in $UAC_BYPASS_REGS) {
-        if (Test-Path $ub) {
-            $cmd = (Get-ItemProperty -Path $ub -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
+    $zbUacTargets = @()
+    foreach ($zbHive in @(Get-UserHives)) {
+        # $null classes path = "we could not look", NOT "nothing there" — skip, never fall through.
+        if (-not $zbHive.ClassesHivePath) { continue }
+        foreach ($ub in $UAC_BYPASS_REGS) {
+            # Defensive strip: an entry already stored hive-relative passes through unchanged.
+            $zbUbRel = "$ub" -replace '(?i)^HK(CU|EY_CURRENT_USER):?\\', ''
+            $zbUbRel = $zbUbRel -replace '(?i)^Software\\Classes\\', ''
+            $zbUbRel = $zbUbRel -replace '^\\+', ''
+            if (-not $zbUbRel) { continue }
+            $zbUacTargets += @{ Path = "$($zbHive.ClassesHivePath)\$zbUbRel"; Rel = $zbUbRel
+                                User = $zbHive.User; Sid = $zbHive.Sid; Src = $zbHive.Source
+                                ClsFile = "$($zbHive.UsrClassDat)" }
+        }
+    }
+    foreach ($zbT in $zbUacTargets) {
+        $zbUbPath = "$($zbT.Path)"
+        if (Test-Path $zbUbPath) {
+            $cmd = (Get-ItemProperty -Path $zbUbPath -Name "(default)" -ErrorAction SilentlyContinue)."(default)"
             if ($cmd) {
-                Out-ThreatBanner "UAC BYPASS REGISTRY HIJACK" "$ub -> $cmd"
-                Add-Finding -ID "UACBYPASS_$($ub -replace '[^a-z0-9]','')" -Phase "PHASE 92" -ThreatType "UAC Bypass" `
-                    -Severity $SEV_CRITICAL -Description "UAC bypass reg hijack: $ub = $cmd" `
-                    -Target $ub -FixAction "DeleteRegKey" -FixParam $ub -Group "UAC Bypass"
+                Out-ThreatBanner "UAC BYPASS REGISTRY HIJACK" "[$($zbT.User)] $zbUbPath -> $cmd"
+                # A ZB_UC_* mount is GONE by the time the server's remediation runspace runs (a
+                # different process, long after the engine exited), so a FixParam pointing into
+                # one would silently target nothing. Reg-loaded profiles therefore become
+                # operator-run (rule #1's own prescription), capped at HIGH.
+                $zbUacSev  = $SEV_CRITICAL
+                $zbUacAct  = "DeleteRegKey"
+                $zbUacPrm  = $zbUbPath
+                $zbUacDesc = "[$($zbT.User)] UAC bypass reg hijack: $zbUbPath = $cmd"
+                if ("$($zbT.Src)" -eq 'RegLoad') {
+                    $zbUacSev = $SEV_HIGH
+                    $zbUacAct = "Info"
+                    $zbUacPrm = ""
+                    $zbUacDesc = "[$($zbT.User)] UAC bypass reg hijack recovered from a LOGGED-OFF profile's UsrClass.dat (temporary mount; removed when this scan ended, so remediate by hand): $zbUbPath = $cmd | reg load HKU\ZBFIX `"$($zbT.ClsFile)`" ; Remove-Item -LiteralPath `"Registry::HKEY_USERS\ZBFIX\$($zbT.Rel)`" -Recurse -Force ; reg unload HKU\ZBFIX"
+                }
+                Add-Finding -ID "UACBYPASS_$(Get-StableId "$($zbT.Sid)|$zbUbPath")" -Phase "PHASE 92" -ThreatType "UAC Bypass" `
+                    -Severity $zbUacSev -Description $zbUacDesc `
+                    -Target "[$($zbT.User)] $zbUbPath" -FixAction $zbUacAct -FixParam $zbUacPrm -Group "UAC Bypass"
                 $global:UACBypassHits++; $uacFound = $true
             }
         }
@@ -707,14 +753,47 @@ if ($PhasePlan.Advanced) {
             $sctHits++
         }
     }
-    foreach ($rp in @("HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run","HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run")) {
+    # P1 multi-user: the HKCU half of this pair was the technician's Run key, not the victim's.
+    # The HKLM root is MACHINE scope — enumerated ONCE, outside the profile loop, tagged
+    # [MACHINE], so a box with 8 profiles cannot report one machine-wide condition 8 times.
+    # The scriptlet gate (regsvr32 /i: URL) below is unchanged.
+    $zbSquibTargets = @()
+    foreach ($zbRp in @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run")) {
+        $zbSquibTargets += @{ Path = $zbRp; User = 'MACHINE'; Sid = 'MACHINE'; Src = 'HKLM'; HiveFile = '' }
+    }
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.HivePath) { continue }   # not mounted + loading off = could not look
+        foreach ($zbRel in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Run')) {
+            $zbSquibTargets += @{ Path = "$($zbHive.HivePath)\$zbRel"; User = $zbHive.User
+                                  Sid = $zbHive.Sid; Src = $zbHive.Source; HiveFile = "$($zbHive.NtUserDat)" }
+        }
+    }
+    foreach ($zbT in $zbSquibTargets) {
+        $rp = "$($zbT.Path)"
         if (-not (Test-Path $rp)) { continue }
         $vals = Get-ItemProperty -Path $rp -ErrorAction SilentlyContinue
         foreach ($prop in ($vals.psobject.properties | Where-Object { $_.Name -notmatch "^PS" })) {
             if ([string]$prop.Value -match "regsvr32.{0,16}/i:.{0,16}(http|https|\\\\)") {
-                Add-Finding -ID "SQUIBLY_$($prop.Name -replace '[^a-z0-9]','')" -Phase "PHASE 94" -ThreatType "Squiblydoo" `
-                    -Severity $SEV_CRITICAL -Description "Run key uses regsvr32 /i: URL: $rp\$($prop.Name) = $($prop.Value)" `
-                    -Target "$rp|$($prop.Name)" -FixAction "DeleteReg" -FixParam "$rp|$($prop.Name)" `
+                # ID gains the SID. SQUIBLY_<propname> collided HKCU-vs-HKLM even BEFORE P1 (the
+                # same value name in both roots hashed to one ID and Add-Finding's de-dupe
+                # silently dropped the second); per-profile roots would have made that worse.
+                # `|` stays the FixParam separator — registry paths cannot contain one, and the
+                # Registry::HKEY_USERS\<SID>\... form introduces none.
+                $zbSqSev  = $SEV_CRITICAL
+                $zbSqAct  = "DeleteReg"
+                $zbSqPrm  = "$rp|$($prop.Name)"
+                $zbSqDesc = "[$($zbT.User)] Run key uses regsvr32 /i: URL: $rp\$($prop.Name) = $($prop.Value)"
+                if ("$($zbT.Src)" -eq 'RegLoad') {
+                    # The ZB_UH_* mount does not exist when the server's remediation runspace
+                    # later runs, so hand the operator the literal commands instead.
+                    $zbSqSev = $SEV_HIGH
+                    $zbSqAct = "Info"
+                    $zbSqPrm = ""
+                    $zbSqDesc = "[$($zbT.User)] Run key uses regsvr32 /i: URL, recovered from a LOGGED-OFF profile's NTUSER.DAT (temporary mount; gone once this scan ended, so remediate by hand): $rp\$($prop.Name) = $($prop.Value) | reg load HKU\ZBFIX `"$($zbT.HiveFile)`" ; Remove-ItemProperty -LiteralPath `"Registry::HKEY_USERS\ZBFIX\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`" -Name `"$($prop.Name)`" -Force ; reg unload HKU\ZBFIX"
+                }
+                Add-Finding -ID "SQUIBLY_$(Get-StableId "$($zbT.Sid)|$rp|$($prop.Name)")" -Phase "PHASE 94" -ThreatType "Squiblydoo" `
+                    -Severity $zbSqSev -Description $zbSqDesc `
+                    -Target "[$($zbT.User)] $rp|$($prop.Name)" -FixAction $zbSqAct -FixParam $zbSqPrm `
                     -Group "COM Scriptlet Abuse"
                 $sctHits++
             }

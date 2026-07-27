@@ -87,12 +87,40 @@ foreach ($zbHive in @(Get-UserHives)) {
         $global:RATHits++; $ratFound = $true
     }
 }
-foreach ($rrp in $RAT_REG_PATHS) {
-    if (Test-Path $rrp) {
-        Out-ThreatBanner "RAT REGISTRY KEY" $rrp
-        Add-Finding -ID "RATREG_$($rrp -replace '[^a-z0-9]','')" -Phase "PHASE 61" -ThreatType "RAT" `
-            -Severity $SEV_CRITICAL -Description "Known RAT registry key: $rrp" `
-            -Target $rrp -FixAction "DeleteRegKey" -FixParam $rrp -Group "RAT Artifacts"
+# P1 multi-user: $RAT_REG_PATHS is 12 x "HKCU:\SOFTWARE\<ratname>", so pre-P1 this only ever
+# looked in the ELEVATED TECHNICIAN's hive — on a standard-user endpoint the victim's RAT
+# config key was never read at all. Strip the HKCU: prefix defensively (an entry that is
+# already hive-relative passes through unchanged, so this is safe to apply blindly) and
+# re-root it on every profile's hive. There is no HKLM entry in this list, so there is no
+# machine-scope half to hoist out of the loop.
+# The ID used to be built from the bare key path, which is IDENTICAL for every profile, so
+# two infected users collided on one ID and Add-Finding's de-dupe silently dropped the
+# second victim — it now carries the SID. Severity/FixAction unchanged (CRITICAL +
+# DeleteRegKey is safe here only because these are literal known-RAT key names that never
+# exist on a clean box), and FixParam stays a bare machine-parseable registry path with NO
+# "[User]" prefix.
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }        # hive not mounted + loading off = "could not look"
+    # A ZB_UH_* reg-load mount is gone by the time the server's remediation runspace runs, so a
+    # DeleteRegKey FixParam pointing into it would silently target nothing. Offline hives get
+    # operator-only Info + the literal commands, capped at HIGH (contract rule 7 / addendum 2).
+    $zbRatOff = ($zbHive.Source -eq 'RegLoad')
+    foreach ($rrp in $RAT_REG_PATHS) {
+        $zbRatRel = "$rrp" -replace '(?i)^HK(CU|EY_CURRENT_USER):?\\', ''
+        if (-not $zbRatRel) { continue }
+        $zbRatPath = "$($zbHive.HivePath)\$zbRatRel"
+        if (-not (Test-Path -LiteralPath $zbRatPath)) { continue }
+        Out-ThreatBanner "RAT REGISTRY KEY" "[$($zbHive.User)] $zbRatPath"
+        $zbRatSev  = if ($zbRatOff) { $SEV_HIGH } else { $SEV_CRITICAL }
+        $zbRatFix  = if ($zbRatOff) { "Info" }    else { "DeleteRegKey" }
+        $zbRatPrm  = if ($zbRatOff) { "" }        else { $zbRatPath }
+        $zbRatDesc = "[$($zbHive.User)] Known RAT registry key: $zbRatPath"
+        if ($zbRatOff) {
+            $zbRatDesc += " || Read from the offline hive $($zbHive.NtUserDat); that mount does not survive this scan, so remove it by hand: reg load HKU\ZBFIX ""$($zbHive.NtUserDat)"" ; Remove-Item 'Registry::HKEY_USERS\ZBFIX\$zbRatRel' -Recurse -Force ; reg unload HKU\ZBFIX"
+        }
+        Add-Finding -ID "RATREG_$(Get-StableId "$($zbHive.Sid)|$zbRatPath")" -Phase "PHASE 61" -ThreatType "RAT" `
+            -Severity $zbRatSev -Description $zbRatDesc `
+            -Target "[$($zbHive.User)] $zbRatPath" -FixAction $zbRatFix -FixParam $zbRatPrm -Group "RAT Artifacts"
         $global:RATHits++; $ratFound = $true
     }
 }
@@ -273,8 +301,16 @@ foreach ($drive in $drives) {
         $global:WormHits++; $wormFound = $true
     }
 }
+# P1 multi-user — DELIBERATE SPLIT (operator decision). This is a hardening WRITE, and
+# hardening/lockdown actions are operator-only by rule #1; applying the HKCU half to EVERY
+# profile on the box would materially widen the blast radius, so it stays single-user. What
+# P1 fixes here is the silent ambiguity: pre-P1 "HKCU" meant "whoever the engine is elevated
+# as", which on a standard-user endpoint is the TECHNICIAN, not the victim — the description
+# now names that account explicitly. Severity/FixAction unchanged (INFO + RunCmd).
+$zbAutoRunUser = "$env:USERDOMAIN\$env:USERNAME"
+foreach ($zbHive in @(Get-UserHives)) { if ($zbHive.IsCurrent) { $zbAutoRunUser = "$($zbHive.User)"; break } }
 Add-Finding -ID "AUTORUN_DISABLE" -Phase "PHASE 65" -ThreatType "Hardening" -Severity $SEV_INFO `
-    -Description "Option: Disable Autorun for all drive types (recommended)" `
+    -Description "Option: Disable Autorun for all drive types (recommended). SCOPE: the HKLM half covers every user on this machine; the HKCU half applies ONLY to '$zbAutoRunUser' — the account this scan is running as, which on a standard-user endpoint is the TECHNICIAN, not the logged-on user. Hardening is deliberately not written into other profiles' hives; to cover another user, run the HKCU command while logged on as them (or point it at Registry::HKEY_USERS\<their SID>\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer)." `
     -Target "HKLM/HKCU NoDriveTypeAutoRun" -FixAction "RunCmd" `
     -FixParam "Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' NoDriveTypeAutoRun 0xFF -Type DWord -Force; Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' NoDriveTypeAutoRun 0xFF -Type DWord -Force" `
     -Group "Worm / USB Spread"
@@ -353,18 +389,51 @@ Out-Typewriter "SCANNING FOR KNOWN ADWARE / PUP REGISTRY KEYS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
 # WS0 wiring: externalized to data/detection_signatures.json 'adware_pup_regs' (AMSI-safe,
 # same list). These keys never exist on a clean box, so DeleteRegKey stays safe to auto-select.
-$adwarePaths = $ADWARE_PUP_REGS
-$adwareFound = $false
-foreach ($ap in $adwarePaths) {
-    if (Test-Path $ap) {
-        Out-ThreatBanner "ADWARE/PUP REGISTRY KEY" $ap
-        Add-Finding -ID "ADWARE_$($ap -replace '[^a-z0-9]','')" -Phase "PHASE 67" -ThreatType "Adware/PUP" `
-            -Severity $SEV_HIGH -Description "Known adware/PUP registry key: $ap" `
-            -Target $ap -FixAction "DeleteRegKey" -FixParam $ap -Group "Adware / PUP Remnants"
-        $global:SpywareHits++; $adwareFound = $true
+# P1 multi-user: $ADWARE_PUP_REGS is MIXED SCOPE — 20 HKCU + 4 HKLM — and the HKLM entries
+# are INTERLEAVED, not grouped (HKLM:\SOFTWARE\Superfish sits near the END of the list), so a
+# "the first N are per-user" split would be flat wrong. Split by PREFIX at RUNTIME instead:
+# that works against both the current and any future version of the JSON, so a data file and
+# a .ps1 that ship out of step cannot silently break, and it survives someone appending a new
+# entry later. No data-file change is needed or wanted for this.
+# The machine half is enumerated ONCE, outside the profile loop, tagged [MACHINE] — a box with
+# 8 profiles must not report the same machine-wide key 8 times. Anything that is not HKCU is
+# treated as machine scope (deliberately broader than a bare ^HKLM: test) so a future entry in
+# some other root can never be silently dropped from the scan.
+$zbAdwareUserRel = @($ADWARE_PUP_REGS |
+    Where-Object { "$_" -match '(?i)^HK(CU|EY_CURRENT_USER):' } |
+    ForEach-Object { "$_" -replace '(?i)^HK(CU|EY_CURRENT_USER):?\\', '' })
+$zbAdwareMachine = @($ADWARE_PUP_REGS | Where-Object { "$_" -notmatch '(?i)^HK(CU|EY_CURRENT_USER):' })
+$zbAdwareTargets = @()
+foreach ($zbAp in $zbAdwareMachine) {
+    if (-not $zbAp) { continue }
+    $zbAdwareTargets += @{ Path = "$zbAp"; User = 'MACHINE'; Sid = 'MACHINE'; Off = $false }
+}
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }        # hive not mounted + loading off = "could not look"
+    foreach ($zbRel in $zbAdwareUserRel) {
+        if (-not $zbRel) { continue }
+        $zbAdwareTargets += @{ Path = "$($zbHive.HivePath)\$zbRel"
+                               User = "$($zbHive.User)"
+                               Sid  = "$($zbHive.Sid)"
+                               Off  = ($zbHive.Source -eq 'RegLoad') }
     }
 }
-if (-not $adwareFound) { Out-Typewriter "  -> [OK] NO KNOWN ADWARE/PUP REGISTRY KEYS." "GOOD" }
+$adwareFound = $false
+foreach ($zbAt in $zbAdwareTargets) {
+    if (-not (Test-Path -LiteralPath $zbAt.Path)) { continue }
+    Out-ThreatBanner "ADWARE/PUP REGISTRY KEY" "[$($zbAt.User)] $($zbAt.Path)"
+    # A ZB_UH_* reg-load mount is gone by the time the server's remediation runspace runs, so a
+    # DeleteRegKey FixParam pointing into it would silently target nothing (addendum rule 2).
+    $zbAdFix = if ($zbAt.Off) { "Info" } else { "DeleteRegKey" }
+    $zbAdPrm = if ($zbAt.Off) { "" }     else { "$($zbAt.Path)" }
+    $zbAdDesc = "[$($zbAt.User)] Known adware/PUP registry key: $($zbAt.Path)"
+    if ($zbAt.Off) { $zbAdDesc += " || Read from an offline hive; remove by hand with reg load HKU\ZBFIX / Remove-Item -Recurse -Force / reg unload HKU\ZBFIX." }
+    Add-Finding -ID "ADWARE_$(Get-StableId "$($zbAt.Sid)|$($zbAt.Path)")" -Phase "PHASE 67" -ThreatType "Adware/PUP" `
+        -Severity $SEV_HIGH -Description $zbAdDesc `
+        -Target "[$($zbAt.User)] $($zbAt.Path)" -FixAction $zbAdFix -FixParam $zbAdPrm -Group "Adware / PUP Remnants"
+    $global:SpywareHits++; $adwareFound = $true
+}
+if (-not $adwareFound) { Out-Typewriter "  -> [OK] NO KNOWN ADWARE/PUP REGISTRY KEYS (ALL PROFILES + MACHINE)." "GOOD" }
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 15: ADVANCED / ADDITIONAL MALWARE DETECTION
@@ -551,22 +620,53 @@ if (-not $mutexFound) { Out-Typewriter "  -> [OK] NO KNOWN-MALWARE MUTEXES PRESE
 Show-PhaseHeader "PHASE 70" "FILELESS REGISTRY PAYLOAD DETECTION" "FILELESS"
 Out-Typewriter "SCANNING REGISTRY FOR ENCODED PAYLOADS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
-$filelessPaths = @(
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
-    "HKCU:\Environment","HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options",
-    "HKCU:\SOFTWARE\Classes\CLSID"
-)
+# P1 multi-user: THREE of the four roots are per-user (Run, Environment, Classes\CLSID) and
+# every one of them exists for EVERY profile, so pre-P1 this walked the elevated TECHNICIAN's
+# hive exclusively and a Base64 payload staged in the victim's Run key or UserInitMprLogonScript
+# was structurally invisible. The HKLM IFEO root is machine scope: enumerated ONCE, outside the
+# profile loop, tagged [MACHINE].
+# The Classes root uses ClassesHivePath, NOT HivePath\Software\Classes — for a reg-loaded
+# profile the real per-user class registrations live in a separately-mounted UsrClass.dat and
+# NTUSER.DAT's own Software\Classes is nearly empty (measured: 1 CLSID subkey vs 6).
+# The ID was built from the bare VALUE NAME, so the same value name in two hives (or even in
+# Run vs Environment) collided and Add-Finding's de-dupe silently dropped all but the first —
+# it now carries the SID and the full key path. Severity/FixAction unchanged.
+$zbFlTargets = @()
+foreach ($zbFlMachine in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options")) {
+    $zbFlTargets += @{ Path = $zbFlMachine; User = 'MACHINE'; Sid = 'MACHINE'; Off = $false }
+}
+foreach ($zbHive in @(Get-UserHives)) {
+    $zbFlOff = ($zbHive.Source -eq 'RegLoad')
+    if ($zbHive.HivePath) {                        # $null = "we could not look", not "nothing there"
+        foreach ($zbRel in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Run','Environment')) {
+            $zbFlTargets += @{ Path = "$($zbHive.HivePath)\$zbRel"
+                               User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)"; Off = $zbFlOff }
+        }
+    }
+    if ($zbHive.ClassesHivePath) {
+        $zbFlTargets += @{ Path = "$($zbHive.ClassesHivePath)\CLSID"
+                           User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)"; Off = $zbFlOff }
+    }
+}
 $filelessFound = $false
-foreach ($fp in $filelessPaths) {
-    if (-not (Test-Path $fp)) { continue }
-    $regVals = Get-ItemProperty -Path $fp -ErrorAction SilentlyContinue
+foreach ($zbFt in $zbFlTargets) {
+    $fp = "$($zbFt.Path)"
+    if (-not (Test-Path -LiteralPath $fp)) { continue }
+    $regVals = Get-ItemProperty -LiteralPath $fp -ErrorAction SilentlyContinue
     foreach ($prop in ($regVals.psobject.properties | Where-Object { $_.Name -notmatch "^PS" })) {
         $val = [string]$prop.Value
         if ($val.Length -gt 200 -and $val -match "^[A-Za-z0-9+/=]{100,}$") {
-            Out-Decrypt -Text "$($prop.Name) = [BASE64 BLOB $($val.Length) chars]" -Prefix "  [FILELESS PAYLOAD] "
-            Add-Finding -ID "FILELESS_$($prop.Name -replace '[^a-z0-9]','')" -Phase "PHASE 70" -ThreatType "Fileless Malware" `
-                -Severity $SEV_CRITICAL -Description "Suspected Base64 fileless payload in registry: $fp | $($prop.Name)" `
-                -Target "$fp|$($prop.Name)" -FixAction "DeleteReg" -FixParam "$fp|$($prop.Name)" -Group "Fileless Payloads"
+            Out-Decrypt -Text "[$($zbFt.User)] $($prop.Name) = [BASE64 BLOB $($val.Length) chars]" -Prefix "  [FILELESS PAYLOAD] "
+            # A ZB_UH_* reg-load mount is gone by the time the server's remediation runspace
+            # runs, so a DeleteReg FixParam pointing into it would target nothing (addendum 2).
+            $zbFlSev = if ($zbFt.Off) { $SEV_HIGH } else { $SEV_CRITICAL }
+            $zbFlFix = if ($zbFt.Off) { "Info" }    else { "DeleteReg" }
+            $zbFlPrm = if ($zbFt.Off) { "" }        else { "$fp|$($prop.Name)" }
+            $zbFlDesc = "[$($zbFt.User)] Suspected Base64 fileless payload in registry: $fp | $($prop.Name)"
+            if ($zbFt.Off) { $zbFlDesc += " || Read from an offline hive; remove by hand with reg load HKU\ZBFIX / Remove-ItemProperty / reg unload HKU\ZBFIX." }
+            Add-Finding -ID "FILELESS_$(Get-StableId "$($zbFt.Sid)|$fp|$($prop.Name)")" -Phase "PHASE 70" -ThreatType "Fileless Malware" `
+                -Severity $zbFlSev -Description $zbFlDesc `
+                -Target "[$($zbFt.User)] $fp|$($prop.Name)" -FixAction $zbFlFix -FixParam $zbFlPrm -Group "Fileless Payloads"
             $filelessFound = $true
         }
     }
@@ -639,58 +739,97 @@ if (-not $exploitFound) { Out-Typewriter "  -> [OK] NO OBVIOUS EXPLOIT KIT ARTIF
 Show-PhaseHeader "PHASE 74" "MACRO / OFFICE / OUTLOOK PERSISTENCE AUDIT" "MACRO"
 Out-Typewriter "AUDITING OFFICE MACRO TRUST / OUTLOOK RULES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
-$macroTrust = Get-ItemProperty "HKCU:\SOFTWARE\Microsoft\Office\*\*\Security" -Name "VBAWarnings" -ErrorAction SilentlyContinue
-foreach ($mt in $macroTrust) {
-    if ($mt.VBAWarnings -eq 1) {
-        Out-Typewriter "  -> OFFICE VBA MACROS UNRESTRICTED (VBAWarnings=1)" "CRIT"
-        Add-Finding -ID "MACRO_TRUST_$($mt.PSPath -replace '[^a-z0-9]','')" -Phase "PHASE 74" -ThreatType "Macro Abuse" `
-            -Severity $SEV_HIGH -Description "Office VBAWarnings=1 — all macros enabled without prompts (macro malware vector)" `
-            -Target "$($mt.PSPath)|VBAWarnings" -FixAction "RunCmd" -FixParam "Set-ItemProperty '$($mt.PSPath)' -Name VBAWarnings -Value 4 -Force" `
-            -Group "Office / Macro Security"
-        $global:SpywareHits++
-    }
-}
-$outlookPath = "HKCU:\SOFTWARE\Microsoft\Office\*\Outlook\WebView"
-if (Test-Path $outlookPath) {
-    Out-Typewriter "  -> OUTLOOK WEBVIEW REGISTRY PRESENT — CHECK FOR AUTO-EXEC." "WARN"
-    Add-Finding -ID "OUTLOOK_WEBVIEW" -Phase "PHASE 74" -ThreatType "Outlook Persistence" `
-        -Severity $SEV_POSSIBLE -Description "Outlook WebView registry key present — possible HTML auto-execute persistence" `
-        -Target $outlookPath -FixAction "Info" -Group "Office / Macro Security"
-}
+# P1 multi-user: EVERY registry root in this phase is per-user, so pre-P1 the whole phase only
+# ever examined the ELEVATED TECHNICIAN's hive. Three concrete consequences, all fixed here:
+#   * VBAWarnings=1 in the VICTIM's Office config was never seen — and worse, the RunCmd
+#     FixParam embedded the TECHNICIAN's PSPath, so an operator applying this HIGH auto-selected
+#     fix would have hardened their OWN Office and left the victim's macros wide open.
+#   * "OUTLOOK_WEBVIEW" was a FIXED-STRING ID, so even once every hive is walked Add-Finding's
+#     de-dupe would keep exactly one finding across all users. It now carries the SID.
+#   * The add-in ProgID -> CLSID resolution consulted HKCU:\SOFTWARE\Classes (the technician's).
+#     It now uses each profile's ClassesHivePath — a reg-loaded profile's real class data lives
+#     in a separately-mounted UsrClass.dat, and NTUSER.DAT's own Software\Classes is near-empty.
+# The Office\*\*\Security and Office\*\Addins\* wildcard globbing is preserved verbatim; only
+# the root changes. Severity/FixAction unchanged throughout (HIGH + RunCmd for VBAWarnings,
+# POSSIBLE + Info for the rest).
 # WS8 (T1137): VSTO/COM add-in sideload persistence. Add-ins are a legitimate, extremely common
 # Office extensibility mechanism (Bloomberg/Reuters/CRM/PDF plugins all register exactly this
 # way), so this is inventory + review, never HIGH/CRITICAL — POSSIBLE + Info only (rule #1: this
 # heuristic alone must never drive an auto-select). Two vectors: (a) registered COM/VSTO add-ins
-# under HKCU Office Addins (LoadBehavior), resolved to their on-disk DLL via
+# under per-user Office Addins (LoadBehavior), resolved to their on-disk DLL via
 # ProgID -> CLSID -> InprocServer32 (same resolution pattern as the Phase 24 COM hijack audit);
 # (b) directly-loadable .wll/.xll binaries dropped into the standard per-user AddIns folder —
 # %APPDATA%\Microsoft\AddIns IS the documented install location for legitimate Excel/Word XLL/WLL
 # add-ins, so a hit there is routine, not proof of sideloading; still surfaced for review.
 $addinFound = $false
-$officeAddinKeys = @(Get-ChildItem -Path 'HKCU:\SOFTWARE\Microsoft\Office\*\Addins\*' -ErrorAction SilentlyContinue)
-foreach ($aik in $officeAddinKeys) {
-    $lb = Get-RegVal -Path $aik.PSPath -Name 'LoadBehavior'
-    if ($null -eq $lb) { continue }   # key exists but was never actually loaded — nothing to resolve
-    $progId = $aik.PSChildName
-    $clsidVal = $null; $clsidRoot = $null
-    foreach ($clsRoot in @('HKCU:\SOFTWARE\Classes','HKLM:\SOFTWARE\Classes','HKLM:\SOFTWARE\WOW6432Node\Classes')) {
-        $cv = Get-RegVal -Path "$clsRoot\$progId\CLSID" -Name '(default)'
-        if ($cv) { $clsidVal = $cv; $clsidRoot = $clsRoot; break }
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }        # hive not mounted + loading off = "could not look"
+
+    # ── (1) Office macro trust ───────────────────────────────────────────────────────────
+    $macroTrust = Get-ItemProperty "$($zbHive.HivePath)\SOFTWARE\Microsoft\Office\*\*\Security" -Name "VBAWarnings" -ErrorAction SilentlyContinue
+    foreach ($mt in $macroTrust) {
+        if ($mt.VBAWarnings -ne 1) { continue }
+        # PSPath comes back provider-qualified ("Microsoft.PowerShell.Core\Registry::HKEY_USERS\...").
+        # Both forms are accepted by Set-ItemProperty; normalise to the shorter one so the operator
+        # can read the command. A WasMounted hive is HKEY_USERS\<SID>, which still exists long after
+        # the engine exits — unlike a ZB_UH_* reg-load mount, handled below.
+        $zbMtPath = "$($mt.PSPath)" -replace '^Microsoft\.PowerShell\.Core\\Registry::', 'Registry::'
+        # The Office\*\* wildcard segments are user-writable key names, so they are attacker-
+        # influenceable text being interpolated into a single-quoted RunCmd string that an
+        # auto-selected HIGH finding can execute unattended. Same escaping the Phase 29/64
+        # scheduled-task RunCmds already use (rule #1: fail closed on injection).
+        $zbMtEsc = "$zbMtPath" -replace "'","''"
+        $zbMtOff = ($zbHive.Source -eq 'RegLoad')
+        $zbMtFix = if ($zbMtOff) { "Info" } else { "RunCmd" }
+        $zbMtPrm = if ($zbMtOff) { "" }     else { "Set-ItemProperty '$zbMtEsc' -Name VBAWarnings -Value 4 -Force" }
+        $zbMtDesc = "[$($zbHive.User)] Office VBAWarnings=1 — all macros enabled without prompts (macro malware vector)"
+        if ($zbMtOff) { $zbMtDesc += " || Read from an offline hive that does not survive this scan; harden by hand while that user is logged on, or via reg load HKU\ZBFIX / Set-ItemProperty / reg unload HKU\ZBFIX." }
+        Out-Typewriter "  -> [$($zbHive.User)] OFFICE VBA MACROS UNRESTRICTED (VBAWarnings=1)" "CRIT"
+        Add-Finding -ID "MACRO_TRUST_$(Get-StableId "$($zbHive.Sid)|$zbMtPath")" -Phase "PHASE 74" -ThreatType "Macro Abuse" `
+            -Severity $SEV_HIGH -Description $zbMtDesc `
+            -Target "[$($zbHive.User)] $zbMtPath|VBAWarnings" -FixAction $zbMtFix -FixParam $zbMtPrm `
+            -Group "Office / Macro Security"
+        $global:SpywareHits++
     }
-    if (-not $clsidVal) { continue }   # can't resolve ProgID -> CLSID — fail closed, no finding
-    $dllPath = Get-RegVal -Path "$clsidRoot\CLSID\$clsidVal\InprocServer32" -Name '(default)'
-    if (-not $dllPath) { continue }
-    $dllPath = [System.Environment]::ExpandEnvironmentVariables($dllPath)
-    if (-not (Test-Path -LiteralPath $dllPath -ErrorAction SilentlyContinue)) { continue }
-    $addinSig = Get-AuthSig $dllPath
-    $addinUserPath = ($dllPath -match $global:USER_PATH_RE -and $dllPath -notmatch $global:WINDOWSAPPS_RE)
-    if ($addinSig.Status -ne "Valid" -or $addinUserPath) {
-        $addinFound = $true
-        $addinWhy = if ($addinSig.Status -ne "Valid") { "unsigned" } else { "signed but AppData/Temp-hosted" }
-        Out-Typewriter "  -> OFFICE ADD-IN (review, $addinWhy): $progId LoadBehavior=$lb @ $dllPath" "WARN"
-        Add-Finding -ID "ADDIN_$(Get-StableId "$progId|$dllPath")" -Phase "PHASE 74" -ThreatType "Office Add-in Sideload" `
-            -Severity $SEV_POSSIBLE -Description "Registered Office add-in '$progId' (LoadBehavior=$lb) resolves to a $addinWhy binary: $dllPath — legitimate add-ins (Bloomberg/CRM/PDF plugins) commonly register this exact way too; verify it is an add-in you installed." `
-            -Target $dllPath -FixAction "Info" -Group "Office Add-in Persistence"
+
+    # ── (2) Outlook WebView auto-exec persistence ────────────────────────────────────────
+    $zbOwPattern = "$($zbHive.HivePath)\SOFTWARE\Microsoft\Office\*\Outlook\WebView"
+    if (Test-Path -Path $zbOwPattern) {
+        Out-Typewriter "  -> [$($zbHive.User)] OUTLOOK WEBVIEW REGISTRY PRESENT — CHECK FOR AUTO-EXEC." "WARN"
+        Add-Finding -ID "OUTLOOK_WEBVIEW_$(Get-StableId "$($zbHive.Sid)")" -Phase "PHASE 74" -ThreatType "Outlook Persistence" `
+            -Severity $SEV_POSSIBLE -Description "[$($zbHive.User)] Outlook WebView registry key present — possible HTML auto-execute persistence" `
+            -Target "[$($zbHive.User)] $zbOwPattern" -FixAction "Info" -Group "Office / Macro Security"
+    }
+
+    # ── (3) Registered COM/VSTO Office add-ins ───────────────────────────────────────────
+    $officeAddinKeys = @(Get-ChildItem -Path "$($zbHive.HivePath)\SOFTWARE\Microsoft\Office\*\Addins\*" -ErrorAction SilentlyContinue)
+    foreach ($aik in $officeAddinKeys) {
+        $lb = Get-RegVal -Path $aik.PSPath -Name 'LoadBehavior'
+        if ($null -eq $lb) { continue }   # key exists but was never actually loaded — nothing to resolve
+        $progId = $aik.PSChildName
+        $clsidVal = $null; $clsidRoot = $null
+        # ── (4) ProgID -> CLSID: this profile's OWN class store first, then the machine roots.
+        # ClassesHivePath, never HivePath\Software\Classes (see the header comment).
+        foreach ($zbClsRoot in @($zbHive.ClassesHivePath,'HKLM:\SOFTWARE\Classes','HKLM:\SOFTWARE\WOW6432Node\Classes')) {
+            if (-not $zbClsRoot) { continue }
+            $cv = Get-RegVal -Path "$zbClsRoot\$progId\CLSID" -Name '(default)'
+            if ($cv) { $clsidVal = $cv; $clsidRoot = $zbClsRoot; break }
+        }
+        if (-not $clsidVal) { continue }   # can't resolve ProgID -> CLSID — fail closed, no finding
+        $dllPath = Get-RegVal -Path "$clsidRoot\CLSID\$clsidVal\InprocServer32" -Name '(default)'
+        if (-not $dllPath) { continue }
+        $dllPath = [System.Environment]::ExpandEnvironmentVariables($dllPath)
+        if (-not (Test-Path -LiteralPath $dllPath -ErrorAction SilentlyContinue)) { continue }
+        $addinSig = Get-AuthSig $dllPath
+        $addinUserPath = ($dllPath -match $global:USER_PATH_RE -and $dllPath -notmatch $global:WINDOWSAPPS_RE)
+        if ($addinSig.Status -ne "Valid" -or $addinUserPath) {
+            $addinFound = $true
+            $addinWhy = if ($addinSig.Status -ne "Valid") { "unsigned" } else { "signed but AppData/Temp-hosted" }
+            Out-Typewriter "  -> [$($zbHive.User)] OFFICE ADD-IN (review, $addinWhy): $progId LoadBehavior=$lb @ $dllPath" "WARN"
+            Add-Finding -ID "ADDIN_$(Get-StableId "$($zbHive.Sid)|$progId|$dllPath")" -Phase "PHASE 74" -ThreatType "Office Add-in Sideload" `
+                -Severity $SEV_POSSIBLE -Description "[$($zbHive.User)] Registered Office add-in '$progId' (LoadBehavior=$lb) resolves to a $addinWhy binary: $dllPath — legitimate add-ins (Bloomberg/CRM/PDF plugins) commonly register this exact way too; verify it is an add-in you installed." `
+                -Target "[$($zbHive.User)] $dllPath" -FixAction "Info" -Group "Office Add-in Persistence"
+        }
     }
 }
 $officeAddinFolder = Join-Path $env:APPDATA 'Microsoft\AddIns'
@@ -1073,6 +1212,14 @@ Out-Typewriter "AUDITING ATTACKER-TARGETED FOOTHOLDS FOR PROACTIVE HARDENING..."
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
 $hardenHits = 0
 # (a) Office / Outlook macro & attachment security — primary phishing execution vector.
+# P1 multi-user — DELIBERATE SPLIT (operator decision). The WRITE half stays single-user:
+# hardening/lockdown is operator-only by rule #1, and pushing these values into every profile's
+# hive materially widens the blast radius. What changes is that the description now NAMES the
+# account the RunCmd actually touches — pre-P1 "HKCU" silently meant "the technician running the
+# scan", which on a standard-user endpoint is not the person who gets phished, so the finding
+# was nearly useless for the hardening's actual purpose. Severity/FixAction unchanged.
+$zbHardenUser = "$env:USERDOMAIN\$env:USERNAME"
+foreach ($zbHive in @(Get-UserHives)) { if ($zbHive.IsCurrent) { $zbHardenUser = "$($zbHive.User)"; break } }
 foreach ($ok in $PROACTIVE_OFFICE_KEYS) {
     try {
         if (-not (Test-Path -LiteralPath $ok.Path)) { continue }   # app not installed — skip
@@ -1080,7 +1227,7 @@ foreach ($ok in $PROACTIVE_OFFICE_KEYS) {
         if ($null -eq $cur -or [int]$cur -lt [int]$ok.SafeValue) {
             Add-Finding -ID "HARDEN_OFFICE_$(($ok.Path + $ok.Name) -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 74.7" `
                 -ThreatType "Macro/Attachment Exposure" -Severity $SEV_POSSIBLE `
-                -Description "$($ok.Why). Current=$cur, hardened=$($ok.SafeValue)." `
+                -Description "[$zbHardenUser] $($ok.Why). Current=$cur, hardened=$($ok.SafeValue). SCOPE: this command writes ONLY the hive of '$zbHardenUser' — the account this scan is running as. Other profiles are audited read-only (see the matching audit findings); hardening is never written into another user's hive automatically." `
                 -Target "$($ok.Path)|$($ok.Name)" -FixAction "RunCmd" `
                 -FixParam "New-Item -Path '$($ok.Path)' -Force | Out-Null; Set-ItemProperty -Path '$($ok.Path)' -Name '$($ok.Name)' -Value $($ok.SafeValue) -Type DWord -Force" `
                 -Group "Proactive Hardening"
@@ -1088,15 +1235,60 @@ foreach ($ok in $PROACTIVE_OFFICE_KEYS) {
         }
     } catch {}
 }
+# (a1) AUDIT half of (a) — read the SAME settings out of every OTHER profile's hive. Reading
+# carries no risk and it is what removes the false all-clear: pre-P1 a clean result here only
+# ever meant "the technician's own Office is hardened". Read-only by design — INFO + Info, with
+# the literal per-hive command in the description for an operator who chooses to apply it.
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }        # hive not mounted + loading off = "could not look"
+    if ($zbHive.IsCurrent) { continue }            # already covered by the RunCmd finding above
+    foreach ($ok in $PROACTIVE_OFFICE_KEYS) {
+        try {
+            $zbOkRel = "$($ok.Path)" -replace '(?i)^HK(CU|EY_CURRENT_USER):?\\', ''
+            if (-not $zbOkRel) { continue }
+            $zbOkPath = "$($zbHive.HivePath)\$zbOkRel"
+            if (-not (Test-Path -LiteralPath $zbOkPath)) { continue }   # app not installed for this user
+            $zbOkCur = Get-RegVal -Path $zbOkPath -Name $ok.Name
+            if (-not ($null -eq $zbOkCur -or [int]$zbOkCur -lt [int]$ok.SafeValue)) { continue }
+            Add-Finding -ID "HARDEN_OFFICE_$(Get-StableId "$($zbHive.Sid)|$zbOkPath|$($ok.Name)")" -Phase "PHASE 74.7" `
+                -ThreatType "Macro/Attachment Exposure (other profile, audit)" -Severity $SEV_INFO `
+                -Description "[$($zbHive.User)] $($ok.Why). Current=$zbOkCur, hardened=$($ok.SafeValue). AUDIT ONLY — this profile is not the account the scan runs as, so nothing is offered for automatic application. Apply by hand while that user is logged on, or directly: Set-ItemProperty -Path '$zbOkPath' -Name '$($ok.Name)' -Value $($ok.SafeValue) -Type DWord -Force" `
+                -Target "[$($zbHive.User)] $zbOkPath|$($ok.Name)" -FixAction "Info" -Group "Proactive Hardening"
+            $hardenHits++
+        } catch {}
+    }
+}
 # (a2) Autorun-surface inventory (review #51 — $PROACTIVE_PERSIST_REGS was loaded but never read).
 # Not a detection: an INFO-level census of the autorun keys attackers actually use, with what
 # each one currently holds, so the technician can eyeball the persistence surface in one place
 # after remediation. Only non-empty keys are reported — an empty Run key is not news.
+# P1 multi-user: this is the AUDIT/INVENTORY half of the phase and it covers ALL profiles —
+# an autorun census that only ever listed the technician's own Run keys was worse than useless
+# on a standard-user endpoint. $PROACTIVE_PERSIST_REGS is mixed scope (5 HKCU + 2 HKLM), split
+# by PREFIX at runtime; the machine roots are enumerated ONCE, outside the profile loop, tagged
+# [MACHINE], so an 8-profile box does not list HKLM\...\Run eight times. Anything that is not
+# HKCU is treated as machine scope so a future entry cannot be silently dropped. INFO + Info
+# throughout — reading carries no risk and nothing here is ever auto-applied.
+$zbPersistTargets = @()
 foreach ($pr in $PROACTIVE_PERSIST_REGS) {
+    if ("$($pr.Path)" -match '(?i)^HK(CU|EY_CURRENT_USER):') { continue }
+    $zbPersistTargets += @{ Path = "$($pr.Path)"; Why = "$($pr.Why)"; User = 'MACHINE'; Sid = 'MACHINE' }
+}
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }        # hive not mounted + loading off = "could not look"
+    foreach ($pr in $PROACTIVE_PERSIST_REGS) {
+        if ("$($pr.Path)" -notmatch '(?i)^HK(CU|EY_CURRENT_USER):') { continue }
+        $zbPrRel = "$($pr.Path)" -replace '(?i)^HK(CU|EY_CURRENT_USER):?\\', ''
+        if (-not $zbPrRel) { continue }
+        $zbPersistTargets += @{ Path = "$($zbHive.HivePath)\$zbPrRel"; Why = "$($pr.Why)"
+                                User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)" }
+    }
+}
+foreach ($zbPt in $zbPersistTargets) {
     try {
-        if (-not (Test-Path -LiteralPath $pr.Path)) { continue }
+        if (-not (Test-Path -LiteralPath $zbPt.Path)) { continue }
         $vals = @()
-        $pp = Get-ItemProperty -LiteralPath $pr.Path -ErrorAction SilentlyContinue
+        $pp = Get-ItemProperty -LiteralPath $zbPt.Path -ErrorAction SilentlyContinue
         if ($pp) {
             foreach ($pv in $pp.PSObject.Properties) {
                 if ($pv.Name -like 'PS*') { continue }   # provider noise (PSPath/PSParentPath/...)
@@ -1104,10 +1296,10 @@ foreach ($pr in $PROACTIVE_PERSIST_REGS) {
             }
         }
         if ($vals.Count -eq 0) { continue }
-        Add-Finding -ID "AUTORUNSURF_$(Get-StableId $pr.Path)" -Phase "PHASE 74.7" `
+        Add-Finding -ID "AUTORUNSURF_$(Get-StableId "$($zbPt.Sid)|$($zbPt.Path)")" -Phase "PHASE 74.7" `
             -ThreatType "Autorun Surface (inventory)" -Severity $SEV_INFO `
-            -Description "$($pr.Why). $($vals.Count) entr$(if ($vals.Count -eq 1) {'y'} else {'ies'}) present: $(($vals | Select-Object -First 8) -join ' ;; ')$(if ($vals.Count -gt 8) { " ;; (+$($vals.Count - 8) more)" })" `
-            -Target $pr.Path -FixAction "Info" -Group "Proactive Hardening"
+            -Description "[$($zbPt.User)] $($zbPt.Why). $($vals.Count) entr$(if ($vals.Count -eq 1) {'y'} else {'ies'}) present: $(($vals | Select-Object -First 8) -join ' ;; ')$(if ($vals.Count -gt 8) { " ;; (+$($vals.Count - 8) more)" })" `
+            -Target "[$($zbPt.User)] $($zbPt.Path)" -FixAction "Info" -Group "Proactive Hardening"
         $hardenHits++
     } catch {}
 }
@@ -1130,22 +1322,53 @@ try {
 # attachment OPENS instead of RUNS. Per-extension and per-user (HKCU), fully reversible, and
 # opt-in RunCmd at INFO — never auto-applied, because a shop with legitimate .vbs tooling would
 # notice. Only offered for extensions currently mapped to an executing handler.
+# P1 multi-user — DELIBERATE SPLIT (operator decision), and note this site has TWO different
+# per-user keys, not one: it READS HKCU:\...\Explorer\FileExts\<ext>\UserChoice but its FixParam
+# WRITES HKCU:\SOFTWARE\Classes\<ext>. Migrating only the read would have produced a finding out
+# of the VICTIM's hive whose fix silently rewrote the TECHNICIAN's file associations — so both
+# halves are kept together. The write block below is unchanged and stays single-user (hardening
+# is operator-only, rule #1); the description now names the account it actually writes.
+$zbLureUser = "$env:USERDOMAIN\$env:USERNAME"
+foreach ($zbHive in @(Get-UserHives)) { if ($zbHive.IsCurrent) { $zbLureUser = "$($zbHive.User)"; break } }
 foreach ($lx in $PROACTIVE_LURE_EXTS) {
     try {
         $lxKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$lx\UserChoice"
-        $curProgId = (Get-ItemProperty -LiteralPath $lxKey -Name 'ProgId' -ErrorAction SilentlyContinue).ProgId
+        $curProgId = Get-RegVal -Path $lxKey -Name 'ProgId'
         # Machine default when the user has made no explicit choice.
-        if (-not $curProgId) { $curProgId = (Get-ItemProperty -LiteralPath "HKLM:\SOFTWARE\Classes\$lx" -Name '(default)' -ErrorAction SilentlyContinue).'(default)' }
+        if (-not $curProgId) { $curProgId = Get-RegVal -Path "HKLM:\SOFTWARE\Classes\$lx" -Name '(default)' }
         if (-not $curProgId) { continue }                       # extension not registered at all
         if ("$curProgId" -match '(?i)notepad|txtfile') { continue }   # already opens, does not run
         Add-Finding -ID "HARDEN_LURE_$($lx -replace '[^a-z0-9]','')" -Phase "PHASE 74.7" `
             -ThreatType "Script Lure Association" -Severity $SEV_INFO `
-            -Description "Double-clicking a '$lx' file currently EXECUTES it (handler: $curProgId) — the standard phishing-attachment delivery path. Repointing this extension at Notepad makes it open harmlessly for inspection. Reversible; not auto-applied." `
+            -Description "[$zbLureUser] Double-clicking a '$lx' file currently EXECUTES it (handler: $curProgId) — the standard phishing-attachment delivery path. Repointing this extension at Notepad makes it open harmlessly for inspection. Reversible; not auto-applied. SCOPE: both the reported association and the fix belong to '$zbLureUser' — the account this scan is running as, which on a standard-user endpoint is the TECHNICIAN, not the person who receives the phish. Other profiles are audited read-only below." `
             -Target $lxKey -FixAction "RunCmd" `
             -FixParam "New-Item -Path 'HKCU:\SOFTWARE\Classes\$lx' -Force | Out-Null; Set-ItemProperty -Path 'HKCU:\SOFTWARE\Classes\$lx' -Name '(default)' -Value 'txtfile' -Force" `
             -Group "Proactive Hardening"
         $hardenHits++
     } catch {}
+}
+# (b3) AUDIT half of (b2) — the same UserChoice mapping read out of every OTHER profile's hive.
+# Reading is exactly what the operator asked for and carries no risk; the fix is NOT offered for
+# automatic application, so both halves stay coherent per profile (the literal command in the
+# description targets THAT user's Classes root, never HKCU:). INFO + Info.
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }        # hive not mounted + loading off = "could not look"
+    if ($zbHive.IsCurrent) { continue }            # already covered by the RunCmd finding above
+    foreach ($lx in $PROACTIVE_LURE_EXTS) {
+        try {
+            $zbLxKey = "$($zbHive.HivePath)\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$lx\UserChoice"
+            $zbLxProgId = Get-RegVal -Path $zbLxKey -Name 'ProgId'
+            if (-not $zbLxProgId) { continue }     # this user made no explicit choice — the machine
+                                                   # default is already reported once, machine-wide
+            if ("$zbLxProgId" -match '(?i)notepad|txtfile') { continue }   # already opens, does not run
+            $zbLxClasses = if ($zbHive.ClassesHivePath) { "$($zbHive.ClassesHivePath)\$lx" } else { "Registry::HKEY_USERS\$($zbHive.Sid)\SOFTWARE\Classes\$lx" }
+            Add-Finding -ID "HARDEN_LURE_$($lx -replace '[^a-z0-9]','')_$(Get-StableId "$($zbHive.Sid)")" -Phase "PHASE 74.7" `
+                -ThreatType "Script Lure Association (other profile, audit)" -Severity $SEV_INFO `
+                -Description "[$($zbHive.User)] Double-clicking a '$lx' file EXECUTES it for this user (handler: $zbLxProgId) — the standard phishing-attachment delivery path. AUDIT ONLY: this profile is not the account the scan runs as, so no fix is offered for automatic application. Apply by hand while that user is logged on, or directly: New-Item -Path '$zbLxClasses' -Force | Out-Null; Set-ItemProperty -Path '$zbLxClasses' -Name '(default)' -Value 'txtfile' -Force" `
+                -Target "[$($zbHive.User)] $zbLxKey" -FixAction "Info" -Group "Proactive Hardening"
+            $hardenHits++
+        } catch {}
+    }
 }
 # (c) Defender posture + Attack Surface Reduction rules that kill the phishing-trojan kill chain.
 try {

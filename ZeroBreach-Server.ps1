@@ -444,7 +444,7 @@ function Test-ProtectedTarget {
     # profile. Get-UserHives excludes them by default, but -IncludeService exists and a
     # future caller could pass it, so this is defence in depth at the layer that actually
     # blocks. Editing them is an OS-integrity change, never incident remediation.
-    if ($p -match '(?i)^Registry::HKEY_USERS\\(S-1-5-(18|19|20)|\.DEFAULT)(\\|$)') {
+    if ($p -match '(?i)^(?:Microsoft\.PowerShell\.Core\\)?Registry::HKEY_USERS\\(S-1-5-(18|19|20)|\.DEFAULT)(\\|$)') {
         return 'service/system registry hive (SYSTEM/LOCAL SERVICE/NETWORK SERVICE/.DEFAULT)'
     }
     # A FixParam must NEVER point into a hive this scan temporarily mounted. Remediation runs
@@ -453,7 +453,7 @@ function Test-ProtectedTarget {
     # reasoning about a path that never existed, i.e. "verification passed because the read
     # failed". Findings from a reg-loaded hive are supposed to ship as FixAction Info with the
     # operator commands in the description; this catches any that slip through.
-    if ($p -match '(?i)^Registry::HKEY_USERS\\ZB_(UH|UC)_') {
+    if ($p -match '(?i)^(?:Microsoft\.PowerShell\.Core\\)?Registry::HKEY_USERS\\ZB_(UH|UC)_') {
         return 'temporary hive mount from a completed scan (no longer exists — re-run with -LoadUserHives and act manually)'
     }
     # DELIBERATE ASYMMETRY: the "user logged off since the scan" check lives ONLY in the
@@ -1449,13 +1449,13 @@ function Test-RProtected {
     if ($p -match '(?i)\\Users\\[^\\]+\\\.[^\\]+$' -or $p -match '(?i)\\\.(ssh|gnupg|aws|azure|kube|docker|config)\\' -or $p -match '(?i)\\\.(bashrc|bash_profile|bash_history|profile|zshrc|gitconfig|npmrc|claude\.json)($|[^a-z])' -or $p -match '(?i)\\\.claude\\') { return 'user shell/git/ssh/cloud config (dotfile)' }
     if ($p -match '(?i)\\SafeBoot') { return 'SafeBoot registry (breaks Safe Mode)' }
     # P1 — mirrors Test-ProtectedTarget; see the commentary there.
-    if ($p -match '(?i)^Registry::HKEY_USERS\\(S-1-5-(18|19|20)|\.DEFAULT)(\\|$)') { return 'service/system registry hive' }
-    if ($p -match '(?i)^Registry::HKEY_USERS\\ZB_(UH|UC)_') { return 'temporary hive mount from a completed scan (no longer exists)' }
+    if ($p -match '(?i)^(?:Microsoft\.PowerShell\.Core\\)?Registry::HKEY_USERS\\(S-1-5-(18|19|20)|\.DEFAULT)(\\|$)') { return 'service/system registry hive' }
+    if ($p -match '(?i)^(?:Microsoft\.PowerShell\.Core\\)?Registry::HKEY_USERS\\ZB_(UH|UC)_') { return 'temporary hive mount from a completed scan (no longer exists)' }
     # A finding captured against a LOGGED-ON user's hive can be remediated only while that hive is
     # still mounted. If the user logged off between scan and remediation the key genuinely vanishes
     # -- and Test-RPathGone would report 'gone', i.e. SUCCESS for a removal that never happened.
     # "Couldn't act" and "nothing there" are different answers: report blocked, never applied.
-    if ($p -match '(?i)^Registry::HKEY_USERS\\(S-1-5-21-[0-9-]+)(\\|$)') {
+    if ($p -match '(?i)^(?:Microsoft\.PowerShell\.Core\\)?Registry::HKEY_USERS\\(S-1-5-21-[0-9-]+)(\\|$)') {
         $zbSidWanted = $matches[1]
         $zbMountedNow = $false
         try {
