@@ -145,6 +145,21 @@ if ($PhasePlan.Advanced) {
     $yaraExt   = @(".exe",".com",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
     $yaraHits  = 0
     $trojSigSeen = 0; $trojSigSw = [System.Diagnostics.Stopwatch]::StartNew()   # SIG_AUDIT budget (P90 name loop)
+    # SIG_AUDIT budget for the YARA-hit Authenticode gate below. Deliberately created
+    # STOPPED and Start()/Stop()ed around each Get-AuthSig call, so it measures CUMULATIVE
+    # TIME SPENT IN AUTHENTICODE, not wall-clock since the phase began.
+    # Why that matters (measured live 2026-07-26): the YARA gate does not run until AFTER the
+    # magic-byte sniff and the per-file content read, which on this box take ~220s. A
+    # StartNew()-at-phase-entry stopwatch is therefore already 200s past a 25s deadline when
+    # the FIRST hit arrives, so the budget check is never once satisfied and not a single
+    # signature is verified — the gate would then downgrade every hit, signed or not, as
+    # "unverified" and quietly destroy the phase's real coverage. Cumulative call time bounds
+    # exactly the cost the budget exists for (Authenticode's ~15s CRL/OCSP blocks) and is a
+    # strictly tighter bound than wall-clock: BOTH the count cap and the time cap still apply.
+    # NOTE: $trojSigSw above is a StartNew() wall-clock stopwatch with this same defect and is
+    # left alone here (it gates a different detection that needs its own grading) — see the
+    # report accompanying this change.
+    $yaraSigSeen = 0; $yaraSigSw = New-Object System.Diagnostics.Stopwatch
     # Single bounded walk across all roots (was per-root recursion x5, -First 200 each).
     # Assigned to a variable first, never piped directly — Get-ScanFiles returns ,$arr (CLAUDE.md).
     $allScanned = Get-ScanFiles -Path $yaraRoots -TimeScoped
@@ -237,13 +252,96 @@ if ($PhasePlan.Advanced) {
                                 -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches"
                             $yaraHits++; break
                         }
-                        $sev = if ($rule.Severity -eq "CRITICAL") { $SEV_CRITICAL } else { $SEV_HIGH }
+                        # ── AUTHENTICODE GATE (rule #1 — added 2026-07-26) ─────────────────
+                        # YARA-lite matches API-name strings in file CONTENT. Legitimate
+                        # system-administration, debugging and EDR tooling contains those
+                        # strings BECAUSE THAT IS WHAT IT DOES: WMI_Reflective matches any PE
+                        # whose import table references VirtualAllocEx/WriteProcessMemory/
+                        # CreateRemoteThread, and UAC_Bypass_FodHelper matches any binary that
+                        # merely mentions eventvwr.exe. Measured live on this box 2026-07-26:
+                        # Phase 90 produced 18 auto-selected CRITICAL/HIGH + DeleteFile findings,
+                        # 12 of them against Microsoft's own Authenticode-signed Sysinternals
+                        # Suite in Downloads (ADInsight, Coreinfo, livekd, vmmap, Winobj...),
+                        # plus Anthropic-signed "Claude Setup.exe" and a Microsoft-signed
+                        # concrt140.dll — every one queued for automatic DELETION on a completely
+                        # healthy machine. That is rule #1 verbatim.
+                        #
+                        # The decisive signal must be the Authenticode verdict, NOT the path.
+                        # A path allowlist is attacker-satisfiable (drop the payload in a folder
+                        # called "SysinternalsSuite") and does not generalise to client machines;
+                        # $YARA_BENIGN_RE above stays as the narrow JIT-runtime carve-out it is,
+                        # routed through Test-BenignPath so a staging-dir match is vetoed.
+                        # Same precedent as the TROJNAME block below and Phases 36/69/83: where
+                        # the action is destructive, the signature verdict decides whether the
+                        # finding is auto-actionable.
+                        #
+                        #   Status 'Valid'  -> POSSIBLE + Info : demoted, never dropped. The
+                        #                      finding still appears, with the rule's original
+                        #                      severity and the signer stated in the description.
+                        #   any other status-> grading UNCHANGED. "NotSigned" is NOT evidence of
+                        #                      malice — Get-AuthSig cannot see CATALOG signatures,
+                        #                      so many legitimate OS files report NotSigned. It is
+                        #                      simply the absence of a positive trust signal, so
+                        #                      the pre-existing behaviour is what applies.
+                        #   not checked at all-> POSSIBLE + Info : fail closed. A guard whose
+                        #                      input is missing (budget exhausted, file locked)
+                        #                      must never fall through into the destructive path.
+                        #
+                        # Budgeted per CLAUDE.md: Authenticode does online CRL/OCSP revocation
+                        # checks that block ~15s each, so this loop carries the $global:SIG_AUDIT_*
+                        # deadline+count pair. The stopwatch is cumulative-call-time, not
+                        # wall-clock-since-phase-start (see its declaration for the measurement
+                        # that forced that). Get-AuthSig is additionally memoized in
+                        # $global:AUTHSIG_CACHE (WS4), so a path already verified by an earlier
+                        # phase returns instantly and costs the deadline nothing.
+                        # Flags are raised only AFTER the check succeeds, never optimistically.
+                        $yaraSigChecked = $false
+                        $yaraSigValid   = $false
+                        $yaraSigStatus  = ''
+                        $yaraSigner     = ''
+                        $ysig           = $null
+                        if ($yaraSigSeen -lt $global:SIG_AUDIT_MAX_FILES -and
+                            $yaraSigSw.Elapsed.TotalSeconds -lt $global:SIG_AUDIT_DEADLINE_S) {
+                            $yaraSigSeen++
+                            $yaraSigSw.Start()
+                            try { $ysig = Get-AuthSig $cand.FullName } finally { $yaraSigSw.Stop() }
+                            if ($ysig) {
+                                $yaraSigChecked = $true
+                                $yaraSigStatus  = "$($ysig.Status)"
+                                if ($ysig.SignerCertificate) { $yaraSigner = "$($ysig.SignerCertificate.Subject)" }
+                                if ($yaraSigStatus -eq 'Valid') { $yaraSigValid = $true }
+                            }
+                        }
+                        $yaraSignerShort = $yaraSigner
+                        if ($yaraSigner -match 'CN=([^,]+)') { $yaraSignerShort = $Matches[1].Trim('"') }
+                        if ($yaraSigValid) {
+                            Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                                -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
+                                -Description "YARA rule '$($rule.Name)' (rule severity $($rule.Severity)) matched the CONTENT of a validly Authenticode-signed binary: $($cand.FullName) — signed by '$yaraSignerShort'. Demoted to review-only and never auto-acted-on: these rules match API-name strings that legitimate system-administration, debugging and security tooling contains by design. Verify the signer is expected for this machine before acting." `
+                                -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches" `
+                                -Signer $yaraSignerShort -SignatureStatus $yaraSigStatus
+                            $yaraHits++; break
+                        }
+                        if (-not $yaraSigChecked) {
+                            Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                                -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
+                                -Description "YARA rule '$($rule.Name)' (rule severity $($rule.Severity)) matched: $($cand.FullName) — but the Authenticode signature could NOT be verified (file locked, or this phase's signature-check budget of $($global:SIG_AUDIT_MAX_FILES) files / $($global:SIG_AUDIT_DEADLINE_S)s was exhausted). Held at review-only rather than auto-acted-on, because an unverified signature is not a verdict. Re-check this file by hand: Get-AuthenticodeSignature '$($cand.FullName)'" `
+                                -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches"
+                            $yaraHits++; break
+                        }
+                        # Checked, and NOT validly signed: original grading, unchanged.
+                        # FixAction is Quarantine rather than DeleteFile (changed 2026-07-26):
+                        # a content-string match is a heuristic, never a hash confirmation, and
+                        # CLAUDE.md prefers the reversible action for anything not hash-confirmed.
+                        # Severity and auto-selectability are identical, so no coverage is lost —
+                        # only the operator's ability to undo a wrong call is gained.
+                        $zbYaraSev = if ($rule.Severity -eq "CRITICAL") { $SEV_CRITICAL } else { $SEV_HIGH }
                         Out-Decrypt -Text "$($rule.Name) -> $($cand.FullName)" -Prefix "  [YARA HIT] "
                         Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
-                            -ThreatType "YARA-Lite Match" -Severity $sev `
-                            -Description "YARA rule '$($rule.Name)' matched: $($cand.FullName)" `
-                            -Target $cand.FullName -FixAction "DeleteFile" -FixParam $cand.FullName `
-                            -Group "YARA-Lite Matches"
+                            -ThreatType "YARA-Lite Match" -Severity $zbYaraSev `
+                            -Description "YARA rule '$($rule.Name)' matched: $($cand.FullName) — not validly signed (Authenticode status: $yaraSigStatus)." `
+                            -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                            -Group "YARA-Lite Matches" -SignatureStatus $yaraSigStatus
                         $yaraHits++; $global:TrojanHits++; break
                     }
                 }
@@ -1597,21 +1695,43 @@ if ($PhasePlan.Integrity) {
         Out-Typewriter "  -> $sigUnverif binary signature(s) unverifiable in-process (review only; not auto-acted)." "WARN"
     } else { Out-Typewriter "  -> [OK] ALL PROTECTED BINARIES VALIDLY SIGNED BY TRUSTED PUBLISHERS." "GOOD" }
 
-    # Accessibility-binary backdoor cross-check (sethc/utilman replaced or IFEO-debugged)
-    foreach ($ab in @(Get-Perm 'accessibility_binaries')) {
-        $abPath = Expand-EnvPath "%WINDIR%\System32\$ab"
-        if (Test-Path -LiteralPath $abPath) {
+    # Accessibility-binary backdoor cross-check (sethc/utilman replaced or IFEO-debugged).
+    # P12 (EVIDENCE_ENGINE_PLAN §2): the list now comes from data\detection_signatures.json via
+    # Get-Sig — the SINGLE canonical source. It previously came from permission_baseline.json via
+    # Get-Perm, and the two had drifted: the (never-read) signature copy carries hh.exe and the
+    # baseline did not, so the HTML-Help IFEO backdoor was listed in data but checked nowhere, and
+    # editing the signature copy had no effect on anything. permission_baseline.json is the ACL/owner
+    # baseline for the perm-integrity phases; a detection list does not belong in it.
+    $abNames = @(Get-Sig 'accessibility_binaries')
+    if ($abNames.Count -eq 0) {
+        Out-Typewriter "  -> ACCESSIBILITY BINARY LIST UNAVAILABLE (signature data missing) — CHECK SKIPPED, NOT CLEAN." "WARN"
+    }
+    foreach ($ab in $abNames) {
+        # hh.exe ships as %WINDIR%\hh.exe and %WINDIR%\SysWOW64\hh.exe and never in System32, so a
+        # System32-only probe could never have found it. Every location is checked, not just the
+        # first hit — replacing either image is equally a backdoor. The System32 finding IDs are
+        # left EXACTLY as they were so -Baseline diffs are unaffected; the two additional locations
+        # carry a suffix so the three probes cannot collide in Add-Finding's ID dedupe.
+        foreach ($abLoc in @(
+            @{ P = (Expand-EnvPath "%WINDIR%\System32\$ab"); S = '' },
+            @{ P = (Expand-EnvPath "%WINDIR%\$ab");          S = '_WINDIR' },
+            @{ P = (Expand-EnvPath "%WINDIR%\SysWOW64\$ab"); S = '_WOW64' }
+        )) {
+            $abPath = $abLoc.P
+            $abHere = $false
+            try { $abHere = Test-Path -LiteralPath $abPath } catch { $abHere = $false }
+            if (-not $abHere) { continue }
             $v = Get-SignatureVerdict -FilePath $abPath
             # Genuine tamper (bad hash / untrusted) or a validly-signed-but-NON-Microsoft replacement
             # = real backdoor (CRITICAL + sfc restore). An unverifiable status (catalog unreadable
             # in-process) is review-only — don't FP a legit sethc/utilman as a backdoor.
             if (($v.Status -eq 'Valid' -and -not $v.IsMs) -or $v.Status -eq 'HashMismatch' -or $v.Status -eq 'NotTrusted') {
                 Out-ThreatBanner "ACCESSIBILITY BACKDOOR SUSPECT" "$ab signature=$($v.Status)"
-                Add-Finding -ID "ACCESS109_$ab" -Phase "PHASE 109" -ThreatType "Accessibility Backdoor" `
-                    -Severity $SEV_CRITICAL -Description "Accessibility binary $ab is not a valid Microsoft signed file (Status=$($v.Status), Signer='$($v.Signer)') — classic logon-screen SYSTEM backdoor. Restore with sfc /scannow." `
+                Add-Finding -ID "ACCESS109_$ab$($abLoc.S)" -Phase "PHASE 109" -ThreatType "Accessibility Backdoor" `
+                    -Severity $SEV_CRITICAL -Description "Accessibility binary $ab is not a valid Microsoft signed file (Status=$($v.Status), Signer='$($v.Signer)') at $abPath — classic logon-screen SYSTEM backdoor. Restore with sfc /scannow." `
                     -Target $abPath -FixAction "RunCmd" -FixParam "sfc /scannow" -Group "Accessibility Backdoors"
             } elseif ($v.Status -ne 'Valid') {
-                Add-Finding -ID "ACCESS109X_$ab" -Phase "PHASE 109" -ThreatType "Accessibility Backdoor" `
+                Add-Finding -ID "ACCESS109X_$ab$($abLoc.S)" -Phase "PHASE 109" -ThreatType "Accessibility Backdoor" `
                     -Severity $SEV_POSSIBLE -Description "Accessibility binary $ab signature unverifiable in-process (Status=$($v.Status); usually catalog-signed — review): $abPath" `
                     -Target $abPath -FixAction "Info" -Group "Accessibility Backdoors"
             }

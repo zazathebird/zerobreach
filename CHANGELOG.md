@@ -6,6 +6,106 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-26 — Phase 90 was auto-deleting signed Microsoft binaries, and the batch's integration run
+
+### The third live rule-#1 violation
+
+Phase 90's YARA-lite content sweep graded **Authenticode-signed Microsoft Sysinternals binaries HIGH +
+`DeleteFile`** — 18 auto-selected destructive findings on a healthy box, including `ADInsight`,
+`Coreinfo`, `livekd`, `vmmap`, `Winobj`, a Microsoft-signed `concrt140.dll`, and `Claude Setup.exe`
+(signed *Anthropic*), all queued for automatic deletion.
+
+The cause is inherent to the check: YARA-lite matches API-name strings in file **content**, and
+legitimate administration and debugging tools contain `VirtualAllocEx` / `WriteProcessMemory`
+**because that is what they do**.
+
+**The Authenticode verdict is now the gate, not the path** — the same precedent set for phases
+36/69/83 in the 2026-07-22 anchored-path work. A `Valid` signature demotes to `POSSIBLE` + `Info`
+with the signer and the original rule severity stated; anything else keeps its severity unchanged;
+and a signature that could not be checked (budget exhausted, file locked) is `POSSIBLE` + `Info` with
+the reason and a manual re-check command. Flags are raised only after the check succeeds.
+
+A path allowlist was deliberately **not** used: it is attacker-satisfiable and does not generalise to
+client machines. Verified — a payload in a folder literally named `SysinternalsSuite` still grades
+`HIGH` + auto-selected, as does an unsigned payload sitting beside signed binaries.
+
+`DeleteFile` → **`Quarantine`** on the unsigned branch. A content-string match is a heuristic, never a
+hash confirmation, and the project prefers the reversible action for exactly that; severity and
+auto-selectability are unchanged, so no coverage is lost. The hash-match branch below it already used
+`Quarantine`, so the phase is now internally consistent.
+
+Auto-destructive **18 → 4** (17 → 3 excluding the synthetic test fixture). All finding IDs unchanged:
+0 dropped, 0 added, 18 changed in **grading only** — zero baseline-diff impact.
+
+### The bug the live run caught that the code review did not
+
+The first implementation used `[Stopwatch]::StartNew()` at phase entry — matching the sibling
+`$trojSigSw` — to carry the `$global:SIG_AUDIT_*` budget. The harness then reported
+**`yaraSigSeen = 0`**: the YARA gate is not reached until after the magic-byte sniff and per-file
+content reads, which take **~220 s** on this box, so a 25 s deadline was already 200 s blown at the
+*first* hit. **Zero signatures were ever verified**, every hit took the fail-closed branch, and the
+unsigned attacker fixture was demoted along with everything else.
+
+It read as a flawless "18 → 0" pass while silently destroying the phase's entire coverage. Fixed to
+measure *cumulative Authenticode time* — the stopwatch is created stopped and started/stopped around
+each `Get-AuthSig` call: `yaraSigSeen = 18`, cumulative 1.4 s. Forcing `SIG_AUDIT_MAX_FILES=3`
+verified exactly 3 checks and 15 findings held at review-only, so the loop is bounded by both count
+and cumulative time.
+
+**This is why a "before → 0" result is not evidence on its own.** A number that good should prompt the
+question *"did the check actually run?"*, and here the answer was no.
+
+### P12 completed — the second half
+
+`engine/Phases-3.ps1` (Phase 109) now reads `accessibility_binaries` via `Get-Sig` from
+`detection_signatures.json` instead of `Get-Perm` from `permission_baseline.json`, and probes
+`%WINDIR%` and `SysWOW64` in addition to `System32` — **`hh.exe` lives in neither System32 nor the old
+baseline copy, so the HTML-Help IFEO backdoor could never have been detected by anything.** The
+System32 finding IDs are byte-identical to before so `-Baseline` diffs are unaffected; the two extra
+locations carry a suffix so the three probes cannot collide in `Add-Finding`'s dedupe. The duplicate
+list is removed from `permission_baseline.json`, replaced by a note explaining why it must not come
+back.
+
+### Integration run — the whole batch, live, on real PS 5.1
+
+Five agents edited four engine files plus the server and the GUI in this batch. Verified together:
+
+- All **seven** engine/server files parse-clean on `powershell.exe` 5.1.26100 **and** `pwsh` 7, every
+  BOM `EF BB BF`. Header counts exact: **70 · 40 · 30**.
+- `QUICK -Hours 0 -Auto`: **exit 0, 0 recovered errors, 0 bytes on stderr**, 110 s, 310 findings.
+- **QUICK still runs exactly 30 headers.** A naive phase-number sweep of the log reports 31 — the
+  extra is `74.7` appearing as *prose inside a Phase 74.6 finding description*, not a header. The real
+  `Show-PhaseHeader "PHASE 74.7"` is correctly inside `if (-not $global:QUICK_MODE)`.
+- **Auto-destructive 94 → 63**, and the `%TEMP%\claude\` harness flood is **completely gone (0)**. The
+  residual 59 Phase 10 hits are genuine loose executables in the operator's own project temp
+  directories (`plbisect-*`, `zbbase`, `zb-vfx-profile`, pytest trees). The remaining 4 are all
+  previously documented by-design items: the deliberate `_DELETEME` Run-key tripwire, `OneDC_Updater`,
+  the Ollama startup `.lnk`, and the `RunAsPPL` posture item.
+- **0** drive-root / `icacls /reset /T` / `vssadmin delete shadows /all` FixParams at all-time scope.
+- **P7+P8 confirmed working live, on the plan's own worked example.** The run produced the
+  `obj\Debug\…\PirateLifeNative.dll` finding cited in `EVIDENCE_ENGINE_PLAN.md` §0.1 as a proven
+  auto-selected false positive — now matched by *family* (`Trojan:Win32/Wacatac.C!ml`, which the old
+  `StartsWith` test could not match at all) and demoted to `POSSIBLE` carrying its full rationale:
+  ML-derived verdict, dev build-output path class, and *"file was written after Defender's action —
+  this is not the file Defender flagged."*
+
+### Found, not fixed — carried forward deliberately
+
+- **`$trojSigSw` (Phase 90) has the identical wall-clock defect**, so `$TROJAN_FILE_PATTERNS` is
+  **effectively dead code in that phase**. Not repaired here: fixing it *enables a dormant detection*,
+  which the project's own rule says may not ship ungraded — and it cannot be graded on this box, where
+  0 candidates match any pattern. Needs a client-representative machine.
+- **Three CRITICAL + `Quarantine` auto-selects remain**: the operator's own unsigned IR PowerShell
+  (`MSP-IR-Tool (1).ps1`, `ZeroBreach-V19.ps1`, a copy of `engine\Phases-1.ps1`) tripping
+  `Mimikatz_Strings`. Pre-existing and now at least reversible, but an IR tool that auto-quarantines
+  its own tooling is worth a follow-up.
+- **Phase 90 finding IDs key on the file *name*, not the full path**, so two same-named files in
+  different directories collide and one is deduped away. Left alone because fixing it changes IDs.
+- **`yara_benign_paths`' `\appdata\local\temp\claude\` entry is permanently dead** —
+  `$global:ALLOW_VETO_RE` vetoes it 100% of the time. Independently confirmed twice in this batch.
+
+---
+
 ## 2026-07-26 — EVIDENCE_ENGINE_PLAN P4 · P5 · P11 · P12 + the Phase 10 FP tune
 
 ### P11 — a live rule-#1 violation on every healthy Windows box

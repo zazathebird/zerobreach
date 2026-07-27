@@ -56,16 +56,7 @@
     "%WINDIR%\\System32\\drivers\\etc\\hosts"
   ],
 
-  "_accessibility_note": "accessibility_binaries: the classic 'sticky keys / utilman' backdoor set — if any of these is replaced (bad signature) or has its IFEO debugger set, an attacker gets a SYSTEM shell from the logon screen. Integrity + IFEO cross-check.",
-  "accessibility_binaries": [
-    "sethc.exe",
-    "utilman.exe",
-    "osk.exe",
-    "Magnify.exe",
-    "Narrator.exe",
-    "DisplaySwitch.exe",
-    "atbroker.exe"
-  ],
+  "_accessibility_moved_note": "accessibility_binaries lived here until 2026-07-26 and has been REMOVED — see EVIDENCE_ENGINE_PLAN.md P12. It is a DETECTION list (which images are sticky-keys/utilman backdoor targets), not an ACL/owner baseline, and having a second copy here meant the two drifted: this copy lacked hh.exe, so the HTML-Help IFEO backdoor was listed in detection_signatures.json but checked nowhere, and editing that file had no effect at all. The single canonical source is now 'accessibility_binaries' in data/detection_signatures.json, read via Get-Sig by Phase 45 and Phase 109. Do not re-add it here.",
 
   "_reg_acl_note": "critical_reg_acl_keys: registry keys whose ACL should only allow SYSTEM / Administrators / TrustedInstaller to write. A write Allow ACE for Everyone / Users / Authenticated Users here = persistence/privesc surface.",
   "critical_reg_acl_keys": [
