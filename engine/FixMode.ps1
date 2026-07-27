@@ -26,13 +26,28 @@ Out-Typewriter "CREATING ROLLBACK SNAPSHOT BEFORE ANY CHANGES..." "ACT"
 Invoke-QuantumBar "REGISTRY EXPORT IN PROGRESS" 10 160
 $snapshotOk = $false
 try {
+    # P1: the two per-user keys below used to be exported as literal HKCU, which under an
+    # elevated technician session is the TECHNICIAN's hive. Phases 20 and 24 delete from the
+    # VICTIM's hive, so the rollback net was snapshotting one user and the fix was modifying
+    # another: a destructive action whose "safety net" restores nothing. Now expanded to one
+    # export per profile. Note reg.exe wants HKU\<SID>\... (no colon, not the Registry:: form).
     $regExports = @(
-        @{H="HKCU"; K="SOFTWARE\Microsoft\Windows\CurrentVersion\Run";      F="$env:TEMP\KB_Run_HKCU.reg"},
         @{H="HKLM"; K="SOFTWARE\Microsoft\Windows\CurrentVersion\Run";      F="$env:TEMP\KB_Run_HKLM.reg"},
         @{H="HKLM"; K="SYSTEM\CurrentControlSet\Services";                  F="$env:TEMP\KB_Services.reg"},
-        @{H="HKLM"; K="SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"; F="$env:TEMP\KB_Winlogon.reg"},
-        @{H="HKCU"; K="SOFTWARE\Classes\CLSID";                             F="$env:TEMP\KB_CLSID.reg"}
+        @{H="HKLM"; K="SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"; F="$env:TEMP\KB_Winlogon.reg"}
     )
+    $zbSnapUsers = 0
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.HivePath) { continue }   # hive unavailable: nothing to snapshot
+        $zbRegRoot = "HKU\" + (("$($zbHive.HivePath)") -replace '(?i)^Registry::HKEY_USERS\\', '')
+        $zbTag     = Get-StableId "$($zbHive.Sid)"
+        $regExports += @{ H=$zbRegRoot; K="SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+                          F="$env:TEMP\KB_Run_$zbTag.reg" }
+        $regExports += @{ H=$zbRegRoot; K="SOFTWARE\Classes\CLSID"
+                          F="$env:TEMP\KB_CLSID_$zbTag.reg" }
+        $zbSnapUsers++
+    }
+    Out-Typewriter "  -> SNAPSHOTTING PER-USER KEYS FOR $zbSnapUsers PROFILE(S)" "INFO"
     $snapshotFiles = @()
     foreach ($re in $regExports) {
         reg export "$($re.H)\$($re.K)" $re.F /y 2>$null | Out-Null

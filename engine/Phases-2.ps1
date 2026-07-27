@@ -811,10 +811,19 @@ foreach ($zbOwn in $zbEmailRoots) {
             $fixAct = if ($sev -eq $SEV_POSSIBLE) { "Info" } else { "Quarantine" }
             $lvl = if ($sev -eq $SEV_POSSIBLE) { "WARN" } else { "CRIT" }
             Out-Typewriter "  -> [$sev] [$($zbOwn.User)] EMAIL ARTIFACT: $($ef.Name)" $lvl
-            # SID in the ID: the same lure attachment cached under two profiles previously
-            # collided on name+length and Add-Finding's de-dupe dropped the second victim.
+            # ID = SID + PHYSICAL FILE IDENTITY (name + length + mtime), deliberately NOT the
+            # full path. Two reasons, pulling in opposite directions:
+            #  - The SID is REQUIRED: the same lure cached under two profiles used to collide on
+            #    name+length, and Add-Finding's de-dupe silently dropped the second victim.
+            #  - The PATH must be excluded: ...\Temporary Internet Files\Content.Outlook is a
+            #    JUNCTION to ...\INetCache\Content.Outlook, and both are in the scan template
+            #    list, so keying on FullName reported one physical file TWICE — as HIGH +
+            #    Quarantine, where the second attempt would act on an already-quarantined file.
+            #    Caught by live grading, 2026-07-26; keying on identity collapses the aliases
+            #    back to one finding while keeping the per-user split.
+            # Root order (INetCache before Temporary Internet Files) makes the canonical path win.
             # FixParam stays a bare machine-parseable path — the user lives in Target/Description.
-            Add-Finding -ID "EMAIL_${idSafe}_$(Get-StableId "$($zbOwn.Sid)|$($ef.FullName)|$($ef.Length)")" -Phase "PHASE 74.5" -ThreatType $threat `
+            Add-Finding -ID "EMAIL_${idSafe}_$(Get-StableId "$($zbOwn.Sid)|$($ef.Name)|$($ef.Length)|$($ef.LastWriteTimeUtc.Ticks)")" -Phase "PHASE 74.5" -ThreatType $threat `
                 -Severity $sev -Description "[$($zbOwn.User)] Email attachment threat: $($reasons -join '; ') [$($ef.FullName)]" `
                 -Target "[$($zbOwn.User)] $($ef.FullName)" -FixAction $fixAct -FixParam $ef.FullName `
                 -Group "Email / Phishing Threats"
