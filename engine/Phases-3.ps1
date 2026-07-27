@@ -141,7 +141,48 @@ if ($PhasePlan.Advanced) {
     # delivery locations this content pass exists for — a real banking trojan sat in Downloads as
     # *.exe.vir — so they go FIRST. %TEMP% is a subtree of %LOCALAPPDATA% and the noisiest, so it
     # goes last (it is still covered, and Phase 10 sweeps the temp dirs independently).
-    $yaraRoots = @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop",$env:APPDATA,$env:LOCALAPPDATA,$env:TEMP)
+    #
+    # P1 multi-user: those five roots were the ELEVATED process's OWN environment, i.e. the
+    # TECHNICIAN's profile on a standard-user endpoint — the deepest content-inspection pass in
+    # the whole engine was reading the wrong person's Downloads and reporting the infected
+    # profile clean. Roots are now collected for EVERY reachable profile and handed to the SAME
+    # single Get-ScanFiles call, so the shared file/wall-clock budget is NOT multiplied by the
+    # profile count (a per-profile call would be 8 x 20s on an 8-profile box). The ORDER
+    # rationale above is preserved ACROSS profiles: every profile's Downloads+Desktop first,
+    # then every profile's AppData/LocalAppData, then every profile's Temp last.
+    # Get-UserPaths is memoized per SID, so the three passes cost one resolution per profile.
+    $zbYaraHives  = @(@(Get-UserHives) | Sort-Object -Property Sid)   # SID order = stable memo key
+    $zbYaraOwners = @{}    # lowercased root -> owning user, for attributing each hit back
+    $yaraRoots    = @()
+    foreach ($zbHive in $zbYaraHives) {
+        if (-not $zbHive.ProfileReachable) { continue }   # never re-probe: 42s UNC stalls
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.Downloads, $zbUp.Desktop)) {
+            if (-not $zbR) { continue }
+            $yaraRoots += $zbR
+            $zbYaraOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
+        }
+    }
+    foreach ($zbHive in $zbYaraHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.AppData, $zbUp.LocalAppData)) {
+            if (-not $zbR) { continue }
+            $yaraRoots += $zbR
+            $zbYaraOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
+        }
+    }
+    foreach ($zbHive in $zbYaraHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        if (-not $zbUp.Temp) { continue }
+        $yaraRoots += $zbUp.Temp
+        $zbYaraOwners["$($zbUp.Temp)".ToLowerInvariant()] = "$($zbHive.User)"
+    }
+    $yaraRoots = @($yaraRoots | Select-Object -Unique)
     $yaraExt   = @(".exe",".com",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
     $yaraHits  = 0
     $trojSigSeen = 0; $trojSigSw = [System.Diagnostics.Stopwatch]::StartNew()   # SIG_AUDIT budget (P90 name loop)
@@ -199,12 +240,22 @@ if ($PhasePlan.Advanced) {
     # The counters must therefore NOT be incremented unconditionally, or the GUI's Trojan threat
     # counter double-counts every file both phases saw (caught in review 2026-07-26). Compare the
     # finding count before/after and only count what was actually added.
+    # Owner attribution is by longest-prefix match on the ROOTS we built, not on ProfilePath:
+    # folder redirection genuinely moves Downloads/Desktop/AppData onto a file server OUTSIDE
+    # the profile root, and a ProfilePath test would then mislabel a real per-user hit as
+    # [MACHINE]. The roots came from Get-UserPaths, so they are authoritative either way.
     foreach ($mf in $byMagic) {
+        $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+        foreach ($zbK in @($zbYaraOwners.Keys)) {
+            if ("$($mf.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                $zbOwner = $zbYaraOwners[$zbK]; $zbOwnerLen = $zbK.Length
+            }
+        }
         $beforeCount = $global:AuditFindings.Count
         Add-Finding -ID "MASQPE_$(Get-StableId $mf.FullName)" -Phase "PHASE 90" `
             -ThreatType "Masquerading Executable" -Severity $SEV_HIGH `
-            -Description "File is a real Windows PE executable but carries a non-executable extension ('$($mf.Extension)') in a user staging path: $($mf.FullName) — classic rename-to-evade delivery. Review before acting." `
-            -Target $mf.FullName -FixAction "Info" -Group "Masquerading Executables"
+            -Description "[$zbOwner] File is a real Windows PE executable but carries a non-executable extension ('$($mf.Extension)') in a user staging path: $($mf.FullName) — classic rename-to-evade delivery. Review before acting." `
+            -Target "[$zbOwner] $($mf.FullName)" -FixAction "Info" -Group "Masquerading Executables"
         if ($global:AuditFindings.Count -gt $beforeCount) { $yaraHits++; $global:TrojanHits++ }
     }
     if ($byMagic.Count -gt 0) { Out-Typewriter "  -> $($byMagic.Count) MISNAMED PE BINAR(IES) FOUND BY CONTENT." "WARN" }
@@ -228,6 +279,14 @@ if ($PhasePlan.Advanced) {
     $magicOnly = @{}
     foreach ($m in $byMagic) { $magicOnly[$m.FullName] = $true }
         foreach ($cand in $candidates) {
+            # Attribute this candidate back to the profile whose root it came from (see the
+            # comment above the $byMagic loop for why this keys on the roots, not ProfilePath).
+            $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+            foreach ($zbK in @($zbYaraOwners.Keys)) {
+                if ("$($cand.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                    $zbOwner = $zbYaraOwners[$zbK]; $zbOwnerLen = $zbK.Length
+                }
+            }
             try {
                 $bytes = [System.IO.File]::ReadAllBytes($cand.FullName)
                 $text  = [System.Text.Encoding]::ASCII.GetString($bytes)
@@ -236,20 +295,24 @@ if ($PhasePlan.Advanced) {
                         # JIT/renderer runtime DLLs (SwiftShader etc.) legitimately contain
                         # VirtualAllocEx-class API strings; allowlisted paths are review-only.
                         if (Test-BenignPath $cand.FullName $YARA_BENIGN_RE) {
-                            Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                            # P1: the ID was YARA_<rule>_<FILENAME>. With per-profile roots the same
+                            # leaf name in two profiles hashed to ONE id and Add-Finding's de-dupe
+                            # silently dropped the second user's hit — worse than not migrating.
+                            # Hashing the full path makes it per-profile for free.
+                            Add-Finding -ID "YARA_$($rule.Name)_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                                 -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
-                                -Description "YARA rule '$($rule.Name)' matched an allowlisted runtime/library file (JIT renderers legitimately contain these API strings — review only): $($cand.FullName)" `
-                                -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches"
+                                -Description "[$zbOwner] YARA rule '$($rule.Name)' matched an allowlisted runtime/library file (JIT renderers legitimately contain these API strings — review only): $($cand.FullName)" `
+                                -Target "[$zbOwner] $($cand.FullName)" -FixAction "Info" -Group "YARA-Lite Matches"
                             $yaraHits++; break
                         }
                         if ($magicOnly.ContainsKey($cand.FullName)) {
                             # Reachable only because of the magic-byte sniff — review-only (see the
                             # $magicOnly comment above; rule #1). It already carries a HIGH
                             # masquerade finding, so the operator still sees it prominently.
-                            Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                            Add-Finding -ID "YARA_$($rule.Name)_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                                 -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
-                                -Description "YARA rule '$($rule.Name)' matched a file identified as an executable by CONTENT rather than extension: $($cand.FullName) — review-only, because this rule class also matches ordinary PE import-table strings in installers and runtime shims." `
-                                -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches"
+                                -Description "[$zbOwner] YARA rule '$($rule.Name)' matched a file identified as an executable by CONTENT rather than extension: $($cand.FullName) — review-only, because this rule class also matches ordinary PE import-table strings in installers and runtime shims." `
+                                -Target "[$zbOwner] $($cand.FullName)" -FixAction "Info" -Group "YARA-Lite Matches"
                             $yaraHits++; break
                         }
                         # ── AUTHENTICODE GATE (rule #1 — added 2026-07-26) ─────────────────
@@ -315,18 +378,18 @@ if ($PhasePlan.Advanced) {
                         $yaraSignerShort = $yaraSigner
                         if ($yaraSigner -match 'CN=([^,]+)') { $yaraSignerShort = $Matches[1].Trim('"') }
                         if ($yaraSigValid) {
-                            Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                            Add-Finding -ID "YARA_$($rule.Name)_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                                 -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
-                                -Description "YARA rule '$($rule.Name)' (rule severity $($rule.Severity)) matched the CONTENT of a validly Authenticode-signed binary: $($cand.FullName) — signed by '$yaraSignerShort'. Demoted to review-only and never auto-acted-on: these rules match API-name strings that legitimate system-administration, debugging and security tooling contains by design. Verify the signer is expected for this machine before acting." `
-                                -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches" `
+                                -Description "[$zbOwner] YARA rule '$($rule.Name)' (rule severity $($rule.Severity)) matched the CONTENT of a validly Authenticode-signed binary: $($cand.FullName) — signed by '$yaraSignerShort'. Demoted to review-only and never auto-acted-on: these rules match API-name strings that legitimate system-administration, debugging and security tooling contains by design. Verify the signer is expected for this machine before acting." `
+                                -Target "[$zbOwner] $($cand.FullName)" -FixAction "Info" -Group "YARA-Lite Matches" `
                                 -Signer $yaraSignerShort -SignatureStatus $yaraSigStatus
                             $yaraHits++; break
                         }
                         if (-not $yaraSigChecked) {
-                            Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                            Add-Finding -ID "YARA_$($rule.Name)_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                                 -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
-                                -Description "YARA rule '$($rule.Name)' (rule severity $($rule.Severity)) matched: $($cand.FullName) — but the Authenticode signature could NOT be verified (file locked, or this phase's signature-check budget of $($global:SIG_AUDIT_MAX_FILES) files / $($global:SIG_AUDIT_DEADLINE_S)s was exhausted). Held at review-only rather than auto-acted-on, because an unverified signature is not a verdict. Re-check this file by hand: Get-AuthenticodeSignature '$($cand.FullName)'" `
-                                -Target $cand.FullName -FixAction "Info" -Group "YARA-Lite Matches"
+                                -Description "[$zbOwner] YARA rule '$($rule.Name)' (rule severity $($rule.Severity)) matched: $($cand.FullName) — but the Authenticode signature could NOT be verified (file locked, or this phase's signature-check budget of $($global:SIG_AUDIT_MAX_FILES) files / $($global:SIG_AUDIT_DEADLINE_S)s was exhausted). Held at review-only rather than auto-acted-on, because an unverified signature is not a verdict. Re-check this file by hand: Get-AuthenticodeSignature '$($cand.FullName)'" `
+                                -Target "[$zbOwner] $($cand.FullName)" -FixAction "Info" -Group "YARA-Lite Matches"
                             $yaraHits++; break
                         }
                         # Checked, and NOT validly signed: original grading, unchanged.
@@ -336,11 +399,11 @@ if ($PhasePlan.Advanced) {
                         # Severity and auto-selectability are identical, so no coverage is lost —
                         # only the operator's ability to undo a wrong call is gained.
                         $zbYaraSev = if ($rule.Severity -eq "CRITICAL") { $SEV_CRITICAL } else { $SEV_HIGH }
-                        Out-Decrypt -Text "$($rule.Name) -> $($cand.FullName)" -Prefix "  [YARA HIT] "
-                        Add-Finding -ID "YARA_$($rule.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                        Out-Decrypt -Text "[$zbOwner] $($rule.Name) -> $($cand.FullName)" -Prefix "  [YARA HIT] "
+                        Add-Finding -ID "YARA_$($rule.Name)_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                             -ThreatType "YARA-Lite Match" -Severity $zbYaraSev `
-                            -Description "YARA rule '$($rule.Name)' matched: $($cand.FullName) — not validly signed (Authenticode status: $yaraSigStatus)." `
-                            -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                            -Description "[$zbOwner] YARA rule '$($rule.Name)' matched: $($cand.FullName) — not validly signed (Authenticode status: $yaraSigStatus)." `
+                            -Target "[$zbOwner] $($cand.FullName)" -FixAction "Quarantine" -FixParam $cand.FullName `
                             -Group "YARA-Lite Matches" -SignatureStatus $yaraSigStatus
                         $yaraHits++; $global:TrojanHits++; break
                     }
@@ -349,12 +412,12 @@ if ($PhasePlan.Advanced) {
                 if ($cand.Extension.ToLower() -in @(".htm",".html",".js",".jse",".vbs",".vbe",".hta",".wsf",".svg")) {
                     $cr = Test-ContentRules -FilePath $cand.FullName -Rules $EMAIL_CONTENT_RULES
                     if ($cr.Hit) {
-                        Out-Decrypt -Text "$($cr.Name) -> $($cand.FullName)" -Prefix "  [CONTENT HIT] "
+                        Out-Decrypt -Text "[$zbOwner] $($cr.Name) -> $($cand.FullName)" -Prefix "  [CONTENT HIT] "
                         $fa = if ($cr.Severity -eq $SEV_POSSIBLE) { "Info" } else { "Quarantine" }
-                        Add-Finding -ID "CONTENT_$($cr.Name)_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                        Add-Finding -ID "CONTENT_$($cr.Name)_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                             -ThreatType "Phishing / Smuggling Content" -Severity $cr.Severity `
-                            -Description "Content rule '$($cr.Name)' matched: $($cand.FullName)" `
-                            -Target $cand.FullName -FixAction $fa -FixParam $cand.FullName `
+                            -Description "[$zbOwner] Content rule '$($cr.Name)' matched: $($cand.FullName)" `
+                            -Target "[$zbOwner] $($cand.FullName)" -FixAction $fa -FixParam $cand.FullName `
                             -Group "Phishing / Smuggling Content"
                         $yaraHits++; $global:TrojanHits++
                     }
@@ -364,11 +427,14 @@ if ($PhasePlan.Advanced) {
                     try {
                         $hash = (Get-FileHashSafe $cand.FullName).ToLower()
                         if (($KNOWN_MALWARE_HASHES -contains $hash) -or ($global:CustomIocs.Hashes -contains $hash)) {
-                            Out-Decrypt -Text "IOC hash match: $($cand.FullName)" -Prefix "  [IOC HIT] "
-                            Add-Finding -ID "IOC_HASH_$($cand.Name -replace '[^a-z0-9]','')" -Phase "PHASE 90" `
+                            Out-Decrypt -Text "[$zbOwner] IOC hash match: $($cand.FullName)" -Prefix "  [IOC HIT] "
+                            # Path-hashed (was filename-only): per-profile unique, and it now uses
+                            # the SAME id shape as the ungated sweep below, so one physical file
+                            # reached by both passes cannot be reported twice.
+                            Add-Finding -ID "IOC_HASH_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                                 -ThreatType "Known-Malware Hash" -Severity $SEV_CRITICAL `
-                                -Description "File matches known-malware/IOC hash ($hash): $($cand.FullName)" `
-                                -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                                -Description "[$zbOwner] File matches known-malware/IOC hash ($hash): $($cand.FullName)" `
+                                -Target "[$zbOwner] $($cand.FullName)" -FixAction "Quarantine" -FixParam $cand.FullName `
                                 -Group "Known-Malware Hash Matches"
                             $yaraHits++; $global:TrojanHits++
                         }
@@ -390,21 +456,21 @@ if ($PhasePlan.Advanced) {
                     if ($tsig -and $tsig.Status -eq 'Valid') {
                         Add-Finding -ID "TROJNAME_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                             -ThreatType "Suspicious Filename" -Severity $SEV_POSSIBLE `
-                            -Description "Filename matches a known malware/tooling naming pattern ('$tfp') but the binary is validly signed (review only, never auto-acted): $($cand.FullName)" `
-                            -Target $cand.FullName -FixAction "Info" -Group "Suspicious Filenames"
+                            -Description "[$zbOwner] Filename matches a known malware/tooling naming pattern ('$tfp') but the binary is validly signed (review only, never auto-acted): $($cand.FullName)" `
+                            -Target "[$zbOwner] $($cand.FullName)" -FixAction "Info" -Group "Suspicious Filenames"
                     } elseif ($magicOnly.ContainsKey($cand.FullName)) {
                         # Magic-sniffed file: newly reachable here, so keep it out of the
                         # auto-select path (rule #1 — see the $magicOnly comment above).
                         Add-Finding -ID "TROJNAME_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                             -ThreatType "Suspicious Filename" -Severity $SEV_POSSIBLE `
-                            -Description "Unsigned file, identified as an executable by CONTENT rather than extension, whose name matches a known malware/tooling naming pattern ('$tfp'): $($cand.FullName) — review-only." `
-                            -Target $cand.FullName -FixAction "Info" -Group "Suspicious Filenames"
+                            -Description "[$zbOwner] Unsigned file, identified as an executable by CONTENT rather than extension, whose name matches a known malware/tooling naming pattern ('$tfp'): $($cand.FullName) — review-only." `
+                            -Target "[$zbOwner] $($cand.FullName)" -FixAction "Info" -Group "Suspicious Filenames"
                     } else {
-                        Out-Decrypt -Text "trojan-pattern filename: $($cand.FullName)" -Prefix "  [NAME HIT] "
+                        Out-Decrypt -Text "[$zbOwner] trojan-pattern filename: $($cand.FullName)" -Prefix "  [NAME HIT] "
                         Add-Finding -ID "TROJNAME_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                             -ThreatType "Suspicious Filename" -Severity $SEV_HIGH `
-                            -Description "Unsigned file whose name matches a known malware/tooling naming pattern ('$tfp'): $($cand.FullName)" `
-                            -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                            -Description "[$zbOwner] Unsigned file whose name matches a known malware/tooling naming pattern ('$tfp'): $($cand.FullName)" `
+                            -Target "[$zbOwner] $($cand.FullName)" -FixAction "Quarantine" -FixParam $cand.FullName `
                             -Group "Suspicious Filenames"
                         $global:TrojanHits++
                     }
@@ -416,11 +482,11 @@ if ($PhasePlan.Advanced) {
                 # the name, not a hash, so a same-named innocent file is possible.
                 if ($global:CustomIocFileNames.Count -gt 0 -and
                     $global:CustomIocFileNames -contains $cand.Name.ToLower()) {
-                    Out-Decrypt -Text "IOC filename match: $($cand.FullName)" -Prefix "  [IOC HIT] "
+                    Out-Decrypt -Text "[$zbOwner] IOC filename match: $($cand.FullName)" -Prefix "  [IOC HIT] "
                     Add-Finding -ID "IOC_FILE_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
                         -ThreatType "Custom IOC" -Severity $SEV_HIGH `
-                        -Description "File matches an operator-supplied IOC filename: $($cand.FullName)" `
-                        -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                        -Description "[$zbOwner] File matches an operator-supplied IOC filename: $($cand.FullName)" `
+                        -Target "[$zbOwner] $($cand.FullName)" -FixAction "Quarantine" -FixParam $cand.FullName `
                         -Group "Custom IOC Matches"
                     $yaraHits++; $global:TrojanHits++
                 }
@@ -429,11 +495,11 @@ if ($PhasePlan.Advanced) {
                 foreach ($cre in $global:CustomIocRegexOk) {
                     try {
                         if ($text -match $cre -or $cand.FullName -match $cre) {
-                            Out-Decrypt -Text "IOC regex match: $($cand.FullName)" -Prefix "  [IOC HIT] "
+                            Out-Decrypt -Text "[$zbOwner] IOC regex match: $($cand.FullName)" -Prefix "  [IOC HIT] "
                             Add-Finding -ID "IOC_RE_$(Get-StableId ("$cre|$($cand.FullName)"))" -Phase "PHASE 90" `
                                 -ThreatType "Custom IOC" -Severity $SEV_HIGH `
-                                -Description "File matches operator-supplied IOC pattern '$cre': $($cand.FullName)" `
-                                -Target $cand.FullName -FixAction "Quarantine" -FixParam $cand.FullName `
+                                -Description "[$zbOwner] File matches operator-supplied IOC pattern '$cre': $($cand.FullName)" `
+                                -Target "[$zbOwner] $($cand.FullName)" -FixAction "Quarantine" -FixParam $cand.FullName `
                                 -Group "Custom IOC Matches"
                             $yaraHits++; $global:TrojanHits++; break
                         }
@@ -467,11 +533,17 @@ if ($PhasePlan.Advanced) {
                 if (-not $h2) { continue }
                 $h2 = $h2.ToLower()
                 if (($KNOWN_MALWARE_HASHES -contains $h2) -or ($global:CustomIocs.Hashes -contains $h2)) {
-                    Out-Decrypt -Text "IOC hash match (name-independent): $($hf.FullName)" -Prefix "  [IOC HIT] "
+                    $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+                    foreach ($zbK in @($zbYaraOwners.Keys)) {
+                        if ("$($hf.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                            $zbOwner = $zbYaraOwners[$zbK]; $zbOwnerLen = $zbK.Length
+                        }
+                    }
+                    Out-Decrypt -Text "[$zbOwner] IOC hash match (name-independent): $($hf.FullName)" -Prefix "  [IOC HIT] "
                     Add-Finding -ID "IOC_HASH_$(Get-StableId $hf.FullName)" -Phase "PHASE 90" `
                         -ThreatType "Known-Malware Hash" -Severity $SEV_CRITICAL `
-                        -Description "File matches known-malware/IOC hash ($h2) despite a non-executable filename: $($hf.FullName)" `
-                        -Target $hf.FullName -FixAction "Quarantine" -FixParam $hf.FullName `
+                        -Description "[$zbOwner] File matches known-malware/IOC hash ($h2) despite a non-executable filename: $($hf.FullName)" `
+                        -Target "[$zbOwner] $($hf.FullName)" -FixAction "Quarantine" -FixParam $hf.FullName `
                         -Group "Known-Malware Hash Matches"
                     $yaraHits++; $global:TrojanHits++
                 }
@@ -512,66 +584,94 @@ if ($PhasePlan.Advanced) {
     $zbZoneSeen = 0; $zbZoneMax = 1500; $zbZoneDeadlineS = 30; $zbZoneCut = $false
     $zbZoneSw = [System.Diagnostics.Stopwatch]::StartNew()
     $zbOriginHits = 0
-    foreach ($root in @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop")) {
-        if ($zbZoneCut) { break }
-        if (-not (Test-Path $root)) { continue }
-        $zbMotwCand = Get-ScanFiles -Path $root -TimeScoped     # assign first — Get-ScanFiles returns ,$arr (CLAUDE.md)
-        $exes = @($zbMotwCand | Where-Object { $_.Extension -match $zbMotwEvidRe })
-        foreach ($exe in $exes) {
-            if ($zbZoneSeen -ge $zbZoneMax -or $zbZoneSw.Elapsed.TotalSeconds -gt $zbZoneDeadlineS) { $zbZoneCut = $true; break }
-            $zbZoneSeen++
-            $zbIsExec = ($exe.Extension -match $zbMotwExecRe)
-            $stream = Get-Item -LiteralPath $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue
-            if (-not $stream) {
-                if ($zbIsExec -and $exe.Length -gt 8192) {
-                    Add-Finding -ID "MOTW_$($exe.Name -replace '[^a-z0-9]','')" -Phase "PHASE 91" -ThreatType "MoTW Abuse" `
-                        -Severity $SEV_POSSIBLE `
-                        -Description "Executable in Downloads/Desktop missing Zone.Identifier (MoTW stripped): $($exe.FullName)" `
-                        -Target $exe.FullName -FixAction "Info" -Group "MoTW / Web-Origin Abuse"
-                    $motwHits++
-                }
-                continue
-            }
-            # ── P6: the stream IS present — read it instead of discarding it ──────────
-            $zbZoneTxt = ''
-            try { $zbZoneTxt = ((Get-Content -LiteralPath $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue) -join "`n") } catch { $zbZoneTxt = '' }
-            if (-not $zbZoneTxt) { continue }
-            $zbZoneId = ''; $zbHostUrl = ''; $zbRefUrl = ''
-            $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*ZoneId\s*=\s*(\d+)')
-            if ($zbZm.Success) { $zbZoneId = $zbZm.Groups[1].Value }
-            $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*HostUrl\s*=\s*(\S.*?)\s*$')
-            if ($zbZm.Success) { $zbHostUrl = $zbZm.Groups[1].Value }
-            $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*ReferrerUrl\s*=\s*(\S.*?)\s*$')
-            if ($zbZm.Success) { $zbRefUrl = $zbZm.Groups[1].Value }
-            # A bare ZoneId with no URL carries no origin — nothing to report, and reporting it
-            # on every downloaded file would be pure noise.
-            if (-not $zbHostUrl -and -not $zbRefUrl) { continue }
-            $zbZoneNum = 0
-            if ($zbZoneId) { [void][int]::TryParse($zbZoneId, [ref]$zbZoneNum) }
-            $zbZoneName = switch ($zbZoneNum) {
-                0       { 'Local machine' }
-                1       { 'Local intranet' }
-                2       { 'Trusted sites' }
-                3       { 'Internet' }
-                4       { 'Restricted / untrusted' }
-                default { 'unspecified' }
-            }
-            $zbBenignOrigin = (($zbHostUrl -and $zbHostUrl -match $zbMotwBenignRe) -or ($zbRefUrl -and $zbRefUrl -match $zbMotwBenignRe))
-            $zbSevZ = if ($zbIsExec -and $zbZoneNum -ge 3 -and $zbHostUrl -and -not $zbBenignOrigin) { $SEV_POSSIBLE } else { $SEV_INFO }
-            # A known-benign origin on a non-executable is not worth a line at all.
-            if ($zbBenignOrigin -and -not $zbIsExec) { continue }
-            # SharePoint/Graph download URLs run to 1 KB+; keep the finding readable.
-            $zbHostShort = if ($zbHostUrl.Length -gt 300) { $zbHostUrl.Substring(0,300) + '...[truncated]' } else { $zbHostUrl }
-            $zbRefShort  = if ($zbRefUrl.Length  -gt 300) { $zbRefUrl.Substring(0,300)  + '...[truncated]' } else { $zbRefUrl }
-            $zbZdesc = "Web-origin evidence recovered from the Zone.Identifier stream of $($exe.FullName): ZoneId=$(if ($zbZoneId) { $zbZoneId } else { '?' }) ($zbZoneName)"
-            if ($zbHostShort) { $zbZdesc += " | HostUrl=$zbHostShort" }
-            if ($zbRefShort)  { $zbZdesc += " | ReferrerUrl=$zbRefShort" }
-            $zbZdesc += ". This is where the file was downloaded from, as recorded by the browser; it survives deletion of the payload. Evidence only - no action is proposed."
-            Add-Finding -ID "MOTWORIGIN_$(Get-StableId $exe.FullName)" -Phase "PHASE 91" -ThreatType "Web Origin Evidence" `
-                -Severity $zbSevZ -Description $zbZdesc `
-                -Target $exe.FullName -FixAction "Info" -Group "MoTW / Web-Origin Abuse"
-            $zbOriginHits++
+    # P1 multi-user: Downloads/Desktop were read from the ELEVATED process's environment, i.e.
+    # the technician's own profile on a standard-user endpoint — so the one phase whose entire
+    # purpose is "what did this user download" never looked at the user who downloaded it.
+    # Roots now come from Get-UserPaths for EVERY reachable profile (redirection-aware: a
+    # redirected Desktop on a file server resolves correctly, which a constructed
+    # "$profile\Desktop" never would) and go to ONE Get-ScanFiles call, so the file/deadline
+    # budget is not multiplied by the profile count. The stream-reading and grading logic below
+    # is byte-for-byte unchanged; only the roots and the finding attribution differ.
+    $zbMotwHives  = @(@(Get-UserHives) | Sort-Object -Property Sid)   # SID order = stable memo key
+    $zbMotwOwners = @{}
+    $zbMotwRoots  = @()
+    foreach ($zbHive in $zbMotwHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.Downloads, $zbUp.Desktop)) {
+            if (-not $zbR) { continue }
+            $zbMotwRoots += $zbR
+            $zbMotwOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
         }
+    }
+    $zbMotwRoots = @($zbMotwRoots | Select-Object -Unique)
+    $zbMotwCand  = Get-ScanFiles -Path $zbMotwRoots -TimeScoped   # assign first — Get-ScanFiles returns ,$arr (CLAUDE.md)
+    $exes = @($zbMotwCand | Where-Object { $_.Extension -match $zbMotwEvidRe })
+    foreach ($exe in $exes) {
+        if ($zbZoneSeen -ge $zbZoneMax -or $zbZoneSw.Elapsed.TotalSeconds -gt $zbZoneDeadlineS) { $zbZoneCut = $true; break }
+        $zbZoneSeen++
+        # Longest-prefix attribution against the roots we built (not ProfilePath — a redirected
+        # Downloads/Desktop lives outside the profile root and would read as [MACHINE]).
+        $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+        foreach ($zbK in @($zbMotwOwners.Keys)) {
+            if ("$($exe.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                $zbOwner = $zbMotwOwners[$zbK]; $zbOwnerLen = $zbK.Length
+            }
+        }
+        $zbIsExec = ($exe.Extension -match $zbMotwExecRe)
+        $stream = Get-Item -LiteralPath $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue
+        if (-not $stream) {
+            if ($zbIsExec -and $exe.Length -gt 8192) {
+                # ID was filename-only: "setup.exe" in two profiles collapsed to ONE id and
+                # Add-Finding's de-dupe dropped the second user's hit. Path-hashed now.
+                Add-Finding -ID "MOTW_$(Get-StableId $exe.FullName)" -Phase "PHASE 91" -ThreatType "MoTW Abuse" `
+                    -Severity $SEV_POSSIBLE `
+                    -Description "[$zbOwner] Executable in Downloads/Desktop missing Zone.Identifier (MoTW stripped): $($exe.FullName)" `
+                    -Target "[$zbOwner] $($exe.FullName)" -FixAction "Info" -Group "MoTW / Web-Origin Abuse"
+                $motwHits++
+            }
+            continue
+        }
+        # ── P6: the stream IS present — read it instead of discarding it ──────────
+        $zbZoneTxt = ''
+        try { $zbZoneTxt = ((Get-Content -LiteralPath $exe.FullName -Stream "Zone.Identifier" -ErrorAction SilentlyContinue) -join "`n") } catch { $zbZoneTxt = '' }
+        if (-not $zbZoneTxt) { continue }
+        $zbZoneId = ''; $zbHostUrl = ''; $zbRefUrl = ''
+        $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*ZoneId\s*=\s*(\d+)')
+        if ($zbZm.Success) { $zbZoneId = $zbZm.Groups[1].Value }
+        $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*HostUrl\s*=\s*(\S.*?)\s*$')
+        if ($zbZm.Success) { $zbHostUrl = $zbZm.Groups[1].Value }
+        $zbZm = [regex]::Match($zbZoneTxt, '(?im)^\s*ReferrerUrl\s*=\s*(\S.*?)\s*$')
+        if ($zbZm.Success) { $zbRefUrl = $zbZm.Groups[1].Value }
+        # A bare ZoneId with no URL carries no origin — nothing to report, and reporting it
+        # on every downloaded file would be pure noise.
+        if (-not $zbHostUrl -and -not $zbRefUrl) { continue }
+        $zbZoneNum = 0
+        if ($zbZoneId) { [void][int]::TryParse($zbZoneId, [ref]$zbZoneNum) }
+        $zbZoneName = switch ($zbZoneNum) {
+            0       { 'Local machine' }
+            1       { 'Local intranet' }
+            2       { 'Trusted sites' }
+            3       { 'Internet' }
+            4       { 'Restricted / untrusted' }
+            default { 'unspecified' }
+        }
+        $zbBenignOrigin = (($zbHostUrl -and $zbHostUrl -match $zbMotwBenignRe) -or ($zbRefUrl -and $zbRefUrl -match $zbMotwBenignRe))
+        $zbSevZ = if ($zbIsExec -and $zbZoneNum -ge 3 -and $zbHostUrl -and -not $zbBenignOrigin) { $SEV_POSSIBLE } else { $SEV_INFO }
+        # A known-benign origin on a non-executable is not worth a line at all.
+        if ($zbBenignOrigin -and -not $zbIsExec) { continue }
+        # SharePoint/Graph download URLs run to 1 KB+; keep the finding readable.
+        $zbHostShort = if ($zbHostUrl.Length -gt 300) { $zbHostUrl.Substring(0,300) + '...[truncated]' } else { $zbHostUrl }
+        $zbRefShort  = if ($zbRefUrl.Length  -gt 300) { $zbRefUrl.Substring(0,300)  + '...[truncated]' } else { $zbRefUrl }
+        $zbZdesc = "[$zbOwner] Web-origin evidence recovered from the Zone.Identifier stream of $($exe.FullName): ZoneId=$(if ($zbZoneId) { $zbZoneId } else { '?' }) ($zbZoneName)"
+        if ($zbHostShort) { $zbZdesc += " | HostUrl=$zbHostShort" }
+        if ($zbRefShort)  { $zbZdesc += " | ReferrerUrl=$zbRefShort" }
+        $zbZdesc += ". This is where the file was downloaded from, as recorded by the browser; it survives deletion of the payload. Evidence only - no action is proposed."
+        Add-Finding -ID "MOTWORIGIN_$(Get-StableId $exe.FullName)" -Phase "PHASE 91" -ThreatType "Web Origin Evidence" `
+            -Severity $zbSevZ -Description $zbZdesc `
+            -Target "[$zbOwner] $($exe.FullName)" -FixAction "Info" -Group "MoTW / Web-Origin Abuse"
+        $zbOriginHits++
     }
     if ($zbZoneCut) {
         Out-Typewriter ("  -> [INFO] ZONE.IDENTIFIER READ BUDGET REACHED ({0} files / {1}s) — partial." -f $zbZoneSeen, $zbZoneDeadlineS) "WARN"
@@ -729,29 +829,55 @@ if ($PhasePlan.Advanced) {
     Show-PhaseHeader "PHASE 94" "COM SCRIPTLET (.SCT/.WSC) ABUSE & SQUIBLYDOO" "COM SCRIPTLET"
     Out-Typewriter "SCANNING FOR SCRIPTLET FILES AND REGSVR32 STAGING..." "HUNT"
     $sctHits = 0
-    foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
-        if (-not (Test-Path $root)) { continue }
-        # NB: .sct/.wsc are scriptlet-specific. .xsl is overwhelmingly benign (every
-        # lxml/Python/Office install ships thousands) so it is NOT matched by extension
-        # alone — Squiblytwo (.xsl via wmic) is caught by the run-key/content checks below.
-        $sctFiles = (Get-ScanFiles -Path $root -TimeScoped) |
-            Where-Object { $_.Extension -match "\.(sct|wsc)$" }
-        foreach ($s in $sctFiles) {
-            # Library test fixtures (pywin32's Testpys.sct in site-packages etc.) are not
-            # Squiblydoo staging — allowlisted package trees are review-only.
-            if (Test-BenignPath $s.FullName $SCT_BENIGN_RE) {
-                Add-Finding -ID "SCT_$($s.Name -replace '[^a-z0-9]','')" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
-                    -Severity $SEV_POSSIBLE -Description "COM scriptlet inside a package/library tree (likely a library test fixture — review, not auto-deleted): $($s.FullName)" `
-                    -Target $s.FullName -FixAction "Info" -Group "COM Scriptlet Abuse"
-                $sctHits++
-                continue
-            }
-            Out-ThreatBanner "COM SCRIPTLET FILE" $s.FullName
-            Add-Finding -ID "SCT_$($s.Name -replace '[^a-z0-9]','')" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
-                -Severity $SEV_HIGH -Description "COM scriptlet (Squiblydoo vector): $($s.FullName)" `
-                -Target $s.FullName -FixAction "DeleteFile" -FixParam $s.FullName -Group "COM Scriptlet Abuse"
-            $sctHits++
+    # P1 multi-user: the four roots were the ELEVATED process's own Temp/LocalAppData/AppData/
+    # Downloads — the technician's, not the victim's, on a standard-user endpoint. Roots are now
+    # collected for EVERY reachable profile and passed to ONE Get-ScanFiles call so the
+    # file/deadline budget is not multiplied by the profile count. Grading is untouched.
+    $zbSctHives  = @(@(Get-UserHives) | Sort-Object -Property Sid)   # SID order = stable memo key
+    $zbSctOwners = @{}
+    $zbSctRoots  = @()
+    foreach ($zbHive in $zbSctHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.Temp, $zbUp.LocalAppData, $zbUp.AppData, $zbUp.Downloads)) {
+            if (-not $zbR) { continue }
+            $zbSctRoots += $zbR
+            $zbSctOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
         }
+    }
+    $zbSctRoots = @($zbSctRoots | Select-Object -Unique)
+    # NB: .sct/.wsc are scriptlet-specific. .xsl is overwhelmingly benign (every
+    # lxml/Python/Office install ships thousands) so it is NOT matched by extension
+    # alone — Squiblytwo (.xsl via wmic) is caught by the run-key/content checks below.
+    $sctFiles = (Get-ScanFiles -Path $zbSctRoots -TimeScoped) |
+        Where-Object { $_.Extension -match "\.(sct|wsc)$" }
+    foreach ($s in $sctFiles) {
+        # Longest-prefix attribution against the roots we built (not ProfilePath: a redirected
+        # AppData/Downloads lives outside the profile root and would read as [MACHINE]).
+        $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+        foreach ($zbK in @($zbSctOwners.Keys)) {
+            if ("$($s.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                $zbOwner = $zbSctOwners[$zbK]; $zbOwnerLen = $zbK.Length
+            }
+        }
+        # Library test fixtures (pywin32's Testpys.sct in site-packages etc.) are not
+        # Squiblydoo staging — allowlisted package trees are review-only.
+        if (Test-BenignPath $s.FullName $SCT_BENIGN_RE) {
+            # ID was filename-only: the SAME fixture name under two profiles' site-packages
+            # hashed to one id and the second user's hit was silently dropped by Add-Finding's
+            # de-dupe. Path-hashed now, so it is per-profile for free.
+            Add-Finding -ID "SCT_$(Get-StableId $s.FullName)" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
+                -Severity $SEV_POSSIBLE -Description "[$zbOwner] COM scriptlet inside a package/library tree (likely a library test fixture — review, not auto-deleted): $($s.FullName)" `
+                -Target "[$zbOwner] $($s.FullName)" -FixAction "Info" -Group "COM Scriptlet Abuse"
+            $sctHits++
+            continue
+        }
+        Out-ThreatBanner "COM SCRIPTLET FILE" "[$zbOwner] $($s.FullName)"
+        Add-Finding -ID "SCT_$(Get-StableId $s.FullName)" -Phase "PHASE 94" -ThreatType "COM Scriptlet/Squiblydoo" `
+            -Severity $SEV_HIGH -Description "[$zbOwner] COM scriptlet (Squiblydoo vector): $($s.FullName)" `
+            -Target "[$zbOwner] $($s.FullName)" -FixAction "DeleteFile" -FixParam $s.FullName -Group "COM Scriptlet Abuse"
+        $sctHits++
     }
     # P1 multi-user: the HKCU half of this pair was the technician's Run key, not the victim's.
     # The HKLM root is MACHINE scope — enumerated ONCE, outside the profile loop, tagged
@@ -887,16 +1013,52 @@ if ($PhasePlan.Advanced) {
     Show-PhaseHeader "PHASE 97" "CLICKONCE / .APPLICATION DEPLOYMENT ABUSE" "CLICKONCE"
     Out-Typewriter "SCANNING FOR CLICKONCE PAYLOADS IN USER PATHS..." "HUNT"
     $coHits = 0
-    foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,"$env:LOCALAPPDATA\Apps","$env:USERPROFILE\Downloads")) {
-        if (-not (Test-Path $root)) { continue }
-        (Get-ScanFiles -Path $root -TimeScoped) |
-            Where-Object { $_.Extension -match "\.(application|manifest|deploy)$" } |
-            Select-Object -First 50 | ForEach-Object {
-            Add-Finding -ID "CLICKONCE_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 97" -ThreatType "ClickOnce Abuse" `
-                -Severity $SEV_POSSIBLE -Description "ClickOnce deployment artifact in user path: $($_.FullName)" `
-                -Target $_.FullName -FixAction "DeleteFile" -FixParam $_.FullName -Group "ClickOnce Abuse"
-            $coHits++
+    # P1 multi-user: the roots were the ELEVATED process's own environment (the technician's
+    # profile on a standard-user endpoint). Collected for EVERY reachable profile now and passed
+    # to ONE Get-ScanFiles call so the file/deadline budget is not multiplied by profile count.
+    # The bare `(Get-ScanFiles ...) | Where | Select | ForEach-Object {}` STATEMENT this replaces
+    # was the highest-risk shape in the module (a dropped paren makes ,$arr arrive as ONE item
+    # and the filter silently matches everything) — it is now assigned first, then iterated.
+    $zbCoHives  = @(@(Get-UserHives) | Sort-Object -Property Sid)   # SID order = stable memo key
+    $zbCoOwners = @{}
+    $zbCoRoots  = @()
+    foreach ($zbHive in $zbCoHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        $zbCoPer = @($zbUp.Temp, $zbUp.LocalAppData, $zbUp.Downloads)
+        # ...\AppData\Local\Apps is where ClickOnce actually deploys; kept as an explicit root
+        # (as before) even though it is a LocalAppData subtree, so the walk reaches it early.
+        if ($zbUp.LocalAppData) { $zbCoPer += (Join-Path $zbUp.LocalAppData 'Apps') }
+        foreach ($zbR in $zbCoPer) {
+            if (-not $zbR) { continue }
+            $zbCoRoots += $zbR
+            $zbCoOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
         }
+    }
+    $zbCoRoots = @($zbCoRoots | Select-Object -Unique)
+    $zbCoFiles = (Get-ScanFiles -Path $zbCoRoots -TimeScoped) |
+        Where-Object { $_.Extension -match "\.(application|manifest|deploy)$" }
+    # The old `Select-Object -First 50` was a flood cap applied PER ROOT. A single global 50
+    # across every profile would let one noisy profile starve the rest, so the cap is kept but
+    # applied PER OWNER — same intent, same order of magnitude, honest under P1.
+    $zbCoCount = @{}
+    foreach ($zbCf in $zbCoFiles) {
+        $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+        foreach ($zbK in @($zbCoOwners.Keys)) {
+            if ("$($zbCf.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                $zbOwner = $zbCoOwners[$zbK]; $zbOwnerLen = $zbK.Length
+            }
+        }
+        if (-not $zbCoCount.ContainsKey($zbOwner)) { $zbCoCount[$zbOwner] = 0 }
+        if ($zbCoCount[$zbOwner] -ge 50) { continue }
+        $zbCoCount[$zbOwner]++
+        # ID was filename-only — "setup.application" exists under most profiles, so the second
+        # user's hit was silently dropped by Add-Finding's de-dupe. Path-hashed now.
+        Add-Finding -ID "CLICKONCE_$(Get-StableId $zbCf.FullName)" -Phase "PHASE 97" -ThreatType "ClickOnce Abuse" `
+            -Severity $SEV_POSSIBLE -Description "[$zbOwner] ClickOnce deployment artifact in user path: $($zbCf.FullName)" `
+            -Target "[$zbOwner] $($zbCf.FullName)" -FixAction "DeleteFile" -FixParam $zbCf.FullName -Group "ClickOnce Abuse"
+        $coHits++
     }
     if ($coHits -eq 0) { Out-Typewriter "  -> [OK] NO CLICKONCE PAYLOADS." "GOOD" }
 
@@ -959,30 +1121,52 @@ if ($PhasePlan.Advanced) {
     $sigSeen = 0
     $sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
     $sigBudgetHit = $false
-    foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
-        if ($sigBudgetHit) { break }
-        if (-not (Test-Path $root)) { continue }
-        $sigCandidates = (Get-ScanFiles -Path $root -TimeScoped) |
-            Where-Object { $_.Extension -match "\.(exe|dll)$" }
-        foreach ($f in $sigCandidates) {
-            if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
-                $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
-                $sigBudgetHit = $true; break
-            }
-            $sigSeen++
-            $asig = Get-AuthSig $f.FullName
-            if ($asig.SignerCertificate) {
-                $subj = $asig.SignerCertificate.Subject
-                foreach ($lc in $leakedCerts) {
-                    if ($subj -match [regex]::Escape($lc)) {
-                        Out-Decrypt -Text "Stolen cert: $($f.FullName) -> $subj" -Prefix "  [STOLEN CERT] "
-                        Add-Finding -ID "STOLENCERT_$($f.Name -replace '[^a-z0-9]','')" -Phase "PHASE 98" `
-                            -ThreatType "Stolen Code-Sign Cert" -Severity $SEV_CRITICAL `
-                            -Description "Binary signed by known-leaked cert ($lc): $($f.FullName)" `
-                            -Target $f.FullName -FixAction "DeleteFile" -FixParam $f.FullName `
-                            -Group "Stolen Code-Signing Certs"
-                        $stolenHits++; break
+    # P1 multi-user: the four roots were the ELEVATED process's own environment. Collected for
+    # EVERY reachable profile now and passed to ONE Get-ScanFiles call — the $global:SIG_AUDIT_*
+    # deadline+count pair below was ALREADY shared across roots, so it stays a single budget and
+    # is not multiplied by the profile count either (Authenticode blocks ~15s per CRL/OCSP call).
+    $zbCertHives  = @(@(Get-UserHives) | Sort-Object -Property Sid)   # SID order = stable memo key
+    $zbCertOwners = @{}
+    $zbCertRoots  = @()
+    foreach ($zbHive in $zbCertHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.Temp, $zbUp.LocalAppData, $zbUp.AppData, $zbUp.Downloads)) {
+            if (-not $zbR) { continue }
+            $zbCertRoots += $zbR
+            $zbCertOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
+        }
+    }
+    $zbCertRoots = @($zbCertRoots | Select-Object -Unique)
+    $sigCandidates = (Get-ScanFiles -Path $zbCertRoots -TimeScoped) |
+        Where-Object { $_.Extension -match "\.(exe|dll)$" }
+    foreach ($f in $sigCandidates) {
+        if ($sigSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+            $sigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+            $sigBudgetHit = $true; break
+        }
+        $sigSeen++
+        $asig = Get-AuthSig $f.FullName
+        if ($asig.SignerCertificate) {
+            $subj = $asig.SignerCertificate.Subject
+            foreach ($lc in $leakedCerts) {
+                if ($subj -match [regex]::Escape($lc)) {
+                    $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+                    foreach ($zbK in @($zbCertOwners.Keys)) {
+                        if ("$($f.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                            $zbOwner = $zbCertOwners[$zbK]; $zbOwnerLen = $zbK.Length
+                        }
                     }
+                    Out-Decrypt -Text "[$zbOwner] Stolen cert: $($f.FullName) -> $subj" -Prefix "  [STOLEN CERT] "
+                    # ID was filename-only; the same dropped binary staged under two profiles
+                    # collapsed to one id and the second was silently de-duped away.
+                    Add-Finding -ID "STOLENCERT_$(Get-StableId $f.FullName)" -Phase "PHASE 98" `
+                        -ThreatType "Stolen Code-Sign Cert" -Severity $SEV_CRITICAL `
+                        -Description "[$zbOwner] Binary signed by known-leaked cert ($lc): $($f.FullName)" `
+                        -Target "[$zbOwner] $($f.FullName)" -FixAction "DeleteFile" -FixParam $f.FullName `
+                        -Group "Stolen Code-Signing Certs"
+                    $stolenHits++; break
                 }
             }
         }
@@ -1214,21 +1398,42 @@ if ($PhasePlan.Advanced) {
                 -Target "PID:$($p.ProcessId)" -FixAction "Info" -Group "Cloud Credential Exposure"
             $abeHits++; $global:SpywareHits++
         }
-        foreach ($root in @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads")) {
-            if ($abeSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) { break }
-            if (-not (Test-Path $root)) { continue }
-            $abeFiles = (Get-ScanFiles -Path $root -TimeScoped) | Where-Object { $ABE_BYPASS_TOOL_NAMES -contains $_.Name.ToLower() }
-            foreach ($af in $abeFiles) {
-                if ($abeSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or $abeSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) { break }
-                $abeSigSeen++
-                if ((Get-AuthSig $af.FullName).Status -eq 'Valid') { continue }
-                Out-ThreatBanner "APP-BOUND ENCRYPTION BYPASS TOOL (FILE)" $af.FullName
-                Add-Finding -ID "ABEBYPASSFILE_$(Get-StableId $af.FullName)" -Phase "PHASE 100.5" `
-                    -ThreatType "Info-Stealer / Token Theft" -Severity $SEV_POSSIBLE `
-                    -Description "File matches a known Chrome/Edge App-Bound-Encryption-bypass cookie-theft tool name, unsigned, in a user-writable path: $($af.FullName) — this stealer generation reads cookies/tokens via IPC to the browser's elevation service, bypassing the credential-DB entirely." `
-                    -Target $af.FullName -FixAction "Info" -Group "Cloud Credential Exposure"
-                $abeHits++; $global:SpywareHits++
+        # P1 multi-user: this file half still walked the ELEVATED process's own Temp/LocalAppData/
+        # AppData/Downloads (the $tokRoots staging scan above was migrated in an earlier stage;
+        # this loop was not). Roots for EVERY reachable profile now, via ONE Get-ScanFiles call so
+        # the file/deadline budget — and the shared $abeSigSw Authenticode budget — are not
+        # multiplied by the profile count. $zbTokHives is the SID-sorted set built above.
+        $zbAbeOwners = @{}
+        $zbAbeRoots  = @()
+        foreach ($zbHive in $zbTokHives) {
+            if (-not $zbHive.ProfileReachable) { continue }
+            $zbUp = Get-UserPaths $zbHive
+            if (-not $zbUp) { continue }
+            foreach ($zbR in @($zbUp.Temp, $zbUp.LocalAppData, $zbUp.AppData, $zbUp.Downloads)) {
+                if (-not $zbR) { continue }
+                $zbAbeRoots += $zbR
+                $zbAbeOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
             }
+        }
+        $zbAbeRoots = @($zbAbeRoots | Select-Object -Unique)
+        $abeFiles = (Get-ScanFiles -Path $zbAbeRoots -TimeScoped) | Where-Object { $ABE_BYPASS_TOOL_NAMES -contains $_.Name.ToLower() }
+        foreach ($af in $abeFiles) {
+            if ($abeSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or $abeSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) { break }
+            $abeSigSeen++
+            if ((Get-AuthSig $af.FullName).Status -eq 'Valid') { continue }
+            $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+            foreach ($zbK in @($zbAbeOwners.Keys)) {
+                if ("$($af.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                    $zbOwner = $zbAbeOwners[$zbK]; $zbOwnerLen = $zbK.Length
+                }
+            }
+            Out-ThreatBanner "APP-BOUND ENCRYPTION BYPASS TOOL (FILE)" "[$zbOwner] $($af.FullName)"
+            # ID already hashes the FULL path, so it is per-profile unique for free.
+            Add-Finding -ID "ABEBYPASSFILE_$(Get-StableId $af.FullName)" -Phase "PHASE 100.5" `
+                -ThreatType "Info-Stealer / Token Theft" -Severity $SEV_POSSIBLE `
+                -Description "[$zbOwner] File matches a known Chrome/Edge App-Bound-Encryption-bypass cookie-theft tool name, unsigned, in a user-writable path: $($af.FullName) — this stealer generation reads cookies/tokens via IPC to the browser's elevation service, bypassing the credential-DB entirely." `
+                -Target "[$zbOwner] $($af.FullName)" -FixAction "Info" -Group "Cloud Credential Exposure"
+            $abeHits++; $global:SpywareHits++
         }
     }
     if ($abeHits -eq 0) { Out-Typewriter "  -> [OK] NO APP-BOUND-ENCRYPTION-BYPASS TOOLS DETECTED." "GOOD" }
@@ -1365,17 +1570,46 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     Show-PhaseHeader "PHASE 103" "SUSPICIOUS COMPRESSED ARCHIVE PAYLOAD AUDIT" "PHISHING"
     Out-Typewriter "SCANNING RECENT ARCHIVES IN DOWNLOAD PATHS..." "HUNT"
     $arcHits = 0
-    foreach ($root in @("$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop",$env:TEMP)) {
-        if (-not (Test-Path $root)) { continue }
-        (Get-ScanFiles -Path $root -TimeScoped) |
-            Where-Object { ($_.Extension -match "\.(zip|7z|rar|iso|img)$") -and $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Length -gt 1024 } |
-            Select-Object -First 40 | ForEach-Object {
-            Add-Finding -ID "ARCHIVE_$($_.Name -replace '[^a-z0-9]','')" -Phase "PHASE 103" `
-                -ThreatType "Suspicious Archive" -Severity $SEV_POSSIBLE `
-                -Description "Recent compressed archive (review for password-protected payload): $($_.FullName)" `
-                -Target $_.FullName -FixAction "Info" -Group "Suspicious Archives"
-            $arcHits++
+    # P1 multi-user: Downloads/Desktop/Temp were the ELEVATED process's own — a phishing archive
+    # in the VICTIM's Downloads was invisible. Roots for EVERY reachable profile now, through ONE
+    # Get-ScanFiles call so the budget is not multiplied by the profile count. As in Phase 97 the
+    # bare `(Get-ScanFiles ...) | ... | ForEach-Object {}` STATEMENT is replaced by an assignment
+    # plus a foreach — one fewer place a dropped paren could make ,$arr arrive as a single item.
+    $zbArcHives  = @(@(Get-UserHives) | Sort-Object -Property Sid)   # SID order = stable memo key
+    $zbArcOwners = @{}
+    $zbArcRoots  = @()
+    foreach ($zbHive in $zbArcHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.Downloads, $zbUp.Desktop, $zbUp.Temp)) {
+            if (-not $zbR) { continue }
+            $zbArcRoots += $zbR
+            $zbArcOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
         }
+    }
+    $zbArcRoots = @($zbArcRoots | Select-Object -Unique)
+    $zbArcFiles = (Get-ScanFiles -Path $zbArcRoots -TimeScoped) |
+        Where-Object { ($_.Extension -match "\.(zip|7z|rar|iso|img)$") -and $_.LastWriteTime -gt (Get-Date).AddDays(-7) -and $_.Length -gt 1024 }
+    # `Select-Object -First 40` was a PER-ROOT flood cap; kept as a PER-OWNER cap so one noisy
+    # profile cannot starve the others out of the report (same intent, honest under P1).
+    $zbArcCount = @{}
+    foreach ($zbAf in $zbArcFiles) {
+        $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+        foreach ($zbK in @($zbArcOwners.Keys)) {
+            if ("$($zbAf.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                $zbOwner = $zbArcOwners[$zbK]; $zbOwnerLen = $zbK.Length
+            }
+        }
+        if (-not $zbArcCount.ContainsKey($zbOwner)) { $zbArcCount[$zbOwner] = 0 }
+        if ($zbArcCount[$zbOwner] -ge 40) { continue }
+        $zbArcCount[$zbOwner]++
+        # ID was filename-only — "invoice.zip" downloaded by two users collapsed to one id.
+        Add-Finding -ID "ARCHIVE_$(Get-StableId $zbAf.FullName)" -Phase "PHASE 103" `
+            -ThreatType "Suspicious Archive" -Severity $SEV_POSSIBLE `
+            -Description "[$zbOwner] Recent compressed archive (review for password-protected payload): $($zbAf.FullName)" `
+            -Target "[$zbOwner] $($zbAf.FullName)" -FixAction "Info" -Group "Suspicious Archives"
+        $arcHits++
     }
     if ($arcHits -eq 0) { Out-Typewriter "  -> [OK] NO RECENT SUSPICIOUS ARCHIVES." "GOOD" }
 
@@ -1511,16 +1745,37 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     # ── PHASE 106: MEMORY DUMP ARTIFACT SCAN ──────────────────────────────────
     Show-PhaseHeader "PHASE 106" "MEMORY DUMP ARTIFACT SCAN (MINIDUMP / CRASHDUMPS)" "FORENSIC"
     Out-Typewriter "SCANNING CRASH DUMP LOCATIONS FOR SUSPICIOUS ARTIFACTS..." "HUNT"
-    $dumpPaths = @(
-        "$env:SystemRoot\Minidump",
-        "$env:LOCALAPPDATA\CrashDumps",
-        "$env:APPDATA\CrashDumps",
-        "$env:SystemRoot\MEMORY.DMP",
-        "$env:TEMP\*.dmp",
-        "$env:USERPROFILE\AppData\Local\Temp\*.dmp"
-    )
+    # P1 multi-user: four of the six paths were per-USER (%LOCALAPPDATA%/%APPDATA%\CrashDumps,
+    # %TEMP%\*.dmp) and resolved to the ELEVATED process's own profile — i.e. the technician's,
+    # not the victim's, on a standard-user endpoint. They are now expanded per profile and each
+    # entry carries its owner. The two %SystemRoot% paths are MACHINE scope and are added exactly
+    # ONCE, outside the profile loop, so an 8-profile box cannot report MEMORY.DMP eight times.
+    $zbDumpHives = @(@(Get-UserHives) | Sort-Object -Property Sid)
+    $dumpPaths = @()
+    foreach ($zbMp in @("$env:SystemRoot\Minidump", "$env:SystemRoot\MEMORY.DMP")) {
+        if ($zbMp) { $dumpPaths += @{ Path = $zbMp; User = 'MACHINE' } }
+    }
+    foreach ($zbHive in $zbDumpHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        $zbDu = "$($zbHive.User)"
+        if ($zbUp.LocalAppData) {
+            $dumpPaths += @{ Path = (Join-Path $zbUp.LocalAppData 'CrashDumps'); User = $zbDu }
+            # The original list carried BOTH %TEMP%\*.dmp and the constructed
+            # ...\AppData\Local\Temp\*.dmp because a per-user TEMP override makes them differ.
+            # Both are kept; a box where they are identical just yields the same files twice and
+            # Add-Finding's (now path-derived) de-dupe collapses it.
+            $dumpPaths += @{ Path = (Join-Path $zbUp.LocalAppData 'Temp\*.dmp'); User = $zbDu }
+        }
+        if ($zbUp.AppData) { $dumpPaths += @{ Path = (Join-Path $zbUp.AppData 'CrashDumps'); User = $zbDu } }
+        if ($zbUp.Temp)    { $dumpPaths += @{ Path = (Join-Path $zbUp.Temp '*.dmp');         User = $zbDu } }
+    }
     $dumpFound = $false
-    foreach ($dp in $dumpPaths) {
+    foreach ($zbDpEntry in $dumpPaths) {
+        $dp      = "$($zbDpEntry.Path)"
+        $zbOwner = "$($zbDpEntry.User)"
+        if (-not $dp) { continue }
         if ($dp.Contains("*")) {
             $root = Split-Path $dp; $filter = Split-Path $dp -Leaf
             if (-not (Test-Path $root)) { continue }
@@ -1535,10 +1790,12 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
             if ($null -eq $item) { continue }
             $ageDays = ([datetime]::Now - $item.LastWriteTime).TotalDays
             $sev = if ($ageDays -lt 1) { $SEV_HIGH } else { $SEV_POSSIBLE }
-            Out-Decrypt -Text $item.FullName -Prefix "  [DUMP FILE] "
-            Add-Finding -ID "DUMP_$($item.Name -replace '[^a-z0-9]','')" -Phase "PHASE 106" -ThreatType "Memory Dump Artifact" `
-                -Severity $sev -Description "Memory dump file found (age: $([Math]::Round($ageDays,1)) days): $($item.FullName)" `
-                -Target $item.FullName -FixAction "Info" -Group "Memory Dump Artifacts"
+            Out-Decrypt -Text "[$zbOwner] $($item.FullName)" -Prefix "  [DUMP FILE] "
+            # ID was filename-only: every profile has ...\CrashDumps\<app>.<pid>.dmp, and
+            # "MEMORY.DMP" is a fixed name — the second user's dump was silently de-duped away.
+            Add-Finding -ID "DUMP_$(Get-StableId $item.FullName)" -Phase "PHASE 106" -ThreatType "Memory Dump Artifact" `
+                -Severity $sev -Description "[$zbOwner] Memory dump file found (age: $([Math]::Round($ageDays,1)) days): $($item.FullName)" `
+                -Target "[$zbOwner] $($item.FullName)" -FixAction "Info" -Group "Memory Dump Artifacts"
             $dumpFound = $true
         }
     }
@@ -1547,12 +1804,39 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     $dumpTools = $CRED_DUMP_TOOLS
     # One bounded walk + anchored regex (was 3 roots x 8 names = 24 recursions incl. whole profile).
     $dumpRegex = ($dumpTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
-    $dumpHits = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE)) | Where-Object { $_.Name -match $dumpRegex }
+    # P1 multi-user: %TEMP%/%LOCALAPPDATA%/%USERPROFILE% were the ELEVATED process's own, so a
+    # credential dumper parked in the victim's profile was never seen. Every reachable profile's
+    # roots go into the SAME single Get-ScanFiles call (this walk is whole-profile-wide and NOT
+    # -TimeScoped, so a per-profile call would multiply the most expensive walk in the phase).
+    $zbDtOwners = @{}
+    $zbDtRoots  = @()
+    foreach ($zbHive in $zbDumpHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        # Profile root subsumes Temp/LocalAppData on a normal box; both are still listed because
+        # a redirected LocalAppData or a per-user TEMP override can sit outside it.
+        foreach ($zbR in @($zbUp.Profile, $zbUp.Temp, $zbUp.LocalAppData)) {
+            if (-not $zbR) { continue }
+            $zbDtRoots += $zbR
+            $zbDtOwners["$zbR".ToLowerInvariant()] = "$($zbHive.User)"
+        }
+    }
+    $zbDtRoots = @($zbDtRoots | Select-Object -Unique)
+    $dumpHits = (Get-ScanFiles -Path $zbDtRoots) | Where-Object { $_.Name -match $dumpRegex }
     foreach ($hit in $dumpHits) {
-        Out-ThreatBanner "MEMORY DUMPER TOOL" $hit.FullName
-        Add-Finding -ID "DUMPTOOL_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 106" -ThreatType "Credential Dumping Tool" `
-            -Severity $SEV_CRITICAL -Description "Memory/credential dumping tool found: $($hit.FullName)" `
-            -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Memory Dump Artifacts"
+        $zbOwner = 'MACHINE'; $zbOwnerLen = -1
+        foreach ($zbK in @($zbDtOwners.Keys)) {
+            if ("$($hit.FullName)".ToLowerInvariant().StartsWith($zbK) -and $zbK.Length -gt $zbOwnerLen) {
+                $zbOwner = $zbDtOwners[$zbK]; $zbOwnerLen = $zbK.Length
+            }
+        }
+        Out-ThreatBanner "MEMORY DUMPER TOOL" "[$zbOwner] $($hit.FullName)"
+        # ID was filename-only — "procdump.exe" under two profiles hashed to ONE id and the
+        # second user's copy was silently dropped, i.e. left un-remediated. Path-hashed now.
+        Add-Finding -ID "DUMPTOOL_$(Get-StableId $hit.FullName)" -Phase "PHASE 106" -ThreatType "Credential Dumping Tool" `
+            -Severity $SEV_CRITICAL -Description "[$zbOwner] Memory/credential dumping tool found: $($hit.FullName)" `
+            -Target "[$zbOwner] $($hit.FullName)" -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Memory Dump Artifacts"
         $global:TrojanHits++; $dumpFound = $true
     }
     if (-not $dumpFound) { Out-Typewriter "  -> [OK] NO SUSPICIOUS DUMP FILES OR DUMPER TOOLS." "GOOD" }

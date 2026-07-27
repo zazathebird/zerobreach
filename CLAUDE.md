@@ -237,6 +237,22 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Never pipe `Get-ScanFiles` directly** into `Where-Object`/`ForEach-Object` — its `return ,$arr`
   makes the whole array arrive as **one** item, so the filter silently matches everything (or nothing).
   Wrap in parens `(Get-ScanFiles …) | …` or assign to a var first. `@(Get-ScanFiles …)` does NOT fix it.
+- **Do NOT copy `return ,$arr` into new helpers — return a plain array and call it as `@(fn)`.**
+  Measured on live 5.1 (5.1.26100.8875), `,$arr` is wrong in almost every natural spelling:
+
+  | spelling | `return ,$arr` | plain `return $arr` |
+  |---|---|---|
+  | `@(fn).Count` (2 results) | **1** | 2 |
+  | `@(fn)[0] -is [array]` | **True** — hands the WHOLE array to a caller expecting one item | False |
+  | `foreach ($x in fn)` | **1 iteration** | 2 |
+  | `fn \| Where-Object` | **1** | 2 |
+
+  The only thing `,$arr` buys is stopping PS 5.1 unwrapping a **single**-element result to a scalar,
+  and `@()` at the call site already fixes that (`@(fn).Count` = 1, correctly). `Get-ScanFiles`
+  keeps `,$arr` only for compatibility with its 30 existing call sites. `Get-UserHives` deliberately
+  does not. **This bit the P1 spec three times** — it recommended `@(Get-UserHives)[0]`, claimed bare
+  `foreach` was safe, and divided a per-profile budget by `@(...).Count`, which would have been 1
+  instead of N (2026-07-26).
 - **Never `(fn …)[0]` when `fn` may return a single value** — PS 5.1 unwraps a single-element `@()`
   return to a scalar, so `[0]` indexes into a *string's first character*. Use `@(fn …)[0]` (force array,
   then index). Only a genuine array literal / `-split` result is safe to bare-index.
@@ -365,6 +381,25 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Build finding IDs from `Get-StableId`, never `.GetHashCode()`.** `[string]::GetHashCode()` is
   randomised per process on .NET 5+/pwsh 7, so IDs derived from it change every run and the
   `-Baseline` diff reports the same finding as new forever (fixed at 16 sites, 2026-07-22).
+- **An ID must be unique per THING FOUND, not per name.** `Add-Finding` de-dupes on ID with an
+  early `return`, so a too-weak ID does not merely mislabel — it **silently discards** every later
+  match. Real cases found 2026-07-26: `MINERCFG_$($f.Name -replace '[^a-z0-9]','')` where the name
+  is *always* `config.json`, so every miner config on the box collapsed into one finding; and 9
+  filename-only IDs in Phases-3 (`procdump.exe` in two profiles → one ID → the second user's copy
+  left un-remediated). Hash the full path (or a real identity), plus the SID for anything per-user.
+- **Adding a discriminator to an ID can EXPOSE latent duplicates the weaker ID was masking.**
+  Phase 74.5 began reporting one physical file twice the moment the SID was added, because
+  `...\Temporary Internet Files\Content.Outlook` is a **junction** to `...\INetCache\Content.Outlook`
+  and both are in the scan list — at HIGH + `Quarantine`, so the second action would fire on an
+  already-quarantined file. The SID did not cause it, it revealed it. When a site can reach the
+  same object by two paths, key on identity (name + length + mtime), not on the path string.
+- **Grade auto-destructive counts per phase AND with `%TEMP%` discounted.** On a dev box the raw
+  total is dominated by transient test debris: 33 new `%TEMP%` files appeared between two scans run
+  28 minutes apart (pytest dirs, VBCSCompiler, bisect harnesses), turning a correct change into an
+  apparent +36 regression. Excluding that churn the healthy-box baseline is **7** — the figure
+  `EVIDENCE_ENGINE_PLAN.md` §7 always claimed. **The 63 and 94 figures recorded in sessions 17/18
+  were debris, not detections.** Note Git Bash's `/tmp` writes straight into `%TEMP%`, so do not put
+  scratch files there during a grading window.
 - **New detections get a FRACTIONAL phase number inside an existing `if (-not $global:QUICK_MODE)`
   block.** QUICK is a real 30-phase gate whose count the server maps to a 1..30 progress index, and
   the plan ceilings (QUICK 30 / FULL 80 / DEEP+ 115) are wired into both servers — a fractional

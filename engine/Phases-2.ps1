@@ -219,27 +219,62 @@ foreach ($proc in $highCpuProcs) {
     }
 }
 # Miner config files
-# Get-ScanFiles, not a raw Get-ChildItem -Recurse (CLAUDE.md rule): this walks three whole
-# user roots, so it needs the file cap, wall-clock deadline, cache-dir pruning and OneDrive
+# Get-ScanFiles, not a raw Get-ChildItem -Recurse (CLAUDE.md rule): this walks whole user
+# roots, so it needs the file cap, wall-clock deadline, cache-dir pruning and OneDrive
 # placeholder skip. Parenthesised because Get-ScanFiles returns `,$arr` — piping it directly
 # hands the entire array to Where-Object as ONE item and the filter silently matches nothing.
-$minerConfigFiles = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,"$env:USERPROFILE\AppData\Roaming") `
-    -Filter 'config.json' -TimeScoped)
+# P1 multi-user: the three roots were $env:TEMP / $env:LOCALAPPDATA / "$env:USERPROFILE\AppData\
+# Roaming", i.e. the ELEVATED TECHNICIAN's profile — on a standard-user endpoint the victim's
+# miner config was never looked at. Roots are now resolved per profile via Get-UserPaths
+# (Roaming is NOT constructed by hand: folder redirection genuinely moves AppData).
+# SINGLE-CALL shape: Get-ScanFiles's MaxFiles/DeadlineSecs are PER CALL, so putting the call
+# inside the profile loop would multiply wall-clock by the profile count (8 profiles x 20s).
+# One walk over every profile's roots, then each file is attributed back to its owning root by
+# LONGEST-prefix match. Severity/FixAction unchanged (CRITICAL + DeleteFile / POSSIBLE + Info).
+$zbMinerRoots = @()
+foreach ($zbHive in (@(Get-UserHives) | Sort-Object Sid)) {   # SID order -> stable memo key
+    if (-not $zbHive.ProfileReachable) { continue }           # never re-probe reachability
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp) { continue }
+    foreach ($zbR in @($zbUp.Temp, $zbUp.LocalAppData, $zbUp.AppData)) {
+        if (-not $zbR) { continue }
+        if (@($zbMinerRoots | Where-Object { "$($_.Root)".ToLowerInvariant() -eq "$zbR".ToLowerInvariant() }).Count -gt 0) { continue }
+        $zbMinerRoots += [pscustomobject]@{ Root = "$zbR"; User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)" }
+    }
+}
+$minerConfigFiles = @()
+if ($zbMinerRoots.Count -gt 0) {
+    $minerConfigFiles = (Get-ScanFiles -Path @($zbMinerRoots | ForEach-Object { $_.Root }) `
+        -Filter 'config.json' -TimeScoped)
+}
 foreach ($cf in $minerConfigFiles) {
+    # Longest-prefix attribution (Temp nests inside LocalAppData, so shortest-match would lie).
+    $zbCfUser = 'MACHINE'; $zbCfSid = 'MACHINE'; $zbCfLen = -1
+    $zbCfLc = "$($cf.FullName)".ToLowerInvariant()
+    foreach ($zbR in $zbMinerRoots) {
+        $zbRl = "$($zbR.Root)".ToLowerInvariant()
+        if ($zbRl.Length -gt $zbCfLen -and $zbCfLc.StartsWith($zbRl)) {
+            $zbCfUser = "$($zbR.User)"; $zbCfSid = "$($zbR.Sid)"; $zbCfLen = $zbRl.Length
+        }
+    }
     $content = Get-Content $cf.FullName -Raw -ErrorAction SilentlyContinue
     if ($content -match '"pools"|url.*stratum|"user".*[0-9A-Za-z]{90,}|monero|xmr|ethereum|mining') {
-        # Content words (mining/pools/…) hit legitimate app configs — LGHUB game-integration
-        # applets etc. Allowlisted parent paths are review-only, never auto-deleted.
+        # ID was "MINERCFG_" + the filename with non-alphanumerics stripped — and the filename is
+        # ALWAYS "config.json", so every hit on the box collapsed to the single ID
+        # "MINERCFG_configjson" and Add-Finding's de-dupe dropped all but the first. That was
+        # already wrong pre-P1 (two miner configs = one finding); with N profiles it would have
+        # silently hidden every victim but one. Keyed on SID + full path now.
         if (Test-BenignPath $cf.FullName $MINERCFG_BENIGN_RE) {
-            Add-Finding -ID "MINERCFG_$($cf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 63" -ThreatType "Cryptominer" `
-                -Severity $SEV_POSSIBLE -Description "config.json matches miner keywords but sits in a known app/library tree (likely an app config — review, not auto-deleted): $($cf.FullName)" `
-                -Target $cf.FullName -FixAction "Info" -Group "Live Cryptominer"
+            Add-Finding -ID "MINERCFG_$(Get-StableId "$zbCfSid|$($cf.FullName)")" -Phase "PHASE 63" -ThreatType "Cryptominer" `
+                -Severity $SEV_POSSIBLE -Description "[$zbCfUser] config.json matches miner keywords but sits in a known app/library tree (likely an app config — review, not auto-deleted): $($cf.FullName)" `
+                -Target "[$zbCfUser] $($cf.FullName)" -FixAction "Info" -Group "Live Cryptominer"
             continue
         }
-        Out-ThreatBanner "MINER CONFIG FILE" $cf.FullName
-        Add-Finding -ID "MINERCFG_$($cf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 63" -ThreatType "Cryptominer" `
-            -Severity $SEV_CRITICAL -Description "Miner configuration file found: $($cf.FullName)" `
-            -Target $cf.FullName -FixAction "DeleteFile" -FixParam $cf.FullName -Group "Live Cryptominer"
+        Out-ThreatBanner "MINER CONFIG FILE" "[$zbCfUser] $($cf.FullName)"
+        # FixParam stays a bare machine-parseable path — the user lives in Target/Description.
+        Add-Finding -ID "MINERCFG_$(Get-StableId "$zbCfSid|$($cf.FullName)")" -Phase "PHASE 63" -ThreatType "Cryptominer" `
+            -Severity $SEV_CRITICAL -Description "[$zbCfUser] Miner configuration file found: $($cf.FullName)" `
+            -Target "[$zbCfUser] $($cf.FullName)" -FixAction "DeleteFile" -FixParam $cf.FullName -Group "Live Cryptominer"
         $global:MinerHits++; $minerFound = $true
     }
 }
@@ -335,7 +370,32 @@ $selfRoot = $global:ZB_ROOT
 # PE that appeared in a share you DON'T control, so only those escalate to HIGH+DeleteFile; unsigned
 # exes inside the local profiles tree are surfaced for review only (rule #1: never auto-delete the
 # user's own files).
-$usersRoot = Split-Path $env:USERPROFILE -Parent
+# P1 multi-user (MIGRATE-LITE): the "local user-profiles tree" root was derived from the
+# ELEVATED TECHNICIAN's own profile path (Split-Path $env:USERPROFILE -Parent), which is only
+# ever correct when every profile on the box lives beside the technician's. On a machine whose
+# profiles were relocated (ProfilesDirectory pointed at D:\Users, a redirected root, or a
+# migrated box carrying two profile roots) that test silently failed and unsigned executables
+# in a shared user profile escalated to HIGH + DeleteFile — the user's own installers, offered
+# for auto-deletion (rule #1). Derived from the DISTINCT PARENTS of every real profile path now.
+# Unreachable profiles are deliberately INCLUDED here: this is a pure string prefix test with no
+# filesystem I/O (Split-Path does not touch the disk), and a broader list can only DOWNGRADE a
+# finding to POSSIBLE/Info, never escalate one — so it fails closed in the safe direction.
+$zbUserRoots = @()
+$zbShareOwners = @()
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.ProfilePath) { continue }
+    $zbShareOwners += [pscustomobject]@{ Prefix = "$($zbHive.ProfilePath)"; User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)" }
+    $zbPar = $null
+    try { $zbPar = Split-Path "$($zbHive.ProfilePath)" -Parent } catch {}
+    if (-not $zbPar) { continue }
+    if (@($zbUserRoots | Where-Object { "$_".ToLowerInvariant() -eq "$zbPar".ToLowerInvariant() }).Count -gt 0) { continue }
+    $zbUserRoots += "$zbPar"
+}
+# Fail closed: if the hive enumeration produced nothing usable, fall back to the pre-P1 root
+# rather than losing the downgrade branch entirely (losing it would ESCALATE to DeleteFile).
+if ($zbUserRoots.Count -eq 0 -and $env:USERPROFILE) {
+    try { $zbUserRoots = @((Split-Path $env:USERPROFILE -Parent)) } catch { $zbUserRoots = @() }
+}
 foreach ($share in $shares) {
     if ($sigBudgetHit) { break }
     Out-Typewriter "  -> OPEN SHARE: $($share.Name) @ $($share.Path)" "WARN"
@@ -352,27 +412,48 @@ foreach ($share in $shares) {
             $sigSeen++
             $asig = Get-AuthSig $mis.FullName
             if ($asig.Status -ne "Valid") {
+                # This phase already reached OTHER users' files pre-P1 (a "Users" share walks the
+                # whole profiles tree) — it just could not SAY whose file it was, and the ID was
+                # the bare filename, so two profiles each holding "setup.exe" collided on one ID
+                # and Add-Finding's de-dupe dropped the second victim silently. Attribute the hit
+                # to the owning profile by longest ProfilePath prefix and key the ID on SID+path.
+                $zbMisLc = "$($mis.FullName)".ToLowerInvariant()
+                $zbMisUser = 'MACHINE'; $zbMisSid = 'MACHINE'; $zbMisLen = -1
+                foreach ($zbSo in $zbShareOwners) {
+                    $zbSoLc = "$($zbSo.Prefix)".ToLowerInvariant()
+                    if ($zbSoLc -and $zbSoLc.Length -gt $zbMisLen -and $zbMisLc.StartsWith($zbSoLc)) {
+                        $zbMisUser = "$($zbSo.User)"; $zbMisSid = "$($zbSo.Sid)"; $zbMisLen = $zbSoLc.Length
+                    }
+                }
+                $zbMisId = "SHAREWORM_$(Get-StableId "$zbMisSid|$($mis.FullName)")"
+                # Severity gate is UNCHANGED in meaning: "is this inside the local user-profiles
+                # tree" — only the definition of that tree is now correct on any profile layout.
+                $zbInUserTree = $false
+                foreach ($zbUr in $zbUserRoots) {
+                    if ($zbUr -and $zbMisLc.StartsWith("$zbUr".ToLowerInvariant())) { $zbInUserTree = $true; break }
+                }
                 if ($mis.Extension -match "\.(exe|scr|com|pif)$") {
-                    if ($usersRoot -and $mis.FullName.ToLower().StartsWith($usersRoot.ToLower())) {
+                    if ($zbInUserTree) {
                         # Unsigned PE inside the local profiles tree — the user's own download/build, not
                         # a foreign worm. Surface for review; never auto-delete the user's installers.
-                        Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
-                            -Severity $SEV_POSSIBLE -Description "Unsigned executable in a shared user-profile path (review — usually the user's own download/build): $($mis.FullName)" `
-                            -Target $mis.FullName -FixAction "Info" -Group "Network Share Worms"
+                        Add-Finding -ID $zbMisId -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
+                            -Severity $SEV_POSSIBLE -Description "[$zbMisUser] Unsigned executable in a shared user-profile path (review — usually the user's own download/build): $($mis.FullName)" `
+                            -Target "[$zbMisUser] $($mis.FullName)" -FixAction "Info" -Group "Network Share Worms"
                     } else {
                         # A real unsigned PE dropped in a foreign/public open share is the classic worm vector.
-                        Out-ThreatBanner "UNSIGNED EXE IN OPEN SHARE" $mis.FullName
-                        Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
-                            -Severity $SEV_HIGH -Description "Unsigned executable in open share: $($mis.FullName)" `
-                            -Target $mis.FullName -FixAction "DeleteFile" -FixParam $mis.FullName -Group "Network Share Worms"
+                        Out-ThreatBanner "UNSIGNED EXE IN OPEN SHARE" "[$zbMisUser] $($mis.FullName)"
+                        # FixParam stays a bare machine-parseable path — user lives in Target/Description.
+                        Add-Finding -ID $zbMisId -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
+                            -Severity $SEV_HIGH -Description "[$zbMisUser] Unsigned executable in open share: $($mis.FullName)" `
+                            -Target "[$zbMisUser] $($mis.FullName)" -FixAction "DeleteFile" -FixParam $mis.FullName -Group "Network Share Worms"
                         $global:WormHits++
                     }
                 } else {
                     # An unsigned *script* in a share is weak signal — a user's own profile share is full
                     # of their own .ps1/.bat/.js. Surface for review only; never auto-delete the user's scripts.
-                    Add-Finding -ID "SHAREWORM_$($mis.Name -replace '[^a-z0-9]','')" -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
-                        -Severity $SEV_POSSIBLE -Description "Unsigned script in open share (review — often a user's own file): $($mis.FullName)" `
-                        -Target $mis.FullName -FixAction "Info" -Group "Network Share Worms"
+                    Add-Finding -ID $zbMisId -Phase "PHASE 66" -ThreatType "Worm/Network Share" `
+                        -Severity $SEV_POSSIBLE -Description "[$zbMisUser] Unsigned script in open share (review — often a user's own file): $($mis.FullName)" `
+                        -Target "[$zbMisUser] $($mis.FullName)" -FixAction "Info" -Group "Network Share Worms"
                 }
             }
         }
@@ -475,7 +556,29 @@ foreach ($sp in $stealerProcs) {
     }
     $global:SpywareHits++
 }
-$p68Files = @((Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA) -TimeScoped))
+# P1 multi-user: the walk was $env:TEMP / $env:LOCALAPPDATA / $env:APPDATA — the ELEVATED
+# TECHNICIAN's profile, so on a standard-user endpoint the victim's stolen-credential drops and
+# loader staging paths were never enumerated at all. Roots resolved per profile via
+# Get-UserPaths (never hand-built: folder redirection genuinely moves AppData/LocalAppData).
+# SINGLE-CALL shape — Get-ScanFiles's MaxFiles/DeadlineSecs are PER CALL, so a call inside the
+# profile loop would multiply wall-clock by the profile count. Files are attributed back to the
+# owning root by LONGEST-prefix match (Temp nests inside LocalAppData). $zbP68Roots is reused
+# by BOTH consumers below (the credential-file loop and the drop-path rule loop).
+$zbP68Roots = @()
+foreach ($zbHive in (@(Get-UserHives) | Sort-Object Sid)) {   # SID order -> stable memo key
+    if (-not $zbHive.ProfileReachable) { continue }           # never re-probe reachability
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp) { continue }
+    foreach ($zbR in @($zbUp.Temp, $zbUp.LocalAppData, $zbUp.AppData)) {
+        if (-not $zbR) { continue }
+        if (@($zbP68Roots | Where-Object { "$($_.Root)".ToLowerInvariant() -eq "$zbR".ToLowerInvariant() }).Count -gt 0) { continue }
+        $zbP68Roots += [pscustomobject]@{ Root = "$zbR"; User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)" }
+    }
+}
+$p68Files = @()
+if ($zbP68Roots.Count -gt 0) {
+    $p68Files = @((Get-ScanFiles -Path @($zbP68Roots | ForEach-Object { $_.Root }) -TimeScoped))
+}
 $stealerFiles = $p68Files |
     Where-Object { $_.Name -match "passwords|credentials|wallet|login|autofill|cookie" -and $_.Extension -match "\.(zip|txt|log|db)$" }
 foreach ($sf in $stealerFiles) {
@@ -490,10 +593,23 @@ foreach ($sf in $stealerFiles) {
     # treat it as POSSIBLE (shown, not auto-selected for destructive remediation). A creds *archive*
     # (.zip) staged in a user path is a stronger stealer signal -> keep HIGH.
     $stealSev = if ($sf.Extension -match "\.zip$") { $SEV_HIGH } else { $SEV_POSSIBLE }
-    Out-Typewriter "  -> SUSPECT CREDENTIAL FILE: $($sf.FullName)" "CRIT"
-    Add-Finding -ID "STEALFILE_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
-        -Severity $stealSev -Description "Credential-named file in user path: $($sf.FullName)" `
-        -Target $sf.FullName -FixAction "DeleteFile" -FixParam $sf.FullName -Group "Info-Stealer"
+    # Longest-prefix attribution back to the owning profile root.
+    $zbSfUser = 'MACHINE'; $zbSfSid = 'MACHINE'; $zbSfLen = -1
+    $zbSfLc = "$($sf.FullName)".ToLowerInvariant()
+    foreach ($zbR in $zbP68Roots) {
+        $zbRl = "$($zbR.Root)".ToLowerInvariant()
+        if ($zbRl.Length -gt $zbSfLen -and $zbSfLc.StartsWith($zbRl)) {
+            $zbSfUser = "$($zbR.User)"; $zbSfSid = "$($zbR.Sid)"; $zbSfLen = $zbRl.Length
+        }
+    }
+    Out-Typewriter "  -> [$zbSfUser] SUSPECT CREDENTIAL FILE: $($sf.FullName)" "CRIT"
+    # ID was the bare filename with non-alphanumerics stripped, so the SAME lure name under two
+    # profiles ("passwords.txt") collided on one ID and Add-Finding's de-dupe dropped the second
+    # victim — on a HIGH + DeleteFile finding. Keyed on SID + full path now.
+    # FixParam stays a bare machine-parseable path; the user lives in Target/Description.
+    Add-Finding -ID "STEALFILE_$(Get-StableId "$zbSfSid|$($sf.FullName)")" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
+        -Severity $stealSev -Description "[$zbSfUser] Credential-named file in user path: $($sf.FullName)" `
+        -Target "[$zbSfUser] $($sf.FullName)" -FixAction "DeleteFile" -FixParam $sf.FullName -Group "Info-Stealer"
     $global:SpywareHits++
 }
 # WS0 wiring: known-family drop-path rules (Latrodectus/Matanbuchus/DarkGate) + C2 framework
@@ -510,11 +626,24 @@ if ($allFileRules.Count -gt 0) {
     foreach ($f in @($p68Files + $dropFiles)) {
         foreach ($r in $allFileRules) {
             if ($f.FullName -match $r.Pattern) {
+                # $dropRoots are machine-scope (ProgramData / C:\temp / C:\tmpa) and enumerated
+                # exactly once outside the profile loop, so anything that matches no profile root
+                # is correctly tagged [MACHINE] rather than reported once per profile.
+                $zbDrUser = 'MACHINE'; $zbDrSid = 'MACHINE'; $zbDrLen = -1
+                $zbDrLc = "$($f.FullName)".ToLowerInvariant()
+                foreach ($zbR in $zbP68Roots) {
+                    $zbRl = "$($zbR.Root)".ToLowerInvariant()
+                    if ($zbRl.Length -gt $zbDrLen -and $zbDrLc.StartsWith($zbRl)) {
+                        $zbDrUser = "$($zbR.User)"; $zbDrSid = "$($zbR.Sid)"; $zbDrLen = $zbRl.Length
+                    }
+                }
                 $ruleTT = if ($r.Family) { "Loader Drop ($($r.Family))" } else { "C2 Framework Artifact" }
-                Out-ThreatBanner "MALWARE DROP-PATH MATCH ($($r.Name))" $f.FullName
-                Add-Finding -ID "DROPRULE_$($f.Name -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 68" -ThreatType $ruleTT `
-                    -Severity $fileRuleSevMap[$r.Severity] -Description "$($r.Name): $($f.FullName)" `
-                    -Target $f.FullName -FixAction "Info" -Group "Loader / C2 Drop Artifacts"
+                Out-ThreatBanner "MALWARE DROP-PATH MATCH ($($r.Name))" "[$zbDrUser] $($f.FullName)"
+                # ID was the bare filename — the same loader drop name under two profiles
+                # collapsed to one finding. Keyed on SID + full path now.
+                Add-Finding -ID "DROPRULE_$(Get-StableId "$zbDrSid|$($f.FullName)")" -Phase "PHASE 68" -ThreatType $ruleTT `
+                    -Severity $fileRuleSevMap[$r.Severity] -Description "[$zbDrUser] $($r.Name): $($f.FullName)" `
+                    -Target "[$zbDrUser] $($f.FullName)" -FixAction "Info" -Group "Loader / C2 Drop Artifacts"
                 $global:TrojanHits++; $dropRuleHits++
                 break   # one finding per file
             }
@@ -721,16 +850,49 @@ Show-PhaseHeader "PHASE 73" "EXPLOIT KIT ARTIFACT & CVE-2021-36934 REMEDIATION" 
 Out-Typewriter "CHECKING FOR EXPLOIT KIT INDICATORS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
 # HiveNightmare already covered in Phase 43 — here we check for exploit toolkit payloads
-$exploitPaths = @("$env:TEMP\*shellcode*","$env:TEMP\*exploit*","$env:TEMP\*payload*","$env:LOCALAPPDATA\*shellcode*","$env:LOCALAPPDATA\*cobalt*","$env:LOCALAPPDATA\*beacon*")
+# P1 multi-user: the six globs were "$env:TEMP\*..." / "$env:LOCALAPPDATA\*..." — the ELEVATED
+# TECHNICIAN's profile — so on a standard-user endpoint the victim's staged shellcode/beacon
+# payloads were never looked at. Roots are resolved per profile via Get-UserPaths; the two
+# pattern SETS stay exactly as they were (Temp: shellcode/exploit/payload, LocalAppData:
+# shellcode/cobalt/beacon), and the walk stays NON-recursive on the root, same as before.
+# Get-ChildItem here is bounded by construction (one directory level, a name filter), so this
+# does not need the Get-ScanFiles budget the recursive sites use.
+$zbExploitTargets = @()
+foreach ($zbHive in (@(Get-UserHives) | Sort-Object Sid)) {
+    if (-not $zbHive.ProfileReachable) { continue }           # never re-probe reachability
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp) { continue }
+    foreach ($zbEr in @(
+        [pscustomobject]@{ Root = $zbUp.Temp;         Pats = @('*shellcode*','*exploit*','*payload*') }
+        [pscustomobject]@{ Root = $zbUp.LocalAppData; Pats = @('*shellcode*','*cobalt*','*beacon*') }
+    )) {
+        if (-not $zbEr.Root) { continue }
+        foreach ($zbEp in $zbEr.Pats) {
+            # De-dupe (root,pattern): if two profiles resolve to the same folder, or Temp and
+            # LocalAppData collapse to one path, the same file must not be reported twice.
+            if (@($zbExploitTargets | Where-Object {
+                    "$($_.Root)".ToLowerInvariant() -eq "$($zbEr.Root)".ToLowerInvariant() -and $_.Pat -eq $zbEp
+                }).Count -gt 0) { continue }
+            $zbExploitTargets += [pscustomobject]@{ Root = "$($zbEr.Root)"; Pat = $zbEp
+                                                    User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)" }
+        }
+    }
+}
 $exploitFound = $false
-foreach ($ep in $exploitPaths) {
-    $hits = Get-ChildItem -Path (Split-Path $ep) -Filter (Split-Path $ep -Leaf) -ErrorAction SilentlyContinue |
+foreach ($zbEt in $zbExploitTargets) {
+    # -LiteralPath, not -Path: a resolved profile root can legitimately contain [ ] (a renamed
+    # account folder), which -Path would treat as a wildcard character class and silently match
+    # nothing. The wildcard we DO want stays where it belongs, in -Filter.
+    $hits = Get-ChildItem -LiteralPath $zbEt.Root -Filter $zbEt.Pat -ErrorAction SilentlyContinue |
         Where-Object { Test-InScope $_.LastWriteTime }
     foreach ($h in $hits) {
-        Out-ThreatBanner "EXPLOIT KIT ARTIFACT" $h.FullName
-        Add-Finding -ID "EXPLOIT_$($h.Name -replace '[^a-z0-9]','')" -Phase "PHASE 73" -ThreatType "Exploit Kit" `
-            -Severity $SEV_CRITICAL -Description "Exploit kit artifact in temp: $($h.FullName)" `
-            -Target $h.FullName -FixAction "DeleteFile" -FixParam $h.FullName -Group "Exploit Kit Artifacts"
+        Out-ThreatBanner "EXPLOIT KIT ARTIFACT" "[$($zbEt.User)] $($h.FullName)"
+        # ID was the bare filename — "payload.bin" under two profiles collided on one ID and
+        # Add-Finding's de-dupe dropped the second victim, on a CRITICAL + DeleteFile finding.
+        # FixParam stays a bare machine-parseable path.
+        Add-Finding -ID "EXPLOIT_$(Get-StableId "$($zbEt.Sid)|$($h.FullName)")" -Phase "PHASE 73" -ThreatType "Exploit Kit" `
+            -Severity $SEV_CRITICAL -Description "[$($zbEt.User)] Exploit kit artifact in temp: $($h.FullName)" `
+            -Target "[$($zbEt.User)] $($h.FullName)" -FixAction "DeleteFile" -FixParam $h.FullName -Group "Exploit Kit Artifacts"
         $exploitFound = $true
     }
 }
@@ -832,18 +994,58 @@ foreach ($zbHive in @(Get-UserHives)) {
         }
     }
 }
-$officeAddinFolder = Join-Path $env:APPDATA 'Microsoft\AddIns'
-if (Test-Path -LiteralPath $officeAddinFolder) {
-    $officeAddinFiles = (Get-ScanFiles -Path $officeAddinFolder -TimeScoped) | Where-Object { $_.Extension -match '\.(wll|xll)$' }
+# P1 multi-user: the loop above walks every profile's HIVE, but this folder scan was still
+# Join-Path $env:APPDATA — the ELEVATED TECHNICIAN's %APPDATA%. On a standard-user endpoint the
+# victim's %APPDATA%\Microsoft\AddIns was never opened, so a dropped .xll/.wll (a mainstream
+# initial-access vector) was invisible. AppData comes from Get-UserPaths, never hand-built:
+# folder redirection genuinely moves Roaming onto a file server.
+# SINGLE-CALL shape: one Get-ScanFiles over every profile's AddIns folder, then longest-prefix
+# attribution — a call per profile would multiply the PER-CALL budget by the profile count.
+$zbAddinRoots = @()
+foreach ($zbHive in (@(Get-UserHives) | Sort-Object Sid)) {
+    if (-not $zbHive.ProfileReachable) { continue }           # never re-probe reachability
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp -or -not $zbUp.AppData) { continue }
+    $zbAf = $null
+    try { $zbAf = Join-Path "$($zbUp.AppData)" 'Microsoft\AddIns' } catch {}
+    if (-not $zbAf) { continue }
+    if (@($zbAddinRoots | Where-Object { "$($_.Root)".ToLowerInvariant() -eq "$zbAf".ToLowerInvariant() }).Count -gt 0) { continue }
+    if (-not (Test-Path -LiteralPath $zbAf -ErrorAction SilentlyContinue)) { continue }
+    $zbAddinRoots += [pscustomobject]@{ Root = "$zbAf"; User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)" }
+}
+if ($zbAddinRoots.Count -gt 0) {
+    $officeAddinFiles = (Get-ScanFiles -Path @($zbAddinRoots | ForEach-Object { $_.Root }) -TimeScoped) |
+        Where-Object { $_.Extension -match '\.(wll|xll)$' }
+    # Get-AuthSig does online CRL/OCSP revocation checks that can block ~15s each, and this loop
+    # is now N profiles wide instead of one — so it carries the shared SIG_AUDIT budget like
+    # every other multi-file sig loop in the engine (CLAUDE.md). A single-profile box hits the
+    # same code path as before and the budget never trips (AddIns holds a handful of files).
+    $zbOafSeen = 0
+    $zbOafSw   = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($oaf in $officeAddinFiles) {
+        if ($zbOafSeen -ge $global:SIG_AUDIT_MAX_FILES -or
+            $zbOafSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+            Out-Typewriter "  -> [INFO] OFFICE ADD-IN SIG BUDGET REACHED — partial scan." "WARN"
+            break
+        }
+        $zbOafSeen++
+        $zbOafUser = 'MACHINE'; $zbOafSid = 'MACHINE'; $zbOafLen = -1
+        $zbOafLc = "$($oaf.FullName)".ToLowerInvariant()
+        foreach ($zbR in $zbAddinRoots) {
+            $zbRl = "$($zbR.Root)".ToLowerInvariant()
+            if ($zbRl.Length -gt $zbOafLen -and $zbOafLc.StartsWith($zbRl)) {
+                $zbOafUser = "$($zbR.User)"; $zbOafSid = "$($zbR.Sid)"; $zbOafLen = $zbRl.Length
+            }
+        }
         $oafSig = Get-AuthSig $oaf.FullName
         $addinFound = $true
         $oafWhy = if ($oafSig.Status -ne "Valid") { "Unsigned" } else { "Signed" }
-        Out-Typewriter "  -> XLL/WLL ADD-IN BINARY ($oafWhy): $($oaf.FullName)" "WARN"
-        Add-Finding -ID "ADDINFILE_$(Get-StableId $oaf.FullName)" -Phase "PHASE 74" -ThreatType "Office Add-in Sideload" `
-            -Severity $SEV_POSSIBLE -Description "$oafWhy XLL/WLL Office add-in binary in the standard per-user AddIns folder (legitimate install location for user-installed add-ins — review, do not assume malicious): $($oaf.FullName)" `
-            -Target $oaf.FullName -FixAction "Info" -Group "Office Add-in Persistence"
+        Out-Typewriter "  -> [$zbOafUser] XLL/WLL ADD-IN BINARY ($oafWhy): $($oaf.FullName)" "WARN"
+        Add-Finding -ID "ADDINFILE_$(Get-StableId "$zbOafSid|$($oaf.FullName)")" -Phase "PHASE 74" -ThreatType "Office Add-in Sideload" `
+            -Severity $SEV_POSSIBLE -Description "[$zbOafUser] $oafWhy XLL/WLL Office add-in binary in the standard per-user AddIns folder (legitimate install location for user-installed add-ins — review, do not assume malicious): $($oaf.FullName)" `
+            -Target "[$zbOafUser] $($oaf.FullName)" -FixAction "Info" -Group "Office Add-in Persistence"
     }
+    $zbOafSw.Stop()
 }
 if (-not $addinFound) { Out-Typewriter "  -> [OK] NO SUSPICIOUS OFFICE ADD-IN BINARIES." "GOOD" }
 Out-Typewriter "  -> MACRO/OUTLOOK AUDIT COMPLETE." "VER"
@@ -1548,13 +1750,61 @@ $docExt   = @('.doc','.docm','.dot','.dotm','.xls','.xlsm','.xlsb','.xlt','.xltm
 # whatever is last gets dropped on a busy box. The Outlook attachment cache is the highest-value
 # root for macro-doc delivery (and the only one the $inMail escalation can fire on), so it goes
 # first; %TEMP% is the noisiest and least valuable, so it goes last.
-$docRoots = @(
-    "$env:LOCALAPPDATA\Microsoft\Windows\INetCache\Content.Outlook",
-    "$env:USERPROFILE\Downloads",
-    "$env:USERPROFILE\Desktop",
-    "$env:PUBLIC\Downloads",
-    $env:TEMP
-) | Where-Object { $_ -and (Test-Path $_) }
+# P1 multi-user: every root here was the ELEVATED TECHNICIAN's ($env:LOCALAPPDATA /
+# $env:USERPROFILE / $env:TEMP), so on a standard-user endpoint the macro document the VICTIM
+# actually received was never opened — which is precisely the blind spot this phase exists to
+# close. Roots come from Get-UserPaths per profile (INetCache and Downloads/Desktop are the two
+# most commonly REDIRECTED folders on a managed box, so hand-building them would be wrong even
+# for the current user). $env:PUBLIC\Downloads is machine-scope and added exactly ONCE.
+# The documented priority order is preserved ACROSS profiles, not just within one: all Outlook
+# caches first, then all Downloads, then all Desktops, then the machine root, then all Temps —
+# because Get-ScanFiles walks the array in order under ONE shared budget and whatever is last
+# gets dropped on a busy box.
+$zbDocOwners = @()
+$zbDocOutlook = @(); $zbDocDl = @(); $zbDocDesk = @(); $zbDocTmp = @()
+foreach ($zbHive in (@(Get-UserHives) | Sort-Object Sid)) {   # SID order -> stable memo key
+    if (-not $zbHive.ProfileReachable) { continue }           # never re-probe reachability
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp) { continue }
+    $zbDocOl = $null
+    if ($zbUp.INetCache) { try { $zbDocOl = Join-Path "$($zbUp.INetCache)" 'Content.Outlook' } catch {} }
+    # Redirected -eq $null means UNKNOWN (the profile resolved by constructed fallback), which is
+    # NOT the same as "not redirected" — carried into the finding so a clean result from a folder
+    # that may not be where the user's documents actually live is not read as an all-clear.
+    $zbDocRedir = ''
+    if ($zbUp.Redirected -eq $true) {
+        $zbDocRedir = " || NOTE: this profile has REDIRECTED shell folders — documents may also live on a file server this scan did not walk."
+    } elseif ($null -eq $zbUp.Redirected) {
+        $zbDocRedir = " || NOTE: folder redirection for this profile is UNKNOWN (paths came from a constructed fallback, not the user's own shell-folder registration) — coverage of their real document folders is unproven."
+    }
+    foreach ($zbD in @(
+        [pscustomobject]@{ Bucket = 'OL';   Path = $zbDocOl }
+        [pscustomobject]@{ Bucket = 'DL';   Path = $zbUp.Downloads }
+        [pscustomobject]@{ Bucket = 'DESK'; Path = $zbUp.Desktop }
+        [pscustomobject]@{ Bucket = 'TMP';  Path = $zbUp.Temp }
+    )) {
+        if (-not $zbD.Path) { continue }
+        if (@($zbDocOwners | Where-Object { "$($_.Root)".ToLowerInvariant() -eq "$($zbD.Path)".ToLowerInvariant() }).Count -gt 0) { continue }
+        if (-not (Test-Path -LiteralPath "$($zbD.Path)" -ErrorAction SilentlyContinue)) { continue }
+        $zbDocOwners += [pscustomobject]@{ Root = "$($zbD.Path)"; User = "$($zbHive.User)"
+                                           Sid = "$($zbHive.Sid)"; Redir = $zbDocRedir }
+        switch ($zbD.Bucket) {
+            'OL'   { $zbDocOutlook += "$($zbD.Path)" }
+            'DL'   { $zbDocDl      += "$($zbD.Path)" }
+            'DESK' { $zbDocDesk    += "$($zbD.Path)" }
+            'TMP'  { $zbDocTmp     += "$($zbD.Path)" }
+        }
+    }
+}
+$zbDocPublic = @()
+foreach ($zbPd in @("$env:PUBLIC\Downloads")) {               # machine-wide, added ONCE
+    if (-not $zbPd) { continue }
+    if (-not (Test-Path -LiteralPath $zbPd -ErrorAction SilentlyContinue)) { continue }
+    if (@($zbDocOwners | Where-Object { "$($_.Root)".ToLowerInvariant() -eq "$zbPd".ToLowerInvariant() }).Count -gt 0) { continue }
+    $zbDocOwners += [pscustomobject]@{ Root = "$zbPd"; User = 'MACHINE'; Sid = 'MACHINE'; Redir = '' }
+    $zbDocPublic += "$zbPd"
+}
+$docRoots = @($zbDocOutlook + $zbDocDl + $zbDocDesk + $zbDocPublic + $zbDocTmp)
 $macroHits = 0
 if ($docRoots.Count -gt 0) {
     $docFiles = Get-ScanFiles -Path $docRoots -TimeScoped
@@ -1605,22 +1855,32 @@ if ($docRoots.Count -gt 0) {
             $vbaApiHits = @([regex]::Matches($docFlat, $vbaBadApiRe) | ForEach-Object { $_.Value.ToLower() } | Select-Object -Unique)
             $vbaBadApi  = ($vbaApiHits.Count -ge 2)
             $inMail = ($doc.FullName -match '(?i)\\Content\.Outlook\\')
+            # Longest-prefix attribution back to the owning root (Temp can nest under
+            # LocalAppData, and Public\Downloads is machine-scope).
+            $zbDocUser = 'MACHINE'; $zbDocSid = 'MACHINE'; $zbDocNote = ''; $zbDocLen = -1
+            $zbDocLc = "$($doc.FullName)".ToLowerInvariant()
+            foreach ($zbR in $zbDocOwners) {
+                $zbRl = "$($zbR.Root)".ToLowerInvariant()
+                if ($zbRl.Length -gt $zbDocLen -and $zbDocLc.StartsWith($zbRl)) {
+                    $zbDocUser = "$($zbR.User)"; $zbDocSid = "$($zbR.Sid)"; $zbDocNote = "$($zbR.Redir)"; $zbDocLen = $zbRl.Length
+                }
+            }
             if ($vbaAutoExec -or $vbaBadApi) {
                 $why = @()
                 if ($vbaAutoExec) { $why += 'an auto-executing entry point (runs on open)' }
                 if ($vbaBadApi)   { $why += "shell/download API strings ($($vbaApiHits.Count) distinct)" }
                 if ($inMail)      { $why += 'and it arrived as an email attachment' }
-                Out-ThreatBanner "MACRO DOCUMENT" "$($doc.Name)"
-                Add-Finding -ID "MACRODOC_$(Get-StableId $doc.FullName)" -Phase "PHASE 74.9" `
+                Out-ThreatBanner "MACRO DOCUMENT" "[$zbDocUser] $($doc.Name)"
+                Add-Finding -ID "MACRODOC_$(Get-StableId "$zbDocSid|$($doc.FullName)")" -Phase "PHASE 74.9" `
                     -ThreatType "Malicious Macro Document" -Severity $SEV_HIGH `
-                    -Description "Office document contains an embedded VBA macro project WITH $($why -join ', '): $($doc.FullName). This is the dominant initial-access delivery shape. Open in Protected View only; do not enable content. Review-only — never auto-acted, because legitimate business documents also carry macros." `
-                    -Target $doc.FullName -FixAction "Info" -Group "Macro Documents"
+                    -Description "[$zbDocUser] Office document contains an embedded VBA macro project WITH $($why -join ', '): $($doc.FullName). This is the dominant initial-access delivery shape. Open in Protected View only; do not enable content. Review-only — never auto-acted, because legitimate business documents also carry macros.$zbDocNote" `
+                    -Target "[$zbDocUser] $($doc.FullName)" -FixAction "Info" -Group "Macro Documents"
                 $global:TrojanHits++
             } else {
-                Add-Finding -ID "MACRODOC_$(Get-StableId $doc.FullName)" -Phase "PHASE 74.9" `
+                Add-Finding -ID "MACRODOC_$(Get-StableId "$zbDocSid|$($doc.FullName)")" -Phase "PHASE 74.9" `
                     -ThreatType "Macro Document" -Severity $SEV_POSSIBLE `
-                    -Description "Office document contains an embedded VBA macro project (no auto-exec entry point or shell/download API string detected): $($doc.FullName). Macros are common in legitimate business documents — inventory/review only." `
-                    -Target $doc.FullName -FixAction "Info" -Group "Macro Documents"
+                    -Description "[$zbDocUser] Office document contains an embedded VBA macro project (no auto-exec entry point or shell/download API string detected): $($doc.FullName). Macros are common in legitimate business documents — inventory/review only.$zbDocNote" `
+                    -Target "[$zbDocUser] $($doc.FullName)" -FixAction "Info" -Group "Macro Documents"
             }
             $macroHits++
         } catch {}
@@ -1708,15 +1968,53 @@ foreach ($svcName in @("WinRM","sshd")) {
 # FixAction Info: an authorized_keys line can be a legitimate admin/dev key, so this is triage
 # evidence for the operator, never auto-removed.
 $sshKeyFiles = @()
+# $env:ProgramData is MACHINE scope — enumerated once, outside anything per-user.
 $adminAuthKeysPath = Join-Path $env:ProgramData 'ssh\administrators_authorized_keys'
-if (Test-Path -LiteralPath $adminAuthKeysPath) { $sshKeyFiles += @{ Path = $adminAuthKeysPath; Owner = "SYSTEM (all administrators)" } }
-$sshUsersRoot = Split-Path $env:USERPROFILE -Parent
-if ($sshUsersRoot -and (Test-Path -LiteralPath $sshUsersRoot)) {
+if (Test-Path -LiteralPath $adminAuthKeysPath) { $sshKeyFiles += @{ Path = $adminAuthKeysPath; Owner = "MACHINE — SYSTEM (all administrators)" } }
+# P1 multi-user (MIGRATE-LITE): the users root was Split-Path $env:USERPROFILE -Parent, i.e.
+# derived from the ELEVATED TECHNICIAN's profile path. The INTENT was already all-users, but the
+# derivation breaks the moment profiles do not live beside the technician's — a relocated
+# ProfilesDirectory (D:\Users), a migrated box carrying two profile roots, or a technician
+# signing in with a profile on a different volume. Every user's SSH backdoor key would then be
+# missed while the phase still printed its green "NO SSH AUTHORIZED_KEYS FILES PRESENT" line —
+# a false all-clear. Built from the DISTINCT PARENTS of the real profile paths now, so the
+# directory walk still covers stale/orphaned profile folders that have no hive (the pre-P1
+# coverage) while being correct on any layout.
+# Unreachable profiles are excluded BEFORE any filesystem call: Get-UserHives sets
+# ProfileReachable exactly once and Test-Path on an unreachable UNC path stalled 42s on this box
+# and can throw a terminating IOException that -EA SilentlyContinue does NOT suppress.
+$zbSshRoots = @()
+$zbSshOwners = @()
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.ProfilePath) { continue }
+    if (-not $zbHive.ProfileReachable) { continue }
+    $zbSshOwners += [pscustomobject]@{ Prefix = "$($zbHive.ProfilePath)"; User = "$($zbHive.User)" }
+    $zbPar = $null
+    try { $zbPar = Split-Path "$($zbHive.ProfilePath)" -Parent } catch {}
+    if (-not $zbPar) { continue }
+    if (@($zbSshRoots | Where-Object { "$_".ToLowerInvariant() -eq "$zbPar".ToLowerInvariant() }).Count -gt 0) { continue }
+    $zbSshRoots += "$zbPar"
+}
+if ($zbSshRoots.Count -eq 0 -and $env:USERPROFILE) {
+    try { $zbSshRoots = @((Split-Path $env:USERPROFILE -Parent)) } catch { $zbSshRoots = @() }
+}
+foreach ($sshUsersRoot in $zbSshRoots) {
+    if (-not $sshUsersRoot -or -not (Test-Path -LiteralPath $sshUsersRoot)) { continue }
     $sshUserDirs = Get-ChildItem -LiteralPath $sshUsersRoot -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notin @('Public','Default','Default User','All Users') }
     foreach ($sud in $sshUserDirs) {
         $uak = Join-Path $sud.FullName '.ssh\authorized_keys'
-        if (Test-Path -LiteralPath $uak) { $sshKeyFiles += @{ Path = $uak; Owner = $sud.Name } }
+        if (-not (Test-Path -LiteralPath $uak)) { continue }
+        if (@($sshKeyFiles | Where-Object { "$($_.Path)".ToLowerInvariant() -eq "$uak".ToLowerInvariant() }).Count -gt 0) { continue }
+        # Prefer the real account name (DOMAIN\user) over the profile FOLDER leaf: the two differ
+        # routinely (name changes, duplicate-profile ".DOMAIN" suffixes), and the folder leaf alone
+        # does not tell the operator which ACCOUNT the backdoor key logs in as.
+        $zbSshOwner = $sud.Name
+        $zbSudLc = "$($sud.FullName)".ToLowerInvariant()
+        foreach ($zbSo in $zbSshOwners) {
+            if ("$($zbSo.Prefix)".ToLowerInvariant() -eq $zbSudLc) { $zbSshOwner = "$($zbSo.User)"; break }
+        }
+        $sshKeyFiles += @{ Path = $uak; Owner = $zbSshOwner }
     }
 }
 $sshBackdoorFound = $false
@@ -1731,9 +2029,11 @@ foreach ($skf in $sshKeyFiles) {
     })
     $sshBackdoorFound = $true
     Out-ThreatBanner "SSH AUTHORIZED_KEYS ENTRY" "$($skf.Owner): $($skLines.Count) key(s) — $($skLabels -join ', ')"
+    # ID is derived from the FULL PATH, which now names a different user per profile, so it picks
+    # up per-user uniqueness for free — no SID needed (contract rule 5).
     Add-Finding -ID "SSHKEYS_$(Get-StableId $skf.Path)" -Phase "PHASE 77" -ThreatType "SSH Key Backdoor" `
-        -Severity $SEV_POSSIBLE -Description "authorized_keys present for $($skf.Owner) with $($skLines.Count) key(s) — a durable SSH login backdoor that survives password resets. Key label(s): $($skLabels -join ', '). Verify every entry is a known admin/dev key: $($skf.Path)" `
-        -Target $skf.Path -FixAction "Info" -Group "Remote Management Services"
+        -Severity $SEV_POSSIBLE -Description "[$($skf.Owner)] authorized_keys present with $($skLines.Count) key(s) — a durable SSH login backdoor that survives password resets. Key label(s): $($skLabels -join ', '). Verify every entry is a known admin/dev key: $($skf.Path)" `
+        -Target "[$($skf.Owner)] $($skf.Path)" -FixAction "Info" -Group "Remote Management Services"
 }
 if (-not $sshBackdoorFound) { Out-Typewriter "  -> [OK] NO SSH AUTHORIZED_KEYS FILES PRESENT." "GOOD" }
 
@@ -1822,7 +2122,38 @@ if ($PhasePlan.Universal) {
     Show-PhaseHeader "PHASE 82" "NETCAT / SOCAT / CHISEL / PLINK BINARY SCAN" "UNIVERSAL"
     # WS0 wiring: externalized to 'tunneling_tools' (AMSI-safe, same list).
     $tunnelNames = $TUNNELING_TOOLS
-    $tunnelRoots = @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE,"$env:WINDIR\Temp")
+    # P1 multi-user: the roots were $env:TEMP / $env:LOCALAPPDATA / $env:USERPROFILE — the
+    # ELEVATED TECHNICIAN's profile — plus $env:WINDIR\Temp. On a standard-user endpoint the
+    # attacker's netcat/chisel staged in the VICTIM's profile was never walked. Roots resolved
+    # per profile via Get-UserPaths; $env:WINDIR\Temp is MACHINE scope and added exactly ONCE.
+    # PREFIX DE-DUPE: Temp and LocalAppData normally nest INSIDE the profile root, so the pre-P1
+    # array walked the same tree up to three times (only the bare-filename ID masked the
+    # duplicate findings). With N profiles that waste is multiplied by N against a PER-CALL
+    # budget, which would truncate the walk before it reaches the later profiles. A root already
+    # covered by one taken earlier is skipped; Temp/LocalAppData are still added when redirection
+    # has genuinely moved them outside the profile root.
+    $zbTunnelRoots = @()
+    foreach ($zbHive in (@(Get-UserHives) | Sort-Object Sid)) {   # SID order -> stable memo key
+        if (-not $zbHive.ProfileReachable) { continue }           # never re-probe reachability
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.Profile, $zbUp.Temp, $zbUp.LocalAppData)) {
+            if (-not $zbR) { continue }
+            $zbRlc = "$zbR".ToLowerInvariant()
+            $zbCovered = $false
+            foreach ($zbEx in $zbTunnelRoots) {
+                $zbExLc = "$($zbEx.Root)".ToLowerInvariant()
+                if ($zbRlc -eq $zbExLc -or $zbRlc.StartsWith($zbExLc.TrimEnd('\') + '\')) { $zbCovered = $true; break }
+            }
+            if ($zbCovered) { continue }
+            $zbTunnelRoots += [pscustomobject]@{ Root = "$zbR"; User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)" }
+        }
+    }
+    foreach ($zbMr in @("$env:WINDIR\Temp")) {                    # machine-wide, added ONCE
+        if (-not $zbMr) { continue }
+        if (@($zbTunnelRoots | Where-Object { "$($_.Root)".ToLowerInvariant() -eq "$zbMr".ToLowerInvariant() }).Count -gt 0) { continue }
+        $zbTunnelRoots += [pscustomobject]@{ Root = "$zbMr"; User = 'MACHINE'; Sid = 'MACHINE' }
+    }
     # One bounded walk; anchored regex so "nc.exe" doesn't substring-match "sync.exe"
     # (was 4 roots x 12 names = 48 recursions, one over the entire user profile).
     $tunnelRegex = ($tunnelNames | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
@@ -1831,14 +2162,32 @@ if ($PhasePlan.Universal) {
     # putty/plink sign-off 2026-07-04; rest of the suite added 2026-07-11 (new coverage, same grade).
     $tunnelDualRegex = (@($TUNNELING_TOOLS_DUALUSE) | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
     $tunnelFound = $false
-    $tunnelHits = (Get-ScanFiles -Path $tunnelRoots) | Where-Object { $_.Name -match $tunnelRegex }
+    # Parens are mandatory — Get-ScanFiles ends `return ,$arr`, so bare-piping it hands the whole
+    # array over as ONE item and the filter silently matches everything (CLAUDE.md).
+    $tunnelHits = @()
+    if ($zbTunnelRoots.Count -gt 0) {
+        $tunnelHits = (Get-ScanFiles -Path @($zbTunnelRoots | ForEach-Object { $_.Root })) |
+            Where-Object { $_.Name -match $tunnelRegex }
+    }
     foreach ($hit in $tunnelHits) {
         $tunnelFound = $true
-        Out-Decrypt -Text $hit.FullName -Prefix "  [TUNNEL TOOL] "
+        # Longest-prefix attribution back to the owning root.
+        $zbTuUser = 'MACHINE'; $zbTuSid = 'MACHINE'; $zbTuLen = -1
+        $zbTuLc = "$($hit.FullName)".ToLowerInvariant()
+        foreach ($zbR in $zbTunnelRoots) {
+            $zbRl = "$($zbR.Root)".ToLowerInvariant()
+            if ($zbRl.Length -gt $zbTuLen -and $zbTuLc.StartsWith($zbRl)) {
+                $zbTuUser = "$($zbR.User)"; $zbTuSid = "$($zbR.Sid)"; $zbTuLen = $zbRl.Length
+            }
+        }
+        Out-Decrypt -Text "[$zbTuUser] $($hit.FullName)" -Prefix "  [TUNNEL TOOL] "
         $tunnelSev = if ($tunnelDualRegex -and $hit.Name -match $tunnelDualRegex) { $SEV_POSSIBLE } else { $SEV_CRITICAL }
-        Add-Finding -ID "TUNNEL_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 82" -ThreatType "Tunneling Tool" `
-            -Severity $tunnelSev -Description "Tunneling/pivoting tool found: $($hit.FullName)" `
-            -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Tunneling / Pivoting Tools"
+        # ID was the bare filename, so one "nc.exe" per profile collapsed to a single finding and
+        # Add-Finding's de-dupe dropped every victim but the first — on a CRITICAL + DeleteFile.
+        # FixParam stays a bare machine-parseable path.
+        Add-Finding -ID "TUNNEL_$(Get-StableId "$zbTuSid|$($hit.FullName)")" -Phase "PHASE 82" -ThreatType "Tunneling Tool" `
+            -Severity $tunnelSev -Description "[$zbTuUser] Tunneling/pivoting tool found: $($hit.FullName)" `
+            -Target "[$zbTuUser] $($hit.FullName)" -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Tunneling / Pivoting Tools"
     }
     if (-not $tunnelFound) { Out-Typewriter "  -> [OK] NO TUNNELING TOOLS FOUND." "GOOD" }
 
@@ -2149,12 +2498,52 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
     $stegoTools = $STEGO_TOOLS
     # One bounded walk + anchored regex (was 3 roots x 7 names = 21 recursions incl. whole profile).
     $stegoRegex = ($stegoTools | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
-    $stegoHits = (Get-ScanFiles -Path @($env:TEMP,$env:LOCALAPPDATA,$env:USERPROFILE)) | Where-Object { $_.Name -match $stegoRegex }
+    # P1 multi-user: the roots were $env:TEMP / $env:LOCALAPPDATA / $env:USERPROFILE — the
+    # ELEVATED TECHNICIAN's profile — so a stego/exfil tool staged in the VICTIM's profile was
+    # never walked. Resolved per profile via Get-UserPaths, with the same PREFIX DE-DUPE the
+    # Phase 82 walk uses (Temp and LocalAppData normally nest inside the profile root, so the
+    # pre-P1 array walked the same tree three times against a PER-CALL budget; with N profiles
+    # that waste would truncate the walk before it reached the later profiles).
+    $zbStegoRoots = @()
+    foreach ($zbHive in (@(Get-UserHives) | Sort-Object Sid)) {   # SID order -> stable memo key
+        if (-not $zbHive.ProfileReachable) { continue }           # never re-probe reachability
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.Profile, $zbUp.Temp, $zbUp.LocalAppData)) {
+            if (-not $zbR) { continue }
+            $zbRlc = "$zbR".ToLowerInvariant()
+            $zbCovered = $false
+            foreach ($zbEx in $zbStegoRoots) {
+                $zbExLc = "$($zbEx.Root)".ToLowerInvariant()
+                if ($zbRlc -eq $zbExLc -or $zbRlc.StartsWith($zbExLc.TrimEnd('\') + '\')) { $zbCovered = $true; break }
+            }
+            if ($zbCovered) { continue }
+            $zbStegoRoots += [pscustomobject]@{ Root = "$zbR"; User = "$($zbHive.User)"; Sid = "$($zbHive.Sid)" }
+        }
+    }
+    # Parens kept — Get-ScanFiles ends `return ,$arr` and a bare pipe would hand the whole array
+    # to Where-Object as ONE item (CLAUDE.md).
+    $stegoHits = @()
+    if ($zbStegoRoots.Count -gt 0) {
+        $stegoHits = (Get-ScanFiles -Path @($zbStegoRoots | ForEach-Object { $_.Root })) |
+            Where-Object { $_.Name -match $stegoRegex }
+    }
     foreach ($hit in $stegoHits) {
-        Out-Typewriter "  -> STEGO TOOL: $($hit.FullName)" "WARN"
-        Add-Finding -ID "STEGO_$($hit.Name -replace '[^a-z0-9]','')" -Phase "PHASE 89" -ThreatType "Steganography/Exfil Tool" `
-            -Severity $SEV_HIGH -Description "Steganography tool found: $($hit.FullName)" `
-            -Target $hit.FullName -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Data Exfiltration"
+        $zbStUser = 'MACHINE'; $zbStSid = 'MACHINE'; $zbStLen = -1
+        $zbStLc = "$($hit.FullName)".ToLowerInvariant()
+        foreach ($zbR in $zbStegoRoots) {
+            $zbRl = "$($zbR.Root)".ToLowerInvariant()
+            if ($zbRl.Length -gt $zbStLen -and $zbStLc.StartsWith($zbRl)) {
+                $zbStUser = "$($zbR.User)"; $zbStSid = "$($zbR.Sid)"; $zbStLen = $zbRl.Length
+            }
+        }
+        Out-Typewriter "  -> [$zbStUser] STEGO TOOL: $($hit.FullName)" "WARN"
+        # ID was the bare filename — one steghide.exe per profile collapsed to a single finding
+        # and Add-Finding's de-dupe dropped every victim but the first, on a HIGH + DeleteFile.
+        # FixParam stays a bare machine-parseable path.
+        Add-Finding -ID "STEGO_$(Get-StableId "$zbStSid|$($hit.FullName)")" -Phase "PHASE 89" -ThreatType "Steganography/Exfil Tool" `
+            -Severity $SEV_HIGH -Description "[$zbStUser] Steganography tool found: $($hit.FullName)" `
+            -Target "[$zbStUser] $($hit.FullName)" -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Data Exfiltration"
     }
     Out-Typewriter "  -> PHASE 89 COMPLETE." "VER"
 }
