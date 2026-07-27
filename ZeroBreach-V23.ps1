@@ -51,6 +51,14 @@ param(
     [int]   $Hours     = -1,
     [switch]$Auto,
     [switch]$Html,
+    # P1 multi-user hives: permit `reg load` of a LOGGED-OFF user's NTUSER.DAT so their
+    # registry can be examined. OFF by default and never active in STEALTH — mounting a
+    # hive is a system STATE CHANGE (write-capable handle on NTUSER.DAT, touches .LOG1/
+    # .LOG2, visible to every process), and a leaked mount locks that profile until this
+    # process exits, giving the user a TEMPORARY PROFILE at their next logon. Same
+    # audit-only reasoning that declined VSS/Amcache. Already-mounted hives are always
+    # read; profiles skipped because this is off get a named "was NOT examined" finding.
+    [switch]$LoadUserHives,
     [string]$OutDir    = "",
     [ValidateSet("","DAILY","WEEKLY")]
     [string]$Schedule  = "",
@@ -97,6 +105,7 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     if ($Paranoid)   { $argList += " -Paranoid" }
     if ($Auto)       { $argList += " -Auto" }
     if ($Html)       { $argList += " -Html" }
+    if ($LoadUserHives) { $argList += " -LoadUserHives" }
     if ($Mode)       { $argList += " -Mode $Mode" }
     if ($Hours -ge 0){ $argList += " -Hours $Hours" }
     if ($IocFile)    { $argList += " -IocFile `"$IocFile`"" }
@@ -148,6 +157,11 @@ $global:MSP_MODE       = $false
 $global:STEALTH_MODE   = [bool]$Stealth
 $global:PARANOID_MODE  = [bool]$Paranoid
 $global:HTML_REPORT    = [bool]$Html
+# P1: operator opt-in for `reg load` of logged-off users' hives. PRESENCE-based env
+# override (any value, even "0", enables) mirroring the ZB_NOCACHE convention, so a
+# headless harness can turn it on without a CLI change. Get-UserHives additionally
+# vetoes this in STEALTH at call time — stealth's whole contract is minimal footprint.
+$global:UH_ALLOW_LOAD  = ([bool]$LoadUserHives -or [bool]$env:ZB_LOAD_HIVES)
 $global:GUI_MODE       = $false
 $global:ScanMode       = "FULL"
 $global:TIME_LIMIT     = [datetime]::MinValue
@@ -1043,7 +1057,12 @@ $KNOWN_KEYLOGGER_PROCS  = Get-Sig 'known_keylogger_procs'
 $RANSOMWARE_EXTENSIONS  = Get-Sig 'ransomware_extensions'
 $STRATUM_PORTS          = Get-Sig 'stratum_ports'
 $SUSPICIOUS_DNS_DOMAINS = Get-Sig 'suspicious_dns_domains'
-$RAT_CONFIG_PATHS       = @((Get-Sig 'rat_config_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+# P1: TEMPLATES, not resolved paths. These lists used to be expanded ONCE here, at load
+# time, against the ADMIN's environment — so on a standard-user box every one of them
+# pointed at the technician's profile. They now carry {TOKEN} form and are resolved PER
+# PROFILE at the call site via Expand-UserPathTemplate. Renamed *_TEMPLATES so a future
+# reader cannot mistake them for paths.
+$RAT_CONFIG_TEMPLATES   = Get-Sig 'rat_config_paths_raw'
 $RAT_REG_PATHS          = Get-Sig 'rat_reg_paths'
 $TROJAN_FILE_PATTERNS   = Get-Sig 'trojan_file_patterns'
 $UAC_BYPASS_REGS        = Get-Sig 'uac_bypass_regs'
@@ -1054,7 +1073,7 @@ $SCRIPT_OWN_STRINGS     = Get-Sig 'script_own_strings'
 $KNOWN_MALWARE_HASHES   = @((Get-Sig 'known_malware_hashes') | ForEach-Object { "$_".ToLower().Trim() })
 $EMAIL_PHISHING_TROJANS = Get-Sig 'email_phishing_trojans'
 $EMAIL_CONTENT_RULES    = Get-Sig 'email_content_rules'
-$EMAIL_SCAN_PATHS       = @((Get-Sig 'email_scan_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$EMAIL_SCAN_TEMPLATES   = Get-Sig 'email_scan_paths_raw'   # P1: templates — see $RAT_CONFIG_TEMPLATES
 $EMAIL_ATTACH_EXTS      = @((Get-Sig 'email_attach_extensions') | ForEach-Object { "$_".ToLower() })
 $EMAIL_LURE_PATTERNS    = Get-Sig 'email_lure_filename_patterns'
 $PROACTIVE_PERSIST_REGS = Get-Sig 'proactive_persistence_regs'
@@ -1136,7 +1155,10 @@ $SECURITY_TOOL_PROCS       = @((Get-Sig 'security_tool_process_names') | ForEach
 $INJECTION_DLL_POINTS      = Get-Sig 'injection_dll_reg_points'          # Phase 22.5
 $NETSH_HELPER_ROOT         = @(Get-Sig 'netsh_helper_reg_root')[0]       # Phase 22.5
 $CRED_DUMP_ARTIFACTS       = Get-Sig 'credential_dump_artifacts'         # Phase 44.5
-$DPAPI_THEFT_PATHS         = @((Get-Sig 'dpapi_theft_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 44.5
+# P1: was DOUBLY broken — expanded at load time AND written in %VAR% form, which
+# ExpandString does not expand at all, so this list matched NOTHING and Phase 44.5's
+# DPAPI-store inventory had never once fired. Now {TOKEN} templates, resolved per profile.
+$DPAPI_THEFT_TEMPLATES     = Get-Sig 'dpapi_theft_paths_raw'             # Phase 44.5
 $CRED_THEFT_CMD_RULES      = Get-Sig 'cred_theft_cmdline_rules'          # Phase 44.5
 $RDP_HARDENING_CHECKS      = Get-Sig 'rdp_hardening_checks'              # Phase 45.5
 $HIDDEN_ACCOUNT_REG        = @(Get-Sig 'hidden_account_reg_path')[0]     # Phase 42.5
@@ -1145,7 +1167,9 @@ $RUNMRU_REG_PATH           = @(Get-Sig 'runmru_reg_path')[0]             # Phase
 $CLIPBOARD_LURE_RULES      = Get-Sig 'clipboard_lure_rules'              # Phase 68.5
 $RMM_TOOL_BINARIES         = @((Get-Sig 'rmm_tool_binaries') | ForEach-Object { "$_".ToLower() })           # Phase 82.5
 $RMM_SUSPICIOUS_PATH_RE    = @(Get-Sig 'rmm_suspicious_path_regex')[0]   # Phase 82.5
-$CLOUD_TOKEN_PATHS         = @((Get-Sig 'cloud_token_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 100.5
+# P1: same double breakage as $DPAPI_THEFT_TEMPLATES — Phase 100.5's TOKENSTORES_PRESENT
+# finding has never fired. Now {TOKEN} templates, resolved per profile.
+$CLOUD_TOKEN_TEMPLATES     = Get-Sig 'cloud_token_paths_raw'             # Phase 100.5
 $TOKEN_STAGING_PATTERNS    = Get-Sig 'token_staging_name_patterns'       # Phase 100.5
 $TIMESTOMP_EXTENSIONS      = @((Get-Sig 'timestomp_extensions') | ForEach-Object { "$_".ToLower() })        # Phase 17.5
 $WS6_HARDENING_ACTIONS     = Get-Sig 'ws6_hardening_actions'             # Phase 45.5 (operator-only hardening set)
@@ -1155,7 +1179,7 @@ $C2_PIPE_PATTERNS          = Get-Sig 'c2_pipe_patterns'              # Phase 62 
 $C2_CONFIG_RULES           = Get-Sig 'c2_config_rules'               # Phase 68 (C2 artifact filename rules)
 $LOADER_DROP_PATH_RULES    = Get-Sig 'loader_drop_path_rules'        # Phase 68 (family drop-path rules)
 $BYOVD_CERT_TBS_HASHES     = Get-Sig 'byovd_cert_tbs_hashes'         # Phase 55.5 (cert-TBS confirm)
-$INFOSTEALER_TARGET_PATHS  = @((Get-Sig 'infostealer_target_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 100
+$INFOSTEALER_TARGET_TEMPLATES = Get-Sig 'infostealer_target_paths_raw'   # Phase 100 (P1: templates)
 
 # ── WS7 (2026-07-25) detection expansion — DLL side-loading, .lnk downloader payloads,
 # extension update_url, clipboard clipper, cloud IMDS theft, npm/pip postinstall exfil.
@@ -1307,6 +1331,582 @@ function Get-RegVal {
     param([string]$Path, [string]$Name)
     try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
 }
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MULTI-USER HIVES + PER-USER PATHS (P1)
+# ══════════════════════════════════════════════════════════════════════════════
+# THE DEFECT THESE FIX: the engine self-elevates with Start-Process -Verb RunAs. On a
+# standard-user endpoint — the normal MSP case — the technician supplies ADMIN credentials,
+# so HKCU:, $env:APPDATA, $env:LOCALAPPDATA, $env:USERPROFILE and $env:TEMP inside the
+# elevated process all resolve to the TECHNICIAN's profile, not the victim's. Every
+# per-user detection was looking in the wrong place and reporting clean because it never
+# looked at the infected profile. Get-UserHives/Get-UserPaths give a phase the real
+# per-profile roots; Expand-UserPathTemplate resolves the {TOKEN} path lists in
+# data\detection_signatures.json against one profile.
+#
+# Budgets (see the bulk-loop budget rule). Every cap that is hit is REPORTED, never
+# silently truncated — a silently truncated profile list reproduces exactly the class of
+# bug P1 exists to fix.
+$global:UH_MAX_PROFILES  = 25    # hard cap on profiles returned
+$global:UH_DEADLINE_S    = 20    # wall-clock for the whole enumeration, including loads
+$global:UH_MAX_LOADS     = 10    # hard cap on `reg load` operations per scan
+$global:UH_UNC_TIMEOUT_S = 3     # per-profile reachability probe ceiling
+# Registry of every hive mount THIS SCAN created — the unload ledger. Close-UserHives
+# drains it; engine\Summary.ps1 drains it again unconditionally as the backstop, because
+# a try/finally in a dot-sourced phase body does NOT run on [Environment]::Exit(N) or on
+# a hard process kill from the GUI abort button.
+$global:UH_LOADED_MOUNTS = New-Object System.Collections.ArrayList
+# Profiles dropped by a budget cap, and profiles skipped for lack of a mounted hive —
+# both feed the "this check was blind" coverage findings. Never let these go unreported.
+$global:UH_SKIPPED       = New-Object System.Collections.ArrayList
+$global:UH_TRUNCATED     = $false
+# Memos. ProfileList is effectively static for the life of a scan, so unlike
+# Get-ProcSnapshot there is deliberately NO TTL. Shares the ZB_NOCACHE kill-switch
+# (PRESENCE-based — any value, even "0", disables).
+$global:USER_HIVE_CACHE    = @{}
+$global:USER_HIVE_CACHE_ON = $global:SCAN_FILE_CACHE_ON
+$global:USER_PATH_CACHE    = @{}
+
+# Read a REG_EXPAND_SZ WITHOUT expanding %VARS%.
+# CRITICAL: the provider (Get-ItemProperty / Get-RegVal) expands %USERPROFILE% against the
+# SCAN process's environment — i.e. the ADMIN's profile — which would silently reintroduce
+# the exact bug P1 exists to fix, with no error and a perfectly plausible-looking path.
+# Uses the .NET API with explicit Close()/Dispose() in finally: that is the one read shape
+# proven to leave NO handle on a loaded hive (a leaked RegistryKey defeats `reg unload`
+# permanently, and [gc]::Collect() cannot rescue it while a reference is still rooted).
+function Get-UserRegRaw {
+    param([string]$SubKey, [string]$Name)
+    $zbBase = $null; $zbKey = $null; $zbOut = $null
+    try {
+        $zbBase = [Microsoft.Win32.RegistryKey]::OpenBaseKey(
+                    [Microsoft.Win32.RegistryHive]::Users,
+                    [Microsoft.Win32.RegistryView]::Default)
+        $zbKey  = $zbBase.OpenSubKey($SubKey)
+        if ($zbKey) {
+            $zbOut = $zbKey.GetValue($Name, $null,
+                        [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+        }
+    } catch { $zbOut = $null }
+    finally {
+        if ($zbKey)  { try { $zbKey.Close();  $zbKey.Dispose()  } catch {} }
+        if ($zbBase) { try { $zbBase.Close(); $zbBase.Dispose() } catch {} }
+    }
+    if ($null -eq $zbOut) { return $null }
+    return "$zbOut"
+}
+
+# Substitute a raw REG_EXPAND_SZ against the TARGET user's profile, not the scan user's.
+# The $ doubling matters: -replace treats $ in the REPLACEMENT string as a capture
+# reference, so a profile path containing $ would corrupt the result.
+function Expand-UserRegPath {
+    param([string]$Raw, $Hive)
+    if (-not $Raw -or -not $Hive) { return $null }
+    $zbP = "$($Hive.ProfilePath)".Replace('$', '$$')
+    $zbV = "$Raw" -replace '(?i)%USERPROFILE%', $zbP
+    $zbV = $zbV   -replace '(?i)%HOMEDRIVE%%HOMEPATH%', $zbP
+    # Only machine-scope variables (%SystemRoot%, %ProgramData%, ...) may remain.
+    try { $zbV = [Environment]::ExpandEnvironmentVariables($zbV) } catch {}
+    if ("$zbV" -match '%[A-Za-z_()]+%') { return $null }   # unresolved user-scope var: never emit
+    return $zbV
+}
+
+# Enumerate every human profile on the box, with its registry hive if reachable.
+#
+# CALL-SITE CONVENTION — always:   $zbHives = @(Get-UserHives)
+#
+# This function deliberately returns a PLAIN array, NOT Get-ScanFiles' `return ,$arr`.
+# That is a considered deviation, measured on live 5.1 (5.1.26100.8875), because `,$arr`
+# is wrong in almost every natural spelling and P1 adds ~50 new call sites that would each
+# have to remember the exception:
+#
+#            spelling                     ,$arr   plain    (2-element result)
+#     @(fn).Count                           1       2      <- budget division would use 1
+#     @(fn)[0] -is [array]                True   False     <- hands the WHOLE array to a
+#                                                             site expecting one hive
+#     foreach ($h in fn)                    1       2
+#     fn | Where-Object {...}               1       2
+#     (fn) | Where-Object {...}             2       2
+#     $v = fn ; $v.Count                    2       2
+#
+# The only thing `,$arr` buys is stopping PS 5.1 unwrapping a SINGLE-element result to a
+# scalar — and wrapping the call in @() already fixes that (@(fn).Count = 1, correctly).
+# So: plain return + @() at the call site is correct in ALL cases, including one profile.
+# Get-ScanFiles keeps `,$arr` for compatibility with its 30 existing call sites; do not
+# copy that pattern into new helpers.
+function Get-UserHives {
+    param(
+        [switch]$IncludeService,   # also return S-1-5-18/19/20 (default: excluded)
+        [switch]$AllowLoad,        # permit `reg load` of logged-off hives (default OFF)
+        [int]$MaxProfiles  = 0,
+        [int]$DeadlineSecs = 0
+    )
+    $zbArr = @()
+    # The whole body is wrapped: this helper lives in the loader, so a throw would
+    # propagate into whichever MODULE called it and take out the rest of that module.
+    try {
+        $zbMax  = $MaxProfiles;  if ($zbMax  -le 0) { $zbMax  = [int]$global:UH_MAX_PROFILES }
+        $zbDead = $DeadlineSecs; if ($zbDead -le 0) { $zbDead = [int]$global:UH_DEADLINE_S }
+        if ($zbMax  -le 0) { $zbMax  = 25 }
+        if ($zbDead -le 0) { $zbDead = 20 }
+
+        # Effective load permission = per-call request AND operator opt-in AND not STEALTH.
+        # Evaluated HERE, not at assignment, because $global:STEALTH_MODE is set later by
+        # the interactive menu / -Mode STEALTH.
+        $zbAllow = [bool]$AllowLoad
+        if (-not $global:UH_ALLOW_LOAD) { $zbAllow = $false }
+        if ($global:STEALTH_MODE)       { $zbAllow = $false }
+
+        # Key on the FULL parameter tuple: -AllowLoad genuinely changes the result set, so a
+        # scalar cache would be wrong.
+        $zbKey = "$([bool]$IncludeService)|$zbAllow"
+        if ($global:USER_HIVE_CACHE_ON -and $global:USER_HIVE_CACHE.ContainsKey($zbKey)) {
+            return $global:USER_HIVE_CACHE[$zbKey]
+        }
+
+        $zbStart = Get-Date
+        $zbLoads = 0
+        $zbTrunc = $false
+
+        # Which SIDs are already mounted. Project to STRINGS inside the pipeline — a
+        # RegistryKey object escaping into a variable is what defeats `reg unload`.
+        $zbMounted = @{}
+        foreach ($zbNm in @(Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue |
+                            ForEach-Object { $_.PSChildName })) {
+            if ($zbNm) { $zbMounted["$zbNm"] = $true }
+        }
+
+        $zbCurSid = ''
+        try { $zbCurSid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value } catch {}
+
+        # ProfileList is the AUTHORITY, not HKEY_USERS: it includes logged-off users and
+        # excludes the .DEFAULT / _Classes noise. HKEY_USERS is only a mounted-or-not lookup.
+        $zbPlRoot = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList'
+        $zbSids = @(Get-ChildItem -Path $zbPlRoot -ErrorAction SilentlyContinue |
+                    ForEach-Object { $_.PSChildName })
+
+        $zbSeen = @{}
+        foreach ($zbSid in $zbSids) {
+            if (-not $zbSid) { continue }
+            if (((Get-Date) - $zbStart).TotalSeconds -gt $zbDead) {
+                $zbTrunc = $true; $null = $global:UH_SKIPPED.Add("$zbSid (deadline)"); continue
+            }
+            if ($zbArr.Count -ge $zbMax) {
+                $zbTrunc = $true; $null = $global:UH_SKIPPED.Add("$zbSid (profile cap)"); continue
+            }
+            # A .bak entry is the fingerprint of a failed profile load / temp-profile event
+            # and its ProfileImagePath is often stale.
+            if ("$zbSid" -match '\.bak$') { continue }
+            if ("$zbSid" -like '*_Classes') { continue }
+            if (-not $IncludeService) {
+                # This single rule eliminates S-1-5-18/19/20 and .DEFAULT. Deliberately NOT a
+                # substring test for "S-1-5-18" — a domain SID can legitimately contain those
+                # digits in another position.
+                if ("$zbSid" -notmatch '^S-1-5-21-\d+-\d+-\d+-\d+$') { continue }
+            }
+            if ($zbSeen.ContainsKey("$zbSid")) { continue }
+
+            $zbPip = Get-RegVal -Path "$zbPlRoot\$zbSid" -Name 'ProfileImagePath'
+            if (-not $zbPip) { continue }
+            # ProfileImagePath is REG_EXPAND_SZ; %SystemDrive%\Users\x is common on imaged
+            # boxes. Only machine-scope vars appear here, so this expansion is safe.
+            try { $zbPip = [Environment]::ExpandEnvironmentVariables("$zbPip") } catch {}
+            if (-not $IncludeService) {
+                if ("$zbPip" -match '(?i)\\(ServiceProfiles|systemprofile)\\') { continue }
+            }
+            $zbLeafName = ''
+            try { $zbLeafName = Split-Path "$zbPip" -Leaf } catch { $zbLeafName = '' }
+            # defaultuser0 (OOBE staging) has a real S-1-5-21 SID, so the shape rule misses it.
+            if ("$zbLeafName" -match '(?i)^defaultuser\d*$') { continue }
+            if ("$zbLeafName" -match '(?i)^(Default|Default User|Public|All Users)$') { continue }
+
+            $zbSeen["$zbSid"] = $true
+
+            # ── Reachability. TEXTUAL tests FIRST, before any filesystem access. ──────
+            # Test-Path on an unreachable UNC took 42.2 SECONDS silently on this box for an
+            # unrouteable IP, and is separately known to throw a terminating IOException that
+            # -EA SilentlyContinue does NOT suppress. Defend against BOTH outcomes, and note
+            # that negative DNS/SMB caching makes a naive retest look completely fine.
+            # This is decided EXACTLY ONCE per profile; no downstream site may re-probe.
+            $zbReach = $true
+            if ("$zbPip" -match '^\\\\') { $zbReach = $false }
+            elseif ("$zbPip" -notmatch '^[A-Za-z]:\\') { $zbReach = $false }
+            else {
+                try   { $zbReach = [bool](Test-Path -LiteralPath "$zbPip" -ErrorAction SilentlyContinue) }
+                catch { $zbReach = $false }
+            }
+
+            $zbUser = $null
+            try {
+                $zbUser = (New-Object System.Security.Principal.SecurityIdentifier("$zbSid")
+                          ).Translate([System.Security.Principal.NTAccount]).Value
+            } catch { $zbUser = $null }
+            if (-not $zbUser) { $zbUser = $zbLeafName }   # deleted / orphaned account
+            if (-not $zbUser) { $zbUser = "$zbSid" }
+
+            # Trailing RID. Informational only — RID 500/501 (built-in Administrator and
+            # Guest) are real, human-usable, infectable profiles and are NEVER filtered out.
+            $zbRid = 0
+            try {
+                $zbParts = "$zbSid".Split('-')
+                $zbRid = [int]$zbParts[$zbParts.Length - 1]
+            } catch { $zbRid = 0 }
+
+            $zbNtUser = ''
+            $zbUsrCls = ''
+            try {
+                $zbNtUser = Join-Path "$zbPip" 'NTUSER.DAT'
+                $zbUsrCls = Join-Path "$zbPip" 'AppData\Local\Microsoft\Windows\UsrClass.dat'
+            } catch {}
+
+            $zbHivePath = $null; $zbClsPath = $null; $zbSource = 'NotMounted'
+            $zbLoaded = $false; $zbMount = $null; $zbClsMount = $null
+            $zbIsMounted = [bool]$zbMounted["$zbSid"]
+
+            if ($zbIsMounted) {
+                $zbHivePath = "Registry::HKEY_USERS\$zbSid"
+                # For a LOGGED-ON user, HKU\<SID>\Software\Classes and HKU\<SID>_Classes are
+                # the same store (the former is a registry symbolic link) — measured. One
+                # string keeps the migration a pure prefix substitution.
+                $zbClsPath  = "Registry::HKEY_USERS\$zbSid\Software\Classes"
+                $zbSource   = 'HKU'
+            }
+            elseif ($zbAllow -and $zbReach -and $zbLoads -lt [int]$global:UH_MAX_LOADS) {
+                # A logged-ON user's NTUSER.DAT is LOCKED, so mounted-first is not an
+                # optimisation, it is the only order that works.
+                if ($zbNtUser -and (Test-Path -LiteralPath $zbNtUser)) {
+                    $zbMount = 'ZB_UH_' + (Get-StableId "$zbSid")
+                    try {
+                        $null = & reg.exe load "HKU\$zbMount" "$zbNtUser" 2>&1
+                        if ($LASTEXITCODE -eq 0) {
+                            $null = $global:UH_LOADED_MOUNTS.Add($zbMount)
+                            $zbHivePath = "Registry::HKEY_USERS\$zbMount"
+                            $zbSource   = 'RegLoad'
+                            $zbLoaded   = $true
+                            $zbLoads++
+                            # A reg-loaded NTUSER.DAT's Software\Classes is nearly EMPTY —
+                            # the real per-user class registrations live in UsrClass.dat, a
+                            # SEPARATE file needing its own mount and its own unload. Without
+                            # this, a logged-off user's COM-hijack and UAC-bypass checks are
+                            # structurally blind: both techniques live in Software\Classes.
+                            if ($zbUsrCls -and (Test-Path -LiteralPath $zbUsrCls)) {
+                                $zbClsMount = 'ZB_UC_' + (Get-StableId "$zbSid")
+                                $null = & reg.exe load "HKU\$zbClsMount" "$zbUsrCls" 2>&1
+                                if ($LASTEXITCODE -eq 0) {
+                                    $null = $global:UH_LOADED_MOUNTS.Add($zbClsMount)
+                                    $zbClsPath = "Registry::HKEY_USERS\$zbClsMount"
+                                } else { $zbClsMount = $null }
+                            }
+                        } else { $zbMount = $null }
+                    } catch { $zbMount = $null }
+                }
+                if (-not $zbLoaded -and $zbLoads -ge [int]$global:UH_MAX_LOADS) {
+                    $zbTrunc = $true; $null = $global:UH_SKIPPED.Add("$zbUser (load cap)")
+                }
+            }
+
+            $zbArr += [pscustomobject]@{
+                Sid              = "$zbSid"
+                User             = "$zbUser"
+                ProfilePath      = "$zbPip"
+                HivePath         = $zbHivePath
+                ClassesHivePath  = $zbClsPath
+                WasMounted       = $zbIsMounted
+                Loaded           = $zbLoaded
+                MustUnload       = $zbLoaded
+                MountName        = $zbMount
+                ClassesMountName = $zbClsMount
+                NtUserDat        = "$zbNtUser"
+                UsrClassDat      = "$zbUsrCls"
+                ProfileReachable = $zbReach
+                IsCurrent        = ("$zbSid" -eq "$zbCurSid")
+                Source           = $zbSource
+                Rid              = $zbRid
+            }
+        }
+
+        if ($zbTrunc) { $global:UH_TRUNCATED = $true }
+        # Never cache a truncated result — same reasoning Get-ScanFiles uses for refusing to
+        # cache a deadline-truncated walk: a load-dependent partial set must not poison every
+        # later identical call.
+        if ($global:USER_HIVE_CACHE_ON -and -not $zbTrunc) {
+            $global:USER_HIVE_CACHE[$zbKey] = $zbArr
+        }
+    } catch {
+        try { Write-RecoveredError $_ } catch {}
+    }
+    return $zbArr
+}
+
+# Unload every hive mount this scan created. MUST NEVER THROW.
+#
+# Getting this wrong is user-visible damage, not an inconvenience: a leaked mount keeps the
+# victim's NTUSER.DAT locked for the remaining life of the engine process, and their next
+# logon yields a TEMPORARY PROFILE with an empty desktop — an outage on a client machine
+# caused by the IR tool. [gc]::Collect() is NECESSARY BUT NOT SUFFICIENT: it only works when
+# no live variable still holds a RegistryKey/PSObject rooted in the mounted hive, which is
+# why the caches are dropped first and why loaded hives are read through Get-UserRegRaw.
+function Close-UserHives {
+    param(
+        [switch]$All,
+        [string[]]$MountName
+    )
+    try {
+        $zbTargets = @()
+        if ($MountName) { $zbTargets = @($MountName) }
+        else            { $zbTargets = @($global:UH_LOADED_MOUNTS) }
+
+        # Drop anything that could root a handle into a mounted hive, THEN collect. Do this
+        # even when there is nothing to unload — the cached HivePath values for Loaded
+        # entries go stale the moment a mount disappears.
+        $global:USER_HIVE_CACHE = @{}
+        $global:USER_PATH_CACHE = @{}
+        if (-not $zbTargets -or $zbTargets.Count -eq 0) { return }
+
+        [gc]::Collect(); [gc]::WaitForPendingFinalizers(); [gc]::Collect()
+
+        foreach ($zbM in $zbTargets) {
+            if (-not $zbM) { continue }
+            $zbOk = $false
+            try {
+                $null = & reg.exe unload "HKU\$zbM" 2>&1
+                if ($LASTEXITCODE -eq 0) { $zbOk = $true }
+                else {
+                    [gc]::Collect(); [gc]::WaitForPendingFinalizers(); [gc]::Collect()
+                    $null = & reg.exe unload "HKU\$zbM" 2>&1
+                    if ($LASTEXITCODE -eq 0) { $zbOk = $true }
+                }
+            } catch { $zbOk = $false }
+
+            if ($zbOk) {
+                try { $global:UH_LOADED_MOUNTS.Remove("$zbM") } catch {}
+            } else {
+                # NEVER swallow this silently, and never CRITICAL + a destructive action —
+                # the operator needs to know a profile is pinned, and the fix is a command
+                # they run by hand.
+                try {
+                    Add-Finding -ID "HIVELOCK_$(Get-StableId "$zbM")" -Phase "PHASE 0" `
+                        -ThreatType "Scan Coverage" -Severity $SEV_HIGH `
+                        -Description ("A registry hive this scan loaded could not be unloaded (mount $zbM). " +
+                                      "The affected user's profile stays LOCKED until this scan process exits, and a " +
+                                      "logon before then would give them a TEMPORARY PROFILE. If the scan has already " +
+                                      "exited, run this by hand: reg unload HKU\$zbM") `
+                        -Target "HKU\$zbM" -FixAction "Info" -FixParam "" -Group "Scan Coverage" `
+                        -EvidenceSource "RegLoad" -Confidence "HIGH"
+                } catch {}
+            }
+        }
+    } catch {}
+}
+
+# Resolve one profile's real folder locations. Do NOT just append \AppData\Roaming:
+# folder redirection and the User Shell Folders key genuinely move these, and a redirected
+# Documents folder living on a file server means a ransomware/document scan looked
+# somewhere that does not hold the user's documents — reporting that clean is the exact
+# dishonesty this workstream exists to remove.
+# Returns $null when given nothing usable; every caller must handle that.
+function Get-UserPaths {
+    param($Hive)
+    if (-not $Hive) { return $null }
+    $zbOut = $null
+    try {
+        $zbSid = "$($Hive.Sid)"
+        if ($global:USER_HIVE_CACHE_ON -and $zbSid -and $global:USER_PATH_CACHE.ContainsKey($zbSid)) {
+            return $global:USER_PATH_CACHE[$zbSid]
+        }
+        $zbProf = "$($Hive.ProfilePath)"
+        $zbLeaf = $null
+        if ($Hive.HivePath) { $zbLeaf = "$($Hive.HivePath)" -replace '(?i)^Registry::HKEY_USERS\\', '' }
+
+        $zbV   = @{}
+        $zbSrc = 'Constructed'
+
+        # 1. Volatile Environment — the user's ACTUAL live environment, i.e. precisely what
+        #    $env:APPDATA would be inside their session. Best source, but it does not exist
+        #    in a reg-loaded hive (it is volatile by construction), so: mounted users only.
+        if ($zbLeaf -and $Hive.WasMounted) {
+            foreach ($zbM in @(,@('AppData','APPDATA'), ,@('LocalAppData','LOCALAPPDATA'))) {
+                $zbR = Get-RegVal -Path "$($Hive.HivePath)\Volatile Environment" -Name $zbM[1]
+                if ($zbR) { $zbV[$zbM[0]] = "$zbR"; $zbSrc = 'VolatileEnv' }
+            }
+        }
+
+        # 2. User Shell Folders — primary for loaded hives, and AUTHORITATIVE for redirection.
+        #    Value-name mapping is not obvious: Personal = Documents, "Local AppData" has a
+        #    space, Cache = INetCache, My Music/My Pictures/My Video keep the legacy prefix,
+        #    and Downloads has NO friendly name at all — it is a bare GUID.
+        #    Prefer this over "Shell Folders", which is an Explorer-maintained cache that on
+        #    a live box holds only a "!Do not use this registry key" sentinel.
+        if ($zbLeaf) {
+            $zbUsf = "$zbLeaf\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders"
+            foreach ($zbM in @(
+                ,@('AppData',      'AppData')
+                ,@('LocalAppData', 'Local AppData')
+                ,@('Desktop',      'Desktop')
+                ,@('Documents',    'Personal')
+                ,@('Pictures',     'My Pictures')
+                ,@('Videos',       'My Video')
+                ,@('Music',        'My Music')
+                ,@('Favorites',    'Favorites')
+                ,@('Startup',      'Startup')
+                ,@('StartMenu',    'Start Menu')
+                ,@('Programs',     'Programs')
+                ,@('Recent',       'Recent')
+                ,@('INetCache',    'Cache')
+                ,@('Downloads',    '{374DE290-123F-4565-9164-39C4925E467B}')
+            )) {
+                if ($zbV.ContainsKey($zbM[0]) -and $zbV[$zbM[0]]) { continue }
+                $zbEx = Expand-UserRegPath (Get-UserRegRaw $zbUsf $zbM[1]) $Hive
+                if ($zbEx) {
+                    $zbV[$zbM[0]] = $zbEx
+                    if ($zbSrc -eq 'Constructed') { $zbSrc = 'UserShellFolders' }
+                }
+            }
+        }
+
+        # 3. Fallback — construct from ProfilePath for anything still unresolved.
+        $zbFall = $false
+        foreach ($zbM in @(
+            ,@('AppData',      'AppData\Roaming')
+            ,@('LocalAppData', 'AppData\Local')
+            ,@('Desktop',      'Desktop')
+            ,@('Documents',    'Documents')
+            ,@('Downloads',    'Downloads')
+            ,@('Pictures',     'Pictures')
+            ,@('Videos',       'Videos')
+            ,@('Music',        'Music')
+            ,@('Favorites',    'Favorites')
+        )) {
+            if ($zbV.ContainsKey($zbM[0]) -and $zbV[$zbM[0]]) { continue }
+            if (-not $zbProf) { continue }
+            try { $zbV[$zbM[0]] = (Join-Path $zbProf $zbM[1]); $zbFall = $true } catch {}
+        }
+        foreach ($zbM in @(
+            ,@('Startup',   'AppData',      'Microsoft\Windows\Start Menu\Programs\Startup')
+            ,@('StartMenu', 'AppData',      'Microsoft\Windows\Start Menu')
+            ,@('Programs',  'AppData',      'Microsoft\Windows\Start Menu\Programs')
+            ,@('Recent',    'AppData',      'Microsoft\Windows\Recent')
+            ,@('INetCache', 'LocalAppData', 'Microsoft\Windows\INetCache')
+        )) {
+            if ($zbV.ContainsKey($zbM[0]) -and $zbV[$zbM[0]]) { continue }
+            if (-not $zbV[$zbM[1]]) { continue }
+            try { $zbV[$zbM[0]] = (Join-Path $zbV[$zbM[1]] $zbM[2]); $zbFall = $true } catch {}
+        }
+
+        # 4. Temp has NO User Shell Folders entry. A per-user override lives in the hive's
+        #    Environment key; otherwise derive it from LocalAppData.
+        $zbTemp = $null
+        if ($zbLeaf) { $zbTemp = Expand-UserRegPath (Get-UserRegRaw "$zbLeaf\Environment" 'TEMP') $Hive }
+        if (-not $zbTemp -and $zbV['LocalAppData']) {
+            try { $zbTemp = Join-Path $zbV['LocalAppData'] 'Temp' } catch {}
+        }
+
+        # 5. OneDrive — the Environment value is authoritative; the constructed path is only
+        #    usually right.
+        $zbOd = $null
+        if ($zbLeaf) {
+            $zbOd = Expand-UserRegPath (Get-UserRegRaw "$zbLeaf\Environment" 'OneDrive') $Hive
+            if (-not $zbOd) {
+                $zbOd = Expand-UserRegPath (Get-UserRegRaw "$zbLeaf\Software\Microsoft\OneDrive\Accounts\Business1" 'UserFolder') $Hive
+            }
+        }
+        if (-not $zbOd -and $zbProf -and $Hive.ProfileReachable) {
+            try {
+                $zbOdC = Join-Path $zbProf 'OneDrive'
+                if (Test-Path -LiteralPath $zbOdC) { $zbOd = $zbOdC }
+            } catch {}
+        }
+
+        # 6. Redirection. $true = something resolved outside the profile root (a whole class
+        #    of file checks would be looking at a network share). $null = UNKNOWN, because a
+        #    constructed fallback cannot tell — consumers must carry that as a caveat rather
+        #    than treat it as "not redirected".
+        $zbRedir = $false
+        foreach ($zbK in @($zbV.Keys)) {
+            $zbPv = "$($zbV[$zbK])"
+            if ($zbPv -and $zbProf -and -not $zbPv.ToLowerInvariant().StartsWith($zbProf.ToLowerInvariant())) {
+                $zbRedir = $true
+            }
+        }
+        if ($zbSrc -eq 'Constructed' -or $zbFall) { if (-not $zbRedir) { $zbRedir = $null } }
+
+        $zbOut = [pscustomobject]@{
+            Sid          = $zbSid
+            User         = "$($Hive.User)"
+            Profile      = $zbProf
+            AppData      = $zbV['AppData']
+            LocalAppData = $zbV['LocalAppData']
+            Temp         = $zbTemp
+            Downloads    = $zbV['Downloads']
+            Desktop      = $zbV['Desktop']
+            Documents    = $zbV['Documents']
+            Pictures     = $zbV['Pictures']
+            Videos       = $zbV['Videos']
+            Music        = $zbV['Music']
+            Favorites    = $zbV['Favorites']
+            Startup      = $zbV['Startup']
+            StartMenu    = $zbV['StartMenu']
+            Programs     = $zbV['Programs']
+            Recent       = $zbV['Recent']
+            INetCache    = $zbV['INetCache']
+            OneDrive     = $zbOd
+            Redirected   = $zbRedir
+            Reachable    = $Hive.ProfileReachable
+            Source       = $zbSrc
+        }
+        if ($global:USER_HIVE_CACHE_ON -and $zbSid) { $global:USER_PATH_CACHE[$zbSid] = $zbOut }
+    } catch {
+        try { Write-RecoveredError $_ } catch {}
+        $zbOut = $null
+    }
+    return $zbOut
+}
+
+# Resolve a {TOKEN} path template from data\detection_signatures.json against one profile.
+#
+# Why {TOKEN} and not $env: or %VAR% — the two forms already in the data files were BOTH
+# wrong in a way that failed silently. The loader expanded them with ExpandString, which
+# handles only the $env: form, so every %VAR% list matched NOTHING and had never fired.
+# An unsubstituted {APPDATA} is glaringly visible in a log line; an unsubstituted %APPDATA%
+# looks like a legitimate Windows path. This is generic mechanism, not signature content,
+# so the AMSI rule (no signature literals in the .ps1) is untouched.
+# Returns $null when a required token has no value — the caller SKIPS, and must never emit
+# a half-substituted path.
+function Expand-UserPathTemplate {
+    param([string]$Template, $UserPaths)
+    if (-not $Template -or -not $UserPaths) { return $null }
+    $zbT = "$Template"
+    # Legacy tolerance: accept the older $env:/%VAR% spellings so a JSON and a .ps1 that
+    # land out of step degrade to correct behaviour instead of matching nothing.
+    $zbT = $zbT -replace '(?i)\$env:LOCALAPPDATA', '{LOCALAPPDATA}'
+    $zbT = $zbT -replace '(?i)\$env:APPDATA',      '{APPDATA}'
+    $zbT = $zbT -replace '(?i)\$env:USERPROFILE',  '{USERPROFILE}'
+    $zbT = $zbT -replace '(?i)\$env:TEMP',         '{TEMP}'
+    $zbT = $zbT -replace '(?i)%LOCALAPPDATA%',     '{LOCALAPPDATA}'
+    $zbT = $zbT -replace '(?i)%APPDATA%',          '{APPDATA}'
+    $zbT = $zbT -replace '(?i)%USERPROFILE%',      '{USERPROFILE}'
+    $zbT = $zbT -replace '(?i)%TEMP%',             '{TEMP}'
+    foreach ($zbM in @(
+        ,@('{USERPROFILE}',  $UserPaths.Profile)
+        ,@('{APPDATA}',      $UserPaths.AppData)
+        ,@('{LOCALAPPDATA}', $UserPaths.LocalAppData)
+        ,@('{TEMP}',         $UserPaths.Temp)
+        ,@('{DOWNLOADS}',    $UserPaths.Downloads)
+        ,@('{DESKTOP}',      $UserPaths.Desktop)
+        ,@('{DOCUMENTS}',    $UserPaths.Documents)
+        ,@('{STARTUP}',      $UserPaths.Startup)
+        ,@('{RECENT}',       $UserPaths.Recent)
+        ,@('{INETCACHE}',    $UserPaths.INetCache)
+        ,@('{ONEDRIVE}',     $UserPaths.OneDrive)
+    )) {
+        if ($zbT.IndexOf($zbM[0], [System.StringComparison]::OrdinalIgnoreCase) -lt 0) { continue }
+        if (-not $zbM[1]) { return $null }
+        $zbT = $zbT -replace [regex]::Escape($zbM[0]), ("$($zbM[1])".Replace('$', '$$'))
+    }
+    if ($zbT -match '\{[A-Za-z_]+\}') { return $null }   # unknown token left: never emit
+    try { $zbT = [Environment]::ExpandEnvironmentVariables($zbT) } catch {}
+    return $zbT
+}
+
 # Tri-state post-condition check for FixMode's DeleteFile/DeleteRegKey/Quarantine (mirrors
 # ZeroBreach-Server.ps1's Test-RPathGone for the GUI runspace — same bug, same fix, both paths).
 # A bare Test-Path returns $false on an ACCESS-DENIED path exactly like it does on a genuinely

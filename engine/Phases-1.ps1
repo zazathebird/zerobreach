@@ -288,22 +288,55 @@ Show-SectionBanner "BROWSER & TEMPORARY ARTIFACT AUDIT"
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 7" "BROWSER CACHE & SERVICE WORKER AUDIT"
-$browserCachePaths = @(
-    @{P="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Cache\Cache_Data"; L="Chrome Cache"},
-    @{P="$env:LOCALAPPDATA\Google\Chrome\User Data\Default\Service Worker\CacheStorage"; L="Chrome Service Worker Cache"},
-    @{P="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Cache\Cache_Data"; L="Edge Cache"},
-    @{P="$env:LOCALAPPDATA\Microsoft\Edge\User Data\Default\Service Worker\CacheStorage"; L="Edge Service Worker"},
-    @{P="$env:APPDATA\Mozilla\Firefox\Profiles"; L="Firefox Profiles"},
-    @{P="$env:LOCALAPPDATA\BraveSoftware\Brave-Browser\User Data\Default\Cache"; L="Brave Cache"},
-    @{P="$env:APPDATA\Opera Software\Opera Stable\Cache"; L="Opera Cache"}
+# P1 multi-user: every path here is PER-USER. Under the elevated technician session
+# $env:LOCALAPPDATA / $env:APPDATA resolved to the TECHNICIAN's profile, so the victim's
+# browsers were never inventoried. Paths are now {TOKEN} templates expanded per profile via
+# Get-UserPaths / Expand-UserPathTemplate (folder redirection safe).
+# This phase is pure INVENTORY, not a detection: 8 profiles x 7 browsers would be 56 identical
+# INFO rows. Operator-approved 2026-07-26: the per-folder detail stays on the console/log and
+# the FINDINGS collapse to ONE aggregate row. FixAction is Info — the old INFO+DeleteFile
+# pairing hung a destructive action off a finding that reports nothing wrong.
+$browserCacheTemplates = @(
+    @{P="{LOCALAPPDATA}\Google\Chrome\User Data\Default\Cache\Cache_Data"; L="Chrome Cache"},
+    @{P="{LOCALAPPDATA}\Google\Chrome\User Data\Default\Service Worker\CacheStorage"; L="Chrome Service Worker Cache"},
+    @{P="{LOCALAPPDATA}\Microsoft\Edge\User Data\Default\Cache\Cache_Data"; L="Edge Cache"},
+    @{P="{LOCALAPPDATA}\Microsoft\Edge\User Data\Default\Service Worker\CacheStorage"; L="Edge Service Worker"},
+    @{P="{APPDATA}\Mozilla\Firefox\Profiles"; L="Firefox Profiles"},
+    @{P="{LOCALAPPDATA}\BraveSoftware\Brave-Browser\User Data\Default\Cache"; L="Brave Cache"},
+    @{P="{APPDATA}\Opera Software\Opera Stable\Cache"; L="Opera Cache"}
 )
-foreach ($bc in $browserCachePaths) {
-    if (Test-Path $bc.P) {
-        Out-Typewriter "  -> BROWSER CACHE EXISTS: $($bc.L)" "INFO"
-        Add-Finding -ID "BROWSER_CACHE_$($bc.L -replace ' ','')" -Phase "PHASE 7" -ThreatType "Browser Artifact" `
-            -Severity $SEV_INFO -Description "Browser cache folder present: $($bc.L)" `
-            -Target $bc.P -FixAction "DeleteFile" -FixParam $bc.P -Group "Browser Cache / Artifacts"
+$zbBcProfiles = 0     # profiles we could actually look at
+$zbBcSeen     = 0     # total cache folders found
+$zbBcParts    = @()   # per-user summary fragments
+$zbBcIdParts  = @()   # SID|label pairs -> deterministic aggregate ID
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.ProfileReachable) { continue }
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp) { continue }
+    $zbBcProfiles++
+    $zbBcHere = @()
+    foreach ($bc in $browserCacheTemplates) {
+        $zbPath = Expand-UserPathTemplate $bc.P $zbUp
+        if (-not $zbPath) { continue }
+        if (-not (Test-Path $zbPath)) { continue }
+        Out-Typewriter "  -> BROWSER CACHE EXISTS: [$($zbHive.User)] $($bc.L)" "INFO"
+        Write-Log "Browser cache present: [$($zbHive.User)] $($bc.L) -> $zbPath"
+        $zbBcHere    += $bc.L
+        $zbBcIdParts += "$($zbHive.Sid)|$($bc.L)"
+        $zbBcSeen++
     }
+    if ($zbBcHere.Count -gt 0) {
+        $zbBcParts += "$($zbHive.User) ($($zbBcHere.Count) browsers: $($zbBcHere -join ', '))"
+    }
+}
+if ($zbBcSeen -gt 0) {
+    Add-Finding -ID "BROWSER_CACHE_INVENTORY_$(Get-StableId ((@($zbBcIdParts) | Sort-Object) -join ';'))" `
+        -Phase "PHASE 7" -ThreatType "Browser Artifact" -Severity $SEV_INFO `
+        -Description "Browser cache folders present for $($zbBcParts.Count) of $zbBcProfiles profiles: $($zbBcParts -join '; ')." `
+        -Target "Browser cache inventory ($($zbBcParts.Count) profile(s))" `
+        -FixAction "Info" -Group "Browser Cache / Artifacts"
+} else {
+    Out-Typewriter "  -> [OK] NO BROWSER CACHE FOLDERS FOUND." "GOOD"
 }
 
 Show-PhaseHeader "PHASE 8" "BROWSER EXTENSION SANITIZATION (HEURISTIC)"
@@ -2412,9 +2445,22 @@ foreach ($cf in $credFiles) {
 }
 # DPAPI master keys / Credential Manager blobs copied OUT of their protected home directory.
 # The originals are normal; a copy anywhere else is theft staging.
-foreach ($dp in $DPAPI_THEFT_PATHS) {
-    if (-not (Test-Path -LiteralPath $dp)) { continue }
-    Write-Log "DPAPI store present (normal): $dp"
+# P1: this list shipped in %APPDATA% form but was expanded with ExpandString, which only
+# understands the $env: spelling — so it resolved to a literal "%APPDATA%\..." path and has
+# NEVER matched anything, on any box, ever. The data side now ships {TOKEN} templates
+# ($DPAPI_THEFT_TEMPLATES) which are expanded per profile. Deliberately still LOG-ONLY and
+# not a finding: a DPAPI store sitting in its own home directory is normal, and this
+# detection is switching on for the first time — no severity/action escalation here.
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.ProfileReachable) { continue }
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp) { continue }
+    foreach ($zbTpl in $DPAPI_THEFT_TEMPLATES) {
+        $zbPath = Expand-UserPathTemplate $zbTpl $zbUp
+        if (-not $zbPath) { continue }
+        if (-not (Test-Path -LiteralPath $zbPath)) { continue }
+        Write-Log "DPAPI store present (normal): [$($zbHive.User)] $zbPath"
+    }
 }
 # LIVE-TUNED 2026-07-22: the first cut flagged any GUID-named file under 64 KB in these roots
 # and produced 99 HIGH+Quarantine findings on a healthy box — GUID filenames are ubiquitous
@@ -2717,15 +2763,28 @@ function Test-ClipperCoOccurrence {
 }
 $clipperHits = 0
 # 1) Run / RunOnce values (HKCU + HKLM, 64/32)
-$clipperRunPaths = @(
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
-    "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
+# P1 multi-user: the HKLM roots are MACHINE scope and are enumerated exactly once (a box with
+# 8 profiles must not report a machine-wide Run value 8 times); the former HKCU roots become
+# hive-relative and are walked per profile, so a clipper living in the victim's profile is
+# visible from the technician's elevated session. Grading logic below is unchanged.
+$zbClipperRunTargets = @()
+foreach ($zbMp in @(
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
     "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce",
     "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Run",
-    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce"
-)
-foreach ($crp in $clipperRunPaths) {
+    "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\RunOnce")) {
+    $zbClipperRunTargets += @{ Path = $zbMp; User = 'MACHINE'; Sid = 'MACHINE'; Src = 'HKLM' }
+}
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.HivePath) { continue }   # not mounted and loading is off: we could not look
+    foreach ($zbRel in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
+                         'SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce')) {
+        $zbClipperRunTargets += @{ Path = "$($zbHive.HivePath)\$zbRel"
+                                   User = $zbHive.User; Sid = $zbHive.Sid; Src = $zbHive.Source }
+    }
+}
+foreach ($zbT in $zbClipperRunTargets) {
+    $crp = $zbT.Path
     if (-not (Test-Path $crp)) { continue }
     $crKeys = Get-ItemProperty -Path $crp -ErrorAction SilentlyContinue
     if (-not $crKeys) { continue }
@@ -2733,10 +2792,10 @@ foreach ($crp in $clipperRunPaths) {
         $crVal = "$($prop.Value)"
         if (-not (Test-ClipperCoOccurrence $crVal)) { continue }
         $clipperHits++
-        Out-ThreatBanner "CLIPPER CO-OCCURRENCE (RUN KEY)" "$crp|$($prop.Name)"
-        Add-Finding -ID "CLIPPER_RUN_$(Get-StableId "$crp|$($prop.Name)")" -Phase "PHASE 49.5" -ThreatType "Clipper/Crypto Hijacker" `
-            -Severity $SEV_POSSIBLE -Description "Run key value references BOTH a clipboard API and a hardcoded crypto address literal (possible clipboard-hijacking clipper — review): [$crp] $($prop.Name) = $crVal" `
-            -Target "$crp|$($prop.Name)" -FixAction "Info" -Group "Clipboard Clipper Detection"
+        Out-ThreatBanner "CLIPPER CO-OCCURRENCE (RUN KEY)" "[$($zbT.User)] $crp|$($prop.Name)"
+        Add-Finding -ID "CLIPPER_RUN_$(Get-StableId "$($zbT.Sid)|$crp|$($prop.Name)")" -Phase "PHASE 49.5" -ThreatType "Clipper/Crypto Hijacker" `
+            -Severity $SEV_POSSIBLE -Description "User $($zbT.User) [hive source: $($zbT.Src)]: Run key value references BOTH a clipboard API and a hardcoded crypto address literal (possible clipboard-hijacking clipper — review): [$crp] $($prop.Name) = $crVal" `
+            -Target "[$($zbT.User)] $crp|$($prop.Name)" -FixAction "Info" -Group "Clipboard Clipper Detection"
     }
 }
 # 2) Scheduled task command lines

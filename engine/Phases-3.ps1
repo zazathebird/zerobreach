@@ -982,15 +982,28 @@ if ($PhasePlan.Advanced) {
     # Severity is POSSIBLE across the board: a recent access-time on a store the OWNING app also
     # touches routinely (browser running -> Login Data always "recent") is indistinguishable from
     # a stealer read by timestamp alone — triage-visible, never red-flooding (FP round precedent).
-    $credDbs = $INFOSTEALER_TARGET_PATHS
+    #
+    # P1 multi-user: the list is now {TOKEN} TEMPLATES resolved PER PROFILE. Before P1 it was
+    # expanded ONCE against the elevated process's own environment, i.e. the TECHNICIAN's profile
+    # on a standard-user endpoint — so this phase audited the wrong person's browser stores and
+    # reported the infected profile clean. Only the way each path is PRODUCED changed; the
+    # wildcard resolution (multi-profile browsers) still goes through Get-Item's globbing, and
+    # the grading below is untouched.
     $credHits = 0
-    foreach ($db in $credDbs) {
-        foreach ($item in @(Get-Item $db -ErrorAction SilentlyContinue)) {
-            if ($item -and $item.LastAccessTime -gt (Get-Date).AddMinutes(-60)) {
-                Add-Finding -ID "CREDDB_$($item.FullName -replace '[^a-z0-9]','')" -Phase "PHASE 100" -ThreatType "Info-Stealer Activity" `
-                    -Severity $SEV_POSSIBLE -Description "Credential/wallet store accessed in last 60 min (may be the owning app itself — verify): $($item.FullName) @ $($item.LastAccessTime)" `
-                    -Target $item.FullName -FixAction "Info" -Group "Credential DB Access"
-                $credHits++
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbTpl in $INFOSTEALER_TARGET_TEMPLATES) {
+            $zbPath = Expand-UserPathTemplate $zbTpl $zbUp
+            if (-not $zbPath) { continue }   # unresolved token -> never emit a half-built path
+            foreach ($item in @(Get-Item $zbPath -ErrorAction SilentlyContinue)) {
+                if ($item -and $item.LastAccessTime -gt (Get-Date).AddMinutes(-60)) {
+                    Add-Finding -ID "CREDDB_$(Get-StableId "$($zbHive.Sid)|$($item.FullName)")" -Phase "PHASE 100" -ThreatType "Info-Stealer Activity" `
+                        -Severity $SEV_POSSIBLE -Description "[$($zbHive.User)] Credential/wallet store accessed in last 60 min (may be the owning app itself — verify): $($item.FullName) @ $($item.LastAccessTime)" `
+                        -Target "[$($zbHive.User)] $($item.FullName)" -FixAction "Info" -Group "Credential DB Access"
+                    $credHits++
+                }
             }
         }
     }
@@ -1003,20 +1016,68 @@ if ($PhasePlan.Advanced) {
     # passwords. The token FILES existing is completely normal (any developer box has them), so
     # their mere presence is inventory, not a finding. What is never legitimate is a token store
     # COPIED into a staging/archive location, or an archive named like stealer loot.
+    #
+    # P1 multi-user: this list is now {TOKEN} TEMPLATES resolved PER PROFILE. It had NEVER fired
+    # once — the raw data was written in %VAR% form but expanded with ExpandString, which only
+    # understands the $env: form, so every entry stayed a literal "%USERPROFILE%\..." and matched
+    # nothing. TOKENSTORES_PRESENT has therefore never appeared in any scan; it is switching on
+    # for the first time here, so the grade stays deliberately conservative (INFO + Info).
+    #
+    # This is INVENTORY, not a detection, so it stays ONE aggregate finding naming which profile
+    # holds which store — a box with 8 developer profiles must not emit 8x16 rows.
     $tokHits = 0
     $tokPresent = 0
-    foreach ($tp in $CLOUD_TOKEN_PATHS) {
-        if (Test-Path -LiteralPath $tp) { $tokPresent++; Write-Log "Cloud token store present (normal): $tp" }
+    $zbTokRows  = @()      # "user|path" — the sorted set is what the finding ID hashes
+    $zbTokByUser = @{}
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        $zbUser = "$($zbHive.User)"
+        foreach ($zbTpl in $CLOUD_TOKEN_TEMPLATES) {
+            $zbPath = Expand-UserPathTemplate $zbTpl $zbUp
+            if (-not $zbPath) { continue }
+            if (-not (Test-Path -LiteralPath $zbPath)) { continue }
+            $tokPresent++
+            $zbTokRows += "$zbUser|$zbPath"
+            # Name the store by its template tail ('.aws\credentials'), not the leaf — half these
+            # leaves are the useless word 'leveldb'.
+            $zbStore = ($zbTpl -replace '^\{[A-Za-z_]+\}\\', '')
+            if (-not $zbTokByUser.ContainsKey($zbUser)) { $zbTokByUser[$zbUser] = @() }
+            $zbTokByUser[$zbUser] += $zbStore
+            Write-Log "Cloud token store present (normal): [$zbUser] $zbPath"
+        }
     }
     if ($tokPresent -gt 0) {
-        Add-Finding -ID "TOKENSTORES_PRESENT" -Phase "PHASE 100.5" -ThreatType "Cloud Credential Exposure" `
+        $zbTokSorted  = @($zbTokRows | Sort-Object)
+        $zbTokSummary = (@(@($zbTokByUser.Keys) | Sort-Object) | ForEach-Object {
+            "$_ -> " + ((@(@($zbTokByUser[$_]) | Sort-Object -Unique)) -join ', ')
+        }) -join ' ; '
+        if ($zbTokSummary.Length -gt 900) { $zbTokSummary = $zbTokSummary.Substring(0,900) + ' ...' }
+        $zbTokTag = $(if ($zbTokByUser.Count -eq 1) { "[$(@($zbTokByUser.Keys)[0])]" } else { "[$($zbTokByUser.Count) PROFILES]" })
+        Add-Finding -ID "TOKENSTORES_$(Get-StableId ($zbTokSorted -join "`n"))" -Phase "PHASE 100.5" -ThreatType "Cloud Credential Exposure" `
             -Severity $SEV_INFO `
-            -Description "$tokPresent cloud/session token store(s) present on this machine (AWS/Azure/GCP/kube/npm/browser session data). Normal for a developer or admin workstation — but if this box is confirmed compromised, every one of those tokens must be revoked, because an access token bypasses MFA." `
-            -Target "Cloud token stores" -FixAction "Info" -Group "Cloud Credential Exposure"
+            -Description "$zbTokTag $tokPresent cloud/session token store(s) present across $($zbTokByUser.Count) user profile(s) (AWS/Azure/GCP/kube/npm/browser session data): $zbTokSummary. Normal for a developer or admin workstation — but if this box is confirmed compromised, every one of those tokens must be revoked, for EVERY profile listed, because an access token bypasses MFA." `
+            -Target "$zbTokTag Cloud token stores" -FixAction "Info" -Group "Cloud Credential Exposure"
     }
     # Loot-shaped archives / dumps in staging locations.
     $tokRe = ($TOKEN_STAGING_PATTERNS | ForEach-Object { '^' + [regex]::Escape($_).Replace('\*','.*') + '$' }) -join '|'
-    $tokRoots = @($env:TEMP, "$env:USERPROFILE\Downloads", "$env:PUBLIC", "$env:ProgramData", "$env:LOCALAPPDATA")
+    # P1 multi-user: per-profile staging roots for EVERY reachable profile (sorted by SID so the
+    # Get-ScanFiles memo key is stable), handed to ONE Get-ScanFiles call so the file/deadline
+    # budget is not multiplied by the profile count.
+    $zbTokHives = @(@(Get-UserHives) | Sort-Object -Property Sid)
+    $tokRoots = @()
+    foreach ($zbHive in $zbTokHives) {
+        if (-not $zbHive.ProfileReachable) { continue }
+        $zbUp = Get-UserPaths $zbHive
+        if (-not $zbUp) { continue }
+        foreach ($zbR in @($zbUp.Temp, $zbUp.Downloads, $zbUp.LocalAppData)) {
+            if ($zbR) { $tokRoots += $zbR }
+        }
+    }
+    # PUBLIC and ProgramData are MACHINE-wide — added exactly once, OUTSIDE the profile loop.
+    foreach ($zbR in @($env:PUBLIC, $env:ProgramData)) { if ($zbR) { $tokRoots += $zbR } }
+    $tokRoots = @($tokRoots | Select-Object -Unique)
     $tokFiles = (Get-ScanFiles -Path $tokRoots -TimeScoped)
     foreach ($tf in $tokFiles) {
         if ($tf.Name -notmatch $tokRe) { continue }
@@ -1028,11 +1089,22 @@ if ($PhasePlan.Advanced) {
         # the unambiguous loot names (exfil/loot/stealer-log) keep an actionable grade, and even
         # then Quarantine, which is reversible.
         $tokBlatant = ($tf.Name -match '(?i)(exfil|loot|stealer.?log)')
-        Out-Decrypt -Text $tf.FullName -Prefix "  [TOKEN STAGING] "
+        # Attribute the file back to the profile that owns it (longest-prefix on ProfilePath);
+        # anything under PUBLIC/ProgramData stays [MACHINE].
+        $zbOwner = 'MACHINE'
+        foreach ($zbHive in $zbTokHives) {
+            if ($zbHive.ProfilePath -and
+                "$($tf.FullName)".ToLowerInvariant().StartsWith("$($zbHive.ProfilePath)".ToLowerInvariant())) {
+                $zbOwner = "$($zbHive.User)"; break
+            }
+        }
+        Out-Decrypt -Text $tf.FullName -Prefix "  [TOKEN STAGING][$zbOwner] "
+        # NOTE: the ID hashes the FULL path, so it already differs per profile — no separate SID
+        # component needed. FixParam stays the bare machine-parseable path (no [user] prefix).
         Add-Finding -ID "TOKENSTAGE_$(Get-StableId $tf.FullName)" -Phase "PHASE 100.5" `
             -ThreatType "Info-Stealer / Token Theft" -Severity $(if ($tokBlatant) { $SEV_HIGH } else { $SEV_POSSIBLE }) `
-            -Description "File named like credential/token exfil loot in a staging directory: $($tf.FullName) — infostealers collect browser cookies, wallets and cloud tokens into an archive here before upload.$(if (-not $tokBlatant) { ' The name alone is weak evidence (yt-dlp cookie exports and ordinary app token caches collide with it) — review, not auto-acted.' }) Revoke cloud sessions if confirmed." `
-            -Target $tf.FullName -FixAction $(if ($tokBlatant) { "Quarantine" } else { "Info" }) -FixParam $tf.FullName `
+            -Description "[$zbOwner] File named like credential/token exfil loot in a staging directory: $($tf.FullName) — infostealers collect browser cookies, wallets and cloud tokens into an archive here before upload.$(if (-not $tokBlatant) { ' The name alone is weak evidence (yt-dlp cookie exports and ordinary app token caches collide with it) — review, not auto-acted.' }) Revoke cloud sessions if confirmed." `
+            -Target "[$zbOwner] $($tf.FullName)" -FixAction $(if ($tokBlatant) { "Quarantine" } else { "Info" }) -FixParam $tf.FullName `
             -Group "Cloud Credential Exposure"
         $global:SpywareHits++
     }

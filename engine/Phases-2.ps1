@@ -65,12 +65,24 @@ Show-PhaseHeader "PHASE 61" "RAT CONFIGURATION FILE & REGISTRY SCAN" "RAT"
 Out-Typewriter "SCANNING FOR RAT CONFIGURATION ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
 $ratFound = $false
-foreach ($rcp in $RAT_CONFIG_PATHS) {
-    if (Test-Path $rcp) {
-        Out-ThreatBanner "RAT ARTIFACT" $rcp
-        Add-Finding -ID "RATFILE_$($rcp -replace '[^a-z0-9]','')" -Phase "PHASE 61" -ThreatType "RAT" `
-            -Severity $SEV_CRITICAL -Description "Known RAT config/binary path present: $rcp" `
-            -Target $rcp -FixAction "DeleteFile" -FixParam $rcp `
+# P1 multi-user: $RAT_CONFIG_TEMPLATES carries raw {TOKEN} templates. They used to be expanded
+# ONCE at load time against the ELEVATED technician's environment, so on a standard-user
+# endpoint every one of these paths pointed at the admin's profile and the victim's %APPDATA%
+# was never looked at. Resolved per profile now. Severity/FixAction unchanged (CRITICAL +
+# DeleteFile is safe here only because these are literal known-RAT names that never exist on a
+# clean box) — and FixParam stays a bare machine-parseable path with NO "[User]" prefix.
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $zbHive.ProfileReachable) { continue }
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp) { continue }
+    foreach ($zbTpl in $RAT_CONFIG_TEMPLATES) {
+        $zbPath = Expand-UserPathTemplate $zbTpl $zbUp
+        if (-not $zbPath) { continue }                       # unresolved token -> never emit
+        if (-not (Test-Path -LiteralPath $zbPath)) { continue }
+        Out-ThreatBanner "RAT ARTIFACT" "[$($zbHive.User)] $zbPath"
+        Add-Finding -ID "RATFILE_$(Get-StableId "$($zbHive.Sid)|$zbPath")" -Phase "PHASE 61" -ThreatType "RAT" `
+            -Severity $SEV_CRITICAL -Description "[$($zbHive.User)] Known RAT config/binary path present: $zbPath" `
+            -Target "[$($zbHive.User)] $zbPath" -FixAction "DeleteFile" -FixParam $zbPath `
             -Group "RAT Artifacts"
         $global:RATHits++; $ratFound = $true
     }
@@ -449,29 +461,42 @@ Out-Typewriter "READING THE RUN-DIALOG HISTORY THE VICTIM ACTUALLY TYPED..." "HU
 # command. The residue is RunMRU — a verbatim record of what went into the Run dialog. This is
 # unusually high fidelity: no legitimate workflow puts an encoded PowerShell downloader there.
 $clickHits = 0
-if ($RUNMRU_REG_PATH -and (Test-Path -LiteralPath $RUNMRU_REG_PATH)) {
-    $mruProps = Get-ItemProperty -LiteralPath $RUNMRU_REG_PATH -ErrorAction SilentlyContinue
-    if ($mruProps) {
-        foreach ($mp in $mruProps.PSObject.Properties) {
-            if ($mp.Name -like 'PS*' -or $mp.Name -eq 'MRUList') { continue }
-            $mruCmd = "$($mp.Value)"
-            if (-not $mruCmd) { continue }
-            $mruCmd = $mruCmd -replace '\\1$', ''      # RunMRU values carry a trailing \1
-            foreach ($lr in $CLIPBOARD_LURE_RULES) {
-                if ($mruCmd -notmatch $lr.Pattern) { continue }
-                $clickHits++
-                $lsev = switch ("$($lr.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
-                Out-ThreatBanner "CLICKFIX LURE IN RUN HISTORY" "$($mp.Name): $($mruCmd.Substring(0, [Math]::Min(70, $mruCmd.Length)))"
-                # The evidence is a registry VALUE, not a running process: deleting it destroys
-                # the best proof of how the box was compromised. Info by design — the operator
-                # should read it, then hunt what it downloaded.
-                Add-Finding -ID "CLICKFIX_$($mp.Name)_$(Get-StableId $mruCmd)" -Phase "PHASE 68.5" `
-                    -ThreatType "Social Engineering / Initial Access" -Severity $lsev `
-                    -Description "$($lr.Why). The user pasted this into the Run dialog: $($mruCmd.Substring(0, [Math]::Min(240, $mruCmd.Length))) || THIS IS EVIDENCE OF HOW THE MACHINE WAS COMPROMISED — preserve it, then hunt the payload it fetched. Clear afterwards with: Remove-ItemProperty '$RUNMRU_REG_PATH' -Name '$($mp.Name)'" `
-                    -Target "$RUNMRU_REG_PATH|$($mp.Name)" -FixAction "Info" -Group "ClickFix / Clipboard Lures"
-                $global:TrojanHits++
-                break
-            }
+# P1 multi-user: this is the single highest-evidentiary-value per-user key in the engine.
+# RunMRU is a verbatim record of what the VICTIM typed into Win+R — reading the elevated
+# technician's HKCU here is guaranteed to be empty, because the technician never pasted the
+# attacker's command into their own Run box. Walk every profile's hive instead.
+# Defensive strip: the data value is an absolute HKCU: path, so take the hive-relative tail
+# (tolerating the HKEY_CURRENT_USER spelling) and re-root it on each profile's HivePath.
+$zbMruRel = "$RUNMRU_REG_PATH" -replace '(?i)^HK(CU|EY_CURRENT_USER):?\\', ''
+foreach ($zbHive in @(Get-UserHives)) {
+    if (-not $RUNMRU_REG_PATH -or -not $zbMruRel) { continue }
+    if (-not $zbHive.HivePath) { continue }        # hive not mounted + loading off = "could not look"
+    $zbMruPath = "$($zbHive.HivePath)\$zbMruRel"
+    if (-not (Test-Path -LiteralPath $zbMruPath)) { continue }
+    $mruProps = Get-ItemProperty -LiteralPath $zbMruPath -ErrorAction SilentlyContinue
+    if (-not $mruProps) { continue }
+    $zbMruProv = if ($zbHive.Source -eq 'RegLoad') { " [read from the offline hive $($zbHive.NtUserDat)]" } else { "" }
+    foreach ($mp in $mruProps.PSObject.Properties) {
+        if ($mp.Name -like 'PS*' -or $mp.Name -eq 'MRUList') { continue }
+        $mruCmd = "$($mp.Value)"
+        if (-not $mruCmd) { continue }
+        $mruCmd = $mruCmd -replace '\\1$', ''      # RunMRU values carry a trailing \1
+        foreach ($lr in $CLIPBOARD_LURE_RULES) {
+            if ($mruCmd -notmatch $lr.Pattern) { continue }
+            $clickHits++
+            $lsev = switch ("$($lr.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
+            Out-ThreatBanner "CLICKFIX LURE IN RUN HISTORY" "[$($zbHive.User)] $($mp.Name): $($mruCmd.Substring(0, [Math]::Min(70, $mruCmd.Length)))"
+            # The evidence is a registry VALUE, not a running process: deleting it destroys
+            # the best proof of how the box was compromised. Info by design — the operator
+            # should read it, then hunt what it downloaded.
+            # ID carries the SID: two users pasting the SAME command previously collided on
+            # one ID and Add-Finding's de-dupe silently dropped the second victim.
+            Add-Finding -ID "CLICKFIX_$($mp.Name)_$(Get-StableId "$($zbHive.Sid)|$mruCmd")" -Phase "PHASE 68.5" `
+                -ThreatType "Social Engineering / Initial Access" -Severity $lsev `
+                -Description "[$($zbHive.User)]$zbMruProv $($lr.Why). This user pasted this into their Run dialog: $($mruCmd.Substring(0, [Math]::Min(240, $mruCmd.Length))) || THIS IS EVIDENCE OF HOW THE MACHINE WAS COMPROMISED — preserve it, then hunt the payload it fetched. Clear afterwards with: Remove-ItemProperty '$zbMruPath' -Name '$($mp.Name)'" `
+                -Target "[$($zbHive.User)] $zbMruPath|$($mp.Name)" -FixAction "Info" -Group "ClickFix / Clipboard Lures"
+            $global:TrojanHits++
+            break
         }
     }
 }
@@ -688,14 +713,62 @@ Show-PhaseHeader "PHASE 74.5" "EMAIL ATTACHMENT MALWARE SCAN (OUTLOOK CACHE)" "P
 Out-Typewriter "SCANNING OUTLOOK ATTACHMENT CACHE & EMAIL TEMP FOLDERS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
 # Targeted attachment/diagnostic caches only — NOT the multi-GB OST/PST store (scanned elsewhere).
-$emailAttachPaths = @($EMAIL_SCAN_PATHS) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -ErrorAction SilentlyContinue) } | Select-Object -Unique
+# P1 multi-user: $EMAIL_SCAN_TEMPLATES carries raw {TOKEN} templates resolved PER PROFILE. This
+# is the phishing entry point and the operator's primary ticket source, and expanding the list
+# once against the ELEVATED technician's %LOCALAPPDATA% meant the victim's Outlook attachment
+# cache was never scanned at all on a standard-user endpoint.
+$zbEmailRoots = @()
+foreach ($zbHive in (@(Get-UserHives) | Sort-Object Sid)) {      # SID order -> stable memo key
+    if (-not $zbHive.ProfileReachable) { continue }              # never re-probe reachability
+    $zbUp = Get-UserPaths $zbHive
+    if (-not $zbUp) { continue }
+    foreach ($zbTpl in $EMAIL_SCAN_TEMPLATES) {
+        $zbPath = Expand-UserPathTemplate $zbTpl $zbUp
+        if (-not $zbPath) { continue }                           # unresolved token -> never emit
+        if (@($zbEmailRoots | Where-Object { "$($_.Root)".ToLowerInvariant() -eq "$zbPath".ToLowerInvariant() }).Count -gt 0) { continue }
+        if (-not (Test-Path -LiteralPath $zbPath -ErrorAction SilentlyContinue)) { continue }
+        $zbEmailRoots += [pscustomobject]@{
+            Root    = "$zbPath"
+            User    = "$($zbHive.User)"
+            Sid     = "$($zbHive.Sid)"
+            InCache = [bool]("$zbPath" -match 'Olk\\Attachments|Content\.Outlook|Temporary Internet Files')
+        }
+    }
+}
 $emailHits = 0
 # Extensions worth content-scanning for HTML/JS smuggling & redirector payloads.
 $emailTextExt = @(".htm",".html",".js",".jse",".vbs",".vbe",".hta",".wsf",".svg",".log",".txt",".xml")
-foreach ($attachPath in $emailAttachPaths) {
-    $emailFiles = (Get-ScanFiles -Path $attachPath -TimeScoped) |
-        Where-Object { $_.Length -lt 50MB } | Select-Object -First 500
-    $inCache = ($attachPath -match 'Olk\\Attachments|Content\.Outlook|Temporary Internet Files')
+# ONE bounded walk over every profile's roots: Get-ScanFiles's MaxFiles/DeadlineSecs are PER
+# CALL, so a call inside the profile loop would multiply wall-clock by the profile count. Files
+# are attributed back to their owning root by LONGEST-prefix match (the Outlook caches nest).
+# Parens are mandatory — Get-ScanFiles ends `return ,$arr`, so bare-piping it hands the whole
+# array over as ONE item and the filter silently matches everything (CLAUDE.md).
+$zbEmailByRoot = @{}
+if ($zbEmailRoots.Count -gt 0) {
+    $zbEmailAll = (Get-ScanFiles -Path @($zbEmailRoots | ForEach-Object { $_.Root }) -TimeScoped) |
+        Where-Object { $_.Length -lt 50MB }
+    foreach ($zbEf in @($zbEmailAll)) {
+        if (-not $zbEf) { continue }
+        $zbFullLc = "$($zbEf.FullName)".ToLowerInvariant()
+        $zbOwnKey = $null; $zbOwnLen = -1
+        foreach ($zbR in $zbEmailRoots) {
+            $zbRootLc = "$($zbR.Root)".ToLowerInvariant()
+            if ($zbRootLc.Length -gt $zbOwnLen -and $zbFullLc.StartsWith($zbRootLc)) {
+                $zbOwnKey = $zbRootLc; $zbOwnLen = $zbRootLc.Length
+            }
+        }
+        if (-not $zbOwnKey) { continue }
+        if (-not $zbEmailByRoot.ContainsKey($zbOwnKey)) { $zbEmailByRoot[$zbOwnKey] = New-Object System.Collections.ArrayList }
+        $null = $zbEmailByRoot[$zbOwnKey].Add($zbEf)
+    }
+}
+foreach ($zbOwn in $zbEmailRoots) {
+    $zbOwnKey = "$($zbOwn.Root)".ToLowerInvariant()
+    $emailFiles = @()
+    # ContainsKey first: a missing hashtable key yields $null, and @($null) is a ONE-element
+    # array holding $null, not an empty one.
+    if ($zbEmailByRoot.ContainsKey($zbOwnKey)) { $emailFiles = @($zbEmailByRoot[$zbOwnKey] | Select-Object -First 500) }
+    $inCache = $zbOwn.InCache
     foreach ($ef in $emailFiles) {
         $sev = $null; $reasons = @(); $threat = "Phishing / Email Trojan"
         $ext = $ef.Extension.ToLower()
@@ -737,10 +810,13 @@ foreach ($attachPath in $emailAttachPaths) {
             $idSafe = ($ef.Name -replace '[^a-zA-Z0-9]','')
             $fixAct = if ($sev -eq $SEV_POSSIBLE) { "Info" } else { "Quarantine" }
             $lvl = if ($sev -eq $SEV_POSSIBLE) { "WARN" } else { "CRIT" }
-            Out-Typewriter "  -> [$sev] EMAIL ARTIFACT: $($ef.Name)" $lvl
-            Add-Finding -ID "EMAIL_${idSafe}_$($ef.Length)" -Phase "PHASE 74.5" -ThreatType $threat `
-                -Severity $sev -Description "Email attachment threat: $($reasons -join '; ') [$($ef.FullName)]" `
-                -Target $ef.FullName -FixAction $fixAct -FixParam $ef.FullName `
+            Out-Typewriter "  -> [$sev] [$($zbOwn.User)] EMAIL ARTIFACT: $($ef.Name)" $lvl
+            # SID in the ID: the same lure attachment cached under two profiles previously
+            # collided on name+length and Add-Finding's de-dupe dropped the second victim.
+            # FixParam stays a bare machine-parseable path — the user lives in Target/Description.
+            Add-Finding -ID "EMAIL_${idSafe}_$(Get-StableId "$($zbOwn.Sid)|$($ef.FullName)|$($ef.Length)")" -Phase "PHASE 74.5" -ThreatType $threat `
+                -Severity $sev -Description "[$($zbOwn.User)] Email attachment threat: $($reasons -join '; ') [$($ef.FullName)]" `
+                -Target "[$($zbOwn.User)] $($ef.FullName)" -FixAction $fixAct -FixParam $ef.FullName `
                 -Group "Email / Phishing Threats"
             $global:TrojanHits++; $emailHits++
         }
@@ -1590,28 +1666,45 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
 
     Show-PhaseHeader "PHASE 84" "APPLOCKER / GPO POLICY BYPASS AUDIT" "UNIVERSAL"
     Out-Typewriter "CHECKING APPLOCKER BYPASS INDICATORS..." "HUNT"
-    $srpPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
-    $srp = Get-ItemProperty -Path $srpPath -Name "DisallowRun" -ErrorAction SilentlyContinue
-    if ($srp.DisallowRun -eq 1) {
-        Out-Typewriter "  -> DISALLOWRUN ACTIVE — REVIEWING EXCEPTION LIST..." "WARN"
-        Add-Finding -ID "DISALLOWRUN" -Phase "PHASE 84" -ThreatType "Policy Bypass" -Severity $SEV_POSSIBLE `
-            -Description "DisallowRun GPO policy is active — review exception list for bypass paths" `
-            -Target "$srpPath|DisallowRun" -FixAction "Info" -Group "Policy / AppLocker Bypass"
-    } else { Out-Typewriter "  -> [OK] DISALLOWRUN NOT SET." "GOOD" }
+    # P1 multi-user: this policy value is PER USER, and the ID used to be the fixed string
+    # "DISALLOWRUN" — so even once every hive is walked, Add-Finding's de-dupe would keep only
+    # the first user. Hive-relative path + SID in the ID. Severity/FixAction unchanged.
+    $zbSrpRel = 'SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer'
+    $zbSrpHit = $false
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.HivePath) { continue }     # not mounted + loading off = "could not look"
+        $zbSrpPath = "$($zbHive.HivePath)\$zbSrpRel"
+        if (-not (Test-Path -LiteralPath $zbSrpPath)) { continue }
+        # Get-RegVal, never raw Get-ItemPropertyValue/Get-ItemProperty -Name (terminating
+        # "property does not exist" error that -EA SilentlyContinue does not suppress).
+        $zbDisallow = Get-RegVal -Path $zbSrpPath -Name 'DisallowRun'
+        if ("$zbDisallow" -ne '1') { continue }
+        $zbSrpHit = $true
+        Out-Typewriter "  -> [$($zbHive.User)] DISALLOWRUN ACTIVE — REVIEWING EXCEPTION LIST..." "WARN"
+        Add-Finding -ID "DISALLOWRUN_$(Get-StableId "$($zbHive.Sid)|$zbSrpPath")" -Phase "PHASE 84" -ThreatType "Policy Bypass" -Severity $SEV_POSSIBLE `
+            -Description "[$($zbHive.User)] DisallowRun GPO policy is active — review exception list for bypass paths" `
+            -Target "[$($zbHive.User)] $zbSrpPath|DisallowRun" -FixAction "Info" -Group "Policy / AppLocker Bypass"
+    }
+    if (-not $zbSrpHit) { Out-Typewriter "  -> [OK] DISALLOWRUN NOT SET (ALL PROFILES)." "GOOD" }
 
     Show-PhaseHeader "PHASE 85" "LOLBIN PERSISTENCE (INSTALLUTIL / MSIEXEC)" "UNIVERSAL"
     Out-Typewriter "SCANNING INSTALLUTIL/MSIEXEC PERSISTENCE..." "HUNT"
-    foreach ($fp in @("HKCU:\SOFTWARE\Microsoft\InstallShield","HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Installer")) {
-        if (Test-Path $fp) {
+    # P1 multi-user: both roots are per-user. The ID was built from the bare key leaf name, so
+    # the same installer key under two profiles collided and only the first survived de-dupe.
+    foreach ($zbHive in @(Get-UserHives)) {
+        if (-not $zbHive.HivePath) { continue }     # not mounted + loading off = "could not look"
+        foreach ($zbRel in @('SOFTWARE\Microsoft\InstallShield','SOFTWARE\Microsoft\Windows\CurrentVersion\Installer')) {
+            $zbFp = "$($zbHive.HivePath)\$zbRel"
+            if (-not (Test-Path -LiteralPath $zbFp)) { continue }
             # "Recent" is now backed by the real key write time (RegQueryInfoKey via the loader's
             # Get-RegKeyLastWriteTime) — the old $_.LastWriteTime read was $null (no such property),
             # so every installer key ever written surfaced as "recent" regardless of scan window.
-            $recentKeys = Get-ChildItem -Path $fp -Recurse -ErrorAction SilentlyContinue | Where-Object { Test-InScope (Get-RegKeyLastWriteTime $_) }
+            $recentKeys = Get-ChildItem -LiteralPath $zbFp -Recurse -ErrorAction SilentlyContinue | Where-Object { Test-InScope (Get-RegKeyLastWriteTime $_) }
             foreach ($k in $recentKeys) {
-                Out-Typewriter "  -> RECENT INSTALL KEY: $($k.PSPath)" "WARN"
-                Add-Finding -ID "LOLBIN_INST_$($k.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 85" -ThreatType "LoLBin Persistence" `
-                    -Severity $SEV_POSSIBLE -Description "Recent installer registry key (LoLBin persistence vector): $($k.PSPath)" `
-                    -Target $k.PSPath -FixAction "Info" -Group "LoLBin Persistence"
+                Out-Typewriter "  -> [$($zbHive.User)] RECENT INSTALL KEY: $($k.PSPath)" "WARN"
+                Add-Finding -ID "LOLBIN_INST_$(Get-StableId "$($zbHive.Sid)|$($k.PSPath)")" -Phase "PHASE 85" -ThreatType "LoLBin Persistence" `
+                    -Severity $SEV_POSSIBLE -Description "[$($zbHive.User)] Recent installer registry key (LoLBin persistence vector): $($k.PSPath)" `
+                    -Target "[$($zbHive.User)] $($k.PSPath)" -FixAction "Info" -Group "LoLBin Persistence"
             }
         }
     }

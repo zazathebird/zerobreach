@@ -1,5 +1,18 @@
 ﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT statement in THIS module, not by falling through into FixMode.ps1 (see CLAUDE.md engine-split rule)
 Stop-PhaseTiming   # close out the final phase's wall-clock
+
+# ── P1: UNCONDITIONAL hive-unload backstop — must stay the FIRST real work here ──
+# Any user hive this scan `reg load`ed has to come back out. A leaked mount keeps that
+# user's NTUSER.DAT locked for the rest of this process's life, and their next logon
+# yields a TEMPORARY PROFILE with an empty desktop — a visible outage on a client machine
+# caused by the IR tool. A try/finally inside a dot-sourced phase body does NOT run on
+# [Environment]::Exit(N) (which this module calls three times) or on a hard process kill
+# from the GUI abort button, so the per-phase finally blocks are not sufficient on their own.
+#
+# Placement matters: this runs BEFORE the $findingCount/$critCount tallies below, because
+# a failed unload registers a HIGH finding and a finding added after the tally would be
+# counted nowhere and dropped from the written report.
+if (Get-Command Close-UserHives -ErrorAction SilentlyContinue) { Close-UserHives -All }
 $elapsed    = [Math]::Round(((Get-Date) - $global:START_TIME).TotalMinutes, 2)
 $phaseCount = $PhasePlan.Max
 $totalRisk  = $global:RansomwareRisk + ($global:RootkitHits * 3) + ($global:RATHits * 2) +
