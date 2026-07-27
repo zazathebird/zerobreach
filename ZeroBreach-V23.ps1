@@ -1449,12 +1449,22 @@ function Get-UserHives {
         if ($zbMax  -le 0) { $zbMax  = 25 }
         if ($zbDead -le 0) { $zbDead = 20 }
 
-        # Effective load permission = per-call request AND operator opt-in AND not STEALTH.
-        # Evaluated HERE, not at assignment, because $global:STEALTH_MODE is set later by
+        # Effective load permission. THE OPERATOR'S -LoadUserHives IS THE SOLE AUTHORITY.
+        #
+        # This deliberately does NOT also require the caller's -AllowLoad switch. Requiring both
+        # made the feature dead on arrival: all 31 phase call sites use the bare `Get-UserHives`
+        # form, so no hive would EVER have been loaded no matter what the operator asked for --
+        # the same "structurally incapable of firing" class of bug as the %VAR% path lists that
+        # had never matched anything. Caught by an agent's coverage review, 2026-07-26.
+        #
+        # -AllowLoad is still accepted (harnesses and any future explicit caller use it) but it
+        # CANNOT enable loading on its own: a phase author writing `Get-UserHives -AllowLoad`
+        # must not be able to mount a user's hive without the operator having consented.
+        #
+        # Evaluated HERE rather than at assignment because $global:STEALTH_MODE is set later by
         # the interactive menu / -Mode STEALTH.
-        $zbAllow = [bool]$AllowLoad
-        if (-not $global:UH_ALLOW_LOAD) { $zbAllow = $false }
-        if ($global:STEALTH_MODE)       { $zbAllow = $false }
+        $zbAllow = [bool]$global:UH_ALLOW_LOAD
+        if ($global:STEALTH_MODE) { $zbAllow = $false }   # stealth contract: minimal footprint
 
         # Key on the FULL parameter tuple: -AllowLoad genuinely changes the result set, so a
         # scalar cache would be wrong.
