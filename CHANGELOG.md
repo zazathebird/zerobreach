@@ -6,6 +6,89 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-27 (session 23) — seven-agent audit of the preceding 24 h: every area had real defects, and several sign-offs below are weaker than they read
+
+**No code changed in this session.** This entry records an audit and the corrections it forces to
+entries *below* it. Full detail, with file:line and reproduction, is in
+**`REVIEW_FINDINGS_2026-07-27.md`** — that document is the active work queue and **nothing in it is
+fixed yet.** Forward plan: `ENGINE_REWRITE_PLAN.md`.
+
+**Method.** Seven review agents, partitioned by file ownership so no two read the same file, each
+given CLAUDE.md's CRITICAL RULES as the standard and instructed to verify by reading code rather than
+trusting comments or the claims in this file. Scope: `391b6c4..99e5feb`, **8,834 insertions across 24
+files** (P1 multi-user hive coverage, Build Custom Scan, the `/api/remediate` TOCTOU fix, the Phase 90
+self-detect fix, the new sandbox harnesses). Baseline gate re-run first: all 7 engine/server `.ps1`
+files parse clean on live `powershell.exe` 5.1.26100.8875 with UTF-8 BOM intact — **the defects are
+semantic, not syntactic.**
+
+**What was found.** Six rule-#1 violations, nine false-all-clear paths, two detection regressions, a
+permanent-remediation-lockout bug, a host-wide VM kill in a harness, and a harness suite structurally
+incapable of reporting failure. Several findings were confirmed by *measurement* on live 5.1 rather
+than by reasoning: the 74 ms `BeginInvoke` window, the `GetFileName` throw table, the trap-granularity
+before/after trace, the `cmd` `>>` redirect-handle behaviour, the 3.4 s O(n²) dedupe, the 20,000-files-
+in-1.0 s budget exhaustion, and a 23-payload injection matrix (which came back clean).
+
+**Corrections to entries below this one — read these before trusting them:**
+
+- **P1 is not done.** The 2026-07-27 entry below concludes *"All of P1 (Stages 0-9) is now live-graded
+  end-to-end; nothing known left open on P1 itself."* The registry half works. **The filesystem half is
+  effectively a no-op on any multi-user box**: the ~20 migrated sites pass all profiles' roots to one
+  `Get-ScanFiles` call whose caps were never scaled, and one profile exhausts the 20,000-file /
+  20-second budget in ~1 second — so profiles 2..N get zero coverage while the phases print `[OK]`.
+  Three *new* rule-#1 violations came from the ×N multiplication (Phase 106 auto-deletes signed
+  Microsoft ProcDump; Phase 31 auto-deletes developers' PowerShell profiles; Phase 74 writes hardening
+  into other users' hives). `-LoadUserHives` also **cannot be passed from the GUI at all**, though the
+  server's own block message advises operators to use it.
+- **The sandbox "clean PASS" is not evidence.** `harness-malware-detection.ps1` only *logs* its 13
+  assertion counts; every one can be `0` and it still writes its `*_DONE` marker. It has no verdict
+  line, no differentiated exit code and no failing state. Re-runs additionally read the *previous*
+  run's log and test a **stale engine** (`Copy-Item -Recurse` nests rather than overwrites). Neither
+  harness calls `/api/remediate`, so Stage C and P1 Stage 6 are **not reproducible** from
+  `tools/sandbox-test/` despite being cited as live-proven.
+- **The TOCTOU fix introduced a new HIGH bug.** Raising `Remediating` in the route handler was correct,
+  but `[System.IO.Path]::GetFileName()` throws on `| < >` or control chars, and with no `try`/`finally`
+  around the set→dispatch region the flag sticks `$true` — **400-ing every future remediation for the
+  life of the process.** Also: what makes the current check-then-set safe is that the accept loop is
+  single-threaded, **not** atomicity — there is no lock or `Interlocked` anywhere, contrary to the new
+  code comment. And `/api/scan/start` still has the original deferred-set defect, which is not benign:
+  it re-opens the very hole the fix closed.
+- **`vssadmin delete shadows /all /quiet` is still a live FixParam** (`Phases-1.ps1:3041`), and
+  `SELECT ALL` filters on `protected`/`vendor_trusted` but **not severity** — so one click queues an
+  irreversible whole-machine shadow purge. The claim at `:419` of "0 such FixParams" is false as
+  written; it is 0 *auto-selectable* ones.
+- **The P11 "rule-#1 violation" (Phase 30) never actually fired.** `.Count` on a single
+  `ManagementObject` yields nothing, so the unwrapped sum hit the early exit and the phase printed
+  "clean" with zero findings — corroborated by the pre-fix baseline artifact. It was **0 → 0**, and the
+  real defect was the opposite: a false all-clear. The `@()` wrap incidentally fixed it; that lesson
+  was never recorded.
+- **No baseline figure is trustworthy.** Five are in circulation (7 / 8 / 50 / 63 / 94), two pairs on
+  mutually inconsistent bases, and the 94→63 / 92→50 transitions match **no stored artifact**. The
+  widely-quoted **8** predates the Phase 90 fix (post-fix **5**) and contains zero `PHASE 0` findings,
+  so it predates Stage 9 as well.
+- **Build Custom Scan's core promise is currently false** — a pasted SHA256 can never match (its only
+  consumer phases appear in no category), and the auto-suggested TRIAGE mode silently drops most of the
+  phases the panel says it selected, including Phase 74.5 on a phishing alert.
+- Smaller doc errors: "P1 changes IDs at ~20 sites" is really **46**; Phase 10.5 was **never** migrated
+  to the shared `WScript.Shell` COM object despite the P4 entry saying so; the P10 schema is no longer
+  "live but unexercised" (six call sites); Phase 90 IDs are no longer filename-keyed.
+
+**What the audit confirmed as genuinely sound** (recorded so it is not re-litigated): Build Custom
+Scan's command-injection guard, proven against 23 payloads on live 5.1; its gate rewrite, proven by an
+AST diff of all 2,202 command nodes to have byte-identical enclosing predicates with QUICK still at
+exactly 30 headers and all 24 fractionals round-tripping correctly; CSRF gating, XSS, and regex
+backtracking; the `{TOKEN}` path migration; `mitre_mapping.json`'s `phase_map` covering all 139 phases;
+the new WMI allowlists' `^…$` anchoring against self-allowlisting; P1's variable-shadowing discipline
+(zero hits across three modules) and `,$arr` discipline (all 60 `Get-UserHives` call sites correct);
+finding-ID uniqueness across all 57 hive loops bar one; and that the `Test-ProtectedTarget` mirror
+really is inside the `REMEDIATE_SCRIPT` here-string.
+
+**Lesson, added to CLAUDE.md.** The existing rule reads *"live grading and 3 audit agents caught what
+static reasoning missed."* The complement is now also true: **static review caught what a
+structurally-unfailable test suite could not.** Both are needed, and a harness without an observed
+failing state is not a test.
+
+---
+
 ## 2026-07-27 — P1 Stage 6 (end-to-end remediation proof) closed out; fixed a real `/api/remediate` TOCTOU race found while testing
 
 **Context.** P1's engine-side work (Stages 0-5, 7-9) has been done and live-graded since the prior

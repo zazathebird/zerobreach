@@ -1,6 +1,66 @@
-# RESUME HANDOFF — updated 2026-07-26 (session 18: EVIDENCE_ENGINE_PLAN §2 prerequisite batch)
+# RESUME HANDOFF — updated 2026-07-27 (session 23: seven-agent audit)
 
-> ## ▶▶ START HERE — SESSION 18 HANDOFF (2026-07-26). Everything below this block is older.
+> ## ▶▶ START HERE — SESSION 23 HANDOFF (2026-07-27). Everything below this block is older.
+>
+> **Branch `session12/review-remediation-ws6`, still NOT merged to `main`. Working tree CLEAN —
+> everything from this session is committed. NO CODE WAS CHANGED THIS SESSION**, only documentation.
+> Nothing is half-done.
+>
+> ### What happened
+>
+> Seven review agents (partitioned by file ownership) audited the **8,834 insertions across 24 files**
+> committed in the 24 h to 2026-07-27 — P1 multi-user hive coverage, Build Custom Scan, the
+> `/api/remediate` TOCTOU fix, the Phase 90 self-detect fix, the new sandbox harnesses. **Every area
+> came back with real defects.** All 7 engine/server files are parse-clean on live 5.1 with BOM intact;
+> the defects are semantic.
+>
+> ### ▶ THE NEXT TASK: work `REVIEW_FINDINGS_2026-07-27.md` in its stated fix order
+>
+> That document is the active work queue. **Nothing in it is fixed yet.** Do not start the rewrite
+> first — see `ENGINE_REWRITE_PLAN.md` §2.2 for why that would be unsafe.
+>
+> Order (from the findings doc's own §"Suggested fix order"):
+> 1. **P1-1** — give `Get-ScanFiles` a truncation signal and scale/interleave its budget. Highest
+>    leverage in the document: five other findings collapse into it. Measured: one profile exhausts the
+>    20,000-file / 20-second budget in **~1 second**, so on a multi-user box profiles 2..N get **zero**
+>    filesystem coverage and the phases print `[OK]`. Phase 12 (`Phases-1.ps1:1038-1068`) is the
+>    correct in-tree model.
+> 2. **The six rule-#1 violations** — R1-0 (`vssadmin delete shadows /all` reachable via SELECT ALL),
+>    R1-1 (IOC auto-harvest from prose), R1-2 (self-quarantines its own HTML report), P1-2 (deletes
+>    signed Microsoft ProcDump), P1-3 (deletes developers' PowerShell profiles), P1-4 (writes hardening
+>    into other users' hives). **R1-1 needs an operator design decision first** — see below.
+> 3. **AVAIL-1 / AVAIL-3 / P1-6** — permanent remediation lockout, unprompted host-wide VM kill,
+>    console remediation leaving other users' hives mounted.
+> 4. **Repair the harness so it can fail (TEST-1…TEST-5)** — then validate everything after this point
+>    with it. Acceptance: deliberately break a detection and confirm it goes red.
+> 5. Then the false-all-clears, then the regressions, then the tail.
+>
+> ### Operator decisions already made (2026-07-27) — do not re-ask
+>
+> 1. **Engine rewrite APPROVED in principle.** Plan: `ENGINE_REWRITE_PLAN.md` — read-only **Rust**
+>    evidence sidecar first (emitting the existing `[FINDING]` contract, so **no server change is
+>    needed**), then an **incremental** detection port behind a differential PS-vs-Rust harness.
+>    **Destructive remediation stays in PowerShell.** Not a big-bang rewrite.
+> 2. **Event Viewer / IR GUI scope: BOTH live view and export package.**
+> 3. **Merge to `main`: after the review fixes land**, not before.
+> 4. Operator can add AV/EDR exclusions on their own stack but this ships to **client** endpoints —
+>    the real mitigation is **code signing**, which is still open.
+>
+> ### Still OPEN — needs the operator, blocks work
+>
+> - **R1-1 fix shape**: per-IOC confirmation UI, or drop domains/IPs from the auto-merge entirely?
+> - **Sensitive-data policy** for the evidence export path (event logs / browser history carry
+>   credentials and PII) — blocks the Stage 2 exporter.
+> - **A multi-profile grading box.** The dev box has 2 profiles and is **structurally blind** to three
+>   of the rule-#1 findings. **No current baseline figure is trustworthy** — five are in circulation
+>   (7/8/50/63/94); the widely-quoted **8** predates the Phase 90 fix (post-fix **5**) and the Stage 9
+>   honesty findings. Re-measure a DEEP `-LoadUserHives` baseline on current HEAD, multi-profile.
+>
+> `zbtest2` remains the standing multi-user test fixture — **do not tear it down.**
+>
+> ---
+>
+> ## SESSION 18 HANDOFF (2026-07-26) — historical, superseded by the block above.
 >
 > **Authorization for the next session.** The operator has stated that this work is covered by their
 > **CVP approval (org `3f97ddfd`, dual-use security work)** and has **explicitly confirmed that

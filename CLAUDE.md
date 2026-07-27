@@ -196,6 +196,18 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   remaining phases**. This is exactly how the benign System32 ACL `AccessControl.ObjectSecurity`
   TypeData collision at Phase 16 silently dropped phases 17-58. A module-level (or grouped-block)
   trap makes `continue` resume at the next **phase** instead. Keep it as the module's first statement.
+- **Wrapping a phase body in a NEW `{ }` block changes what `continue` resumes into — even though trap
+  *scoping* is unchanged.** `continue` resumes at the next statement **in the block containing the
+  trap**, so the block's statement granularity is the recovery granularity. Adding
+  `if (Test-PhaseGate N) { <existing body> }` around ~134 phases (2026-07-27) silently coarsened
+  recovery from **statement-level to phase-level in every scan**, custom or not. Measured on live 5.1:
+  before, a recovered error cost one statement and the phase continued; after, it discards the entire
+  remainder of the phase — up to ~450 lines in Phase 90 — **while still printing that phase's
+  `PHASE N — … took Ns` timing line, so the log looks complete.** The System32 ACL TypeData collision
+  is a real terminating error that fires on live boxes, so this is a live reduction in detections. If a
+  refactor adds a brace around a phase body, either put a `trap { Write-RecoveredError $_; continue }`
+  as the first statement **inside** the new block, or state the granularity change explicitly — do not
+  let it ride as an unmeasured side effect of a mechanical edit.
 - **Any `exit` inside `engine/*.ps1` that must stop the ENGINE has to be `[Environment]::Exit(N)`.**
   A plain `exit` in a dot-sourced file only returns to the loader, which then runs the NEXT module
   (this hung `-Auto`: `Summary.ps1`'s exit fell through into `FixMode.ps1`'s interactive prompt).
@@ -212,6 +224,14 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
    **healthy box** — no `icacls /reset /T`, `vssadmin delete shadows /all`, recursive deletes, or
    drive-root operations. Put the suggested command in the finding **description** and use
    `FixAction Info` so an operator runs it by hand.
+   **"Not auto-selected" is NOT the same as "not one-click reachable" — there are TWO bulk paths.**
+   `SELECT ALL` (`app.js:1273`) filters only on `protected` / `vendor_trusted` /
+   `isLikelyFalsePositive` — **not on severity** — so an `INFO` finding carrying a destructive
+   `FixParam` is queued by one click. Found live 2026-07-27: `VSS_DELETE_OPT`
+   (`Phases-1.ps1:3038-3041`) still ships `-FixParam "vssadmin delete shadows /all /quiet"` — the exact
+   command this rule names — at INFO, and SELECT ALL → PURGE destroys every restore point and
+   VSS-backed backup on the box, on an incident host where they may be the only recovery path. Grade
+   the destructive set against **SELECT ALL**, not just against the CRITICAL/HIGH auto-select.
 2. **Datto / CentraStage / Kaseya are legitimate RMM partner tooling** — not malware. Still flag them
    if something is genuinely off (vendor name in a suspicious path, or an independent malicious signal).
 
@@ -305,6 +325,30 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **PowerShell's `Invoke-RestMethod` sends no `Origin`/`Referer`**, so `Test-RequestAllowed` treats
   it as a non-browser client: headless API scripting against the server needs **no CSRF token**.
   Do not weaken the browser-facing gate to make a harness work.
+- **A harness that only LOGS is not a test — it must have a failing state, and that state must have
+  been observed.** `harness-malware-detection.ps1` logged 13 assertion counts A-M and then wrote its
+  `*_DONE` marker unconditionally: every count could be `0` and the orchestrator still printed `DONE.`
+  It produced the CHANGELOG's "clean PASS re-validated against current HEAD" while being incapable of
+  reporting failure (2026-07-27). Requirements for every harness from now on: a computed **VERDICT**
+  line, a **differentiated exit code**, **no completion marker on a failed or timed-out run**, and at
+  least one deliberate break-it run proving the harness actually goes red. Assertions must also be
+  *capable* of firing — one asserted the absence of a console banner the engine never emits under any
+  condition, and another grepped for `hive` unanchored (matches `archive`) with no threshold.
+- **Clear the output directory and the staged input tree before every harness run.** Two independent
+  false-green paths from one session: a stale completion marker made a re-run report `DONE.` in
+  milliseconds while the sandbox was still booting (and, because harnesses append with `Add-Content`,
+  the operator then read the *previous* run's verdict); and `Copy-Item <src> <dst> -Recurse -Force`
+  **nests instead of overwriting** once `<dst>` exists, so run 2 left the old `engine\Phases-1.ps1` in
+  place and buried the new one at `engine\engine\` — the harness tested run 1's code forever. Also
+  check `$LASTEXITCODE` after every native command (`npx`, `cargo`): `$ErrorActionPreference='Stop'`
+  does **not** apply to native exit codes, so a failed build silently leaves a stale binary under test.
+- **In a `cmd` line, `echo TEXT%VAR%>>file` writes NOTHING** — `cmd` consumes the digit immediately
+  before `>>` as a redirection *handle*. Verified empirically: `echo EXITCODE=%ERRORLEVEL%>> f` appends
+  nothing at all, which silently removed the only field distinguishing "the script failed to parse"
+  from "it ran and finished" under a console-less `LogonCommand`. Put a space before the `>>`.
+- **`Restart-Service vmcompute -Force` kills every Hyper-V VM and WSL2 distro on the host.** Never fire
+  it unprompted from a harness. Detect the orphan, tell the operator, and let them confirm — and check
+  for `WindowsSandboxClient`/`WindowsSandboxServer`, not just `vmmemWindowsSandbox`.
 
 ### AMSI / signatures
 - **Never put malware-signature literals in the `.ps1`** — Defender AMSI blocks the engine at load
@@ -376,6 +420,30 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Test malformed input, not just wrong-but-well-formed input.** The CIDR unit test passed 15
   cases and still missed the bug, because every "bad" case had an unparseable *IP* — none had a
   valid IP with a bad *prefix*.
+- **A guard flag must be SET by the code that CHECKS it — and every path between the set and the
+  dispatch must reset it.** `/api/remediate` set `Remediating = $true` inside the spawned runspace,
+  which `BeginInvoke` dispatches asynchronously; the measured gap between the route answering and the
+  flag actually rising is **~74 ms for a trivial script** (100-200 ms for the real one), so plain
+  *sequential* requests over loopback slip through — no true concurrency needed. Moving the set into
+  the handler fixed that but created the mirror defect: `[System.IO.Path]::GetFileName()` **throws** on
+  `| < >` or any control char (a .NET terminating throw `-EA` cannot suppress), and with no
+  `try`/`finally` around the set→dispatch region the exception unwinds past every reset, leaving the
+  flag stuck `$true` and **400-ing every future remediation for the life of the process**. Use a
+  sentinel + `finally` (`try { …; $dispatched = $true } finally { if (-not $dispatched) { reset } }`),
+  never a list of inline resets you have to keep complete. Note also that what makes the current
+  check-then-set safe is that the accept loop is **single-threaded** (`GetContext` inline, no
+  `BeginGetContext`) — there is no lock or `Interlocked` anywhere, so anyone who makes the server
+  handle requests concurrently silently restores the race. `/api/scan/start` still has the original
+  deferred-set defect (2026-07-27).
+- **Never auto-feed IOCs extracted from untrusted text into a destructive path.** Build Custom Scan's
+  "USE THIS SCAN" button merged every domain, IP and file path scraped from pasted prose straight into
+  `custom_iocs.ioc` — which reaches CRITICAL + `KillProcess` on a reverse-DNS **substring** match, and
+  HIGH + `Quarantine` on a bare **leaf filename** match. An operator pasting a Defender alert that
+  merely mentions `security.microsoft.com`, a file-server IP and `chrome.exe` arms the next scan to
+  auto-select killing every Microsoft-resolving process and quarantining every `chrome.exe` (caught in
+  review 2026-07-27, before any live run). Extraction from prose is inherently low-precision — version
+  strings like `Agent 1.0.0.1` parse as valid IPv4. IOC ingestion must stay a deliberate, reviewable,
+  per-entry act, and anything auto-extracted must be capped well below the auto-select grade.
 
 ### Findings, IDs and new phases
 - **Build finding IDs from `Get-StableId`, never `.GetHashCode()`.** `[string]::GetHashCode()` is
@@ -400,6 +468,14 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   `EVIDENCE_ENGINE_PLAN.md` §7 always claimed. **The 63 and 94 figures recorded in sessions 17/18
   were debris, not detections.** Note Git Bash's `/tmp` writes straight into `%TEMP%`, so do not put
   scratch files there during a grading window.
+  **⚠ NO CURRENT BASELINE FIGURE IS TRUSTWORTHY (2026-07-27 audit).** Five numbers are in circulation
+  (7 / 8 / 50 / 63 / 94), two pairs of them on mutually inconsistent bases, and the 94→63 / 92→50
+  transitions **match no stored artifact**. The widely-quoted **8** predates the Phase 90 self-detect
+  fix (post-fix it is **5**) and its artifact contains zero `PHASE 0` findings, so it predates the
+  Stage 9 honesty findings too. Two of the "4 remaining by-design items" are not auto-destructive at
+  all. **Re-measure before relying on any of them** — and do it on a **multi-profile** box: the dev box
+  has 2 profiles and is blind by construction to the three ×N rule-#1 violations found in the P1
+  migration.
 - **New detections get a FRACTIONAL phase number inside an existing `if (-not $global:QUICK_MODE)`
   block.** QUICK is a real 30-phase gate whose count the server maps to a 1..30 progress index, and
   the plan ceilings (QUICK 30 / FULL 80 / DEEP+ 115) are wired into both servers — a fractional
@@ -419,10 +495,15 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Apply benign-path allowlists through `Test-BenignPath`, not a bare `-match`.** Those lists key
   on folder names (`node_modules`, `site-packages`) that an attacker can simply create to
   self-allowlist; `Test-BenignPath` additionally vetoes a match found in a staging dir.
-  **But know its blind spot: `$global:ALLOW_VETO_RE` vetoes every allowlist match found under
-  `\Temp\` or `\Downloads\`,** so in a phase whose entire scope is those directories (Phase 10),
-  `Test-BenignPath` **cannot downgrade anything** — it is structurally incapable, and a fix that
-  merely "routes through it" will silently do nothing. Call it first and unchanged, then add a
+  **But know its blind spot: `$global:ALLOW_VETO_RE` vetoes allowlist matches under `\Downloads\`,
+  `\Public\` and `\Temp\`** (the actual regex is
+  `'\\(Downloads|Public)\\|\\Temp\\(?!pip-|pip_|build\\)'` — note it **exempts** `\Temp\pip-*`,
+  `\Temp\pip_*` and `\Temp\build\`). In a phase scoped mostly to those directories, `Test-BenignPath`
+  **cannot downgrade** and a fix that merely "routes through it" will silently do nothing. *Corrected
+  2026-07-27: the earlier wording claimed this covered Phase 10's ENTIRE scope and was "structurally
+  incapable" there — too strong. `INetCache` is also in Phase 10's scope (`Phases-1.ps1:600`) and
+  contains none of those components, so `Test-BenignPath` is fully operative for it.* Call it first and
+  unchanged, then add a
   separate, deliberately narrow, component-anchored, **downgrade-only** list to override the veto.
   And state the trade-off in the data comment: any allowlist scoped to `%TEMP%` is by definition
   attacker-satisfiable, because whoever can write there can create the directory. Keep such a hit a
@@ -441,6 +522,34 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   principle as the remediation rule above: "couldn't check" and "nothing there" are different
   answers, and the plan's whole verdict layer depends on `UNPROVEN` being distinguishable from
   `CLEAN` (2026-07-26, Phases 12/91/107).
+- **A shared budget spread across N roots silently zeroes coverage for roots 2..N — scale it, signal
+  truncation, and NEVER conclude from a truncated walk.** `Get-ScanFiles` caps at
+  `SCAN_MAX_FILES = 20000` / `SCAN_DEADLINE_S = 20` and `return`s the instant a cap is hit, walking
+  roots **in the order given**. Measured on a live box: `C:\Users\<one-user>` alone yields **20,000
+  files in 1.0 s**. When P1 changed ~20 filesystem sites from one profile to "all profiles in one
+  call", the caps were not scaled — so on a multi-user box the first SID consumes the entire budget
+  and every later profile gets **zero** coverage, after which the phase prints
+  `[OK] NO TUNNELING TOOLS FOUND.` `Get-ScanFiles` returns **no truncation signal**, so the phase
+  cannot even detect that it happened. Three compounding traps: `-TimeScoped` does not help (under the
+  default ALL TIME `Test-InScope` is unconditionally `$true`); machine-wide roots appended *after* the
+  per-profile ones become unreachable; and a `break` on budget exhaustion (Phase 10) abandons the
+  remainder with no `Add-Finding`, so the durable report has no record. **Phase 12
+  (`Phases-1.ps1:1038-1068`) is the correct in-tree model** — it scales the budget by profile count,
+  tests for truncation, and emits `PREFETCH_CORR_SKIPPED` instead of concluding. Also de-dupe nested
+  roots by **prefix**, not exact string (`Temp` ⊂ `LocalAppData`; under OneDrive KFM `Documents` ⊂
+  `OneDrive`) or the same tree is walked 2-3× out of the same budget (2026-07-27).
+- **Multiplying a per-user site by N profiles re-grades its severity — re-check rule #1 at the new
+  cardinality.** A finding that was tolerable once per box may be intolerable N times. Three live
+  cases from the P1 migration, none visible on the 2-profile dev box whose baseline is 8: Phase 106
+  `DUMPTOOL` is CRITICAL + **DeleteFile** on a bare `procdump*.exe` glob with no signature gate — it
+  deletes signed Microsoft Sysinternals ProcDump, per profile (Phase 90 documents this exact failure
+  and fixed it with a sig gate; Phase 106 never got one); Phase 31 is CRITICAL + DeleteFile on
+  `IEX|DownloadString|Invoke-Expression`, which is the documented init line for oh-my-posh, starship,
+  zoxide and scoop — on a 5-developer box that is 5 auto-selected deletions of users' PowerShell
+  profiles; Phase 74 `MACRO_TRUST` is HIGH + RunCmd **writing into other users' hives**, which the
+  sibling hardening sites at `Phases-2.ps1:1452/1562` deliberately refuse to do. **A single-box,
+  single-profile baseline cannot see any of this by construction** — grade multi-profile before
+  claiming a per-user migration is safe (2026-07-27).
 - **A written plan's premises are claims, not facts — measure them before implementing.**
   `EVIDENCE_ENGINE_PLAN.md` asserted `$_.Message` renders at 1–3 ms/event (it is ~0.01 ms; the real
   50× cost was a double `[xml]` DOM parse), recommended `.Properties[n].Value` (rejected — positional
@@ -571,9 +680,23 @@ Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
 
 ## Outstanding Work
 
-> Status as of **2026-07-27**. Work since 2026-07-22 lives on the branch
+> Status as of **2026-07-27 (session 23)**. Work since 2026-07-22 lives on the branch
 > **`session12/review-remediation-ws6`**, not `main` — check `git log`/`git status` before assuming
-> anything here is merged. Working tree is clean as of commit `bcbf188` (pushed).
+> anything here is merged.
+>
+> **⚠ READ `REVIEW_FINDINGS_2026-07-27.md` BEFORE TOUCHING ANY CODE. It is the active work queue and
+> nothing in it is fixed yet.** Seven independent review agents audited the 8,834 insertions committed
+> in the 24 h to 2026-07-27 and found defects in **every** area: **six rule-#1 violations**, **nine
+> false-all-clear paths**, **two detection regressions**, a permanent-remediation-lockout bug, and a
+> harness suite that is **structurally incapable of reporting failure** (which is why none of this was
+> caught by the sign-offs below). Several "DONE / live-graded / clean PASS" claims recorded on
+> 2026-07-27 are therefore **weaker than they read** — corrections are inline below and in
+> `CHANGELOG.md`. The engine is parse-clean and functional; these are semantic defects, but three of
+> them damage a healthy client machine and one makes a shipped feature's core promise false.
+>
+> The forward plan is `ENGINE_REWRITE_PLAN.md` (Rust evidence sidecar + incremental detection port
+> behind a differential harness). **It is sequenced deliberately behind fixing the findings and
+> repairing the harness** — see its §2.2 for why starting the rewrite first would be unsafe.
 
 The bulk of the original roadmap is **done** (scan-blocking prompts, re-run handling, MITRE, IOC
 Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–6, engine
@@ -596,12 +719,33 @@ expansion). Since then:
   `reports/remediation_audit_*.jsonl` hash chain manually re-verified) and, against the same class
   of finding after the hive was unmounted, correctly `blocked` with the registry left untouched.
   That testing also caught and fixed a real TOCTOU race in `/api/remediate`'s `Remediating`
-  concurrency guard (flag was set inside the spawned runspace, measurably late — see CHANGELOG). All
-  of P1 (Stages 0-9) is now live-graded end-to-end; nothing known left open on P1 itself.
-- **New, not started: Event Viewer / IR log-collection GUI.** Operator wants dedicated GUI buttons
-  for every event-log/IR artifact that can be collected, viewed, inspected or verified — maps onto
-  `EVIDENCE_ENGINE_PLAN.md`'s A-series (A1 log-availability census onward). Scoping still open:
-  collect-to-evidence-package vs. view-only, on-demand vs. part of a scan, which log sources.
+  concurrency guard (flag was set inside the spawned runspace, measurably late — see CHANGELOG).
+  **⚠ CORRECTION (2026-07-27 audit): P1 is NOT done. The registry half works; the FILESYSTEM half is
+  effectively a no-op on any multi-user box.** The ~20 migrated filesystem sites pass all profiles'
+  roots to **one** `Get-ScanFiles` call whose caps were never scaled — measured live, a single profile
+  exhausts the 20,000-file / 20-second budget in **~1 second**, so profiles 2..N get **zero**
+  filesystem coverage and the phases then print `[OK] NO SUSPICIOUS DUMP FILES…` (finding **P1-1**, the
+  highest-leverage fix in the queue). Also open: **three rule-#1 violations created by the ×N
+  multiplication** (Phase 106 auto-deletes signed Microsoft ProcDump; Phase 31 auto-deletes every
+  developer's PowerShell profile; Phase 74 writes hardening into other users' hives), a browser-
+  extension ID that **silently discards** the Edge copy of a Chrome finding, a console-remediation path
+  that **re-mounts every hive and never unloads them** (TEMPORARY PROFILE outage at the users' next
+  logon), dead code that makes the hive-load-cap honesty finding **unreachable**, and — notably —
+  **`-LoadUserHives` cannot be passed from the GUI at all**, though the server's own block message
+  tells operators to use it. The baseline of **8** is real but was captured on a **2-profile** box and
+  is blind to all three rule-#1 items by construction. Full detail: `REVIEW_FINDINGS_2026-07-27.md`
+  §P6. `zbtest2` stays planted as the standing multi-user test fixture; do not tear it down.
+- **Next major work: Rust evidence engine + Event Viewer / IR GUI.** Operator approved a rewrite on
+  2026-07-27 and the plan is `ENGINE_REWRITE_PLAN.md`: a **read-only Rust sidecar** (`zb-evidence.exe`,
+  reusing the Tauri toolchain already in `native-app/`) emitting the **same `[FINDING]` JSON lines the
+  server already parses — so no server change is needed to accept it**, then an **incremental**
+  detection port behind a differential PS-vs-Rust harness. **Destructive remediation stays in
+  PowerShell** (an unsigned binary doing KillProcess/DeleteFile is the worst possible EDR profile, and
+  this runs on *client* endpoints; the real mitigation is code signing, not AV exclusions). Scope
+  decided: the IR GUI does **both live view and export package**. The evidence work maps onto
+  `EVIDENCE_ENGINE_PLAN.md`'s A-series in its §8 order (A1 log-availability census first). **Blocked
+  on a sensitive-data policy** (plan §5.5) before the exporter is built — event logs and browser
+  history carry credentials and PII.
 - **Native shell (Milestone 1) — built and live-verified.** Real `.exe` rendering the real GUI,
   Job-Object-tied child process (force-kill verified), WebView2 preflight. The Three.js 3D GUI
   redesign it is a stepping stone to has **not** been started.
@@ -626,6 +770,27 @@ expansion). Since then:
   auto-destructive = 10 (sane), 0 `RECOVERED ERROR`s across 490 phase-header lines. See CHANGELOG
   2026-07-27 for full numbers. Run either harness again via
   `tools/sandbox-test/Invoke-SandboxTest.ps1 -Stage WebView2Dialog|MalwareDetection`.
+  **⚠ CORRECTION (2026-07-27 audit): that "clean PASS" is not evidence.
+  `harness-malware-detection.ps1` only *logs* its 13 assertion counts — every one can be `0` and it
+  still writes its `*_DONE` marker and prints `DONE.` It has no verdict line, no differentiated exit
+  code, and no failing state. Compounding it: a stale marker makes a re-run report success in
+  milliseconds while the sandbox is still booting; `Copy-Item -Recurse` nests rather than overwrites,
+  so re-runs test a **stale engine**; a failed `npx tauri build` is undetected; and the sample-integrity
+  gate aborts only if *every* sample is 0 bytes (the rule is per-sample) with magic bytes computed and
+  then discarded. Four of the assertions cannot fail by construction — one greps for a console banner
+  the engine never emits under any condition. The run happened; it could not have failed. Neither
+  harness touches `/api/remediate`, so Stage C and P1 Stage 6 are **not reproducible from
+  `tools/sandbox-test/`** despite being cited as live-proven. Repairing this is a prerequisite for
+  everything else — see `REVIEW_FINDINGS_2026-07-27.md` §P4.**
+- **Build Custom Scan (`5769ac6`) — shipped, and its core promise is currently false.** Paste text →
+  `POST /api/scan/analyze-text` → category/IOC extraction → `-Phases` filter via `Test-PhaseGate`
+  (wired into all ~139 phase gates; the mechanical edit is **verified byte-identical**, QUICK still
+  exactly 30 headers, and **command injection is genuinely closed** — 23 payloads tested on live 5.1).
+  But: **USE THIS SCAN auto-harvests IOCs from prose into CRITICAL+KillProcess / HIGH+Quarantine
+  paths** (rule #1); the suggested `TRIAGE` mode **silently drops most of the phases the panel says it
+  selected** (a pasted phishing alert never runs Phase 74.5, the flagship Outlook detection, and
+  reports clean); and **a pasted SHA256 can never match**, because the only phases consuming custom
+  IOC hashes/filenames/IPs (90 and 36) appear in no category. See §"P0"/"P1" of the findings doc.
 - **Still open / unverified:** the user-driven **browser click-through** (destructive PURGE +
   protected HARD block, export downloads, IOC save→re-scan, STEALTH, live ticker/chips, banner
   glyphs); the **USB foreign-box field test**; the **NSIS installer** (built, never installed);

@@ -148,7 +148,46 @@ severity/FixAction change, and state which box the number came from.
 
 ## 6. Status snapshot
 
-### 2026-07-26 (current)
+### 2026-07-27 (current) — post-audit
+
+**⚠ Read `REVIEW_FINDINGS_2026-07-27.md` before trusting anything below or in §7.** Seven independent
+review agents audited the 8,834 insertions committed in the 24 h to 2026-07-27 and found real defects
+in **every** area. Nothing found is fixed yet. Headline items:
+
+- **P1 (multi-user hive coverage) is NOT done, despite being signed off as such.** The registry half
+  works. The **filesystem half is effectively a no-op on multi-user boxes**: ~20 migrated sites share
+  one `Get-ScanFiles` call whose 20,000-file / 20-second budget is exhausted by a single profile in
+  **~1 second** (measured), so profiles 2..N get zero coverage — and the phases then print `[OK]`.
+- **Six rule-#1 violations** (the tool damaging a healthy box), including auto-deleting **signed
+  Microsoft ProcDump**, auto-deleting **every developer's PowerShell profile** (`Invoke-Expression` is
+  the oh-my-posh/starship/scoop init line), quarantining **ZeroBreach's own exported HTML report** in a
+  self-seeding loop, auto-harvesting IOCs from pasted prose into KillProcess/Quarantine paths, and a
+  live `vssadmin delete shadows /all /quiet` FixParam reachable via **SELECT ALL** (which filters on
+  `protected`/`vendor_trusted` but **not severity**).
+- **Nine false-all-clear paths** — the class CLAUDE.md's "never print a clean result for a check that
+  could not have fired" rule exists to prevent.
+- **Two detection regressions**, one affecting *every* scan: wrapping phases in `if (Test-PhaseGate N)`
+  silently coarsened trap recovery from statement-level to phase-level across ~134 phases.
+- **The sandbox harness cannot report failure** — it only logs counts and always writes its `DONE`
+  marker. The 2026-07-27 "clean PASS re-validated against current HEAD" is therefore not evidence.
+  Repairing it is the prerequisite for everything else.
+- **No baseline figure is currently trustworthy.** Five are in circulation (7/8/50/63/94); the
+  quoted **8** predates the Phase 90 fix (post-fix **5**) and the Stage 9 findings.
+
+**Verified genuinely clean** (do not re-audit): Build Custom Scan's command-injection guard (23
+payloads on live 5.1), its gate rewrite (AST diff of all 2,202 command nodes — byte-identical
+predicates, QUICK still exactly 30), CSRF/XSS/backtracking, the `{TOKEN}` path migration, MITRE
+`phase_map` coverage of all 139 phases, the WMI allowlist anchoring, P1's variable-shadowing and
+`,$arr` discipline (60 call sites), and the server-side P1 remediation guards and their runspace
+mirror. All 7 engine/server files parse clean on live 5.1 with BOM intact.
+
+**Direction set 2026-07-27:** operator approved an engine rewrite. Plan is `ENGINE_REWRITE_PLAN.md` —
+a **read-only Rust evidence sidecar** first (emitting the existing `[FINDING]` contract, so no server
+change), then an **incremental** detection port behind a differential PS-vs-Rust harness; **destructive
+remediation stays in PowerShell**. Sequenced deliberately behind the findings fixes and the harness
+repair. Merge of `session12/review-remediation-ws6` → `main` decided: **after** the review fixes.
+
+### 2026-07-26 (historical)
 
 **Where the code is:** everything since 2026-07-22 sits on the branch
 `session12/review-remediation-ws6`, **not merged to `main`**, and the working tree carries
@@ -200,7 +239,27 @@ now also eyeballing the live finding ticker/chips + clean banner glyphs. Runbook
 
 ## 7. Roadmap
 
-### Now (current/next session)
+### Now (2026-07-27 onward) — supersedes the list below
+
+1. **Fix `REVIEW_FINDINGS_2026-07-27.md`**, in its stated order: P1-1 (the `Get-ScanFiles` truncation
+   signal — highest leverage, five other findings collapse into it), then the six rule-#1 violations,
+   then the lockout/host-damage items.
+2. **Repair the sandbox harness so it can fail** (TEST-1…TEST-5), then extend it into the
+   **differential PS-vs-Rust harness** the rewrite depends on. Acceptance: deliberately break a
+   detection and confirm it goes red.
+3. **Re-measure the healthy-box baseline** on a **multi-profile** box — the current dev box has 2
+   profiles and is structurally blind to three of the rule-#1 findings.
+4. **Merge `session12/review-remediation-ws6` → `main`** once 1-3 land.
+5. **Stage 2 of `ENGINE_REWRITE_PLAN.md`** — `zb-evidence.exe`, the A-series in `EVIDENCE_ENGINE_PLAN.md`
+   §8 order (A1 census first), delivering the operator's Event Viewer / IR GUI (**both live view and
+   export package**). Blocked on a **sensitive-data policy** for the export path.
+6. Then Stage 3: incremental detection port behind the diff.
+
+Still open and unchanged from the list below: live GUI click-through, USB foreign-box field test,
+NSIS installer, `data/coverage_matrix.json` re-audit, `Build-Release.ps1` native-app awareness,
+Three.js 3D GUI, code signing.
+
+### Now (as of 2026-07-26 — largely superseded by the list above)
 - **Finish the sandbox test matrix** — Stage C (detonate KRBanker offline → DEEP rescan → two
   properly sequenced `/api/remediate` calls, one on tripwires and one probing a `protected`
   finding) and Stage D (confirm the WebView2 preflight fires on a WebView2-less box). Both
