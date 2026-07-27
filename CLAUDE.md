@@ -573,9 +573,7 @@ Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
 
 > Status as of **2026-07-27**. Work since 2026-07-22 lives on the branch
 > **`session12/review-remediation-ws6`**, not `main` — check `git log`/`git status` before assuming
-> anything here is merged, and note the working tree currently carries **uncommitted engine changes**
-> (`ZeroBreach-V23.ps1`, `engine/Phases-1/3.ps1`, `CHANGELOG.md`) from the P1 Stage 7-9 sign-off pass
-> — not yet committed.
+> anything here is merged. Working tree is clean as of commit `bcbf188` (pushed).
 
 The bulk of the original roadmap is **done** (scan-blocking prompts, re-run handling, MITRE, IOC
 Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–6, engine
@@ -593,11 +591,13 @@ expansion). Since then:
   re-captured post-P1: **8** (DEEP `-LoadUserHives`) / **2** (QUICK). See `CHANGELOG.md` 2026-07-27
   for the finding-ID churn disclosure — **re-capture any `-Baseline` snapshot taken before commit
   `6e3522b`.** `zbtest2` stays planted as the standing multi-user test fixture; do not tear it down.
-  **Still open: Stage 6's live end-to-end proof** — `POST /api/remediate` against a real
-  hive-loaded (`HKU\<SID>`) `FixParam`, verified in `reports/remediation_audit_*.jsonl` +
-  `server_events_*.log`, plus the logged-off-retry-reports-`blocked` check. No
-  `remediation_audit_*.jsonl` exists yet and the newest `server_events_*.log` predates P1
-  (2026-07-22) — the server-side guards and their 19 unit tests are done, but this run is not.
+  **Stage 6's live end-to-end proof is DONE (2026-07-27, see CHANGELOG.md)**: `POST /api/remediate`
+  against a real hive-mounted `HKU\<SID>` `FixParam` verified applied (registry gone,
+  `reports/remediation_audit_*.jsonl` hash chain manually re-verified) and, against the same class
+  of finding after the hive was unmounted, correctly `blocked` with the registry left untouched.
+  That testing also caught and fixed a real TOCTOU race in `/api/remediate`'s `Remediating`
+  concurrency guard (flag was set inside the spawned runspace, measurably late — see CHANGELOG). All
+  of P1 (Stages 0-9) is now live-graded end-to-end; nothing known left open on P1 itself.
 - **New, not started: Event Viewer / IR log-collection GUI.** Operator wants dedicated GUI buttons
   for every event-log/IR artifact that can be collected, viewed, inspected or verified — maps onto
   `EVIDENCE_ENGINE_PLAN.md`'s A-series (A1 log-availability census onward). Scoping still open:
