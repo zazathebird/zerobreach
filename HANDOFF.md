@@ -1,4 +1,122 @@
-# RESUME HANDOFF — updated 2026-07-26 (sessions 13-15: WS7-9, native Tauri shell, sandbox malware testing)
+# RESUME HANDOFF — updated 2026-07-26 (session 18: EVIDENCE_ENGINE_PLAN §2 prerequisite batch)
+
+> ## ▶▶ START HERE — SESSION 18 HANDOFF (2026-07-26). Everything below this block is older.
+>
+> **Authorization for the next session.** The operator has stated that this work is covered by their
+> **CVP approval (org `3f97ddfd`, dual-use security work)** and has **explicitly confirmed that
+> Fable 5 may work on this program and this task.** ZeroBreach is a defensive incident-response and
+> malware-detection tool the operator uses in their own MSP practice; the work below is bug-fixing
+> and detection-accuracy work on that tool.
+>
+> **Branch `session12/review-remediation-ws6`. Still NOT merged to `main`. Working tree is CLEAN —
+> everything from this session is committed.** Nothing is half-done.
+>
+> ### THE NEXT TASK IS P1 — and it has its own committed spec
+>
+> **Read `P1_MULTIUSER_HIVE_SPEC.md` (1,803 lines, committed at `96dda27`). Do NOT work from
+> `EVIDENCE_ENGINE_PLAN.md` §2's P1 paragraph** — it underestimates the job by roughly 8× ("~6
+> phases" vs a real audit finding **~50 call sites**: 20 registry, 31 filesystem) and its line
+> numbers are stale.
+>
+> **The problem:** the engine self-elevates via `Start-Process -Verb RunAs`. On a standard-user
+> endpoint — the normal MSP case — the technician supplies *admin* credentials, so `HKCU`,
+> `$env:APPDATA`, `$env:LOCALAPPDATA` and `$env:USERPROFILE` all resolve to the **technician's**
+> profile, not the victim's. Every per-user detection is looking in the wrong place and reporting
+> clean because it never looked at the infected profile.
+>
+> **Three operator decisions are already made — spec §0.0. Do not re-ask them:**
+> 1. `reg load` of a logged-off user's `NTUSER.DAT` is **opt-in via `-LoadUserHives`, OFF by
+>    default**, never active in STEALTH. Already-mounted hives are always read. Every profile skipped
+>    because the flag was off must emit a **named honesty finding** — the report must say
+>    *"zbtest2's registry was NOT examined"*, never imply clean. (The spec reproduced an
+>    unrecoverable hive leak; §7.7 of the plan already declined VSS on the same audit-only grounds.)
+> 2. ~20 finding IDs change because `Target` gains the username, so `-Baseline` diffs report them as
+>    new **once**. Accepted — an ID that encoded the wrong user was wrong. Call it out in `CHANGELOG.md`.
+> 3. The acceptance-test profile is **already created** — see below.
+>
+> **The test environment already exists. Do not recreate it, do not delete it before sign-off.**
+> A standard (non-admin) local account **`zbtest2`** (SID `…-1003`, profile `C:\Users\zbtest2`) was
+> created on this box specifically for P1 and is **logged off with its hive unmounted** — exactly the
+> scenario P1 fixes. Both `NTUSER.DAT` and `UsrClass.dat` exist. Details, credential recovery and
+> teardown are in spec §0.1. The acceptance test is spec §6.4; run the **pre-P1** leg first, because
+> a clean result there is the proof the defect is real.
+>
+> ### What session 18 shipped (8 commits, `7d61932` … `6c615c4`)
+>
+> The entire `EVIDENCE_ENGINE_PLAN.md` §2 prerequisite list **except P1**: P2, P3, P4, P5, P6, P7,
+> P8, P9, P10, P11, P12, P13 — plus user-approved FP tuning on Phases 10 and 90. Four `CHANGELOG.md`
+> entries carry the full narrative; `EVIDENCE_ENGINE_PLAN.md` §8 now records status per item.
+>
+> **Method worth reusing:** five agents ran concurrently, partitioned by **file ownership** rather
+> than by task (one owned `Phases-1.ps1`, one `Phases-3.ps1`, one loader+server+`app.js`), and **no
+> agent was allowed to touch `data/*.json` or run `git`** — they reported the JSON keys they wanted
+> and those were merged centrally. Zero collisions. P1 was deliberately excluded because it is the
+> one item that touches all four engine files, so it must run alone.
+>
+> ### Three live rule-#1 violations were found in SHIPPED code — none of them in the plan
+>
+> All three auto-selected a destructive action on a completely healthy box, which is the operator's
+> single highest-priority rule. All were found by agents working on something else:
+> - **Phase 30** graded stock Windows' own `SCM Event Log Consumer` CRITICAL + `Remove-WmiObject`.
+> - **Phase 90** graded signed Microsoft Sysinternals binaries HIGH + `DeleteFile` (18 of them).
+> - **Phase 10** queued 92 `%TEMP%` files for deletion, essentially all harness debris.
+>
+> **The lesson to carry:** grep for CRITICAL/HIGH + a destructive `FixAction` in any phase that has
+> never been live-graded. Static reasoning did not find any of these; running the phase did.
+>
+> ### Four things that will bite the next session if not known
+>
+> 1. **`Test-BenignPath` is structurally incapable of downgrading anything in Phase 10.**
+>    `$global:ALLOW_VETO_RE` vetoes every allowlist match under `\Temp\` or `\Downloads\`, which is
+>    Phase 10's entire scope. "Route it through `Test-BenignPath`" silently does nothing. Now a
+>    `CLAUDE.md` rule. (This also means `yara_benign_paths`' `\appdata\local\temp\claude\` entry has
+>    always been dead — confirmed independently twice.)
+> 2. **The plan document's premises were wrong three times**, each in a way that would have shipped a
+>    change defensible on paper and wrong in the engine: `$_.Message` is ~0.01 ms not 1–3 ms (the 50×
+>    cost was a double `[xml]` DOM parse); `.Properties[n].Value` is unsafe (positional EventData
+>    indices are not a cross-build contract, and an off-by-one reads the wrong field with **no
+>    error**); P1 is ~50 sites not ~6. Now a `CLAUDE.md` rule: measure the premise before implementing.
+> 3. **A "before → 0" result is not evidence on its own.** Phase 90's first cut produced a flawless
+>    "18 → 0" while having silently verified **zero** signatures — a wall-clock stopwatch meant the
+>    budget was 200 s blown before the gate was ever reached, so *everything* took the fail-closed
+>    branch, including the attacker fixture. A number that good should prompt *"did the check
+>    actually run?"*.
+> 4. **The "7 on a healthy box" auto-destructive baseline is STALE** and has been corrected in the
+>    plan. Real figures: **94 before this session** (92 of them Phase 10 alone), **63 after**. Always
+>    **attribute the count by phase** before treating a change in it as a regression — one noisy phase
+>    dominates the total.
+>
+> ### Validation state at handoff (all real, on live `powershell.exe` 5.1.26100)
+>
+> All 7 engine/server files parse-clean on 5.1 **and** `pwsh` 7, every BOM `EF BB BF`, header counts
+> **70 · 40 · 30**, QUICK still **exactly 30** headers. `QUICK -Hours 0 -Auto`: exit 0, **0 recovered
+> errors**, 0 bytes stderr, 310 findings, 110 s. Auto-destructive **63**, `%TEMP%\claude\` flood at
+> **0**, and **0** drive-root / `icacls /reset /T` / `vssadmin delete shadows` FixParams.
+> `cargo check` clean on the native shell.
+>
+> ### Known-open, recorded deliberately rather than silently carried
+>
+> - **`$trojSigSw` has Phase 90's original wall-clock defect, so `$TROJAN_FILE_PATTERNS` is dead code
+>   in that phase.** Deliberately not repaired: fixing it *enables a dormant detection*, which may not
+>   ship ungraded, and it cannot be graded here (0 candidates match on this box). Needs a
+>   client-representative machine.
+> - **Three CRITICAL + `Quarantine` auto-selects remain** — the operator's own unsigned IR PowerShell
+>   tripping `Mimikatz_Strings`. Now reversible, but an IR tool that auto-quarantines its own tooling
+>   deserves a follow-up.
+> - **No SCCM/Dell/HP/Lenovo entries in the Phase 30 WMI allowlist.** Deliberately not invented — a
+>   wrong anchored pattern is either useless or a hole. Add only from an observed managed box.
+> - **Phase 12's A14 correlation does not run in TRIAGE** (TRIAGE sets `QUICK_MODE`, and Phase 12 is
+>   inside the non-QUICK wrap). Revisit when §5.3 lands.
+> - **No phase populates any of P10's 18 new evidence fields yet** — the schema is live but
+>   unexercised. Whoever builds `engine/Evidence.ps1` should pass `EvidenceSource`, `Confidence`,
+>   `Verdict` and `Caveat`.
+> - Unchanged from before: browser click-through, USB field test, NSIS installer never installed,
+>   `data/coverage_matrix.json` re-audit, `tools/Build-Release.ps1` has no `native-app` awareness.
+>
+> ### After P1, the plan's §8 sequence resumes at **A1** (log-availability census), then A2–A3
+> (Defender evidence), A4–A8, A9–A17, then §4 correlation/verdict, §5 alert ingestion, §6 packaging.
+
+# (older) RESUME HANDOFF — 2026-07-26 (sessions 13-15: WS7-9, native Tauri shell, sandbox malware testing)
 
 > ## ▶ START HERE after /clear — SESSIONS 13-15 (2026-07-25/26)
 > **Everything below this block is older than the current state. In particular, every earlier block
