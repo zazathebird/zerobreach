@@ -6,6 +6,107 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-27 — P1 Stage 7 live grading; Phase 90 was self-detecting the engine's own source as Mimikatz
+
+### Stage 7 (filesystem cluster) signed off
+
+The 2026-07-26 snapshot commit (`1c42e3d`) had flagged the Phases-1 agent's 16 sites (incl. the
+Phase 12 prefetch/filesystem correlation index) as possibly incomplete — it had not reported before
+an operator reboot. Direct inspection on resume found the work was actually complete: all 16 sites
+use `Get-UserHives`/`Get-UserPaths`/`Expand-UserPathTemplate`, and the specific worry (the prefetch
+index that manufactures false "executed then deleted" evidence when scoped to the technician's own
+profile) carries the per-profile fix with a fail-safe fallback if no profile resolves.
+
+A live DEEP `-LoadUserHives` run (139 phases, 17.8 min, 1174 findings) confirmed: 0 recovered errors,
+115/115 integer phases contiguous, 0 leaked `ZB_UH_*` hive mounts, zbtest2's `NTUSER.DAT` unlocked
+afterward. Auto-destructive excluding `%TEMP%` is **8** — matching the previously-validated 7→8
+acceptance result exactly (the +1 is the victim's Outlook payload). None of the three phases flagged
+by the migration agents as flood-risks (63/90/106) produced an FP flood: Phase 63 (miner config) and
+Phase 106 (dumper tools) contributed 0 auto-destructive findings each; Phase 90 contributed 3 — which
+turned out to be a real, unrelated bug (below), not a per-profile multiplier problem.
+
+Also fixed as part of sign-off: Phase 20's reg-loaded-hive `Info` hint text was generic boilerplate
+("remove by hand with reg load HKU\ZBFIX / ..."). Since `FixAction Info` means the description IS the
+deliverable, it now embeds the real `NTUSER.DAT` path and the real value name for that profile and
+that Run-key entry, matching the pattern Phase 35 already used.
+
+### Phase 90 was auto-Quarantining ZeroBreach's own script files (and any similar IR tool)
+
+Grading Phase 90 turned up a genuine self-detection bug, independent of P1: the `Mimikatz_Strings`
+YARA-lite rule (`sekurlsa::|lsadump::|mimikatz|gentilkiwi`) matched three files in the operator's own
+Downloads folder — an old `ZeroBreach-V19.ps1`, an old `Phases-1.ps1` backup, and an `MSP-IR-Tool
+(1).ps1` — and queued all three for CRITICAL + `Quarantine`. None of them are malware: they are
+security-tooling **source code** that documents what it detects, and the bare word "mimikatz" is
+enough to match. The CURRENT engine's own `Phases-1.ps1` (a Phase 48 finding description: *"...
+mimikatz target"*) and `Phases-3.ps1` (a Phase 107 comment: *"...Mimikatz-class"*) both contain that
+word today — so a Downloads-folder copy of ZeroBreach itself (an explicitly supported, USB-portable
+use case) would auto-quarantine itself on a live scan.
+
+Five of the shipped YARA-lite rules are bare threat-actor/tool-**name** lists with no shellcode/hex
+signature and no invocation syntax (`Mimikatz_Strings`, `Meterpreter_Strings`, `Sliver_Implant`,
+`Lazagne_Stealer`, `WinPwn_Recon`) — any of these will match a defensive tool's own documentation
+just as readily as a real delivered attack script. `Cobalt_Strike_Beacon` was deliberately left alone:
+its pattern mixes real hex/shellcode signatures (`MZARUH`, `fc4881e4f0e8`) with names, so it already
+carries stronger corroboration than a bare name match.
+
+Fix (`engine/Phases-3.ps1`, Phase 90): for those five rules, on a SCRIPT/text extension only
+(`.ps1/.vbs/.js/.jse/.vbe/.wsf/.hta/.bat/.cmd` — never a real compiled binary), require a
+corroborating long encoded blob (200+ contiguous base64-shaped characters — the same shape a genuine
+Mimikatz/Meterpreter/Sliver/Lazagne loader almost always embeds) before the match is allowed to stay
+CRITICAL/HIGH + `Quarantine`. Absent that corroboration it downgrades to `POSSIBLE` + `Info`,
+explaining that the name-only match is consistent with documentation/comments rather than a delivered
+payload — a downgrade, never a suppression, per the project's standing convention. Verified directly
+against the three real flagged files (all now downgrade) plus a synthetic control — a script that
+names the tool AND embeds a large encoded blob — which correctly stays destructive, so genuine
+detections are not weakened.
+
+### Stage 8 (flood control) — verified, no code changes needed
+
+Compared the Stage 7 DEEP `-LoadUserHives` report against the pre-P1 baseline
+(`KrakenBaseline_20260726_204727.json`). One new `GROUPCAP_*` finding appeared post-P1 (Phase 10,
+"Allowlisted tool/runtime caches") — per spec §4.4 item 4 this must be treated as a suspected
+regression, not assumed benign. Investigation showed all 101 items belong to a single profile
+(`WIN11\user`, the admin) and are this session's own `%TEMP%\claude\...\scratchpad` files — the
+known dev-box `%TEMP%` churn artifact CLAUDE.md already warns about, coincidental with the ~15-hour
+gap between the two baseline captures, not a per-profile multiplication caused by P1. Phase 100.5's
+`TOKENSTORES_PRESENT` aggregate finding is correctly a single row. No fix required.
+
+### Stage 9 — honesty findings, banner relabel, baseline re-capture
+
+Implemented the three still-missing §4.9 honesty findings (case (d), `HIVELOCK_*`, already existed
+from Stage 2) and the §4.6 scan-context relabel, in `ZeroBreach-V23.ps1` right before the engine
+modules are dot-sourced — unconditionally, so they fire in `-Auto`/server-driven scans too, not just
+interactive ones:
+
+- **`PROFILE_CENSUS_*`** — one INFO finding per scan naming every discovered profile (SID, account,
+  path, and whether registry+filesystem/filesystem-only/not-examined coverage applied).
+- **`UNSCANNED_HIVE_*`** (case a) — fires when a profile is logged off and `-LoadUserHives` is off.
+  Live-verified on a QUICK scan without `-LoadUserHives`: correctly named `zbtest2` and stated
+  filesystem checks DID still run, matching the spec's acceptance-test wording exactly.
+- **`UNREACHABLE_PROFILE_*`** (case b) and **`PROFILE_ENUM_TRUNCATED`** (case c) — implemented per
+  spec but not live-triggered this session; this box has no roaming profile or budget-cap scenario
+  to exercise them against.
+- The interactive banner (`if (-not ($global:STEALTH_MODE -or $Auto))` — so servers, which always
+  pass `-Auto`, never see it) now reads `SCAN RUNNING AS: <admin>` plus a `PROFILES EXAMINED: n of m`
+  line instead of the pre-P1 `USER: <admin>`, which was actively misleading once findings started
+  spanning multiple profiles.
+
+Re-captured the healthy-box baseline post-P1: DEEP `-LoadUserHives` auto-destructive excl. `%TEMP%`
+is **8** (`reports/KrakenBaseline_20260727_113431.json`); QUICK (no `-LoadUserHives`, no DEEP+-only
+phases) is **2** (`reports/KrakenBaseline_20260727_120743.json`) — both 0 recovered errors, correct
+phase counts (139 and 30 respectively).
+
+**Finding-ID churn disclosure (spec §5.3):** P1 changes finding IDs at roughly 20 sites across the
+registry and filesystem migration (every ID that was previously a fixed string or a name-only
+fragment now carries the profile's SID, because two users can otherwise collide onto one ID and
+silently lose a finding). **Any `-Baseline` snapshot captured before commit `6e3522b` (session 19's
+first P1 commit) will report every migrated finding as new on the first post-P1 run.** This is a
+one-time diff discontinuity, not a recurring one — `Get-StableId` (FNV-1a, deterministic across
+processes and across PS 5.1/pwsh 7) keeps the new IDs stable forever after. Re-capture any baseline
+you plan to diff against going forward.
+
+---
+
 ## 2026-07-26 — Phase 90 was auto-deleting signed Microsoft binaries, and the batch's integration run
 
 ### The third live rule-#1 violation

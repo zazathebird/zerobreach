@@ -1386,7 +1386,8 @@ foreach ($zbHive in @(Get-UserHives)) {
     foreach ($zbRel in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Run',
                          'SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce')) {
         $zbRunTargets += @{ Path = "$($zbHive.HivePath)\$zbRel"
-                            User = $zbHive.User; Sid = $zbHive.Sid; Src = $zbHive.Source }
+                            User = $zbHive.User; Sid = $zbHive.Sid; Src = $zbHive.Source
+                            NtUserDat = $zbHive.NtUserDat; Rel = $zbRel }
     }
 }
 $zbRunAudited = 0
@@ -1401,18 +1402,23 @@ foreach ($zbT in $zbRunTargets) {
         # A FixParam must never point into a ZB_UH_* mount — remediation runs later, in the
         # server's remediation runspace, long after that mount is gone.
         $zbRunAct    = "DeleteReg"
-        $zbRunHint   = ""
         $zbRunSev    = $SEV_CRITICAL
         $zbRunMounted = ($zbT.Src -eq 'RegLoad')
         if ($zbRunMounted) {
             $zbRunAct  = "Info"
             $zbRunSev  = $SEV_HIGH   # contract: a reg-loaded (logged-off) hive caps at HIGH + Info
-            $zbRunHint = " That profile's hive is only temporarily mounted by this scan — remove by hand with reg load HKU\ZBFIX / Remove-ItemProperty / reg unload HKU\ZBFIX."
         }
         $keys = Get-ItemProperty -Path $rp -ErrorAction SilentlyContinue
         foreach ($prop in ($keys.psobject.properties | Where-Object { $_.Name -notmatch "^PS" }).Name) {
             $val = $keys.$prop
             $zbRunId = "RUNKEY_$(Get-StableId "$($zbT.Sid)|$rp|$prop")"
+            # FixAction Info means this description IS the deliverable (Phase 35's pattern) — the
+            # literal reg load/unload/Remove-ItemProperty commands, naming THIS profile's real
+            # NTUSER.DAT path and THIS value's real name, not a placeholder ZBFIX walkthrough.
+            $zbRunHint = ""
+            if ($zbRunMounted) {
+                $zbRunHint = " That profile's hive is only temporarily mounted by this scan — remove by hand: reg load HKU\ZBFIX '$($zbT.NtUserDat)' ; Remove-ItemProperty -Path 'Registry::HKEY_USERS\ZBFIX\$($zbT.Rel)' -Name '$prop' -Force ; reg unload HKU\ZBFIX"
+            }
             # Strong indicators (Temp / script host / encoded / LOLBin / remote) = CRITICAL auto-deletable.
             # Bare 'AppData' is NOT a strong signal on its own — Discord, Teams, Slack, OneDrive, Logitech
             # and most updaters legitimately autostart from AppData\Local, so an AppData-only value is

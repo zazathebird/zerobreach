@@ -571,11 +571,11 @@ Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
 
 ## Outstanding Work
 
-> Status as of **2026-07-26**. Work since 2026-07-22 lives on the branch
+> Status as of **2026-07-27**. Work since 2026-07-22 lives on the branch
 > **`session12/review-remediation-ws6`**, not `main` — check `git log`/`git status` before assuming
-> anything here is merged, and note the working tree currently carries **uncommitted engine +
-> `native-app` changes** (`ZeroBreach-V23.ps1`, `engine/Phases-1/2/3.ps1`, `data/mitre_mapping.json`,
-> `native-app/src-tauri/{Cargo.toml,src/main.rs}`).
+> anything here is merged, and note the working tree currently carries **uncommitted engine changes**
+> (`ZeroBreach-V23.ps1`, `engine/Phases-1/3.ps1`, `CHANGELOG.md`) from the P1 Stage 7-9 sign-off pass
+> — not yet committed.
 
 The bulk of the original roadmap is **done** (scan-blocking prompts, re-run handling, MITRE, IOC
 Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–6, engine
@@ -583,6 +583,25 @@ split + WS2 port, live finding stream + UTF-8 pipeline, VFX/themes/sound, QUICK-
 scan profiles, portable release build, the 2026-07-22 review remediation + WS6, and the WS7/8/9
 expansion). Since then:
 
+- **P1 (multi-user hive coverage) — engine-side work (Stages 0-5, 7-9) done and live-graded.** The
+  engine no longer scans only the technician's own elevated profile: registry + filesystem sites
+  across all three phase modules now enumerate every reachable Windows profile (`Get-UserHives`/
+  `Get-UserPaths`/`Expand-UserPathTemplate`, `-LoadUserHives` opt-in for logged-off hives), with
+  flood control (`[MACHINE]` tagging, aggregated inventories), honesty findings for coverage gaps
+  (`PROFILE_CENSUS_*`, `UNSCANNED_HIVE_*`, `UNREACHABLE_PROFILE_*`, `PROFILE_ENUM_TRUNCATED`,
+  `HIVELOCK_*`), and a relabeled scan-context banner. Healthy-box auto-destructive baseline
+  re-captured post-P1: **8** (DEEP `-LoadUserHives`) / **2** (QUICK). See `CHANGELOG.md` 2026-07-27
+  for the finding-ID churn disclosure — **re-capture any `-Baseline` snapshot taken before commit
+  `6e3522b`.** `zbtest2` stays planted as the standing multi-user test fixture; do not tear it down.
+  **Still open: Stage 6's live end-to-end proof** — `POST /api/remediate` against a real
+  hive-loaded (`HKU\<SID>`) `FixParam`, verified in `reports/remediation_audit_*.jsonl` +
+  `server_events_*.log`, plus the logged-off-retry-reports-`blocked` check. No
+  `remediation_audit_*.jsonl` exists yet and the newest `server_events_*.log` predates P1
+  (2026-07-22) — the server-side guards and their 19 unit tests are done, but this run is not.
+- **New, not started: Event Viewer / IR log-collection GUI.** Operator wants dedicated GUI buttons
+  for every event-log/IR artifact that can be collected, viewed, inspected or verified — maps onto
+  `EVIDENCE_ENGINE_PLAN.md`'s A-series (A1 log-availability census onward). Scoping still open:
+  collect-to-evidence-package vs. view-only, on-demand vs. part of a scan, which log sources.
 - **Native shell (Milestone 1) — built and live-verified.** Real `.exe` rendering the real GUI,
   Job-Object-tied child process (force-kill verified), WebView2 preflight. The Three.js 3D GUI
   redesign it is a stepping stone to has **not** been started.

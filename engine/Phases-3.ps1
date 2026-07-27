@@ -184,6 +184,18 @@ if ($PhasePlan.Advanced) {
     }
     $yaraRoots = @($yaraRoots | Select-Object -Unique)
     $yaraExt   = @(".exe",".com",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
+    # Self-detection fix (2026-07-27, live-caught in P1 grading): five of the shipped rules are
+    # bare THREAT-ACTOR-TOOL-NAME lists (no shellcode/hex, no encoded-blob, no invocation syntax),
+    # so ANY text file that merely NAMES the tool — a comment, a finding description, another
+    # security tool's OWN detection signatures, this engine's OWN source — matches identically to
+    # a real delivered attack script. Proven live: this engine's own Phases-1.ps1 (Phase 48's WDigest
+    # finding text says "mimikatz target") and Phases-3.ps1 (a Phase 107 comment says "Mimikatz-class")
+    # both contain the bare word "mimikatz", so a Downloads-folder copy of ZeroBreach ITSELF — or any
+    # other MSP/IR script that documents what it detects — was auto-Quarantined by Mimikatz_Strings.
+    # Scoped to SCRIPT/TEXT extensions only: a real compiled .exe/.dll/.scr/.bin containing the bare
+    # word "mimikatz" is a much rarer, much stronger signal and is NOT touched by this carve-out.
+    $YARA_NAME_ONLY_RULES = @("Mimikatz_Strings","Meterpreter_Strings","Sliver_Implant","Lazagne_Stealer","WinPwn_Recon")
+    $YARA_TEXT_ONLY_EXT   = @(".ps1",".vbs",".js",".jse",".vbe",".wsf",".hta",".bat",".cmd")
     $yaraHits  = 0
     $trojSigSeen = 0; $trojSigSw = [System.Diagnostics.Stopwatch]::StartNew()   # SIG_AUDIT budget (P90 name loop)
     # SIG_AUDIT budget for the YARA-hit Authenticode gate below. Deliberately created
@@ -390,6 +402,20 @@ if ($PhasePlan.Advanced) {
                                 -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
                                 -Description "[$zbOwner] YARA rule '$($rule.Name)' (rule severity $($rule.Severity)) matched: $($cand.FullName) — but the Authenticode signature could NOT be verified (file locked, or this phase's signature-check budget of $($global:SIG_AUDIT_MAX_FILES) files / $($global:SIG_AUDIT_DEADLINE_S)s was exhausted). Held at review-only rather than auto-acted-on, because an unverified signature is not a verdict. Re-check this file by hand: Get-AuthenticodeSignature '$($cand.FullName)'" `
                                 -Target "[$zbOwner] $($cand.FullName)" -FixAction "Info" -Group "YARA-Lite Matches"
+                            $yaraHits++; break
+                        }
+                        # Bare-name-rule self-detection carve-out (see $YARA_NAME_ONLY_RULES above).
+                        # A genuine delivered Mimikatz/Meterpreter/Sliver/Lazagne/WinPwn script almost
+                        # always ALSO embeds or fetches its payload — a long encoded blob (the same
+                        # shape Base64_PS_Cradle already keys on) — so require that corroboration
+                        # before a bare name match in a SCRIPT file is allowed to go destructive.
+                        # Fails CLOSED the normal way round: no blob does not mean "definitely safe",
+                        # it means "not yet corroborated", so it demotes to POSSIBLE, never suppresses.
+                        if (($YARA_NAME_ONLY_RULES -contains $rule.Name) -and ($YARA_TEXT_ONLY_EXT -contains $cand.Extension.ToLower()) -and -not [regex]::IsMatch($text, '[A-Za-z0-9+/=]{200,}')) {
+                            Add-Finding -ID "YARA_$($rule.Name)_$(Get-StableId $cand.FullName)" -Phase "PHASE 90" `
+                                -ThreatType "YARA-Lite Match" -Severity $SEV_POSSIBLE `
+                                -Description "[$zbOwner] YARA rule '$($rule.Name)' matched a bare tool-name string in a script/text file with no embedded encoded payload found: $($cand.FullName) — consistent with the name appearing in documentation, a comment, or another security/IR tool's OWN detection signatures rather than a delivered attack script. Review the surrounding context by hand before acting." `
+                                -Target "[$zbOwner] $($cand.FullName)" -FixAction "Info" -Group "YARA-Lite Matches" -SignatureStatus $yaraSigStatus
                             $yaraHits++; break
                         }
                         # Checked, and NOT validly signed: original grading, unchanged.

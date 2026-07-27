@@ -2411,7 +2411,13 @@ if (-not ($global:STEALTH_MODE -or $Auto)) {
     Write-Host "  Spyware · Adware · Botnets · Fileless · C2 Beacons · Miners · Phishing" -ForegroundColor DarkGray
     Write-Host "  YARA-Lite · LOLBAS+ · MoTW · Stolen Certs · AppDomainManager · ClickOnce" -ForegroundColor DarkGray
     Write-Host ""
-    Write-Host "  HOST: $HOST_NAME  |  USER: $USER_NAME  |  OS: $($global:OS_VERSION)" -ForegroundColor DarkCyan
+    # P1 multi-user (§4.6): findings now span every reachable profile, not just the technician's
+    # own — "USER: $USER_NAME" alone is actively misleading post-P1. Get-UserHives is memoized, so
+    # this early call costs nothing extra once phases reach the same hives.
+    $zbBannerHives     = @(Get-UserHives)
+    $zbBannerReachable = @($zbBannerHives | Where-Object { $_.ProfileReachable }).Count
+    Write-Host "  HOST: $HOST_NAME  |  SCAN RUNNING AS: $USER_NAME  |  OS: $($global:OS_VERSION)" -ForegroundColor DarkCyan
+    Write-Host "  PROFILES EXAMINED: $zbBannerReachable of $($zbBannerHives.Count)" -ForegroundColor DarkCyan
     Write-Host "  PSVer: $($global:PSVersionMajor)  |  Legacy: $(if($global:IS_LEGACY_OS){'YES'}else{'NO'})  |  $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor DarkGray
     Write-Host ""
     Write-Host ("═"*80) -ForegroundColor DarkCyan
@@ -2649,6 +2655,54 @@ foreach ($cre in @($global:CustomIocs.Regex)) {
 $global:CustomIocFileNames = @(@($global:CustomIocs.Files) | ForEach-Object {
     try { [IO.Path]::GetFileName("$_").ToLower() } catch { "$_".ToLower() }
 } | Where-Object { $_ })
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  P1 MULTI-USER — SCAN COVERAGE CENSUS (P1_MULTIUSER_HIVE_SPEC.md §4.6 / §4.9)
+#  Runs unconditionally (no -Auto/-Stealth gate, unlike the interactive banner above)
+#  so it lands in every server-driven scan, not just interactive ones. This IS the
+#  A1 log-availability census half for user profiles: one INFO finding naming every
+#  discovered profile, plus the three "could not have fired" honesty cases from §4.9
+#  ((a) hive not loaded, (b) profile unreachable, (c) budget cap hit — case (d),
+#  HIVELOCK, already fires from Close-UserHives). Never a silent clean result.
+# ══════════════════════════════════════════════════════════════════════════════
+$zbCensusHives = @(Get-UserHives)
+if ($zbCensusHives.Count -gt 0) {
+    $zbCensusParts = @($zbCensusHives | ForEach-Object {
+        $zbExamined = if ($_.Loaded -or $_.WasMounted) { "registry+filesystem" }
+                      elseif ($_.ProfileReachable)      { "filesystem only" }
+                      else                              { "NOT EXAMINED" }
+        "$($_.User) [$($_.Sid)] $($_.ProfilePath) (examined: $zbExamined)"
+    })
+    Add-Finding -ID "PROFILE_CENSUS_$(Get-StableId (($zbCensusParts | Sort-Object) -join ';'))" -Phase "PHASE 0" `
+        -ThreatType "Scan Coverage" -Severity $SEV_INFO `
+        -Description "Profile census: $($zbCensusHives.Count) user profile(s) discovered on this box. $($zbCensusParts -join '; ')" `
+        -Target "Profile census ($($zbCensusHives.Count) profile(s))" -FixAction "Info" -Group "Scan Coverage"
+
+    foreach ($zbCh in $zbCensusHives) {
+        # (a) Hive not loaded because loading is disabled by default (-LoadUserHives off) and
+        # the user is logged off. NOT a clean result for that profile's registry checks.
+        if (-not $zbCh.WasMounted -and -not $zbCh.Loaded -and -not $global:UH_ALLOW_LOAD) {
+            Add-Finding -ID "UNSCANNED_HIVE_$(Get-StableId $zbCh.Sid)" -Phase "PHASE 0" `
+                -ThreatType "Scan Coverage" -Severity $SEV_INFO `
+                -Description "User '$($zbCh.User)' ($($zbCh.Sid)) was NOT examined for registry-based persistence: their hive is not loaded (the user is logged off) and hive loading is disabled by default. THIS IS NOT A CLEAN RESULT for that user. Re-run with -LoadUserHives, or have the user log on, to cover this profile. Filesystem checks for this profile $(if ($zbCh.ProfileReachable) { 'DID' } else { 'did NOT' }) run." `
+                -Target "[$($zbCh.User)] $($zbCh.ProfilePath)" -FixAction "Info" -Group "Scan Coverage"
+        }
+        # (b) Profile unreachable (UNC/roaming, §5.4) — no file-based check could run either.
+        if (-not $zbCh.ProfileReachable) {
+            Add-Finding -ID "UNREACHABLE_PROFILE_$(Get-StableId $zbCh.Sid)" -Phase "PHASE 0" `
+                -ThreatType "Scan Coverage" -Severity $SEV_INFO `
+                -Description "User '$($zbCh.User)' ($($zbCh.Sid)) has a profile path that could not be reached ($($zbCh.ProfilePath)) — commonly a roaming profile on an unreachable share. No file-based check could run for this user. Registry checks $(if ($zbCh.WasMounted -or $zbCh.Loaded) { 'DID' } else { 'did NOT' }) run (hive $(if ($zbCh.WasMounted) { 'was' } elseif ($zbCh.Loaded) { 'was loaded' } else { 'was not' }) mounted locally)." `
+                -Target "[$($zbCh.User)] $($zbCh.ProfilePath)" -FixAction "Info" -Group "Scan Coverage"
+        }
+    }
+    # (c) Profile enumeration itself hit its configured cap (count/deadline/load-count budgets).
+    if ($global:UH_TRUNCATED -and $global:UH_SKIPPED.Count -gt 0) {
+        Add-Finding -ID "PROFILE_ENUM_TRUNCATED" -Phase "PHASE 0" `
+            -ThreatType "Scan Coverage" -Severity $SEV_INFO `
+            -Description "Profile enumeration stopped at a configured cap ($($global:UH_MAX_PROFILES) profiles / $($global:UH_DEADLINE_S)s / $($global:UH_MAX_LOADS) hive loads). $($global:UH_SKIPPED.Count) profile(s) were not examined: $($global:UH_SKIPPED -join ', '). Results for those users are unknown, not clean." `
+            -Target "Profile enumeration cap" -FixAction "Info" -Group "Scan Coverage"
+    }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  ENGINE MODULES — dot-sourced in execution order into THIS scope (variables,
