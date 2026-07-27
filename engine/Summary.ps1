@@ -13,6 +13,22 @@ Stop-PhaseTiming   # close out the final phase's wall-clock
 # a failed unload registers a HIGH finding and a finding added after the tally would be
 # counted nowhere and dropped from the written report.
 if (Get-Command Close-UserHives -ErrorAction SilentlyContinue) { Close-UserHives -All }
+
+# Build-Custom-Scan honesty check: if the operator requested a phase-filtered scan
+# (-Phases populated $global:PHASE_ALLOWLIST) and NO phase actually ran, this is NOT a
+# clean result -- it is an EMPTY one (e.g. a stale phase list left over from a different
+# mode, where none of those phase numbers are reachable under the mode actually selected
+# -- a phase only runs if BOTH the mode's own gate AND the custom filter allow it).
+# Without this it would report "0 findings, LOW risk" indistinguishable from a genuinely
+# clean box (CLAUDE.md: never print a clean result for a check that could not have fired).
+# Placement matters -- must run before the $findingCount tally below, same reasoning as
+# the hive-unload backstop just above.
+if ($global:PHASE_ALLOWLIST -and $global:PHASE_ALLOWLIST.Count -gt 0 -and $global:PHASE_TIMINGS.Count -eq 0) {
+    Add-Finding -ID "CUSTOM_SCAN_NO_PHASES_MATCHED" -Phase "PHASE 0" -ThreatType "Scan Coverage" `
+        -Severity $SEV_POSSIBLE -Description "Custom phase filter (-Phases '$($global:PHASE_ALLOWLIST -join ',')') matched ZERO real phases in $global:ScanMode mode -- this scan ran NOTHING, not a clean result. A phase only runs if BOTH the selected mode's own gate (QUICK/FULL/DEEP+) AND the custom filter allow it; check the requested phase numbers are reachable under the mode that was actually run." `
+        -Target "Custom phase filter" -FixAction "Info" -Group "Scan Coverage"
+}
+
 $elapsed    = [Math]::Round(((Get-Date) - $global:START_TIME).TotalMinutes, 2)
 $phaseCount = $PhasePlan.Max
 $totalRisk  = $global:RansomwareRisk + ($global:RootkitHits * 3) + ($global:RATHits * 2) +

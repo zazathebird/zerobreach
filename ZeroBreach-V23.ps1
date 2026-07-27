@@ -46,6 +46,11 @@ param(
     [switch]$Paranoid,
     [string]$IocFile   = "",
     [string]$Baseline  = "",
+    # Build-Custom-Scan: comma-separated phase numbers (fractional-safe, e.g.
+    # "20,21,29,68.5,105") that ADDITIVELY narrows the phases the current
+    # -Mode would otherwise run. Empty (default) = no filtering, zero behavior
+    # change for every other caller. See Test-PhaseGate below.
+    [string]$Phases    = "",
     [ValidateSet("","QUICK","FULL","DEEP","PARANOID","STEALTH","TRIAGE")]
     [string]$Mode      = "",
     [int]   $Hours     = -1,
@@ -110,6 +115,7 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     if ($Hours -ge 0){ $argList += " -Hours $Hours" }
     if ($IocFile)    { $argList += " -IocFile `"$IocFile`"" }
     if ($Baseline)   { $argList += " -Baseline `"$Baseline`"" }
+    if ($Phases)     { $argList += " -Phases `"$Phases`"" }
     if ($OutDir)     { $argList += " -OutDir `"$OutDir`"" }
     # -Schedule/-Smtp* MUST be forwarded too: registering a scheduled task is the one
     # realistic reason to run this from a NON-admin shell, and dropping them here made the
@@ -2573,6 +2579,35 @@ $PhasePlan = switch ($global:ScanMode) {
 # a new PhasePlan flag. No phase module reads it yet — it is inert today by design.
 $global:QUICK_MODE  = ($global:ScanMode -eq 'QUICK' -or $global:ScanMode -eq 'TRIAGE')
 $global:TRIAGE_MODE = ($global:ScanMode -eq 'TRIAGE')
+
+# ── Custom Scan phase allowlist (Build-Custom-Scan feature) ──────────────────
+# -Phases is an OPT-IN, ADDITIVE filter layered on top of every gate above (Min/
+# Max/Universal/Advanced/Integrity/QUICK_MODE) -- it can only narrow a run, never
+# widen it. Unset (every existing caller: GUI mode picker, -Mode alone, scheduled
+# tasks) it is a hard no-op with ZERO behavior change to any currently-shipping
+# phase gate. Built from a comma-separated phase-number list (fractional-safe,
+# e.g. "20,21,29,68.5,105"). Test-PhaseGate is the single choke point every phase
+# gate in engine/Phases-1/2/3.ps1 consults alongside its existing condition.
+$global:PHASE_ALLOWLIST = [System.Collections.Generic.HashSet[double]]::new()
+if ($Phases -and $Phases.Trim()) {
+    foreach ($p in ($Phases -split ',')) {
+        $p = $p.Trim()
+        if ($p -eq '') { continue }
+        $d = 0.0
+        if ([double]::TryParse($p, [System.Globalization.NumberStyles]::Float, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$d)) {
+            [void]$global:PHASE_ALLOWLIST.Add($d)
+        }
+    }
+}
+# Test-PhaseGate($N): TRUE if phase N should run under the custom-scan filter.
+# An EMPTY allowlist (the default) always returns TRUE, so every gate site that
+# adds "-and (Test-PhaseGate N)" to its existing condition is unchanged when
+# -Phases is not supplied.
+function Test-PhaseGate {
+    param([double]$N)
+    if ($global:PHASE_ALLOWLIST.Count -eq 0) { return $true }
+    return $global:PHASE_ALLOWLIST.Contains($N)
+}
 
 # ── Full console transcript (interactive runs) ────────────────────────────────
 # Captures EVERYTHING printed to the console to reports/KrakenConsole_<stamp>.log so

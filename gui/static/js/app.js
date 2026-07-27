@@ -45,6 +45,8 @@ const STATE = {
   lastRemediation: null, // persisted PURGE outcome, rendered on the Report view
   bgTitleTimer: 0,       // flashes document.title when a scan finishes in a background tab
   origTitle: '',         // captured once, so repeated flashes cannot restore the flash text
+  customPhases: null,    // comma-string of phase numbers from Build Custom Scan, or null = off
+  customScanMeta: null,  // { count, mode } for the Launch Pad active-scan banner
 };
 
 // ── CSRF token ────────────────────────────────────────────────────────────────
@@ -167,6 +169,7 @@ function initApp() {
   initScanMonitor();
   initFindingsView();
   initIocView();
+  initCustomScan();
   initMspListener();
   loadSysInfo();
   startVitalsPoller();
@@ -486,6 +489,12 @@ function initLaunchPad() {
       $$('.mode-tile').forEach(t => t.classList.remove('active'));
       tile.classList.add('active');
       STATE.scanMode = tile.dataset.mode;
+      // Manually picking a mode overrides whatever Build Custom Scan computed --
+      // a stale STATE.customPhases from a DIFFERENT mode (e.g. Advanced-tier-only
+      // phases applied under TRIAGE) would otherwise silently survive a switch to
+      // QUICK/FULL, where none of those phase numbers are even reachable, and the
+      // scan would report "complete" having run ZERO phases. See clearCustomScan().
+      if (STATE.customPhases) clearCustomScan();
     });
   });
 
@@ -556,6 +565,7 @@ function renderProfileOptions(selectName) {
 
 function applyProfile(p) {
   ZBSound.play('confirm');
+  if (STATE.customPhases) clearCustomScan();   // same staleness reasoning as the mode-tile handler
   STATE.scanMode = p.mode;
   $$('.mode-tile').forEach(t => t.classList.toggle('active', t.dataset.mode === p.mode));
 
@@ -951,6 +961,10 @@ function startScan() {
     ioc_file:    $('ioc-path').value.trim(),
     msp_mode:    STATE.mspMode,
   };
+  // Build Custom Scan: narrows the phase set on top of whatever mode is selected above.
+  // Cleared only by the explicit CLEAR CUSTOM SCAN control, so it stays in effect across
+  // repeated runs -- same "sticky until changed" behavior as mode/hours/IOC file.
+  if (STATE.customPhases) config.phases = STATE.customPhases;
 
   $('si-mode').textContent   = STATE.scanMode;
   $('pill-mode').style.display = 'flex';
@@ -2053,6 +2067,170 @@ function saveIoc() {
     })
     .catch(e => { showToast(`IOC save failed: ${e.message}`); ZBSound.play('alert'); })
     .finally(() => { $('btn-ioc-save').disabled = false; });
+}
+
+// ── Build Custom Scan ────────────────────────────────────────────────────────
+// Paste text -> POST /api/scan/analyze-text (pure, rule-based, no side effects) ->
+// preview extracted IOCs + matched categories/phases -> operator reviews & can
+// uncheck categories -> USE THIS SCAN applies the result to STATE + the Launch
+// Pad and returns there; nothing is scanned until INITIATE SCAN is pressed.
+let CS_LAST_RESULT = null;
+
+function initCustomScan() {
+  $('btn-cs-analyze').addEventListener('click', runCustomScanAnalysis);
+  $('btn-cs-clear-input').addEventListener('click', () => {
+    $('cs-input').value = '';
+    $('cs-results').style.display = 'none';
+    $('cs-status').textContent = '';
+    CS_LAST_RESULT = null;
+  });
+  $('btn-cs-use').addEventListener('click', applyCustomScan);
+  $('btn-cs-clear-active').addEventListener('click', clearCustomScan);
+}
+
+function runCustomScanAnalysis() {
+  const text = $('cs-input').value.trim();
+  if (!text) { $('cs-status').textContent = 'Paste some text first.'; return; }
+  $('cs-status').textContent = 'Analyzing (offline, rule-based)...';
+  $('btn-cs-analyze').disabled = true;
+  postJSON('/api/scan/analyze-text', { text })
+    .then(r => r.json())
+    .then(res => {
+      if (res.error) throw new Error(res.error);
+      renderCustomScanResults(res);
+      $('cs-status').textContent = '';
+    })
+    .catch(e => { $('cs-status').textContent = `Analysis failed: ${e.message || e}`; })
+    .finally(() => { $('btn-cs-analyze').disabled = false; });
+}
+
+function renderCustomScanResults(res) {
+  CS_LAST_RESULT = res;
+  $('cs-results').style.display = 'block';
+
+  const catHost = $('cs-categories');
+  catHost.innerHTML = '';
+  if (!res.categories || res.categories.length === 0) {
+    catHost.innerHTML = '<div class="cs-summary">No threat category keywords matched this text.</div>';
+  } else {
+    res.categories.forEach(cat => {
+      const row = document.createElement('label');
+      row.className = 'cs-cat-row';
+      const kw = (cat.matched_keywords || []).join(', ');
+      const ph = (cat.phases || []).join(', ');
+      row.innerHTML =
+        `<input type="checkbox" class="cs-cat-check" data-key="${cat.key}" checked>` +
+        `<div><div class="cs-cat-label">${cat.label}</div>` +
+        `<div class="cs-cat-kw">matched: ${kw}</div>` +
+        `<div class="cs-cat-phases">${(cat.phases || []).length} phase(s): ${ph}</div></div>`;
+      catHost.appendChild(row);
+    });
+    catHost.querySelectorAll('.cs-cat-check').forEach(cb => cb.addEventListener('change', recomputeCustomScanSelection));
+  }
+
+  const iocHost = $('cs-iocs');
+  iocHost.innerHTML = '';
+  const groups = [['hashes', 'Hashes'], ['ips', 'IPs'], ['domains', 'Domains'], ['files', 'Files/Paths'], ['registry', 'Registry Keys']];
+  let anyIoc = false;
+  groups.forEach(([key, label]) => {
+    const vals = (res.iocs && res.iocs[key]) || [];
+    if (vals.length === 0) return;
+    anyIoc = true;
+    const row = document.createElement('div');
+    row.className = 'cs-ioc-group';
+    const shown = vals.slice(0, 20).join(', ') + (vals.length > 20 ? ', ...' : '');
+    row.innerHTML = `<b>${label} (${vals.length}):</b> <span class="cs-ioc-val"></span>`;
+    row.querySelector('.cs-ioc-val').textContent = shown;   // textContent: values are untrusted pasted text
+    iocHost.appendChild(row);
+  });
+  if (!anyIoc) iocHost.innerHTML = '<div class="cs-summary">No IOCs extracted from this text.</div>';
+  if (res.iocs && (res.iocs.registry || []).length) {
+    const note = document.createElement('div');
+    note.className = 'cs-summary';
+    note.textContent = 'Registry keys are shown for review only — the IOC file format has no registry-key type, so these are not fed to the scan automatically.';
+    iocHost.appendChild(note);
+  }
+
+  recomputeCustomScanSelection();
+}
+
+// Re-derives the final phase list from which category checkboxes are still checked,
+// plus whatever always-runs baseline phases the server included regardless of category.
+function recomputeCustomScanSelection() {
+  if (!CS_LAST_RESULT) return;
+  const res = CS_LAST_RESULT;
+  // Use the server's own always_include list directly -- do NOT derive it by
+  // subtracting category phase lists from res.phases. A baseline phase can ALSO
+  // appear inside a matched category's list (e.g. phase 6 is in both
+  // always_include and the c2_rat category); subtracting meant unchecking that
+  // category silently dropped the baseline phase too.
+  const finalSet = new Set(res.always_include || []);
+  document.querySelectorAll('.cs-cat-check').forEach(cb => {
+    if (!cb.checked) return;
+    const cat = (res.categories || []).find(c => c.key === cb.dataset.key);
+    if (cat) (cat.phases || []).forEach(p => finalSet.add(p));
+  });
+
+  const finalPhases = Array.from(finalSet).sort((a, b) => a - b);
+  const mode = finalPhases.some(p => p >= 81) ? 'TRIAGE' : 'FULL';
+
+  $('cs-summary').textContent = `${finalPhases.length} phase(s) selected -> ${mode} mode required to reach them all. ${res.rationale || ''}`;
+
+  res._finalPhases = finalPhases;
+  res._finalMode = mode;
+}
+
+function clearCustomScan() {
+  STATE.customPhases = null;
+  STATE.customScanMeta = null;
+  $('cs-active-banner').style.display = 'none';
+  showToast('Custom scan cleared — normal mode/phase rules apply');
+}
+
+function applyCustomScan() {
+  if (!CS_LAST_RESULT) return;
+  const phases = CS_LAST_RESULT._finalPhases && CS_LAST_RESULT._finalPhases.length ? CS_LAST_RESULT._finalPhases : CS_LAST_RESULT.phases;
+  const mode   = CS_LAST_RESULT._finalMode || CS_LAST_RESULT.suggested_mode || 'FULL';
+  if (!phases || phases.length === 0) { showToast('Nothing to apply — no phases selected'); return; }
+
+  const iocs = CS_LAST_RESULT.iocs || {};
+  const hasIocs = ['hashes', 'ips', 'domains', 'files'].some(k => (iocs[k] || []).length > 0);
+  // Merge into whatever IOC set is already saved -- a bare POST here would OVERWRITE
+  // custom_iocs.json/.ioc wholesale (the route saves exactly what it's given), silently
+  // destroying any previously-curated list including wiping regex entries to none.
+  const useIocsThen = hasIocs
+    ? fetch('/api/ioc').then(r => r.json()).catch(() => ({}))
+        .then(existing => {
+          const union = (a, b) => Array.from(new Set([...(a || []), ...(b || [])]));
+          return postJSON('/api/ioc', {
+            hashes:  union(existing.hashes,  iocs.hashes),
+            ips:     union(existing.ips,     iocs.ips),
+            domains: union(existing.domains, iocs.domains),
+            regex:   existing.regex  || [],
+            files:   union(existing.files,   iocs.files),
+          });
+        })
+        .then(r => r.json()).then(j => { if (j && j.path) $('ioc-path').value = j.path; }).catch(() => {})
+    : Promise.resolve();
+
+  useIocsThen.then(() => {
+    STATE.customPhases   = phases.join(',');
+    STATE.customScanMeta = { count: phases.length, mode };
+
+    const tile = document.querySelector(`.mode-tile[data-mode="${mode}"]`);
+    if (tile) {
+      $$('.mode-tile').forEach(t => t.classList.remove('active'));
+      tile.classList.add('active');
+      STATE.scanMode = mode;
+    }
+
+    $('cs-active-banner').style.display = 'flex';
+    $('cs-active-text').textContent = `CUSTOM SCAN ACTIVE — ${phases.length} phase(s), mode ${mode}`;
+
+    showToast('Custom scan applied — review Launch Pad, then INITIATE SCAN');
+    ZBSound.play('deploy');
+    switchView('launchpad');
+  });
 }
 
 // ── Report View ───────────────────────────────────────────────────────────────

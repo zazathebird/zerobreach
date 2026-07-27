@@ -91,6 +91,14 @@ if (Test-Path $mitrePath) {
     catch { $script:MITRE_MAP = $null }
 }
 
+# Category -> phase-number map driving Build-Custom-Scan (POST /api/scan/analyze-text).
+$script:SCAN_CATEGORIES = $null
+$scanCatPath = Join-Path $ROOT 'data\scan_categories.json'
+if (Test-Path $scanCatPath) {
+    try { $script:SCAN_CATEGORIES = Get-Content -LiteralPath $scanCatPath -Raw -ErrorAction Stop | ConvertFrom-Json }
+    catch { $script:SCAN_CATEGORIES = $null }
+}
+
 # ── Built-in scan profiles (read-only presets served by /api/profiles) ─────────
 # Deliberately NO ioc_file key: applying a builtin must not blank an IOC path the
 # IOC Manager just set (the GUI only writes fields present on the profile).
@@ -608,6 +616,110 @@ function Get-ReportSummary {
     return $sum
 }
 
+function Get-TextScanAnalysis {
+    # Build-Custom-Scan: rule-based-only extraction (regex/keyword, no external calls -- this
+    # runs on an air-gapped IR box) of IOCs + threat categories from pasted free text (an
+    # alert, ticket notes, an IOC list), matched against data/scan_categories.json. Pure
+    # function: never mutates server/scan state. Same extraction philosophy as the
+    # ingest-malware-alert skill, just running live instead of at dev time.
+    param([string]$Text)
+
+    $result = [ordered]@{
+        iocs            = [ordered]@{ hashes = @(); ips = @(); domains = @(); files = @(); registry = @() }
+        categories      = @()
+        phases          = @()
+        always_include  = @()   # baseline phases the client must keep regardless of which category
+                                 # checkboxes are unchecked -- kept as its OWN field rather than
+                                 # something the client derives by subtracting category phase lists
+                                 # from `phases`, because a baseline phase can ALSO appear inside a
+                                 # matched category's list (e.g. phase 6 is in both always_include
+                                 # and the c2_rat category); deriving it client-side by subtraction
+                                 # made unchecking that category silently drop the baseline phase too.
+        suggested_mode  = 'FULL'
+        rationale       = ''
+    }
+    if (-not $Text -or -not $Text.Trim()) { return $result }
+    $t     = $Text
+    $tNorm = $t -replace '\[\.\]', '.' -replace '\(\.\)', '.'   # de-fang 1.2.3[.]4 / evil[.]com
+
+    # ---- IOC extraction ---------------------------------------------------------
+    # Hashes: longest-first so a SHA256 substring never ALSO reports as a shorter partial hit.
+    $sha256 = @([regex]::Matches($t, '\b[A-Fa-f0-9]{64}\b') | ForEach-Object { $_.Value.ToLower() } | Select-Object -Unique)
+    $seen   = [System.Collections.Generic.HashSet[string]]::new([string[]]$sha256)
+    $sha1   = @([regex]::Matches($t, '\b[A-Fa-f0-9]{40}\b') | ForEach-Object { $_.Value.ToLower() } | Where-Object { -not $seen.Contains($_) } | Select-Object -Unique)
+    foreach ($h in $sha1) { [void]$seen.Add($h) }
+    $md5    = @([regex]::Matches($t, '\b[A-Fa-f0-9]{32}\b') | ForEach-Object { $_.Value.ToLower() } | Where-Object { -not $seen.Contains($_) } | Select-Object -Unique)
+    $result.iocs.hashes = @(@($sha256) + @($sha1) + @($md5) | Select-Object -Unique)
+
+    $result.iocs.ips = @([regex]::Matches($tNorm, '\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b') | ForEach-Object { $_.Value } | Select-Object -Unique)
+
+    # Windows paths (C:\... or %ENV%\...) -- reported as file IOCs, never as domains.
+    $result.iocs.files = @([regex]::Matches($t, '(?:[A-Za-z]:\\|%[A-Za-z_]+%\\)[^\s"''<>|]+') | ForEach-Object { $_.Value.TrimEnd('.', ',', ')') } | Select-Object -Unique)
+
+    # Registry keys/paths.
+    $result.iocs.registry = @([regex]::Matches($t, '(?:HKLM|HKCU|HKU|HKCR|HKEY_LOCAL_MACHINE|HKEY_CURRENT_USER|HKEY_USERS|HKEY_CLASSES_ROOT)\\[^\s"''<>|]+') | ForEach-Object { $_.Value.TrimEnd('.', ',', ')') } | Select-Object -Unique)
+
+    # Domains: dotted-label tokens whose last label is alpha and NOT a known file extension
+    # (so "malware.exe" reports as a file, not a domain) and not an IP already captured above.
+    # NOTE: 'com' is deliberately OMITTED even though legacy DOS .com executables exist --
+    # .com is also the single most common domain TLD, and excluding it silently dropped
+    # every evil-c2.com-style domain IOC from real alert text (caught live testing this
+    # route: a Cobalt-Strike-style sample alert with "evil-c2[.]com" extracted 0 domains
+    # until this was fixed). A missed rare .com dropper file is far cheaper than a missed
+    # C2 domain.
+    $fileExt = @('exe','dll','bat','cmd','ps1','vbs','js','jse','wsf','scr','pif','lnk','doc','docm','docx','xls','xlsm','xlsx','ppt','pptm','pptx','pdf','zip','rar','7z','jar','msi','hta','py','txt','json','log','tmp','cs','sct','wsc','iso','img','bin')
+    $domains = foreach ($m in [regex]::Matches($tNorm, '\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,24}\b')) {
+        $val = $m.Value.ToLower().TrimEnd('.')
+        if ($val -match '^\d+(\.\d+){3}$') { continue }
+        $lastLabel = $val.Substring($val.LastIndexOf('.') + 1)
+        if ($fileExt -contains $lastLabel) { continue }
+        $val
+    }
+    $result.iocs.domains = @($domains | Select-Object -Unique)
+
+    # ---- Category detection ------------------------------------------------------
+    $matchedPhases = [System.Collections.Generic.List[double]]::new()
+    if ($script:SCAN_CATEGORIES) {
+        if ($script:SCAN_CATEGORIES.always_include) {
+            foreach ($p in $script:SCAN_CATEGORIES.always_include) { $matchedPhases.Add([double]$p) }
+            $result.always_include = @($script:SCAN_CATEGORIES.always_include | ForEach-Object { [double]$_ } | Sort-Object)
+        }
+        foreach ($catKey in $script:SCAN_CATEGORIES.categories.PSObject.Properties.Name) {
+            $cat  = $script:SCAN_CATEGORIES.categories.$catKey
+            $hits = @()
+            foreach ($kw in $cat.keywords) { if ($t -match [regex]::Escape($kw)) { $hits += $kw } }
+            if ($hits.Count -gt 0) {
+                foreach ($p in $cat.phases) { $matchedPhases.Add([double]$p) }
+                $result.categories += [ordered]@{
+                    key = $catKey; label = $cat.label
+                    matched_keywords = @($hits | Select-Object -Unique)
+                    phases = @($cat.phases)
+                }
+            }
+        }
+    }
+
+    $uniquePhases = @($matchedPhases | Select-Object -Unique | Sort-Object)
+    $result.phases = $uniquePhases
+
+    # A phase >= 81 only ever runs under TRIAGE/DEEP/PARANOID/STEALTH ($PhasePlan.Universal --
+    # FULL caps at 80, see $PhasePlan in ZeroBreach-V23.ps1). Recommend the lightest mode that
+    # can actually reach every matched phase; TRIAGE = the QUICK-core + 81-115 combo.
+    $needsAdvanced = @($uniquePhases | Where-Object { $_ -ge 81 }).Count -gt 0
+    $result.suggested_mode = if ($needsAdvanced) { 'TRIAGE' } else { 'FULL' }
+
+    $iocCount = $result.iocs.hashes.Count + $result.iocs.ips.Count + $result.iocs.domains.Count + $result.iocs.files.Count + $result.iocs.registry.Count
+    $result.rationale =
+        if ($result.categories.Count -gt 0) {
+            "Matched " + (($result.categories | ForEach-Object { $_.label }) -join ', ') + " -> $($uniquePhases.Count) phases, mode $($result.suggested_mode). $iocCount IOC(s) extracted."
+        } elseif ($iocCount -gt 0) {
+            "No threat category matched by keyword -- $iocCount IOC(s) extracted and will still be fed to the scan; only baseline phases selected ($($uniquePhases -join ',')). Consider a normal FULL/DEEP scan instead of narrowing if you're not sure what you're looking for."
+        } else {
+            "No categories or IOCs matched this text -- nothing to narrow. Run a normal FULL/DEEP scan instead."
+        }
+    return $result
+}
+
 function Read-RequestBody {
     param($Ctx)
     try {
@@ -929,6 +1041,17 @@ $doSnapshot = ConvertTo-Flag $ScanConfig.snapshot
 $doBaseline = ConvertTo-Flag $ScanConfig.baseline
 $doCsv      = ConvertTo-Flag $ScanConfig.csv
 $iocFile  = "$($ScanConfig.ioc_file)"
+# Build-Custom-Scan: comma-separated phase numbers (fractional-safe) that narrow the
+# chosen mode's phase set. Interpolated unquoted into $psArgs below exactly like
+# $mode/$hours above, so it gets the SAME allowlist treatment (digits/dot/comma ONLY,
+# nothing else survives) rather than the generic passthrough this route deliberately
+# does not otherwise offer (see the $mode comment above — smuggled extra engine params
+# is the exact hole this file already closed once).
+$phasesRaw   = "$($ScanConfig.phases)".Trim()
+$phasesParam = ''
+if ($phasesRaw -and $phasesRaw.Length -le 2000 -and $phasesRaw -match '^[0-9]+(\.[0-9]+)?(,[0-9]+(\.[0-9]+)?)*$') {
+    $phasesParam = $phasesRaw
+}
 
 # ── Reset state for new scan ────────────────────────────────────────────────────
 $ScanState.Mode         = $mode
@@ -955,6 +1078,7 @@ if ($doHtml)   { $psArgs += ' -Html' }
 if ($paranoid) { $psArgs += ' -Paranoid' }
 if ($stealth)  { $psArgs += ' -Stealth' }
 if ($iocFile -and (Test-Path $iocFile)) { $psArgs += " -IocFile `"$iocFile`"" }
+if ($phasesParam) { $psArgs += " -Phases `"$phasesParam`"" }
 # "Baseline Diff Mode": hand the engine the most recent prior baseline so it can report what
 # is NEW since then. Silently skipped on a first-ever run (no baseline exists yet) — and the
 # file the CURRENT run is about to overwrite is captured before it is replaced.
@@ -1949,6 +2073,23 @@ function Handle-Request {
                 }
             } else {
                 Write-JsonResponse $Ctx '{"hashes":[],"ips":[],"domains":[],"regex":[],"files":[],"_path":"","_custom":false}'
+            }
+        }
+
+        '^/api/scan/analyze-text$' {
+            # Build-Custom-Scan: pure analysis, no scan/remediation side effects, safe to call
+            # any time (including mid-scan) and safe to call repeatedly as the operator edits
+            # their pasted text.
+            if ($method -ne 'POST') { Write-JsonResponse $Ctx '{"error":"POST required"}' 405; return }
+            $parsed = Read-JsonBody $Ctx
+            if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
+            $text = "$($parsed.text)"
+            if ($text.Length -gt 50000) { $text = $text.Substring(0, 50000) }
+            try {
+                $analysis = Get-TextScanAnalysis -Text $text
+                Write-JsonResponse $Ctx ($analysis | ConvertTo-Json -Depth 6)
+            } catch {
+                Write-JsonResponse $Ctx (@{ error = "$($_.Exception.Message)" } | ConvertTo-Json -Compress) 500
             }
         }
 

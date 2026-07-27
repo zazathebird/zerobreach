@@ -745,6 +745,45 @@ select.path-input option { background: var(--bg-raised); color: var(--text); }
 #ioc-table .ioc-val { color: var(--text); font-family: "JetBrains Mono", ui-monospace, monospace; word-break: break-all; }
 .ioc-del { padding: 1px 7px !important; line-height: 1.4; }
 
+/* Build Custom Scan */
+.cs-textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  padding: 10px;
+  outline: none;
+  transition: border-color var(--transition);
+}
+.cs-textarea:focus { border-color: var(--accent); box-shadow: 0 0 8px var(--accent-glow); }
+.cs-textarea::placeholder { color: var(--text-dim); }
+#cs-actions { display: flex; gap: 8px; margin-top: 10px; }
+.cs-cat-list, .cs-ioc-list { display: flex; flex-direction: column; gap: 6px; }
+.cs-cat-row {
+  display: flex; align-items: flex-start; gap: 8px; cursor: pointer;
+  background: var(--bg-raised); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 8px 10px;
+}
+.cs-cat-row input[type="checkbox"] { margin-top: 3px; }
+.cs-cat-label { color: var(--text); font-size: 11px; font-weight: 600; letter-spacing: 0.5px; }
+.cs-cat-kw { color: var(--text-dim); font-size: 10px; margin-top: 2px; }
+.cs-cat-phases { color: var(--text-mid); font-size: 9px; margin-top: 2px; font-family: "JetBrains Mono", ui-monospace, monospace; }
+.cs-ioc-group { font-size: 11px; color: var(--text-mid); }
+.cs-ioc-group b { color: var(--accent); }
+.cs-ioc-val { font-family: "JetBrains Mono", ui-monospace, monospace; color: var(--text); word-break: break-all; }
+.cs-summary { font-size: 11px; color: var(--text-mid); line-height: 1.6; }
+#cs-use-wrap { margin-top: 16px; }
+#cs-active-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--accent-dim); border: 1px solid var(--border-bright); border-radius: var(--radius);
+  padding: 8px 12px; margin-top: 14px; font-size: 10px; color: var(--text-mid); letter-spacing: 0.5px;
+}
+
 /* Toasts */
 #zb-toast-host { position: fixed; right: 18px; bottom: 18px; z-index: 100000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
 .zb-toast {

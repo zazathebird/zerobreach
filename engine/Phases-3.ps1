@@ -132,6 +132,7 @@ if ($PhasePlan.Advanced) {
     }
 
     # ── PHASE 90: YARA-LITE STRING SCAN + CUSTOM IOC HASH CHECK ───────────────
+    if (Test-PhaseGate 90) {
     Show-PhaseHeader "PHASE 90" "YARA-LITE BINARY STRING SCAN & CUSTOM IOC HASHES" "YARA-LITE"
     Out-Typewriter "SCANNING USER-PATH BINARIES FOR MALWARE STRINGS..." "HUNT"
     Invoke-QuantumBar "BINARY STRING ANALYSIS" 18 90
@@ -581,8 +582,10 @@ if ($PhasePlan.Advanced) {
         }
     }
     if ($yaraHits -eq 0) { Out-Typewriter "  -> [OK] NO YARA-LITE MATCHES." "GOOD" }
+    }   # end Test-PhaseGate 90
 
     # ── PHASE 91: MARK-OF-THE-WEB ABUSE ───────────────────────────────────────
+    if (Test-PhaseGate 91) {
     Show-PhaseHeader "PHASE 91" "MARK-OF-THE-WEB (MOTW) ZONE.IDENTIFIER STRIP" "MOTW"
     Out-Typewriter "SCANNING DOWNLOADS FOR MOTW-STRIPPED EXECUTABLES AND WEB-ORIGIN EVIDENCE..." "HUNT"
     # EVIDENCE_ENGINE_PLAN P6 / A10 — this phase already opened the right stream and threw the
@@ -708,8 +711,10 @@ if ($PhasePlan.Advanced) {
     } else {
         Out-Typewriter "  -> NO WEB-ORIGIN URLS RECOVERABLE FROM ZONE.IDENTIFIER STREAMS IN SCOPE." "INFO"
     }
+    }   # end Test-PhaseGate 91
 
     # ── PHASE 92: UAC AUTO-ELEVATE BYPASS DETECTION ───────────────────────────
+    if (Test-PhaseGate 92) {
     Show-PhaseHeader "PHASE 92" "UAC AUTO-ELEVATE BYPASS REGISTRY STAGING" "UAC BYPASS"
     Out-Typewriter "CHECKING UAC BYPASS REGISTRY KEYS (FODHELPER / COMPUTERDEFAULTS)..." "HUNT"
     # P1 multi-user: UAC-bypass staging lives in the VICTIM's per-user CLASSES store BY
@@ -803,8 +808,10 @@ if ($PhasePlan.Advanced) {
         $global:UACBypassHits++; $uacFound = $true
     }
     if (-not $uacFound) { Out-Typewriter "  -> [OK] NO UAC BYPASS INDICATORS." "GOOD" }
+    }   # end Test-PhaseGate 92
 
     # ── PHASE 93: DEEP DLL/MODULE INJECTION SCAN ──────────────────────────────
+    if (Test-PhaseGate 93) {
     Show-PhaseHeader "PHASE 93" "DEEP PROCESS MODULE / DLL INJECTION AUDIT" "INJECTION"
     Out-Typewriter "ENUMERATING LOADED MODULES FOR UNSIGNED USER-PATH DLLS..." "HUNT"
     Invoke-QuantumBar "MODULE INTROSPECTION" 16 110
@@ -850,8 +857,10 @@ if ($PhasePlan.Advanced) {
         Out-Typewriter ("  -> [INFO] MODULE SIG BUDGET REACHED ({0} DLLs / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
     }
     if ($injFound -eq 0) { Out-Typewriter "  -> [OK] NO UNSIGNED INJECTED MODULES." "GOOD" }
+    }   # end Test-PhaseGate 93
 
     # ── PHASE 94: COM SCRIPTLET (.SCT) / SQUIBLYDOO ───────────────────────────
+    if (Test-PhaseGate 94) {
     Show-PhaseHeader "PHASE 94" "COM SCRIPTLET (.SCT/.WSC) ABUSE & SQUIBLYDOO" "COM SCRIPTLET"
     Out-Typewriter "SCANNING FOR SCRIPTLET FILES AND REGSVR32 STAGING..." "HUNT"
     $sctHits = 0
@@ -952,8 +961,10 @@ if ($PhasePlan.Advanced) {
         }
     }
     if ($sctHits -eq 0) { Out-Typewriter "  -> [OK] NO COM SCRIPTLET ARTIFACTS." "GOOD" }
+    }   # end Test-PhaseGate 94
 
     # ── PHASE 95: APPDOMAINMANAGER .NET HIJACK ────────────────────────────────
+    if (Test-PhaseGate 95) {
     Show-PhaseHeader "PHASE 95" "APPDOMAINMANAGER .NET LOADER HIJACK" "DOTNET HIJACK"
     Out-Typewriter "CHECKING APPDOMAIN MANAGER ENV VARS AND .CONFIG FILES..." "HUNT"
     $admEnv  = [Environment]::GetEnvironmentVariable("APPDOMAIN_MANAGER_ASM","Machine")
@@ -980,8 +991,10 @@ if ($PhasePlan.Advanced) {
         }
     }
     if ($admHits -eq 0) { Out-Typewriter "  -> [OK] NO APPDOMAINMANAGER HIJACK." "GOOD" }
+    }   # end Test-PhaseGate 95
 
     # ── PHASE 96: PRINTNIGHTMARE / PRINT SPOOLER ──────────────────────────────
+    if (Test-PhaseGate 96) {
     Show-PhaseHeader "PHASE 96" "PRINT SPOOLER / PRINTNIGHTMARE (CVE-2021-34527)" "PRINTNIGHTMARE"
     Out-Typewriter "AUDITING POINT-AND-PRINT POLICY AND SPOOLER DRIVER DIR..." "HUNT"
     $pnHits = 0
@@ -1034,8 +1047,10 @@ if ($PhasePlan.Advanced) {
         -Description "Option: Disable Print Spooler if printers not in use (eliminates PrintNightmare class)" `
         -Target "Service: Spooler" -FixAction "RunCmd" -FixParam "Stop-Service Spooler -Force; Set-Service Spooler -StartupType Disabled" -Group "PrintNightmare"
     if ($pnHits -eq 0) { Out-Typewriter "  -> [OK] NO PRINTNIGHTMARE INDICATORS." "GOOD" }
+    }   # end Test-PhaseGate 96
 
     # ── PHASE 97: CLICKONCE ABUSE ─────────────────────────────────────────────
+    if (Test-PhaseGate 97) {
     Show-PhaseHeader "PHASE 97" "CLICKONCE / .APPLICATION DEPLOYMENT ABUSE" "CLICKONCE"
     Out-Typewriter "SCANNING FOR CLICKONCE PAYLOADS IN USER PATHS..." "HUNT"
     $coHits = 0
@@ -1087,6 +1102,7 @@ if ($PhasePlan.Advanced) {
         $coHits++
     }
     if ($coHits -eq 0) { Out-Typewriter "  -> [OK] NO CLICKONCE PAYLOADS." "GOOD" }
+    }   # end Test-PhaseGate 97
 
     # ── PHASE 97.5: MSIX / APP INSTALLER SIDELOADING ABUSE ────────────────────
     # WS9: enterprise LOB apps and Intune legitimately sideload MSIX (SignatureKind
@@ -1095,6 +1111,7 @@ if ($PhasePlan.Advanced) {
     # suppress this for an org's own Intune-sideloaded LOB apps, add the internal PKI cert's
     # publisher Subject substring to trusted_signers in data/permission_baseline.json (the same
     # customization path used for every other allowlist in this codebase — no code change needed).
+    if (Test-PhaseGate 97.5) {
     Show-PhaseHeader "PHASE 97.5" "MSIX / APP INSTALLER SIDELOADING ABUSE" "MSIX SIDELOAD"
     Out-Typewriter "AUDITING SIDELOADED MSIX/APPX PACKAGES FOR UNTRUSTED PUBLISHERS..." "HUNT"
     $msixHits = 0
@@ -1132,8 +1149,10 @@ if ($PhasePlan.Advanced) {
         }
     } catch {}
     if ($msixHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPICIOUS SIDELOADED MSIX PACKAGES." "GOOD" }
+    }   # end Test-PhaseGate 97.5
 
     # ── PHASE 98: STOLEN/LEAKED CODE-SIGNING CERT ─────────────────────────────
+    if (Test-PhaseGate 98) {
     Show-PhaseHeader "PHASE 98" "STOLEN / LEAKED CODE-SIGNING CERT DETECTION" "STOLEN CERT"
     Out-Typewriter "AUDITING SIGNED BINARIES IN USER PATHS FOR KNOWN-LEAKED ISSUERS..." "HUNT"
     Invoke-QuantumBar "AUTHENTICODE CHAIN AUDIT" 12 100
@@ -1202,8 +1221,10 @@ if ($PhasePlan.Advanced) {
         Out-Typewriter ("  -> [INFO] CERT AUDIT BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
     }
     if ($stolenHits -eq 0) { Out-Typewriter "  -> [OK] NO STOLEN-CERT-SIGNED BINARIES." "GOOD" }
+    }   # end Test-PhaseGate 98
 
     # ── PHASE 99: LOLBAS EXPANDED PROCESS AUDIT ───────────────────────────────
+    if (Test-PhaseGate 99) {
     Show-PhaseHeader "PHASE 99" "LOLBAS EXPANDED PROCESS ABUSE AUDIT" "LOLBAS+"
     Out-Typewriter "SCANNING ALL LOLBAS-CLASS BINARIES FOR ABUSE PATTERNS..." "HUNT"
     Invoke-QuantumBar "LOLBAS CROSS-CORRELATION" 14 90
@@ -1234,12 +1255,14 @@ if ($PhasePlan.Advanced) {
         }
     }
     if ($lolbasHits -eq 0) { Out-Typewriter "  -> [OK] NO EXPANDED LOLBAS ABUSE." "GOOD" }
+    }   # end Test-PhaseGate 99
 
     # ── PHASE 99.5: MALWARE COMMAND-LINE HEURISTICS ───────────────────────────
     # One Win32_Process enumeration cross-checked against the externalized behavioral
     # command-line rules (loader / banking-trojan / infostealer / inhibit-recovery). All
     # FixAction Info — a running process needs operator triage, not an auto-kill (the rules
     # are heuristic and could match a legit admin one-liner).
+    if (Test-PhaseGate 99.5) {
     Show-PhaseHeader "PHASE 99.5" "MALWARE COMMAND-LINE HEURISTICS (LOADER/BANKING/STEALER/RECOVERY)" "BEHAVIOR"
     Out-Typewriter "CROSS-CHECKING PROCESS COMMAND LINES AGAINST BEHAVIORAL RULES..." "HUNT"
     $cmdRuleSevMap = @{ "CRITICAL"=$SEV_CRITICAL; "HIGH"=$SEV_HIGH; "POSSIBLE"=$SEV_POSSIBLE }
@@ -1262,8 +1285,10 @@ if ($PhasePlan.Advanced) {
         }
     }
     if ($cmdRuleHits -eq 0) { Out-Typewriter "  -> [OK] NO MALICIOUS COMMAND-LINE PATTERNS." "GOOD" }
+    }   # end Test-PhaseGate 99.5
 
     # ── PHASE 100: BROWSER CRED DB ACCESS AUDIT ───────────────────────────────
+    if (Test-PhaseGate 100) {
     Show-PhaseHeader "PHASE 100" "BROWSER PASSWORD/COOKIE DB RECENT ACCESS" "INFO-STEALER"
     Out-Typewriter "CHECKING LAST-ACCESS TIME ON BROWSER CREDENTIAL DATABASES..." "HUNT"
     # WS0 wiring: target list externalized/expanded to 'infostealer_target_paths_raw' (31 paths —
@@ -1297,8 +1322,13 @@ if ($PhasePlan.Advanced) {
         }
     }
     if ($credHits -eq 0) { Out-Typewriter "  -> [OK] NO RECENT CRED DB ACCESS." "GOOD" }
+    }   # end Test-PhaseGate 100
 
-    # ── PHASE 101: WSL / DOCKER CONTAINER SURFACE ─────────────────────────────
+    # ── PHASE 100.5: CLOUD & SESSION TOKEN THEFT STAGING ───────────────────────
+    # (this banner used to read "PHASE 101" — a mislabel: the header directly below it, and the
+    #  ~160 lines of body that follow, are PHASE 100.5. Phase 101 starts further down. Comment
+    #  text only; no code change.)
+    if (Test-PhaseGate 100.5) {
         Show-PhaseHeader "PHASE 100.5" "CLOUD & SESSION TOKEN THEFT STAGING" "INFO-STEALER"
     Out-Typewriter "CHECKING CLOUD CREDENTIAL STORES AND EXFIL STAGING..." "HUNT"
     # Access tokens survive MFA, which is exactly why infostealers now target them ahead of
@@ -1463,7 +1493,10 @@ if ($PhasePlan.Advanced) {
         }
     }
     if ($abeHits -eq 0) { Out-Typewriter "  -> [OK] NO APP-BOUND-ENCRYPTION-BYPASS TOOLS DETECTED." "GOOD" }
+    }   # end Test-PhaseGate 100.5
 
+    # ── PHASE 101: WSL / DOCKER CONTAINER SURFACE ─────────────────────────────
+    if (Test-PhaseGate 101) {
 Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     Out-Typewriter "CHECKING WSL DISTROS AND DOCKER DAEMON..." "HUNT"
     if (Get-Command wsl -ErrorAction SilentlyContinue) {
@@ -1564,8 +1597,10 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
             -Target "docker.exe" -FixAction "Info" -Group "WSL / Container"
     }
     Out-Typewriter "  -> CONTAINER SURFACE AUDIT COMPLETE." "VER"
+    }   # end Test-PhaseGate 101
 
     # ── PHASE 102: SVCHOST PARENT VALIDATION ──────────────────────────────────
+    if (Test-PhaseGate 102) {
     Show-PhaseHeader "PHASE 102" "SVCHOST PARENT-CHILD MASQUERADE VALIDATION" "MASQUERADE"
     Out-Typewriter "VERIFYING ALL SVCHOST.EXE PARENT == SERVICES.EXE..." "HUNT"
     Invoke-QuantumBar "PROCESS PARENT MAP" 10 80
@@ -1591,8 +1626,10 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
         }
     }
     if ($svcHits -eq 0) { Out-Typewriter "  -> [OK] ALL SVCHOST INSTANCES VERIFIED." "GOOD" }
+    }   # end Test-PhaseGate 102
 
     # ── PHASE 103: SUSPICIOUS ARCHIVE SCAN ────────────────────────────────────
+    if (Test-PhaseGate 103) {
     Show-PhaseHeader "PHASE 103" "SUSPICIOUS COMPRESSED ARCHIVE PAYLOAD AUDIT" "PHISHING"
     Out-Typewriter "SCANNING RECENT ARCHIVES IN DOWNLOAD PATHS..." "HUNT"
     $arcHits = 0
@@ -1638,8 +1675,10 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
         $arcHits++
     }
     if ($arcHits -eq 0) { Out-Typewriter "  -> [OK] NO RECENT SUSPICIOUS ARCHIVES." "GOOD" }
+    }   # end Test-PhaseGate 103
 
     # ── PHASE 104: SCHEDULED TASK XML DEEP PARSE ──────────────────────────────
+    if (Test-PhaseGate 104) {
     Show-PhaseHeader "PHASE 104" "SCHEDULED TASK XML DEEP PARSE / HIDDEN TASKS" "TASK"
     Out-Typewriter "PARSING TASK XML FOR Hidden=true AND SDDL LOCKS..." "HUNT"
     Invoke-QuantumBar "TASK XML INTROSPECTION" 12 90
@@ -1696,8 +1735,15 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
         }
     }
     if ($taskDeepHits -eq 0) { Out-Typewriter "  -> [OK] NO HIDDEN OR SDDL-LOCKED TASKS." "GOOD" }
+    }   # end Test-PhaseGate 104
 
     # ── PHASE 105: PERSISTENCE HEATMAP & CORRELATION ──────────────────────────
+    # NOTE: the conditional "PHASE 105+" baseline-diff header nested in this body is part of
+    # phase 105, not a phase of its own, so it lives INSIDE this gate (as it always did inside
+    # the $Baseline test). Phase 105 also correlates $global:ZB_ComHandlerTasks, which PHASE 104
+    # populates: under a custom -Phases scan that selects 105 without 104 the variable is simply
+    # unset, @() -> the correlation loop does not run. No error, just no correlation.
+    if (Test-PhaseGate 105) {
     Show-PhaseHeader "PHASE 105" "PERSISTENCE HEATMAP & CROSS-VECTOR CORRELATION" "CORRELATION"
     Out-Typewriter "BUILDING PERSISTENCE HEATMAP ACROSS ALL DETECTED VECTORS..." "ACT"
     Invoke-QuantumBar "CROSS-CORRELATION ENGINE" 15 90
@@ -1767,8 +1813,10 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
         } catch { Out-Typewriter "  -> BASELINE PARSE FAILED." "WARN" }
     }
     Out-Typewriter "  -> PHASE 105 COMPLETE." "VER"
+    }   # end Test-PhaseGate 105
 
     # ── PHASE 106: MEMORY DUMP ARTIFACT SCAN ──────────────────────────────────
+    if (Test-PhaseGate 106) {
     Show-PhaseHeader "PHASE 106" "MEMORY DUMP ARTIFACT SCAN (MINIDUMP / CRASHDUMPS)" "FORENSIC"
     Out-Typewriter "SCANNING CRASH DUMP LOCATIONS FOR SUSPICIOUS ARTIFACTS..." "HUNT"
     # P1 multi-user: four of the six paths were per-USER (%LOCALAPPDATA%/%APPDATA%\CrashDumps,
@@ -1867,8 +1915,10 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     }
     if (-not $dumpFound) { Out-Typewriter "  -> [OK] NO SUSPICIOUS DUMP FILES OR DUMPER TOOLS." "GOOD" }
     Out-Typewriter "  -> PHASE 106 COMPLETE." "VER"
+    }   # end Test-PhaseGate 106
 
     # ── PHASE 107: EVENT LOG THREAT HUNTING ───────────────────────────────────
+    if (Test-PhaseGate 107) {
     Show-PhaseHeader "PHASE 107" "EVENT LOG THREAT HUNTING (4624/4688/7045)" "EVT-HUNT"
     Out-Typewriter "MINING SECURITY/SYSTEM LOGS FOR ANOMALOUS PATTERNS..." "HUNT"
     Invoke-QuantumBar "EVENT LOG ANALYSIS" 12 100
@@ -2046,6 +2096,7 @@ Show-PhaseHeader "PHASE 101" "WSL / DOCKER CONTAINER ESCAPE SURFACE" "CONTAINER"
     if ($zb7045Cut) { Out-Typewriter ("  -> [INFO] 7045 ANALYSIS DEADLINE ({0}s) REACHED — RESULT IS PARTIAL." -f $zbEvtDeadlineS) "WARN" }
     Out-Typewriter "  -> $($zb7045Evts.Count) NEW SERVICE EVENTS IN TIME WINDOW." $(if ($zb7045Evts.Count -gt 0) {"WARN"} else {"GOOD"})
     Out-Typewriter "  -> PHASE 107 COMPLETE." "VER"
+    }   # end Test-PhaseGate 107
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2067,6 +2118,11 @@ if ($PhasePlan.Integrity) {
     $TRUSTED_OWNERS = Get-Perm 'trusted_file_owners'
 
     # ── PHASE 108: COMPREHENSIVE NTFS ACL & OWNERSHIP AUDIT ───────────────────
+    # NOTE: $WEAK_IDS / $TRUSTED_OWNERS above are BLOCK-level (phases 108/110/111/112/115 all
+    # read them) and stay OUTSIDE every Test-PhaseGate wrap, exactly as the group banner does —
+    # otherwise a custom -Phases scan selecting only, say, 111 would run Get-WeakAces with an
+    # unset -WeakIds.
+    if (Test-PhaseGate 108) {
     Show-PhaseHeader "PHASE 108" "NTFS ACL & OWNERSHIP INTEGRITY (CRITICAL PATHS)" "PERMISSIONS"
     Out-Typewriter "AUDITING ACLs ON SYSTEM PATHS FOR WEAK / WORLD-WRITABLE ACES..." "HUNT"
     $aclPaths = @(Get-Perm 'critical_acl_paths' | ForEach-Object { Expand-EnvPath $_ }) | Where-Object { $_ } | Select-Object -Unique
@@ -2109,8 +2165,10 @@ if ($PhasePlan.Integrity) {
         } catch {}
     }
     if ($aclFindings -eq 0) { Out-Typewriter "  -> [OK] NO WEAK ACLs OR OWNERSHIP TAMPER ON CRITICAL PATHS." "GOOD" }
+    }   # end Test-PhaseGate 108
 
     # ── PHASE 109: SYSTEM BINARY INTEGRITY & CODE-SIGNATURE VERIFICATION ───────
+    if (Test-PhaseGate 109) {
     Show-PhaseHeader "PHASE 109" "SYSTEM BINARY INTEGRITY & SIGNATURE VERIFICATION" "INTEGRITY"
     Out-Typewriter "VERIFYING AUTHENTICODE / CATALOG SIGNATURES ON PROTECTED BINARIES..." "HUNT"
     Invoke-QuantumBar "CRYPTOGRAPHIC SIGNATURE CHECK" 14 100
@@ -2208,8 +2266,10 @@ if ($PhasePlan.Integrity) {
             }
         }
     }
+    }   # end Test-PhaseGate 109
 
     # ── PHASE 110: REGISTRY KEY ACL / WEAK-PERMISSION AUDIT ───────────────────
+    if (Test-PhaseGate 110) {
     Show-PhaseHeader "PHASE 110" "REGISTRY KEY ACL / WEAK-PERMISSION AUDIT" "PERMISSIONS"
     Out-Typewriter "AUDITING PERSISTENCE-KEY ACLs FOR NON-ADMIN WRITE ACCESS..." "HUNT"
     $regAcl = 0
@@ -2229,8 +2289,10 @@ if ($PhasePlan.Integrity) {
         } catch {}
     }
     if ($regAcl -eq 0) { Out-Typewriter "  -> [OK] NO WEAK ACLs ON PERSISTENCE REGISTRY KEYS." "GOOD" }
+    }   # end Test-PhaseGate 110
 
     # ── PHASE 111: SERVICE PRIVILEGE-ESCALATION AUDIT ─────────────────────────
+    if (Test-PhaseGate 111) {
     Show-PhaseHeader "PHASE 111" "SERVICE PRIVESC — UNQUOTED PATHS & WRITABLE BINARIES" "PRIVESC"
     Out-Typewriter "INSPECTING SERVICE IMAGE PATHS FOR PRIVILEGE-ESCALATION FLAWS..." "HUNT"
     Invoke-QuantumBar "SERVICE BINARY ACL ANALYSIS" 12 110
@@ -2276,8 +2338,10 @@ if ($PhasePlan.Integrity) {
         }
     }
     if ($svcPriv -eq 0) { Out-Typewriter "  -> [OK] NO SERVICE PRIVILEGE-ESCALATION FLAWS FOUND." "GOOD" }
+    }   # end Test-PhaseGate 111
 
     # ── PHASE 112: PATH & DLL-HIJACK SURFACE (WRITABLE DIRECTORIES) ────────────
+    if (Test-PhaseGate 112) {
     Show-PhaseHeader "PHASE 112" "PATH / DLL-HIJACK SURFACE — WRITABLE DIRECTORIES" "PRIVESC"
     Out-Typewriter "CHECKING SYSTEM PATH DIRECTORIES FOR NON-ADMIN WRITE ACCESS..." "HUNT"
     $pathDirs = @()
@@ -2301,8 +2365,10 @@ if ($PhasePlan.Integrity) {
         } catch {}
     }
     if ($pathHits -eq 0) { Out-Typewriter "  -> [OK] NO WRITABLE DIRECTORIES ON SYSTEM PATH." "GOOD" }
+    }   # end Test-PhaseGate 112
 
     # ── PHASE 113: RECENTLY MODIFIED PROTECTED SYSTEM FILES ───────────────────
+    if (Test-PhaseGate 113) {
     Show-PhaseHeader "PHASE 113" "RECENTLY MODIFIED / UNSIGNED FILES IN SYSTEM32 & DRIVERS" "INTEGRITY"
     Out-Typewriter "HUNTING FOR FILES CHANGED IN-WINDOW OR UNSIGNED IN PROTECTED DIRS..." "HUNT"
     Invoke-QuantumBar "SYSTEM DIRECTORY DELTA SCAN" 16 90
@@ -2330,8 +2396,10 @@ if ($PhasePlan.Integrity) {
         }
     }
     if ($recentSys -eq 0) { Out-Typewriter "  -> [OK] NO CHANGED/UNSIGNED FILES IN PROTECTED DIRS (IN WINDOW)." "GOOD" }
+    }   # end Test-PhaseGate 113
 
     # ── PHASE 114: SECURITY CONTROL HEALTH & TAMPER CONSOLIDATION ──────────────
+    if (Test-PhaseGate 114) {
     Show-PhaseHeader "PHASE 114" "SECURITY CONTROL HEALTH & TAMPER CONSOLIDATION" "DEFENSE"
     Out-Typewriter "VERIFYING AV / FIREWALL / LOGGING CONTROLS ARE INTACT..." "HUNT"
     $ctrlBad = 0
@@ -2377,8 +2445,10 @@ if ($PhasePlan.Integrity) {
         }
     } catch {}
     if ($ctrlBad -eq 0) { Out-Typewriter "  -> [OK] SECURITY CONTROLS INTACT AND RUNNING." "GOOD" }
+    }   # end Test-PhaseGate 114
 
     # ── PHASE 115: AUTORUN TARGET WRITABLE-PATH AUDIT (HIJACKABLE PERSISTENCE) ──
+    if (Test-PhaseGate 115) {
     Show-PhaseHeader "PHASE 115" "AUTORUN TARGET WRITABLE-PATH AUDIT (HIJACKABLE PERSISTENCE)" "PRIVESC"
     Out-Typewriter "CHECKING WHETHER AUTORUN TARGETS CAN BE OVERWRITTEN BY NON-ADMINS..." "HUNT"
     $autoHits = 0
@@ -2412,6 +2482,8 @@ if ($PhasePlan.Integrity) {
         }
     }
     if ($autoHits -eq 0) { Out-Typewriter "  -> [OK] NO HIJACKABLE AUTORUN TARGETS." "GOOD" }
+    }   # end Test-PhaseGate 115
+    # Group-level footer — stays OUTSIDE the per-phase gates, like the group banner at the top.
     Out-Typewriter "  -> PERMISSION & INTEGRITY AUDIT COMPLETE (PHASES 108-115)." "VER"
 }
 

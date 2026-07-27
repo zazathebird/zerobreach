@@ -123,6 +123,9 @@
       <div class="nav-item" data-view="ioc" title="IOC Manager" role="tab" tabindex="0" aria-label="IOC Manager">
         <span class="nav-icon">📁</span><span class="nav-label">IOC MANAGER</span>
       </div>
+      <div class="nav-item" data-view="customscan" title="Build Custom Scan" role="tab" tabindex="0" aria-label="Build Custom Scan">
+        <span class="nav-icon">🧩</span><span class="nav-label">CUSTOM SCAN</span>
+      </div>
       <div class="nav-item" data-view="settings" title="Settings" role="tab" tabindex="0" aria-label="Settings">
         <span class="nav-icon">⚙</span><span class="nav-label">SETTINGS</span>
       </div>
@@ -234,6 +237,12 @@
         <!-- MSP code hint -->
         <div id="msp-hint">CLASSIFIED ACCESS CODE: <span id="msp-input-display">_</span></div>
         <input type="text" id="msp-input" autocomplete="off" style="position:absolute;opacity:0;pointer-events:none">
+
+        <!-- Custom Scan status (BUILD CUSTOM SCAN applies here; hidden until used) -->
+        <div id="cs-active-banner" style="display:none">
+          <span id="cs-active-text"></span>
+          <button class="cyber-btn-sm" id="btn-cs-clear-active">CLEAR CUSTOM SCAN</button>
+        </div>
 
         <!-- INITIATE button -->
         <div id="initiate-wrap">
@@ -468,6 +477,41 @@
           <input type="file" id="ioc-file-input" accept=".json,.ioc,.txt" style="display:none">
         </div>
         <div id="ioc-status" class="ioc-status"></div>
+      </div>
+
+      <!-- ── VIEW: BUILD CUSTOM SCAN ──────────────────────────────── -->
+      <div class="view" id="view-customscan">
+        <div class="view-title">BUILD CUSTOM SCAN</div>
+        <div class="zb-hint">
+          Paste an alert, EDR notification, ticket notes, or an IOC list. ZeroBreach extracts
+          indicators and narrows the scan to the phases that actually cover what's described —
+          entirely offline, rule-based text matching, nothing leaves this box. Nothing runs until
+          you review the result and press INITIATE SCAN on the Launch Pad.
+        </div>
+
+        <div class="section-label" style="margin-top:18px">PASTE TEXT</div>
+        <textarea id="cs-input" class="cs-textarea" maxlength="50000"
+          placeholder="Paste an alert, EDR/Defender notification, ticket notes, or an IOC list here..."></textarea>
+        <div id="cs-actions">
+          <button class="cyber-btn-sm" id="btn-cs-analyze">🔎 ANALYZE</button>
+          <button class="cyber-btn-sm" id="btn-cs-clear-input">CLEAR</button>
+        </div>
+
+        <div id="cs-results" class="cs-results" style="display:none">
+          <div class="section-label" style="margin-top:18px">DETECTED CATEGORIES <span style="color:var(--text-dim);font-weight:normal">(uncheck to exclude)</span></div>
+          <div id="cs-categories" class="cs-cat-list"></div>
+
+          <div class="section-label" style="margin-top:18px">EXTRACTED IOCs</div>
+          <div id="cs-iocs" class="cs-ioc-list"></div>
+
+          <div class="section-label" style="margin-top:18px">RESULTING SCAN</div>
+          <div id="cs-summary" class="cs-summary"></div>
+
+          <div id="cs-use-wrap">
+            <button class="cyber-btn" id="btn-cs-use">USE THIS SCAN →</button>
+          </div>
+        </div>
+        <div id="cs-status" class="ioc-status"></div>
       </div>
 
       <!-- ── VIEW: SETTINGS ──────────────────────────────────────── -->

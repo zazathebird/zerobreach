@@ -1,0 +1,101 @@
+{
+  "_meta": {
+    "purpose": "Category -> phase-number map + keyword list driving the Build-Custom-Scan feature (paste text -> extract IOCs + a targeted phase subset). Phase numbers are the exact Show-PhaseHeader labels (fractional-safe). Built 2026-07-27 by grepping every Show-PhaseHeader call across engine/Phases-1/2/3.ps1 and grouping by what the phase actually detects, not by the loose 4th-arg display category (most phases 1-46 carry no 4th arg at all).",
+    "generated_from": "engine/Phases-1.ps1, engine/Phases-2.ps1, engine/Phases-3.ps1 (2026-07-27 snapshot)",
+    "note": "Re-derive/extend when new phases are added — grep 'Show-PhaseHeader \"PHASE' across engine/*.ps1 and slot the new number into the right categories."
+  },
+  "always_include": [3, 4, 6],
+  "always_include_note": "Minimal baseline kept in every custom scan regardless of matched category: process ancestry/injection audit (3), LOLBIN abuse audit (4), known-malware-process IOC match (6) -- cheap, high-signal, and the pasted-text IOCs (hashes/procs) are only actionable if Phase 6 runs.",
+  "categories": {
+    "persistence": {
+      "label": "Persistence mechanisms",
+      "phases": [17, 20, 21, 21.5, 22, 22.5, 23, 24, 26, 27, 28, 29, 30, 31, 32, 32.5, 45.5, 68.5, 82.5, 92, 94, 95, 104, 105, 115],
+      "keywords": ["persist", "persistence", "run key", "runonce", "run once", "scheduled task", "schtasks", "startup folder", "autorun", "auto-start", "service install", "new service", "wmi subscription", "wmi event", "com hijack", "clsid", "ifeo", "image file execution", "appcert", "appinit", "winsock lsp", "bho", "browser helper object", "safe mode key", "safeboot", "winlogon", "userinit", "shell hijack", "bits job", "rmm abuse", "unauthorized rmm", "uac bypass staging", "com scriptlet", "squiblydoo", "appdomainmanager", ".net loader hijack", "clickfix", "fake captcha"]
+    },
+    "ransomware": {
+      "label": "Ransomware",
+      "phases": [51, 52, 53, 54],
+      "keywords": ["ransomware", "ransom note", "ransom", "encrypted files", "file extension change", "shadow copy delete", "vssadmin", "bcdedit", "backup tampering", ".locked", ".encrypted", "extortion", "double extortion", "lockbit", "akira", "blackcat", "alphv", "conti", "revil"]
+    },
+    "rootkit": {
+      "label": "Rootkit / bootkit",
+      "phases": [55, 55.5, 56, 57, 58],
+      "keywords": ["rootkit", "bootkit", "mbr", "hidden process", "byovd", "bring your own vulnerable driver", "kernel driver", "hidden service", "wmi vs tasklist discrepancy"]
+    },
+    "keylogger": {
+      "label": "Keylogger / input capture",
+      "phases": [47, 48, 49, 49.5, 50],
+      "keywords": ["keylogger", "keystroke", "keylog", "clipboard monitor", "screen capture", "clipper", "address swap", "accessibility api", "uiautomation", "raw input hook"]
+    },
+    "cryptominer": {
+      "label": "Cryptomining",
+      "phases": [63, 64],
+      "keywords": ["miner", "cryptominer", "crypto mining", "xmrig", "cpu abuse", "mining pool", "coinhive", "monero"]
+    },
+    "worm": {
+      "label": "Worm / self-propagation",
+      "phases": [65, 66],
+      "keywords": ["worm", "self-propagat", "usb spread", "network share propagation", "lateral movement", "autorun.inf"]
+    },
+    "spyware": {
+      "label": "Spyware / adware / browser hijack",
+      "phases": [8, 9, 67],
+      "keywords": ["spyware", "adware", "pup", "potentially unwanted", "browser hijack", "browser extension", "homepage hijack", "search redirect"]
+    },
+    "infostealer": {
+      "label": "Info-stealer / credential-harvesting malware",
+      "phases": [44.5, 68, 100, 100.5],
+      "keywords": ["infostealer", "info-stealer", "redline", "raccoon", "vidar", "lumma", "stealc", "stealer", "browser password", "cookie theft", "dpapi", "lsass dump", "credential dump", "session token theft", "cloud token theft", "aws credentials", "azure token"]
+    },
+    "credential_theft": {
+      "label": "Credential access",
+      "phases": [41, 44.5, 68, 88.5, 100, 100.5],
+      "keywords": ["credential theft", "lsass", "wdigest", "mimikatz", "dpapi", "kerberoasting", "as-rep roasting", "password dump", "ntds.dit", "hash dump", "pass the hash"]
+    },
+    "c2_rat": {
+      "label": "C2 / RAT / botnet",
+      "phases": [6, 59, 60, 61, 62, 69, 72, 81, 82],
+      "keywords": ["c2", "command and control", "rat ", "remote access trojan", "beacon", "dns tunneling", "named pipe", "botnet", "reverse shell", "netcat", "socat", "chisel", "plink", "cobalt strike", "havoc", "covenant", "poshc2", "sliver", "brute ratel", "meterpreter"]
+    },
+    "injection": {
+      "label": "Process injection / hollowing",
+      "phases": [3, 5, 69, 93],
+      "keywords": ["process injection", "process hollowing", "dll injection", "amsi bypass", "etw patch", "reflective load", "shellcode"]
+    },
+    "phishing_social_eng": {
+      "label": "Phishing / email / social engineering",
+      "phases": [68.5, 71, 74, 74.5, 74.6, 74.7, 74.8, 74.9, 103],
+      "keywords": ["phishing", "email attachment", "outlook", "macro", "clickfix", "fake captcha", "bec", "business email compromise", "overlay", "fake browser ui", "malicious archive", "malicious document", "spearphish", "lure"]
+    },
+    "privilege_escalation": {
+      "label": "Privilege escalation",
+      "phases": [41, 42, 42.5, 43, 44, 45, 92, 96, 111, 112, 115],
+      "keywords": ["privilege escalation", "privesc", "uac bypass", "ghost account", "shadow admin", "hidden admin account", "hivenightmare", "sam file", "sticky keys", "utilman", "printnightmare", "unquoted service path", "writable service binary", "dll hijack surface"]
+    },
+    "rdp_remote_access": {
+      "label": "RDP / remote access exposure",
+      "phases": [45.5, 82.5],
+      "keywords": ["rdp", "remote desktop", "remote access", "rmm", "teamviewer", "anydesk", "screenconnect", "exposed rdp", "brute force rdp"]
+    },
+    "defense_evasion": {
+      "label": "Defense evasion / tamper",
+      "phases": [5, 25, 34, 35, 38, 39, 40, 84, 91, 98, 114],
+      "keywords": ["amsi bypass", "etw patch", "gpo lockdown", "dns cache poison", "proxy poisoned", "firewall disabled", "rogue certificate", "testsigning", "applocker bypass", "motw strip", "mark of the web", "stolen certificate", "signed malware", "security control tamper", "defender disabled", "av disabled", "edr disabled", "edr blinding"]
+    },
+    "integrity_forensics": {
+      "label": "System integrity",
+      "phases": [13, 14, 15, 16, 17.5, 108, 109, 110, 113],
+      "keywords": ["system file integrity", "sfc scan", "dism", "unsigned binary", "timestomp", "backdated timestamp", "acl integrity", "permission audit", "ntfs permission"]
+    },
+    "previous_infection": {
+      "label": "Prior / historical infection evidence",
+      "phases": [1, 2, 11, 12, 17.5, 74.6, 105, 106, 107],
+      "keywords": ["previously infected", "prior incident", "past detection", "reinfection", "quarantine history", "historical infection", "execution evidence", "prefetch", "jump list", "recent items", "event log", "memory dump", "minidump", "forensic", "re-infected", "came back", "cleaned before"]
+    },
+    "container_cloud": {
+      "label": "Container / cloud",
+      "phases": [36.5, 101],
+      "keywords": ["container", "docker", "wsl", "cloud metadata", "imds", "instance metadata service", "kubernetes", "container escape"]
+    }
+  }
+}

@@ -158,6 +158,7 @@ function Get-ZbOwnerM1 {
 # ══════════════════════════════════════════════════════════════════════════════
 Show-SectionBanner "PRE-FLIGHT SYSTEMS & LOG AUDIT"
 
+if (Test-PhaseGate 1) {
 Show-PhaseHeader "PHASE 1" "ANTI-FORENSIC EVENT LOG AUDIT"
 Invoke-QuantumBar "PARSING SECURITY EVENTS" 10 140
 $logClears = Get-WinEventSafe @{LogName='System','Security'; ID=104,1102} |
@@ -171,8 +172,9 @@ if ($logClears) {
             -Target "Event Log: $($clear.LogName)" -FixAction "Info" -Group "Anti-Forensic / Log Tampering"
     }
 } else { Out-Typewriter "  -> [OK] NO LOG CLEARING ANOMALIES." "GOOD" }
+}
 
-if (-not $global:QUICK_MODE) {
+if ((-not $global:QUICK_MODE) -and (Test-PhaseGate 2)) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 2" "POWERSHELL SCRIPT BLOCK LOG AUDIT (EVENT 4104)"
 Invoke-QuantumBar "SCANNING POWERSHELL OPERATIONAL LOGS" 8 120
@@ -198,6 +200,7 @@ if ($psHits) {
 } else { Out-Typewriter "  -> [OK] NO OBFUSCATED/DOWNLOAD CRADLES IN PS LOGS." "GOOD" }
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 3) {
 Show-PhaseHeader "PHASE 3" "PROCESS ANCESTRY & INJECTION AUDIT"
 Invoke-QuantumBar "MAPPING LIVE PROCESS TREE" 8 120
 # Split STRONG (unambiguous — obfuscation/injection API names/decode flags in a command line is
@@ -230,6 +233,8 @@ if ($suspectProcs) {
     }
 } else { Out-Typewriter "  -> [OK] NO INJECTED/MALICIOUS PROCESS SIGNATURES." "GOOD" }
 
+}
+if (Test-PhaseGate 4) {
 Show-PhaseHeader "PHASE 4" "LOLBIN ABUSE AUDIT (Living-Off-The-Land Binaries)"
 Invoke-QuantumBar "SCANNING LOLBIN EXECUTION TRACES" 10 110
 $lolbins = @("mshta","wscript","cscript","regsvr32","rundll32","certutil","bitsadmin","msiexec","installutil","regasm","regsvcs","msbuild","cmstp","odbcconf","ieexec","pcalua","presentationhost","infdefaultinstall","diskshadow","esentutl","extrac32","findstr","forfiles","gpscript","hh","makecab","mavinject","msdeploy","msdt","pcwrun","replace","rpcping","syncappvpublishingserver","vbc","winrm","wmic","xwizard","msconfig","fodhelper","eventvwr","sdclt","wusa","csc")
@@ -262,6 +267,8 @@ foreach ($p in (Get-ProcSnapshot)) {
 }
 if (-not $lolHits) { Out-Typewriter "  -> [OK] NO LOLBIN ABUSE DETECTED." "GOOD" }
 
+}
+if (Test-PhaseGate 5) {
 Show-PhaseHeader "PHASE 5" "AMSI BYPASS & ETW PATCH DETECTION"
 Invoke-QuantumBar "CHECKING AMSI & ETW INTEGRITY" 8 110
 $amsiReg = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\AMSI\Providers" -ErrorAction SilentlyContinue
@@ -314,6 +321,8 @@ if ($etw.Start -eq 0) {
         -FixAction "RunCmd" -FixParam "Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\WMI\Autologger\EventLog-System' -Name Start -Value 1 -Force" -Group "Security Tool Tampering"
 } else { Out-Typewriter "  -> [OK] ETW SYSTEM LOGGER ENABLED." "GOOD" }
 
+}
+if (Test-PhaseGate 6) {
 Show-PhaseHeader "PHASE 6" "KNOWN MALWARE PROCESS IOC DATABASE MATCH"
 Invoke-QuantumBar "MATCHING PROCESSES AGAINST IOC DATABASE" 12 100
 $runningProcs = Get-Process -ErrorAction SilentlyContinue
@@ -370,6 +379,7 @@ foreach ($proc in $runningProcs) {
     }
 }
 if (-not $iocHits) { Out-Typewriter "  -> [OK] NO IOC PROCESS MATCHES." "GOOD" }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 2: BROWSER & TEMP ARTIFACTS
@@ -378,6 +388,7 @@ Show-SectionBanner "BROWSER & TEMPORARY ARTIFACT AUDIT"
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 7) {
 Show-PhaseHeader "PHASE 7" "BROWSER CACHE & SERVICE WORKER AUDIT"
 # P1 multi-user: every path here is PER-USER. Under the elevated technician session
 # $env:LOCALAPPDATA / $env:APPDATA resolved to the TECHNICIAN's profile, so the victim's
@@ -430,6 +441,8 @@ if ($zbBcSeen -gt 0) {
     Out-Typewriter "  -> [OK] NO BROWSER CACHE FOLDERS FOUND." "GOOD"
 }
 
+}
+if (Test-PhaseGate 8) {
 Show-PhaseHeader "PHASE 8" "BROWSER EXTENSION SANITIZATION (HEURISTIC)"
 # P1 multi-user: every path here is PER-USER, so under the elevated technician session this
 # audited the TECHNICIAN's Chrome/Edge/Brave and an adware extension in the VICTIM's profile was
@@ -483,6 +496,8 @@ foreach ($zbHive in @(Get-UserHives)) {
     }
 }
 
+}
+if (Test-PhaseGate 9) {
 Show-PhaseHeader "PHASE 9" "BROWSER HIJACK — SHORTCUT & HOMEPAGE AUDIT"
 Out-Typewriter "SCANNING BROWSER SHORTCUTS FOR HIJACKED TARGETS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -545,8 +560,10 @@ foreach ($zbHive in @(Get-UserHives)) {
     }
 }
 Out-Typewriter "  -> BROWSER HIJACK AUDIT COMPLETE." "VER"
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 10) {
 Show-PhaseHeader "PHASE 10" "TEMP / DOWNLOAD DIRECTORY ANOMALY SWEEP"
 # P1 multi-user. Four of these six roots are PER-USER, so under the elevated technician session
 # this phase swept the TECHNICIAN's Temp/Downloads/INetCache and reported the victim's profile
@@ -697,6 +714,7 @@ if ($sigBudgetHit) {
 if ($masqBudgetHit) {
     Out-Typewriter ("  -> [INFO] MASQUERADE SNIFF BUDGET REACHED ({0} files / {1}s) — partial scan." -f $masqSeen, [Math]::Round($masqSw.Elapsed.TotalSeconds,1)) "WARN"
 }
+}
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 # WS7: malicious .lnk downloader payload detection. Given its own fractional phase (10.5) and
@@ -711,6 +729,7 @@ if (-not $global:QUICK_MODE) {
 # benign silent background launchers (vendor updaters, tray helpers, IT maintenance scripts) and
 # is deliberately NOT sufficient on its own to fire this. HIGH + Info (never auto-deleted — the
 # user may have just legitimately clicked something and this needs a human look first).
+if (Test-PhaseGate 10.5) {
 Show-PhaseHeader "PHASE 10.5" "MALICIOUS LNK/SHORTCUT DOWNLOADER SWEEP"
 Out-Typewriter "SCANNING SHORTCUTS FOR DOWNLOADER/LOADER PAYLOADS..." "HUNT"
 # STRONG/WEAK split (2026-07-26 adversarial FP audit, same pattern as Phase 3/29): the
@@ -763,6 +782,8 @@ foreach ($lf in $lnkFiles) {
 }
 if (-not $lnkFound) { Out-Typewriter "  -> [OK] NO MALICIOUS LNK DOWNLOADER PAYLOADS." "GOOD" }
 
+}
+if (Test-PhaseGate 10.6) {
 Show-PhaseHeader "PHASE 10.6" "NPM/PIP POSTINSTALL SUPPLY-CHAIN EXFIL SWEEP"
 Out-Typewriter "CHECKING FRESHLY-MODIFIED package.json FOR POSTINSTALL EXFIL CRADLES..." "HUNT"
 # WS7: single highest-FP-risk item in this batch — deliberately the NARROWEST possible trigger.
@@ -809,6 +830,8 @@ foreach ($pf in $npmPkgFiles) {
 }
 if ($npmHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPICIOUS NPM/PIP POSTINSTALL SCRIPTS." "GOOD" }
 
+}
+if (Test-PhaseGate 11) {
 Show-PhaseHeader "PHASE 11" "RECENT ITEMS / JUMP LIST EXECUTION EVIDENCE"
 # EVIDENCE_ENGINE_PLAN P4 / A13. This phase used to open the Recent + JumpList folders, COUNT
 # the files, and emit one INFO finding whose ONLY action was a RunCmd that DELETED them — an
@@ -914,6 +937,8 @@ if ($zbRecentGone -eq 0) { Out-Typewriter "  -> [OK] NO 'RAN THEN DELETED' EXECU
 # only ever read Prefetch — nothing in the engine parses the AppCompatCache. ShimCache binary
 # parsing is Tier B in the plan and explicitly out of scope, so the TITLE is corrected rather
 # than the check faked; a phase must never advertise a check it did not run.
+}
+if (Test-PhaseGate 12) {
 Show-PhaseHeader "PHASE 12" "PREFETCH EXECUTION-TRACE AUDIT"
 Out-Typewriter "SCANNING PREFETCH FOR EXECUTION TRACES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
@@ -1071,12 +1096,14 @@ if (Test-Path -LiteralPath "$env:WINDIR\Prefetch") {
         -Severity $SEV_INFO -Description "No $env:WINDIR\Prefetch directory. Prefetch-based execution evidence is UNAVAILABLE for this box (prefetcher disabled, or the folder was removed) — any 'no execution trace' conclusion from this scan is unproven, not clean." `
         -Target "$env:WINDIR\Prefetch" -FixAction "Info" -Group "Execution Artifacts"
 }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 3: SYSTEM FILE & KERNEL INTEGRITY
 # ══════════════════════════════════════════════════════════════════════════════
 Show-SectionBanner "SYSTEM FILE & KERNEL INTEGRITY"
 
+if (Test-PhaseGate 13) {
 Show-PhaseHeader "PHASE 13" "CRYPTOGRAPHIC SYSTEM FILE VERIFICATION (SFC)"
 if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) {
     # sfc /scannow runs 5-15 min with no streamable progress — in server/GUI/auto
@@ -1096,6 +1123,8 @@ if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) {
         -Target "C:\Windows\Logs\CBS\CBS.log" -FixAction "Info" -Group "System Hardening"
 }
 
+}
+if (Test-PhaseGate 14) {
 Show-PhaseHeader "PHASE 14" "DISM COMPONENT STORE RESTORATION"
 Out-Typewriter "FLUSHING WUAUSERV CACHE..." "ACT"
 Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
@@ -1119,6 +1148,8 @@ if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) {
     catch { $dismProc | Stop-Process -Force -ErrorAction SilentlyContinue; Out-Typewriter "  -> DISM TIMEOUT — CONTINUING." "WARN" }
 }
 
+}
+if (Test-PhaseGate 15) {
 Show-PhaseHeader "PHASE 15" "SYSTEM32 UNSIGNED BINARY AUDIT"
 Out-Typewriter "SCANNING SYSTEM32 FOR FORGED/UNSIGNED BINARIES..." "ACT"
 Invoke-QuantumBar "VERIFYING AUTHENTICODE SIGNATURES" 15 180
@@ -1173,6 +1204,8 @@ if ($sigBudgetHit) {
 }
 if (-not $foundSys) { Out-Typewriter "  -> [OK] ALL RECENT SYSTEM32 BINARIES VERIFIED." "GOOD" }
 
+}
+if (Test-PhaseGate 16) {
 Show-PhaseHeader "PHASE 16" "NTFS PERMISSION INTEGRITY — CRITICAL PATHS"
 foreach ($cp in @("$env:WINDIR\System32","$env:WINDIR\SysWOW64","$env:WINDIR\System32\drivers")) {
     Out-Typewriter "AUDITING ACL: $cp" "INFO"
@@ -1191,6 +1224,8 @@ foreach ($cp in @("$env:WINDIR\System32","$env:WINDIR\SysWOW64","$env:WINDIR\Sys
     }
 }
 
+}
+if (Test-PhaseGate 17) {
 Show-PhaseHeader "PHASE 17" "ALTERNATE DATA STREAM (ADS) PARASITE SCAN"
 # P1 multi-user: all three roots were the technician's. An ADS parasite hidden in the victim's
 # LocalAppData/Temp/Downloads was structurally invisible. Nothing machine-wide belongs here.
@@ -1234,6 +1269,8 @@ foreach ($zbAt in $zbAdsTargets) {
     }
 }
 
+}
+if (Test-PhaseGate 17.5) {
 Show-PhaseHeader "PHASE 17.5" "TIMESTOMP DETECTION — BACKDATED EXECUTABLE CONTENT"
 Out-Typewriter "COMPARING CREATION vs WRITE TIMESTAMPS ON USER-PATH EXECUTABLES..." "HUNT"
 # Time-stomping backdates a dropped file so it blends into the system image AND slips past
@@ -1302,6 +1339,8 @@ foreach ($tf in $tsCandidates) {
 }
 if ($tsHits -eq 0) { Out-Typewriter "  -> [OK] NO TIMESTAMP ANOMALIES." "GOOD" }
 
+}
+if (Test-PhaseGate 18) {
 Show-PhaseHeader "PHASE 18" "DEEP CLOAKED PARASITE SCAN (HIDDEN+SYSTEM ATTRIBUTES)"
 # P1 multi-user: three of the four roots were the technician's profile ($env:USERPROFILE\AppData\
 # Roaming is just $env:APPDATA spelled the long way, and is now resolved redirection-aware via
@@ -1340,6 +1379,8 @@ foreach ($c in $cloaked) {
 }
 if ($cloaked.Count -eq 0) { Out-Typewriter "  -> [OK] NO CLOAKED FILES." "GOOD" }
 
+}
+if (Test-PhaseGate 19) {
 Show-PhaseHeader "PHASE 19" "SCRIPT EXECUTION ASSOCIATION AUDIT"
 Out-Typewriter "CHECKING .JS .VBS .HTA .WSF HANDLER ASSOCIATIONS..." "INFO"
 foreach ($ext in @(".js",".vbs",".hta",".wsf",".wsh",".jse",".vbe")) {
@@ -1356,6 +1397,7 @@ foreach ($ext in @(".js",".vbs",".hta",".wsf",".wsh",".jse",".vbe")) {
     }
 }
 Out-Typewriter "  -> SCRIPT HANDLER AUDIT COMPLETE." "VER"
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 4: REGISTRY PERSISTENCE
@@ -1363,6 +1405,7 @@ Out-Typewriter "  -> SCRIPT HANDLER AUDIT COMPLETE." "VER"
 }   # end QUICK-skip block
 Show-SectionBanner "REGISTRY PERSISTENCE SCRUB"
 
+if (Test-PhaseGate 20) {
 Show-PhaseHeader "PHASE 20" "RUN / RUNONCE HEURISTIC SCRUB"
 # P1 multi-user: the two HKLM roots (plus their WOW6432Node twins) are MACHINE scope and are
 # enumerated exactly ONCE — a box with 8 profiles must not report a machine-wide Run value 8
@@ -1448,6 +1491,8 @@ foreach ($zbT in $zbRunTargets) {
 }
 Out-Typewriter "  -> RUN/RUNONCE AUDIT COMPLETE ($zbRunAudited HIVE ROOT(S))." "VER"
 
+}
+if (Test-PhaseGate 21) {
 Show-PhaseHeader "PHASE 21" "IMAGE FILE EXECUTION OPTIONS (IFEO) SCRUB"
 $ifeoPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options"
 if (Test-Path $ifeoPath) {
@@ -1468,9 +1513,11 @@ if (Test-Path $ifeoPath) {
     }
     Out-Typewriter "  -> IFEO AUDIT COMPLETE." "VER"
 } else { Out-Typewriter "  -> [OK] IFEO HIVE ABSENT." "GOOD" }
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 21.5) {
 Show-PhaseHeader "PHASE 21.5" "SILENT-PROCESS-EXIT / EDR-BLINDING IFEO / COM TYPELIB HIJACK"
 Out-Typewriter "AUDITING DEBUG-HOOK PERSISTENCE THE IFEO SCRUB DOES NOT COVER..." "HUNT"
 # Phase 21 audits the classic IFEO Debugger/GlobalFlag values. This phase covers the three
@@ -1598,6 +1645,8 @@ foreach ($tlRoot in $COM_TYPELIB_ROOTS) {
 }
 if ($ifeoExtra -eq 0) { Out-Typewriter "  -> [OK] NO SILENT-EXIT / EDR-BLINDING / TYPELIB HIJACKS." "GOOD" }
 
+}
+if (Test-PhaseGate 22) {
 Show-PhaseHeader "PHASE 22" "APPINIT_DLLS KERNEL INJECTION SCRUB"
 foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows NT\CurrentVersion\Windows")) {
     $ai = Get-RegVal -Path $p -Name "AppInit_DLLs"
@@ -1609,6 +1658,8 @@ foreach ($p in @("HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Windows","H
     } else { Out-Typewriter "  -> [OK] APPINIT_DLLS EMPTY." "GOOD" }
 }
 
+}
+if (Test-PhaseGate 22.5) {
 Show-PhaseHeader "PHASE 22.5" "PROCESS-WIDE DLL LOAD POINTS (APPCERT / NETSH / WINSOCK LSP)"
 Out-Typewriter "AUDITING THE REMAINING SYSTEM-WIDE DLL INJECTION REGISTRATIONS..." "HUNT"
 # Phase 22 covers AppInit_DLLs. These are its siblings — every one of them makes Windows load
@@ -1684,8 +1735,10 @@ try {
     }
 } catch {}
 if ($injHits -eq 0) { Out-Typewriter "  -> [OK] NO SYSTEM-WIDE DLL LOAD POINTS SET." "GOOD" }
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 23) {
 Show-PhaseHeader "PHASE 23" "WINLOGON / USERINIT / SHELL HIJACK DETECTION"
 $wlPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 $wlKeys = Get-ItemProperty -Path $wlPath -ErrorAction SilentlyContinue
@@ -1701,9 +1754,11 @@ if ($wlKeys.Userinit -and $wlKeys.Userinit -notmatch "^C:\\Windows\\system32\\us
         -Description "Winlogon Userinit hijacked to: $($wlKeys.Userinit)" `
         -Target "$wlPath|Userinit" -FixAction "RunCmd" -FixParam "Set-ItemProperty -Path '$wlPath' -Name Userinit -Value 'C:\Windows\system32\userinit.exe,' -Force" -Group "Winlogon Hijack"
 } else { Out-Typewriter "  -> [OK] USERINIT VERIFIED." "GOOD" }
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 24) {
 Show-PhaseHeader "PHASE 24" "COM OBJECT HIJACK AUDIT (PER-USER CLSID OVERRIDES)"
 Out-Typewriter "SCANNING PER-USER COM OVERRIDES (ALL READABLE PROFILES)..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -1783,6 +1838,8 @@ if ($comHivesLooked -eq 0) { Out-Typewriter "  -> [OK] NO PER-USER CLSID STORE R
 elseif ($comTopSeen -eq 0) { Out-Typewriter "  -> [OK] NO PER-USER COM OVERRIDES." "GOOD" }
 else { Out-Typewriter ("  -> COM AUDIT: {0} per-user CLSID(s) across {1} profile(s), {2} shadowing HKLM." -f $comTopSeen, $comHivesLooked, $comShadow) "VER" }
 
+}
+if (Test-PhaseGate 25) {
 Show-PhaseHeader "PHASE 25" "GPO LOCKDOWN — TASKMGR/REGEDIT/CMD DISABLED"
 # P1 multi-user: the per-user half read a bare HKCU:, i.e. the TECHNICIAN's hive — a
 # ransomware/RAT lockdown of the VICTIM's Task Manager / RegEdit / CMD reported clean. The
@@ -1823,6 +1880,8 @@ foreach ($pol in @("DisableTaskMgr","DisableRegistryTools","DisableCMD")) {
 }
 Out-Typewriter "  -> GPO POLICY AUDIT COMPLETE." "VER"
 
+}
+if (Test-PhaseGate 26) {
 Show-PhaseHeader "PHASE 26" "BROWSER HELPER OBJECT (BHO) PURGE"
 $bhoPaths = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects","HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects")
 foreach ($bho in $bhoPaths) {
@@ -1844,8 +1903,10 @@ foreach ($bho in $bhoPaths) {
         if ($bhoKeys.Count -eq 0) { Out-Typewriter "  -> [OK] BHO HIVE SECURE." "GOOD" }
     }
 }
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 27) {
 Show-PhaseHeader "PHASE 27" "SAFE MODE HIJACK (SAFEBOOT KEY AUDIT)"
 foreach ($sm in @("Minimal","Network")) {
     $safePath = "HKLM:\SYSTEM\CurrentControlSet\Control\SafeBoot\$sm"
@@ -1873,6 +1934,8 @@ Out-Typewriter "  -> SAFEBOOT AUDIT COMPLETE." "VER"
 # ══════════════════════════════════════════════════════════════════════════════
 Show-SectionBanner "SERVICE / TASK / WMI / BITS PERSISTENCE"
 
+}
+if (Test-PhaseGate 28) {
 Show-PhaseHeader "PHASE 28" "ROGUE WIN32 SERVICE AUDIT"
 Out-Typewriter "QUERYING SERVICE CONTROL MANAGER..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
@@ -1920,6 +1983,8 @@ foreach ($svc in $rogueServices) {
         -Group "Rogue Services"
 }
 
+}
+if (Test-PhaseGate 29) {
 Show-PhaseHeader "PHASE 29" "TASK SCHEDULER DEEP AUDIT"
 Out-Typewriter "DUMPING SCHEDULED TASK MANIFESTS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
@@ -2000,6 +2065,8 @@ foreach ($td in @("$env:WINDIR\System32\Tasks","$env:WINDIR\SysWOW64\Tasks")) {
 }
 Out-Typewriter "  -> TASK AUDIT COMPLETE." "VER"
 
+}
+if (Test-PhaseGate 30) {
 Show-PhaseHeader "PHASE 30" "WMI EVENT FILTER / CONSUMER / BINDING AUDIT"
 Out-Typewriter "ANALYZING ROOT\SUBSCRIPTION NAMESPACE..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
@@ -2104,6 +2171,8 @@ if (($wmiFilters.Count + $wmiConsumers.Count + $wmiBindings.Count) -eq 0) {
     }
 }
 
+}
+if (Test-PhaseGate 31) {
 Show-PhaseHeader "PHASE 31" "BITS / POWERSHELL PROFILE / STARTUP PERSISTENCE"
 $bitsJobs = Get-BitsTransfer -AllUsers -ErrorAction SilentlyContinue | Where-Object { $_.JobState -notmatch "Idle" }
 foreach ($job in $bitsJobs) {
@@ -2237,9 +2306,11 @@ foreach ($zbSp in $zbStartupTargets) {
         }
     }
 }
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 32) {
 Show-PhaseHeader "PHASE 32" "DLL SEARCH ORDER HIJACK — PATH AUDIT"
 Out-Typewriter "AUDITING WRITABLE PATH ENTRIES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -2297,6 +2368,8 @@ foreach ($pd in $pathDirs) {
 if ($dllSigBudgetHit) { Out-Typewriter "  -> SIGNATURE BUDGET REACHED — remaining PATH DLLs not signature-verified." "WARN" }
 Out-Typewriter "  -> DLL PATH AUDIT COMPLETE." "VER"
 
+}
+if (Test-PhaseGate 32.5) {
 Show-PhaseHeader "PHASE 32.5" "DLL SIDE-LOADING — SEARCH-ORDER HIJACK TARGET AUDIT"
 Out-Typewriter "CHECKING SIGNED EXES FOR A CO-LOCATED HIJACK-TARGET DLL..." "HUNT"
 # WS7 (T1574.002) — Phase 32 audits writable PATH dirs; this is the sibling technique: a
@@ -2369,6 +2442,7 @@ foreach ($cd in $candidateDlls) {
 }
 if ($sideloadSigBudgetHit) { Out-Typewriter "  -> SIGNATURE BUDGET REACHED — remaining side-load candidates not fully verified." "WARN" }
 if ($sideloadHits -eq 0) { Out-Typewriter "  -> [OK] NO DLL SIDE-LOAD CANDIDATES FOUND." "GOOD" }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 6: NETWORK & C2
@@ -2376,6 +2450,7 @@ if ($sideloadHits -eq 0) { Out-Typewriter "  -> [OK] NO DLL SIDE-LOAD CANDIDATES
 }   # end QUICK-skip block
 Show-SectionBanner "NETWORK & C2 INDICATOR SWEEP"
 
+if (Test-PhaseGate 33) {
 Show-PhaseHeader "PHASE 33" "HOSTS FILE INTEGRITY AUDIT"
 Out-Typewriter "VERIFYING HOSTS FILE..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -2399,8 +2474,9 @@ if (Test-Path $hostsPath) {
             -Group "Hosts File Hijack"
     } else { Out-Typewriter "  -> [OK] HOSTS FILE CLEAN." "GOOD" }
 }
+}
 
-if (-not $global:QUICK_MODE) {
+if ((-not $global:QUICK_MODE) -and (Test-PhaseGate 34)) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 34" "DNS CACHE POISONING AUDIT & FLUSH"
 Out-Typewriter "DUMPING DNS RESOLVER CACHE..." "INFO"
@@ -2422,6 +2498,7 @@ Clear-DnsClientCache -ErrorAction SilentlyContinue
 Out-Typewriter "  -> [OK] DNS CACHE FLUSHED." "GOOD"
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 35) {
 Show-PhaseHeader "PHASE 35" "PROXY & WINHTTP POISON RESET"
 Out-Typewriter "AUDITING PROXY SETTINGS..." "INFO"
 # P1 multi-user — THE WORST CASE IN THIS BATCH, now fixed. $proxyPath was a bare HKCU: read and
@@ -2512,9 +2589,11 @@ if ($zbProxyHits -gt 0) {
         -Target "[MACHINE] WinHTTP proxy" -FixAction $zbPxMAct -FixParam $zbPxMFp `
         -Group "Proxy / Network Hijack" -Confidence $(if ($zbProxyPub -gt 0) { "HIGH" } else { "LOW" })
 } else { Out-Typewriter "  -> [OK] NO ROGUE PROXY IN ANY READABLE PROFILE." "GOOD" }
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 36) {
 Show-PhaseHeader "PHASE 36" "LIVE TCP/UDP THREAT SOCKET TERMINATION"
 Out-Typewriter "SCANNING OPEN TCP SOCKETS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
@@ -2626,6 +2705,8 @@ foreach ($conn in ($conns | Select-Object -First 30)) {
 }
 if (-not $foundConn) { Out-Typewriter "  -> [OK] NO MALICIOUS OUTBOUND CONNECTIONS." "GOOD" }
 
+}
+if (Test-PhaseGate 36.5) {
 Show-PhaseHeader "PHASE 36.5" "CLOUD INSTANCE METADATA SERVICE (IMDS) CREDENTIAL THEFT"
 Out-Typewriter "CHECKING FOR NON-AGENT CONNECTIONS TO THE CLOUD METADATA ENDPOINT..." "HUNT"
 # WS7 (T1552.005) — 169.254.169.254:80 is the AWS/Azure Instance Metadata Service; a process
@@ -2652,6 +2733,8 @@ foreach ($ic in @($imdsConns)) {
 }
 if ($imdsHits -eq 0) { Out-Typewriter "  -> [OK] NO NON-AGENT IMDS CONNECTIONS." "GOOD" }
 
+}
+if (Test-PhaseGate 37) {
 Show-PhaseHeader "PHASE 37" "IPC NULL SESSION / SMB / PORTPROXY AUDIT"
 $proxies = netsh interface portproxy show all
 if ($proxies -match "Listen Port") {
@@ -2661,6 +2744,8 @@ if ($proxies -match "Listen Port") {
         -Target "netsh portproxy" -FixAction "RunCmd" -FixParam "netsh interface portproxy reset" -Group "Network Tunnels"
 } else { Out-Typewriter "  -> [OK] NO PORTPROXY TUNNELS." "GOOD" }
 
+}
+if (Test-PhaseGate 38) {
 Show-PhaseHeader "PHASE 38" "FIREWALL AUDIT & PERIMETER REVIEW"
 Out-Typewriter "CHECKING UNAUTHORIZED FIREWALL RULES..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -2681,12 +2766,14 @@ if ($suspectRules.Count -eq 0) { Out-Typewriter "  -> [OK] FIREWALL RULES APPEAR
 Add-Finding -ID "FW_RESET_OPT" -Phase "PHASE 38" -ThreatType "Hardening" -Severity $SEV_INFO `
     -Description "Option: Reset Windows Firewall to defaults (netsh advfirewall reset)" `
     -Target "Windows Firewall" -FixAction "RunCmd" -FixParam "netsh advfirewall reset" -Group "Firewall Audit"
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 7: CERTIFICATE & CRYPTO TRUST
 # ══════════════════════════════════════════════════════════════════════════════
 Show-SectionBanner "CERTIFICATE & CRYPTO TRUST CHAIN"
 
+if (Test-PhaseGate 39) {
 Show-PhaseHeader "PHASE 39" "ROGUE ROOT CERTIFICATE AUDIT (LM + USER)"
 Invoke-QuantumBar "AUDITING CERTIFICATE STORES" 10 130
 # Every Windows box ships ~100 legitimate trusted roots (Microsoft Trusted Root Program) + vendor
@@ -2785,6 +2872,8 @@ foreach ($cs in $certStores) {
 if ($certSeen -eq 0) { Out-Typewriter "  -> [OK] MACHINE ROOT STORE CLEAN; PER-USER ROOT STORE CLEAN FOR $env:USERNAME ONLY (OTHER PROFILES NOT EXAMINED)." "GOOD" }
 else { Out-Typewriter "  -> NOTE: THE PER-USER ROOT STORE WAS READ FOR $env:USERNAME ONLY — OTHER PROFILES' PERSONAL ROOT STORES WERE NOT EXAMINED." "WARN" }
 
+}
+if (Test-PhaseGate 40) {
 Show-PhaseHeader "PHASE 40" "BCD STORE — DRIVER SIGNING / TESTSIGNING AUDIT"
 Out-Typewriter "AUDITING BCD STORE FOR SIGNING BYPASS..." "INFO"
 $bcd = bcdedit /enum
@@ -2796,6 +2885,7 @@ if ($bcd -match "testsigning\s+Yes" -or $bcd -match "nointegritychecks\s+Yes") {
         -FixParam "bcdedit /set testsigning off; bcdedit /set nointegritychecks off; bcdedit /set loadoptions ENABLE_INTEGRITY_CHECKS" -Group "BCD / Boot Integrity"
     $global:RootkitHits++
 } else { Out-Typewriter "  -> [OK] BCD SIGNATURE ENFORCEMENT VERIFIED." "GOOD" }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 8: CREDENTIAL & USER ABUSE
@@ -2803,6 +2893,7 @@ if ($bcd -match "testsigning\s+Yes" -or $bcd -match "nointegritychecks\s+Yes") {
 }   # end QUICK-skip block
 Show-SectionBanner "CREDENTIAL & USER ABUSE DETECTION"
 
+if (Test-PhaseGate 41) {
 Show-PhaseHeader "PHASE 41" "LSA / WDIGEST / LSA PROTECTION AUDIT"
 $wdigest = Get-RegVal "HKLM:\SYSTEM\CurrentControlSet\Control\SecurityProviders\WDigest" -Name "UseLogonCredential"
 if ($wdigest -eq 1) {
@@ -2823,6 +2914,8 @@ if ($lsaProtect -ne 1) {
         -Group "Credential Security"
 } else { Out-Typewriter "  -> [OK] LSA PROTECTION ENABLED." "GOOD" }
 
+}
+if (Test-PhaseGate 42) {
 Show-PhaseHeader "PHASE 42" "LOCAL ADMINISTRATOR GHOST ACCOUNT AUDIT"
 Out-Typewriter "QUERYING LOCAL USER ACCOUNTS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1400 }
@@ -2844,9 +2937,11 @@ foreach ($admin in $admins) {
     Write-Log "ADMIN: $($admin.Name)"
 }
 Out-Typewriter "  -> LOCAL ADMIN GROUP LOGGED TO REPORT." "VER"
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 42.5) {
 Show-PhaseHeader "PHASE 42.5" "HIDDEN & SHADOW ADMIN ACCOUNTS"
 Out-Typewriter "CHECKING FOR ACCOUNTS HIDDEN FROM THE LOGON SCREEN..." "HUNT"
 # Phase 42 flags suspiciously-NAMED enabled accounts. This phase covers what a careful
@@ -2903,6 +2998,8 @@ foreach ($am in (Get-LocalGroupMember -Group "Administrators" -ErrorAction Silen
 }
 if ($shadowHits -eq 0) { Out-Typewriter "  -> [OK] NO HIDDEN OR SHADOW ADMIN ACCOUNTS." "GOOD" }
 
+}
+if (Test-PhaseGate 43) {
 Show-PhaseHeader "PHASE 43" "SAM / HIVENIGHTMARE (CVE-2021-36934) AUDIT"
 Out-Typewriter "VERIFYING SAM HIVE PERMISSIONS + HIVENIGHTMARE CHECK..." "INFO"
 $samPerms = cmd.exe /c "icacls %WINDIR%\System32\config\SAM 2>&1"
@@ -2945,6 +3042,8 @@ if ($shadowCount -gt 0) {
     }
 }
 
+}
+if (Test-PhaseGate 44) {
 Show-PhaseHeader "PHASE 44" "TOKEN / PRIVILEGE ABUSE — ELEVATED PROCS IN USER SPACE"
 Out-Typewriter "CHECKING FOR SYSTEM-LEVEL PROCESSES IN USER PATHS..." "INFO"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
@@ -2968,6 +3067,8 @@ foreach ($proc in $elevatedInUS) {
 }
 Out-Typewriter "  -> TOKEN AUDIT COMPLETE." "VER"
 
+}
+if (Test-PhaseGate 44.5) {
 Show-PhaseHeader "PHASE 44.5" "CREDENTIAL ACCESS ARTIFACTS (LSASS DUMPS / HIVES / DPAPI)"
 Out-Typewriter "HUNTING FOR CREDENTIAL-THEFT RESIDUE..." "HUNT"
 # The dumping TOOL is usually long gone by the time anyone looks; the OUTPUT is what remains.
@@ -3078,8 +3179,10 @@ foreach ($cp in (Get-ProcSnapshot)) {
     }
 }
 if ($credHits -eq 0) { Out-Typewriter "  -> [OK] NO CREDENTIAL-ACCESS ARTIFACTS." "GOOD" }
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 45) {
 Show-PhaseHeader "PHASE 45" "ACCESSIBILITY SHELL BACKDOOR (STICKY KEYS / UTILMAN)"
 # EVIDENCE_ENGINE_PLAN P12 — the accessibility binary set had THREE sources of truth: this
 # hardcoded inline list of 6, data\permission_baseline.json (7, read by Phase 109 via Get-Perm)
@@ -3128,9 +3231,11 @@ if ($accessNames.Count -eq 0) {
         }
     }
 }
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 45.5) {
 Show-PhaseHeader "PHASE 45.5" "RDP EXPOSURE & OPERATOR HARDENING SET"
 Out-Typewriter "AUDITING REMOTE-ACCESS EXPOSURE AND ANTI-REINFECTION POSTURE..." "INFO"
 # Everything this phase emits is OPERATOR-ONLY by design (user decision 2026-07-22): Info or
@@ -3171,6 +3276,8 @@ foreach ($ha in $WS6_HARDENING_ACTIONS) {
 }
 if ($hardenExtra -eq 0) { Out-Typewriter "  -> [OK] REMOTE-ACCESS AND HARDENING POSTURE ALREADY GOOD." "GOOD" }
 
+}
+if (Test-PhaseGate 46) {
 Show-PhaseHeader "PHASE 46" "NULL SESSION / NTLM LEVEL / FINAL LSA HARDENING"
 Out-Typewriter "AUDITING LSA SECURITY SETTINGS..." "INFO"
 $lsaPath = "HKLM:\System\CurrentControlSet\Control\Lsa"
@@ -3187,12 +3294,14 @@ Add-Finding -ID "LSA_HARDEN_OPT" -Phase "PHASE 46" -ThreatType "Hardening" -Seve
     -Target "$lsaPath (Multiple keys)" -FixAction "RunCmd" `
     -FixParam "Set-ItemProperty '$lsaPath' RestrictAnonymous 1 -Type DWord -Force; Set-ItemProperty '$lsaPath' NoLMHash 1 -Type DWord -Force; Set-ItemProperty '$lsaPath' RestrictAnonymousSAM 1 -Type DWord -Force" `
     -Group "Credential Security"
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 9: KEYLOGGER DETECTION MODULE
 # ══════════════════════════════════════════════════════════════════════════════
 Show-ThreatCategoryHeader "KEYLOGGER" "Windows Hooks · Raw Input · Kernel Callbacks · Keystroke Log Files · Registry"
 
+if (Test-PhaseGate 47) {
 Show-PhaseHeader "PHASE 47" "WINDOWS HOOK / RAW INPUT KEYLOGGER DETECTION" "KEYLOGGER"
 Out-Typewriter "SCANNING FOR SetWindowsHookEx / RAW INPUT REGISTRATIONS..." "HUNT"
 Invoke-QuantumBar "ENUMERATING GLOBAL HOOKS" 10 120
@@ -3216,6 +3325,8 @@ foreach ($p in $rawInputProcs) {
 }
 if (-not $hookHits) { Out-Typewriter "  -> [OK] NO OBVIOUS HOOK KEYLOGGER PROCESSES." "GOOD" }
 
+}
+if (Test-PhaseGate 48) {
 Show-PhaseHeader "PHASE 48" "KEYLOGGER FILE & REGISTRY ARTIFACT SCAN" "KEYLOGGER"
 Out-Typewriter "SCANNING FOR KEYSTROKE LOG FILES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -3283,6 +3394,8 @@ foreach ($kr in $klRegPaths) {
 }
 if (-not $klFound) { Out-Typewriter "  -> [OK] NO KEYLOGGER ARTIFACTS." "GOOD" }
 
+}
+if (Test-PhaseGate 49) {
 Show-PhaseHeader "PHASE 49" "CLIPBOARD MONITOR / SCREEN CAPTURE DETECTION" "KEYLOGGER"
 Out-Typewriter "CHECKING FOR CLIPBOARD/SCREEN CAPTURE PROCESSES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -3298,6 +3411,8 @@ foreach ($cp in $capProcs) {
 }
 if ($capProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO OBVIOUS CAPTURE PROCESSES." "GOOD" }
 
+}
+if (Test-PhaseGate 49.5) {
 Show-PhaseHeader "PHASE 49.5" "CLIPBOARD CRYPTOCURRENCY ADDRESS-SWAP (CLIPPER) DETECTION" "KEYLOGGER"
 Out-Typewriter "CHECKING FOR CO-OCCURRING CLIPBOARD-API + CRYPTO-ADDRESS CONTENT..." "HUNT"
 # WS7 (T1115) — clipper malware silently swaps a copied crypto address for the attacker's own.
@@ -3438,6 +3553,8 @@ foreach ($csf in $clipperScriptFiles) {
 }
 if ($clipperHits -eq 0) { Out-Typewriter "  -> [OK] NO CLIPBOARD/CRYPTO CO-OCCURRENCE HITS." "GOOD" }
 
+}
+if (Test-PhaseGate 50) {
 Show-PhaseHeader "PHASE 50" "ACCESSIBILITY API / UIAUTOMATION KEYLOGGER CHECK" "KEYLOGGER"
 Out-Typewriter "AUDITING UIAutomation HOOK REGISTRATIONS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
@@ -3452,6 +3569,7 @@ foreach ($up in $uiaProcs) {
     $global:KeyloggerHits++
 }
 if ($uiaProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO UIAUTOMATION ABUSE DETECTED." "GOOD" }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 10: RANSOMWARE DETECTION
@@ -3459,6 +3577,7 @@ if ($uiaProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO UIAUTOMATION ABUSE DET
 }   # end QUICK-skip block
 Show-ThreatCategoryHeader "RANSOMWARE" "Extension Velocity · High Entropy · Ransom Notes · Shadow Deletion · Backup Tampering"
 
+if (Test-PhaseGate 51) {
 Show-PhaseHeader "PHASE 51" "RANSOMWARE EXTENSION VELOCITY DETECTION" "RANSOMWARE"
 Out-Typewriter "SCANNING USER PROFILE FOR RANSOMWARE EXTENSION PATTERNS..." "HUNT"
 Invoke-QuantumBar "EXTENSION ANALYSIS" 12 110
@@ -3508,8 +3627,9 @@ foreach ($rf in $ransomScanFiles) {
     }
 }
 if (-not $encFound) { Out-Typewriter "  -> [OK] NO RANSOMWARE EXTENSION PATTERNS." "GOOD" }
+}
 
-if (-not $global:QUICK_MODE) {
+if ((-not $global:QUICK_MODE) -and (Test-PhaseGate 52)) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 52" "HIGH ENTROPY FILE DETECTION (ENCRYPTED PAYLOAD)" "RANSOMWARE"
 Out-Typewriter "SAMPLING FILES FOR HIGH ENTROPY (ENCRYPTION/PACKING)..." "HUNT"
@@ -3536,6 +3656,7 @@ foreach ($cf in $candidates) {
 if (-not $entropyHits) { Out-Typewriter "  -> [OK] NO SUSPICIOUSLY HIGH ENTROPY FILES FOUND." "GOOD" }
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 53) {
 Show-PhaseHeader "PHASE 53" "RANSOM NOTE DETECTION" "RANSOMWARE"
 Out-Typewriter "SCANNING FOR RANSOM NOTE ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -3605,6 +3726,8 @@ if ($RANSOM_NOTE_CONTENT_RULES.Count -gt 0) {
 }
 if (-not $noteFound) { Out-Typewriter "  -> [OK] NO RANSOM NOTE FILES DETECTED." "GOOD" }
 
+}
+if (Test-PhaseGate 54) {
 Show-PhaseHeader "PHASE 54" "BACKUP PROCESS TAMPERING / BCDEDIT ABUSE" "RANSOMWARE"
 Out-Typewriter "CHECKING FOR BACKUP DISABLE / RECOVERY TAMPERING..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -3626,6 +3749,7 @@ if ($wbadminLog.Count -gt 0) {
         -Target "Windows Backup EventLog" -FixAction "Info" -Group "Recovery / Backup Tampering"
     $global:RansomwareRisk += 3
 }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 11: ROOTKIT DETECTION
@@ -3634,6 +3758,7 @@ Show-ThreatCategoryHeader "ROOTKIT" "Kernel Drivers · Process Discrepancy · Se
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 55) {
 Show-PhaseHeader "PHASE 55" "UNSIGNED / ANOMALOUS KERNEL DRIVER AUDIT" "ROOTKIT"
 Out-Typewriter "ENUMERATING LOADED KERNEL MODULES..." "HUNT"
 Invoke-QuantumBar "KERNEL DRIVER ANALYSIS" 15 130
@@ -3647,6 +3772,7 @@ foreach ($ud in ($driverList | Where-Object { $_.'Is Signed' -eq "FALSE" -and $_
     $global:RootkitHits++; $driverHits = $true
 }
 if (-not $driverHits) { Out-Typewriter "  -> [OK] NO UNSIGNED KERNEL DRIVERS." "GOOD" }
+}
 
 # ── PHASE 55.5: KNOWN-VULNERABLE SIGNED DRIVER AUDIT (BYOVD) ───────────────────
 # Phase 55 only catches *unsigned* drivers; the real BYOVD risk is signed-but-vulnerable
@@ -3654,6 +3780,7 @@ if (-not $driverHits) { Out-Typewriter "  -> [OK] NO UNSIGNED KERNEL DRIVERS." "
 # registered drivers against the LOLDrivers name list; confirm with SHA256 when present.
 # All findings are FixAction Info (a vulnerable driver may be a legit utility — never
 # auto-remove; the operator enables the MS Vulnerable Driver Blocklist / WDAC instead).
+if (Test-PhaseGate 55.5) {
 Show-PhaseHeader "PHASE 55.5" "KNOWN-VULNERABLE SIGNED DRIVER AUDIT (BYOVD)" "ROOTKIT"
 Out-Typewriter "CROSS-REFERENCING DRIVERS AGAINST LOLDrivers BYOVD LIST..." "HUNT"
 $byovdFound = $false
@@ -3692,8 +3819,10 @@ if ($BYOVD_DRIVER_NAMES.Count -gt 0) {
     }
 }
 if (-not $byovdFound) { Out-Typewriter "  -> [OK] NO KNOWN-VULNERABLE BYOVD DRIVERS." "GOOD" }
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 56) {
 Show-PhaseHeader "PHASE 56" "HIDDEN PROCESS DISCREPANCY (WMI vs PS vs TASKLIST)" "ROOTKIT"
 Out-Typewriter "CROSS-CORRELATING PROCESS ENUMERATION METHODS..." "HUNT"
 Invoke-QuantumBar "PROCESS TABLE DELTA ANALYSIS" 12 130
@@ -3726,9 +3855,11 @@ foreach ($rkpid in $hiddenFromWMI) {
     $global:RootkitHits++; $rkSuspect = $true
 }
 if (-not $rkSuspect) { Out-Typewriter "  -> [OK] NO PROCESS ENUMERATION DISCREPANCIES." "GOOD" }
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 57) {
 Show-PhaseHeader "PHASE 57" "SERVICE REGISTRY DELTA — HIDDEN SERVICE OBJECTS" "ROOTKIT"
 Out-Typewriter "COMPARING SERVICE ENUMERATION METHODS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
@@ -3748,6 +3879,8 @@ foreach ($svc in $hiddenFromSCM) {
 }
 if (-not $rootSvcFound) { Out-Typewriter "  -> [OK] NO HIDDEN SERVICE OBJECTS." "GOOD" }
 
+}
+if (Test-PhaseGate 58) {
 Show-PhaseHeader "PHASE 58" "BOOTKIT / MBR INDICATORS" "ROOTKIT"
 Out-Typewriter "AUDITING BCD FOR BOOTKIT-SPECIFIC ENTRIES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -3758,5 +3891,6 @@ if ($bcdedit2 -match "winpe|safeboot.*minimal.*AlternateShell") {
         -Target "bcdedit /enum all" -FixAction "Info" -Group "Bootkit Indicators"
     $global:RootkitHits++
 } else { Out-Typewriter "  -> [OK] BCD BOOT ENTRIES APPEAR CLEAN." "GOOD" }
+}
 
 }   # end QUICK-skip block

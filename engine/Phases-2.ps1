@@ -6,6 +6,7 @@ Show-ThreatCategoryHeader "RAT / C2 BEACON" "Beacon Intervals · DNS Tunneling �
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 59) {
 Show-PhaseHeader "PHASE 59" "C2 BEACON INTERVAL / HIGH-FREQ DNS DETECTION" "RAT/C2"
 Out-Typewriter "ANALYZING DNS CACHE FOR BEACON PATTERNS..." "HUNT"
 Invoke-QuantumBar "BEACON INTERVAL ANALYSIS" 15 120
@@ -37,7 +38,9 @@ foreach ($lc in $longConns) {
     }
 }
 if (-not $beaconFound) { Out-Typewriter "  -> [OK] NO BEACON PATTERN INDICATORS." "GOOD" }
+}
 
+if (Test-PhaseGate 60) {
 Show-PhaseHeader "PHASE 60" "DNS TUNNELING DETECTION" "RAT/C2"
 Out-Typewriter "CHECKING FOR DNS TUNNELING INDICATORS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1200 }
@@ -60,7 +63,9 @@ foreach ($entry in $dnsCache2) {
     }
 }
 if (-not $dnsTunnel) { Out-Typewriter "  -> [OK] NO DNS TUNNELING INDICATORS." "GOOD" }
+}
 
+if (Test-PhaseGate 61) {
 Show-PhaseHeader "PHASE 61" "RAT CONFIGURATION FILE & REGISTRY SCAN" "RAT"
 Out-Typewriter "SCANNING FOR RAT CONFIGURATION ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -125,8 +130,10 @@ foreach ($zbHive in @(Get-UserHives)) {
     }
 }
 if (-not $ratFound) { Out-Typewriter "  -> [OK] NO RAT CONFIGURATION ARTIFACTS." "GOOD" }
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 62) {
 Show-PhaseHeader "PHASE 62" "NAMED PIPE BACKDOOR AUDIT" "RAT/C2"
 Out-Typewriter "ENUMERATING NAMED PIPE ENDPOINTS..." "HUNT"
 try {
@@ -187,13 +194,14 @@ try {
     }
     if ($pipeHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPECT NAMED PIPES." "GOOD" }
 } catch { Out-Typewriter "  -> PIPE ENUMERATION FAILED (ELEVATED SESSION REQUIRED)." "WARN" }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 13: CRYPTOMINER
 # ══════════════════════════════════════════════════════════════════════════════
 Show-ThreatCategoryHeader "CRYPTOMINER" "CPU Abuse · Stratum Protocol · Miner Config Files · Task Persistence"
 
-if (-not $global:QUICK_MODE) {
+if ((-not $global:QUICK_MODE) -and (Test-PhaseGate 63)) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 63" "CPU ABUSE & MINER PROCESS DETECTION" "CRYPTOMINER"
 Out-Typewriter "SCANNING FOR ABNORMAL CPU UTILIZATION..." "HUNT"
@@ -281,6 +289,7 @@ foreach ($cf in $minerConfigFiles) {
 if (-not $minerFound) { Out-Typewriter "  -> [OK] NO CRYPTOMINER INDICATORS." "GOOD" }
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 64) {
 Show-PhaseHeader "PHASE 64" "MINER SCHEDULED TASK / SERVICE PERSISTENCE" "CRYPTOMINER"
 Out-Typewriter "CHECKING FOR MINER PERSISTENCE..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -304,6 +313,7 @@ foreach ($task in $allTasks) {
     }
 }
 Out-Typewriter "  -> MINER PERSISTENCE AUDIT COMPLETE." "VER"
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 14: WORM & SPYWARE
@@ -312,6 +322,7 @@ Show-ThreatCategoryHeader "WORM / SPYWARE / ADWARE" "AutoRun · USB · Network S
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 65) {
 Show-PhaseHeader "PHASE 65" "WORM AUTORUN & USB SPREAD DETECTION" "WORM"
 Out-Typewriter "SCANNING FOR WORM AUTORUN ARTIFACTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -350,7 +361,9 @@ Add-Finding -ID "AUTORUN_DISABLE" -Phase "PHASE 65" -ThreatType "Hardening" -Sev
     -FixParam "Set-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' NoDriveTypeAutoRun 0xFF -Type DWord -Force; Set-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer' NoDriveTypeAutoRun 0xFF -Type DWord -Force" `
     -Group "Worm / USB Spread"
 if (-not $wormFound) { Out-Typewriter "  -> [OK] NO WORM AUTORUN ARTIFACTS." "GOOD" }
+}
 
+if (Test-PhaseGate 66) {
 Show-PhaseHeader "PHASE 66" "NETWORK SHARE WORM PROPAGATION SCAN" "WORM"
 Out-Typewriter "ENUMERATING OPEN NETWORK SHARES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -464,7 +477,9 @@ if ($sigBudgetHit) {
     Out-Typewriter ("  -> [INFO] SHARE-WORM SIG BUDGET REACHED ({0} binaries / {1}s) — partial scan." -f $sigSeen, [Math]::Round($sigSw.Elapsed.TotalSeconds,1)) "WARN"
 }
 if ($shares.Count -eq 0) { Out-Typewriter "  -> [OK] NO NON-STANDARD SHARES FOUND." "GOOD" }
+}
 
+if (Test-PhaseGate 67) {
 Show-PhaseHeader "PHASE 67" "ADWARE / PUP / SPYWARE REGISTRY SCAN" "SPYWARE"
 Out-Typewriter "SCANNING FOR KNOWN ADWARE / PUP REGISTRY KEYS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -515,12 +530,14 @@ foreach ($zbAt in $zbAdwareTargets) {
     $global:SpywareHits++; $adwareFound = $true
 }
 if (-not $adwareFound) { Out-Typewriter "  -> [OK] NO KNOWN ADWARE/PUP REGISTRY KEYS (ALL PROFILES + MACHINE)." "GOOD" }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 15: ADVANCED / ADDITIONAL MALWARE DETECTION
 # ══════════════════════════════════════════════════════════════════════════════
 Show-SectionBanner "ADVANCED MALWARE & PERSISTENCE MODULES"
 
+if (Test-PhaseGate 68) {
 Show-PhaseHeader "PHASE 68" "INFO-STEALER ARTIFACT SCAN (REDLINE/RACCOON/VIDAR)" "INFOSTEALER"
 Out-Typewriter "SCANNING FOR INFO-STEALER ARTIFACTS AND DROP PATHS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -651,7 +668,9 @@ if ($allFileRules.Count -gt 0) {
     }
 }
 if ($stealerProcs.Count -eq 0 -and $stealerFiles.Count -eq 0 -and $dropRuleHits -eq 0) { Out-Typewriter "  -> [OK] NO INFO-STEALER ARTIFACTS." "GOOD" }
+}
 
+if (Test-PhaseGate 68.5) {
 Show-PhaseHeader "PHASE 68.5" "CLICKFIX / FAKE-CAPTCHA CLIPBOARD LURE RESIDUE" "SOCIAL ENG"
 Out-Typewriter "READING THE RUN-DIALOG HISTORY THE VICTIM ACTUALLY TYPED..." "HUNT"
 # ClickFix / "paste this to prove you are human" is currently one of the highest-volume initial
@@ -699,8 +718,10 @@ foreach ($zbHive in @(Get-UserHives)) {
     }
 }
 if ($clickHits -eq 0) { Out-Typewriter "  -> [OK] NO CLICKFIX LURE RESIDUE IN RUN HISTORY." "GOOD" }
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 69) {
 Show-PhaseHeader "PHASE 69" "PROCESS HOLLOWING / INJECTION DETECTION" "INJECTION"
 Out-Typewriter "CHECKING FOR PROCESSES WITH ANOMALOUS MODULE COUNTS..." "HUNT"
 Invoke-QuantumBar "PROCESS MEMORY MAP ANALYSIS" 12 120
@@ -745,7 +766,9 @@ foreach ($mx in $KNOWN_MALWARE_MUTEXES) {
     }
 }
 if (-not $mutexFound) { Out-Typewriter "  -> [OK] NO KNOWN-MALWARE MUTEXES PRESENT." "GOOD" }
+}
 
+if (Test-PhaseGate 70) {
 Show-PhaseHeader "PHASE 70" "FILELESS REGISTRY PAYLOAD DETECTION" "FILELESS"
 Out-Typewriter "SCANNING REGISTRY FOR ENCODED PAYLOADS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -801,8 +824,9 @@ foreach ($zbFt in $zbFlTargets) {
     }
 }
 if (-not $filelessFound) { Out-Typewriter "  -> [OK] NO OBVIOUS FILELESS PAYLOADS DETECTED." "GOOD" }
+}
 
-if (-not $global:QUICK_MODE) {
+if ((-not $global:QUICK_MODE) -and (Test-PhaseGate 71)) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-PhaseHeader "PHASE 71" "PHISHING / OVERLAY / FAKE BROWSER UI DETECTION" "PHISHING"
 Out-Typewriter "CHECKING FOR PHISHING OVERLAY / TYPOSQUAT PROCESSES..." "HUNT"
@@ -819,6 +843,7 @@ foreach ($pp in $phishProcs) {
 if ($phishProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO PHISHING OVERLAY PROCESSES." "GOOD" }
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 72) {
 Show-PhaseHeader "PHASE 72" "BOTNET C2 IP / IOC BLACKLIST CHECK" "BOTNET"
 Out-Typewriter "CROSS-REFERENCING ACTIVE CONNECTIONS AGAINST C2 IOC LIST..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 1000 }
@@ -843,9 +868,11 @@ foreach ($conn in ($allConns | Select-Object -First 50)) {
     } catch { }
 }
 if (-not $botFound) { Out-Typewriter "  -> [OK] NO BOTNET C2 DOMAIN CONNECTIONS." "GOOD" }
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 73) {
 Show-PhaseHeader "PHASE 73" "EXPLOIT KIT ARTIFACT & CVE-2021-36934 REMEDIATION" "EXPLOIT"
 Out-Typewriter "CHECKING FOR EXPLOIT KIT INDICATORS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -897,7 +924,9 @@ foreach ($zbEt in $zbExploitTargets) {
     }
 }
 if (-not $exploitFound) { Out-Typewriter "  -> [OK] NO OBVIOUS EXPLOIT KIT ARTIFACTS." "GOOD" }
+}
 
+if (Test-PhaseGate 74) {
 Show-PhaseHeader "PHASE 74" "MACRO / OFFICE / OUTLOOK PERSISTENCE AUDIT" "MACRO"
 Out-Typewriter "AUDITING OFFICE MACRO TRUST / OUTLOOK RULES..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -1049,7 +1078,9 @@ if ($zbAddinRoots.Count -gt 0) {
 }
 if (-not $addinFound) { Out-Typewriter "  -> [OK] NO SUSPICIOUS OFFICE ADD-IN BINARIES." "GOOD" }
 Out-Typewriter "  -> MACRO/OUTLOOK AUDIT COMPLETE." "VER"
+}
 
+if (Test-PhaseGate 74.5) {
 Show-PhaseHeader "PHASE 74.5" "EMAIL ATTACHMENT MALWARE SCAN (OUTLOOK CACHE)" "PHISHING"
 Out-Typewriter "SCANNING OUTLOOK ATTACHMENT CACHE & EMAIL TEMP FOLDERS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -1174,8 +1205,10 @@ foreach ($zbOwn in $zbEmailRoots) {
 }
 if ($emailHits -eq 0) { Out-Typewriter "  -> [OK] NO SUSPICIOUS EMAIL ARTIFACTS." "GOOD" }
 Out-Typewriter "  -> EMAIL ATTACHMENT SCAN COMPLETE." "VER"
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 74.6) {
 Show-PhaseHeader "PHASE 74.6" "MICROSOFT DEFENDER THREAT HISTORY CORRELATION" "DEFENDER"
 Out-Typewriter "CORRELATING WITH WINDOWS DEFENDER DETECTION HISTORY..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
@@ -1406,9 +1439,11 @@ try {
     Out-Typewriter "  -> Defender history unavailable (module/cmdlet absent): $($_.Exception.Message)" "WARN"
 }
 Out-Typewriter "  -> DEFENDER HISTORY CORRELATION COMPLETE." "VER"
+}
 
 if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
+if (Test-PhaseGate 74.7) {
 Show-PhaseHeader "PHASE 74.7" "PROACTIVE ANTI-REINFECTION HARDENING" "HARDEN"
 Out-Typewriter "AUDITING ATTACKER-TARGETED FOOTHOLDS FOR PROACTIVE HARDENING..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
@@ -1623,7 +1658,9 @@ try {
 if ($hardenHits -eq 0) { Out-Typewriter "  -> [OK] PROACTIVE HARDENING ALREADY IN PLACE." "GOOD" }
 else { Out-Typewriter "  -> $hardenHits PROACTIVE HARDENING RECOMMENDATION(S) ADDED." "DATA" }
 Out-Typewriter "  -> PROACTIVE HARDENING AUDIT COMPLETE." "VER"
+}
 
+if (Test-PhaseGate 74.8) {
 Show-PhaseHeader "PHASE 74.8" "OUTLOOK MAILBOX FORWARD+HIDE (BEC) AUDIT" "PHISHING"
 Out-Typewriter "INSPECTING LIVE OUTLOOK SESSION FOR FORWARD+HIDE RULES..." "HUNT"
 # WS8 (T1114.003): after landing via BEC, an attacker adds an inbox rule that silently
@@ -1725,7 +1762,9 @@ foreach ($br in @($becResults)) {
 }
 if ($outlookRunning -and $null -ne $becResults -and $becHits -eq 0) { Out-Typewriter "  -> [OK] NO FORWARD+HIDE RULES FOUND." "GOOD" }
 Out-Typewriter "  -> OUTLOOK FORWARD+HIDE AUDIT COMPLETE." "VER"
+}
 
+if (Test-PhaseGate 74.9) {
 Show-PhaseHeader "PHASE 74.9" "OFFICE MACRO DOCUMENT CONTENT ANALYSIS" "MACRO"
 Out-Typewriter "INSPECTING OFFICE DOCUMENTS FOR EMBEDDED VBA MACROS..." "HUNT"
 # Until now the engine checked whether macros were ALLOWED TO RUN (Phase 74's VBAWarnings /
@@ -1892,8 +1931,10 @@ if ($docRoots.Count -gt 0) {
 }
 if ($macroHits -eq 0) { Out-Typewriter "  -> [OK] NO MACRO-BEARING DOCUMENTS FOUND." "GOOD" }
 else { Out-Typewriter "  -> $macroHits MACRO-BEARING DOCUMENT(S) FOUND." "WARN" }
+}
 
 }   # end QUICK-skip block
+if (Test-PhaseGate 75) {
 Show-PhaseHeader "PHASE 75" "WINDOWS DEFENDER EXCLUSIONS & TAMPER AUDIT"
 Out-Typewriter "CHECKING DEFENDER EXCLUSION LIST FOR MALWARE HIDING SPOTS..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 800 }
@@ -1930,6 +1971,7 @@ try {
         Out-Typewriter "  -> [OK] NO DEFENDER EXCLUSIONS." "GOOD"
     }
 } catch { Out-Typewriter "  -> DEFENDER API NOT AVAILABLE." "WARN" }
+}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  SECTION 16: FINAL HARDENING CHECKS
@@ -1938,6 +1980,7 @@ if (-not $global:QUICK_MODE) {
     trap { Write-RecoveredError $_; continue }   # QUICK-skip block: inner trap resumes at next phase (CLAUDE.md engine-split rule)
 Show-SectionBanner "FINAL HARDENING & LOCKDOWN AUDIT"
 
+if (Test-PhaseGate 76) {
 Show-PhaseHeader "PHASE 76" "TERMINAL SERVICES / RDP SHADOWING AUDIT"
 $rdpShadow = Get-RegVal "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services" -Name "Shadow"
 if ($null -ne $rdpShadow) {
@@ -1947,7 +1990,9 @@ if ($null -ne $rdpShadow) {
         -Target "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services|Shadow" `
         -FixAction "DeleteReg" -FixParam "HKLM:\SOFTWARE\Policies\Microsoft\Windows NT\Terminal Services|Shadow" -Group "RDP Security"
 } else { Out-Typewriter "  -> [OK] RDP SHADOW NOT CONFIGURED." "GOOD" }
+}
 
+if (Test-PhaseGate 77) {
 Show-PhaseHeader "PHASE 77" "SSH & WINRM REMOTE MANAGEMENT AUDIT"
 foreach ($svcName in @("WinRM","sshd")) {
     $svc = Get-Service -Name $svcName -ErrorAction SilentlyContinue
@@ -2036,7 +2081,9 @@ foreach ($skf in $sshKeyFiles) {
         -Target "[$($skf.Owner)] $($skf.Path)" -FixAction "Info" -Group "Remote Management Services"
 }
 if (-not $sshBackdoorFound) { Out-Typewriter "  -> [OK] NO SSH AUTHORIZED_KEYS FILES PRESENT." "GOOD" }
+}
 
+if (Test-PhaseGate 78) {
 Show-PhaseHeader "PHASE 78" "SYSMON / LAPS / APPLOCKER STATUS AUDIT"
 Out-Typewriter "CHECKING ENDPOINT VISIBILITY TOOLS..." "INFO"
 $sysmonSvc = Get-Service -Name "Sysmon*" -ErrorAction SilentlyContinue
@@ -2053,7 +2100,9 @@ if ($null -eq $applockerPolicy -or $applockerPolicy.RuleCollections.Count -eq 0)
         -Description "AppLocker not configured — no application whitelist in place" `
         -Target "AppLocker Policy" -FixAction "Info" -Group "Endpoint Hardening"
 } else { Out-Typewriter "  -> [OK] APPLOCKER POLICY ACTIVE." "GOOD" }
+}
 
+if (Test-PhaseGate 79) {
 Show-PhaseHeader "PHASE 79" "WINDOWS DEFENDER KICKSTART & EXCLUSION PURGE"
 Out-Typewriter "AUDITING DEFENDER STATE..." "ACT"
 Add-Finding -ID "DEFENDER_KICKSTART" -Phase "PHASE 79" -ThreatType "Hardening" -Severity $SEV_INFO `
@@ -2062,7 +2111,9 @@ Add-Finding -ID "DEFENDER_KICKSTART" -Phase "PHASE 79" -ThreatType "Hardening" -
     -FixParam "`$p = Get-MpPreference; if(`$p.ExclusionPath){ Remove-MpPreference -ExclusionPath `$p.ExclusionPath }; if(`$p.ExclusionProcess){ Remove-MpPreference -ExclusionProcess `$p.ExclusionProcess }; Update-MpSignature; Start-MpScan -ScanType QuickScan -AsJob" `
     -Group "Defender Hardening"
 Out-Typewriter "  -> DEFENDER KICKSTART ADDED TO FIX LIST." "VER"
+}
 
+if (Test-PhaseGate 80) {
 Show-PhaseHeader "PHASE 80" "SECURE BOOT / TPM / BITLOCKER STATUS AUDIT"
 Out-Typewriter "CHECKING SECURE BOOT AND TPM STATUS..." "INFO"
 $secBoot = Confirm-SecureBootUEFI -ErrorAction SilentlyContinue
@@ -2078,6 +2129,7 @@ $tpm = Get-WmiObject -Namespace "root\cimv2\security\microsofttpm" -Class Win32_
 if ($tpm) { Out-Typewriter "  -> [OK] TPM PRESENT: $($tpm.ManufacturerIdTxt) v$($tpm.SpecVersion)" "GOOD" }
 else { Out-Typewriter "  -> TPM NOT DETECTED." "WARN" }
 Out-Typewriter "  -> PHASE 80 COMPLETE — SECURE BOOT/TPM AUDIT DONE." "VER"
+}
 
 }   # end QUICK-skip block
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2093,6 +2145,7 @@ if ($PhasePlan.Universal) {
         Invoke-QuantumBar "ENGAGING OMNI-TIER HEURISTICS" 20 100
     }
 
+    if (Test-PhaseGate 81) {
     Show-PhaseHeader "PHASE 81" "NETSTAT HIGH-PORT REVERSE SHELL AUDIT" "UNIVERSAL"
     $highConns = Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue |
         Where-Object { $_.RemotePort -gt 1024 -and $_.RemotePort -notin @(3389,443,8443,8080,80,8888) }
@@ -2118,7 +2171,9 @@ if ($PhasePlan.Universal) {
         }
     }
     if (-not $foundShell) { Out-Typewriter "  -> [OK] NO REVERSE SHELL SOCKETS." "GOOD" }
+    }
 
+    if (Test-PhaseGate 82) {
     Show-PhaseHeader "PHASE 82" "NETCAT / SOCAT / CHISEL / PLINK BINARY SCAN" "UNIVERSAL"
     # WS0 wiring: externalized to 'tunneling_tools' (AMSI-safe, same list).
     $tunnelNames = $TUNNELING_TOOLS
@@ -2190,7 +2245,9 @@ if ($PhasePlan.Universal) {
             -Target "[$zbTuUser] $($hit.FullName)" -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Tunneling / Pivoting Tools"
     }
     if (-not $tunnelFound) { Out-Typewriter "  -> [OK] NO TUNNELING TOOLS FOUND." "GOOD" }
+    }
 
+        if (Test-PhaseGate 82.5) {
         Show-PhaseHeader "PHASE 82.5" "REMOTE MONITORING TOOL ABUSE (UNAUTHORISED RMM)" "UNIVERSAL"
     Out-Typewriter "AUDITING REMOTE-ACCESS AGENTS FOR UNAUTHORISED DEPLOYMENT..." "HUNT"
     # USER RULE #2: Datto / CentraStage / Kaseya are this shop's own partner tooling and are
@@ -2227,7 +2284,9 @@ if ($PhasePlan.Universal) {
         }
     }
     if ($rmmHits -eq 0) { Out-Typewriter "  -> [OK] NO REMOTE-ACCESS AGENTS RUNNING." "GOOD" }
+        }
 
+if (Test-PhaseGate 83) {
 Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
     Out-Typewriter "EXTENDED PROCESS MEMORY / HOLLOWING ANALYSIS..." "HUNT"
     Invoke-QuantumBar "PROCESS MEMORY MAP ANALYSIS" 15 170
@@ -2244,7 +2303,9 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
                 -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Process Hollowing / Injection"
         }
     }
+}
 
+    if (Test-PhaseGate 84) {
     Show-PhaseHeader "PHASE 84" "APPLOCKER / GPO POLICY BYPASS AUDIT" "UNIVERSAL"
     Out-Typewriter "CHECKING APPLOCKER BYPASS INDICATORS..." "HUNT"
     # P1 multi-user: this policy value is PER USER, and the ID used to be the fixed string
@@ -2267,7 +2328,9 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
             -Target "[$($zbHive.User)] $zbSrpPath|DisallowRun" -FixAction "Info" -Group "Policy / AppLocker Bypass"
     }
     if (-not $zbSrpHit) { Out-Typewriter "  -> [OK] DISALLOWRUN NOT SET (ALL PROFILES)." "GOOD" }
+    }
 
+    if (Test-PhaseGate 85) {
     Show-PhaseHeader "PHASE 85" "LOLBIN PERSISTENCE (INSTALLUTIL / MSIEXEC)" "UNIVERSAL"
     Out-Typewriter "SCANNING INSTALLUTIL/MSIEXEC PERSISTENCE..." "HUNT"
     # P1 multi-user: both roots are per-user. The ID was built from the bare key leaf name, so
@@ -2289,7 +2352,9 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
             }
         }
     }
+    }
 
+    if (Test-PhaseGate 86) {
     Show-PhaseHeader "PHASE 86" "RECYCLE BIN STAGING AREA SCAN" "UNIVERSAL"
     $recycleBin = (Get-ScanFiles -Path "C:\`$Recycle.Bin" -TimeScoped) |
         Where-Object { $_.Extension -match "\.(exe|dll|js|vbs|bat|cmd|ps1|hta|wsf)$" }
@@ -2303,7 +2368,9 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
             -Target $rb.FullName -FixAction "DeleteFile" -FixParam $rb.FullName -Group "Recycle Bin Staging"
     }
     if ($recycleBin.Count -eq 0) { Out-Typewriter "  -> [OK] RECYCLE BIN CLEAR." "GOOD" }
+    }
 
+    if (Test-PhaseGate 87) {
     Show-PhaseHeader "PHASE 87" "GPO SCRIPT DIRECTORY AUDIT" "UNIVERSAL"
     $gpoScriptPaths = @("$env:WINDIR\System32\GroupPolicy\Machine\Scripts","$env:WINDIR\System32\GroupPolicy\User\Scripts")
     foreach ($gsp in $gpoScriptPaths) {
@@ -2317,7 +2384,9 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
             }
         }
     }
+    }
 
+    if (Test-PhaseGate 87.5) {
     Show-PhaseHeader "PHASE 87.5" "GPP CACHED PASSWORD (CPASSWORD) AUDIT" "UNIVERSAL"
     Out-Typewriter "SCANNING GROUP POLICY PREFERENCES XML FOR CACHED CPASSWORD..." "HUNT"
     # WS8 (T1552.001 / MS14-025): Group Policy Preferences let an admin push a local account,
@@ -2385,7 +2454,9 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
         }
     }
     if (-not $gppFound) { Out-Typewriter "  -> [OK] NO GPP CACHED PASSWORDS FOUND." "GOOD" }
+    }
 
+    if (Test-PhaseGate 88) {
     Show-PhaseHeader "PHASE 88" "ACTIVE DIRECTORY / DOMAIN TRUST INDICATORS" "UNIVERSAL"
     $domain = (Get-WmiObject Win32_ComputerSystem).PartOfDomain
     if ($domain) {
@@ -2407,7 +2478,9 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
                 -Target "Security EventLog (4769)" -FixAction "Info" -Group "Active Directory Attacks"
         } else { Out-Typewriter "  -> [OK] NO GOLDEN TICKET INDICATORS." "GOOD" }
     } else { Out-Typewriter "  -> NOT DOMAIN-JOINED. AD CHECKS SKIPPED." "INFO" }
+    }
 
+    if (Test-PhaseGate 88.5) {
     Show-PhaseHeader "PHASE 88.5" "KERBEROASTING / AS-REP ROASTING TRIAGE" "UNIVERSAL"
     # WS8: two independent Kerberos ticket-abuse queries. Computed separately from Phase 88's own
     # 4769 fetch (which filters straight down to krbtgt-only Golden Ticket candidates and
@@ -2480,7 +2553,9 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
         }
         if ($roastHits -eq 0 -and $asrepHits -eq 0) { Out-Typewriter "  -> [OK] NO KERBEROASTING/AS-REP INDICATORS." "GOOD" }
     } else { Out-Typewriter "  -> NOT DOMAIN-JOINED. KERBEROASTING/AS-REP CHECKS SKIPPED." "INFO" }
+    }
 
+    if (Test-PhaseGate 89) {
     Show-PhaseHeader "PHASE 89" "FINAL SWEEP — EXFIL CHANNELS & STEGO TOOLS" "UNIVERSAL"
     Out-Typewriter "CHECKING EXFIL VIA FTP/SMTP/ICMP AND STEGO TOOLS..." "HUNT"
     $exfilConns = Get-NetTCPConnection -State Established -ErrorAction SilentlyContinue |
@@ -2546,6 +2621,7 @@ Show-PhaseHeader "PHASE 83" "HOLLOW PROCESS DEEP SCAN (EXTENDED)" "UNIVERSAL"
             -Target "[$zbStUser] $($hit.FullName)" -FixAction "DeleteFile" -FixParam $hit.FullName -Group "Data Exfiltration"
     }
     Out-Typewriter "  -> PHASE 89 COMPLETE." "VER"
+    }
 }
 
 # ══════════════════════════════════════════════════════════════════════════════
