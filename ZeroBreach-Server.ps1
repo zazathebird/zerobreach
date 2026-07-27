@@ -439,6 +439,29 @@ function Test-ProtectedTarget {
     }
     # SafeBoot registry — deleting it breaks Safe Mode boot.
     if ($p -match '(?i)\\SafeBoot') { return 'SafeBoot registry (deleting breaks Safe Mode)' }
+    # ── P1: per-user hive paths (Registry::HKEY_USERS\<SID>\...) ──────────────────
+    # SYSTEM / LOCAL SERVICE / NETWORK SERVICE / .DEFAULT are SERVICE hives, not a human's
+    # profile. Get-UserHives excludes them by default, but -IncludeService exists and a
+    # future caller could pass it, so this is defence in depth at the layer that actually
+    # blocks. Editing them is an OS-integrity change, never incident remediation.
+    if ($p -match '(?i)^Registry::HKEY_USERS\\(S-1-5-(18|19|20)|\.DEFAULT)(\\|$)') {
+        return 'service/system registry hive (SYSTEM/LOCAL SERVICE/NETWORK SERVICE/.DEFAULT)'
+    }
+    # A FixParam must NEVER point into a hive this scan temporarily mounted. Remediation runs
+    # later, in a DIFFERENT process, long after the engine exited and the ZB_UH_*/ZB_UC_* mount
+    # vanished — the path would resolve to nothing and the tri-state verifier would then be
+    # reasoning about a path that never existed, i.e. "verification passed because the read
+    # failed". Findings from a reg-loaded hive are supposed to ship as FixAction Info with the
+    # operator commands in the description; this catches any that slip through.
+    if ($p -match '(?i)^Registry::HKEY_USERS\\ZB_(UH|UC)_') {
+        return 'temporary hive mount from a completed scan (no longer exists — re-run with -LoadUserHives and act manually)'
+    }
+    # DELIBERATE ASYMMETRY: the "user logged off since the scan" check lives ONLY in the
+    # runspace mirror (Test-RProtected), not here. It is a remediation-TIME condition — the
+    # user may perfectly well log back on between this report being served and the operator
+    # pressing execute, and hard-blocking the checkbox at report time would be wrong. At
+    # execute time it is exactly right, and it is reported as `blocked`, never `applied`.
+    # Do not "sync" it into this copy.
     # Core OS registry hives.
     if ($Action -match '(?i)DeleteReg' -and $p -match '(?i)\\(SYSTEM\\CurrentControlSet\\(Services|Control)|Microsoft\\Windows NT\\CurrentVersion\\(Winlogon|Image File Execution Options|SystemRestore)|Cryptography)') {
         return 'core OS registry'
@@ -1425,6 +1448,26 @@ function Test-RProtected {
     if ($p -match '(?i)\\(desktop\.ini|iconcache\.db|thumbs\.db|ntuser\.dat|usrclass\.dat)' -or $p -match '(?i)\.library-ms$') { return 'Windows shell/system file' }
     if ($p -match '(?i)\\Users\\[^\\]+\\\.[^\\]+$' -or $p -match '(?i)\\\.(ssh|gnupg|aws|azure|kube|docker|config)\\' -or $p -match '(?i)\\\.(bashrc|bash_profile|bash_history|profile|zshrc|gitconfig|npmrc|claude\.json)($|[^a-z])' -or $p -match '(?i)\\\.claude\\') { return 'user shell/git/ssh/cloud config (dotfile)' }
     if ($p -match '(?i)\\SafeBoot') { return 'SafeBoot registry (breaks Safe Mode)' }
+    # P1 — mirrors Test-ProtectedTarget; see the commentary there.
+    if ($p -match '(?i)^Registry::HKEY_USERS\\(S-1-5-(18|19|20)|\.DEFAULT)(\\|$)') { return 'service/system registry hive' }
+    if ($p -match '(?i)^Registry::HKEY_USERS\\ZB_(UH|UC)_') { return 'temporary hive mount from a completed scan (no longer exists)' }
+    # A finding captured against a LOGGED-ON user's hive can be remediated only while that hive is
+    # still mounted. If the user logged off between scan and remediation the key genuinely vanishes
+    # -- and Test-RPathGone would report 'gone', i.e. SUCCESS for a removal that never happened.
+    # "Couldn't act" and "nothing there" are different answers: report blocked, never applied.
+    if ($p -match '(?i)^Registry::HKEY_USERS\\(S-1-5-21-[0-9-]+)(\\|$)') {
+        $zbSidWanted = $matches[1]
+        $zbMountedNow = $false
+        try {
+            foreach ($zbNm in @(Get-ChildItem Registry::HKEY_USERS -ErrorAction SilentlyContinue |
+                                ForEach-Object { $_.PSChildName })) {
+                if ("$zbNm" -eq "$zbSidWanted") { $zbMountedNow = $true; break }
+            }
+        } catch { $zbMountedNow = $false }
+        if (-not $zbMountedNow) {
+            return "user hive no longer mounted ($zbSidWanted logged off since the scan) - have them log on and re-run, or act manually"
+        }
+    }
     if ($Action -match '(?i)DeleteReg' -and $p -match '(?i)\\(SYSTEM\\CurrentControlSet\\(Services|Control)|Microsoft\\Windows NT\\CurrentVersion\\(Winlogon|Image File Execution Options|SystemRestore)|Cryptography)') { return 'core OS registry' }
     if ($Action -eq 'KillProcess' -and $d -match '(?i)(\b(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)\b|claude|zerobreach)') { return 'critical system process or the IR tool itself' }
     return ''
