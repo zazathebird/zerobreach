@@ -2122,6 +2122,7 @@ Out-Typewriter "AUDITING PROXY SETTINGS..." "INFO"
 # phase fired) but it is no longer multiplied.
 $zbProxyRel  = "Software\Microsoft\Windows\CurrentVersion\Internet Settings"
 $zbProxyHits = 0
+$zbProxyPub  = 0    # profiles whose proxy resolves to a PUBLIC IP literal — the escalation gate
 $zbProxyWho  = @()
 foreach ($zbHive in @(Get-UserHives)) {
     if (-not $zbHive.HivePath) { continue }   # not mounted and loading is off: we could not look
@@ -2131,29 +2132,71 @@ foreach ($zbHive in @(Get-UserHives)) {
     if ($ps.ProxyEnable -ne 1) { continue }
     $zbProxyHits++
     $zbProxyWho += "$($zbHive.User) -> $($ps.ProxyServer)"
+    # ── Grading (operator decision, 2026-07-26) ───────────────────────────────────
+    # ProxyEnable=1 means "a proxy is configured", NOT "a proxy is malicious". Pre-P1 this
+    # produced ONE auto-selected CRITICAL + RunCmd (the technician's). Post-P1 it is one per
+    # logged-on profile plus a machine-level one, so on a corporate box where every user has a
+    # proxy it would auto-select N+1 destructive findings on a completely healthy machine —
+    # a direct rule #1 violation that P1 multiplies.
+    #
+    # FAIL CLOSED: start at POSSIBLE + Info and escalate ONLY when a malicious shape is
+    # positively confirmed. Never the reverse — an optimistic CRITICAL cleared on mismatch is
+    # the exact pattern that made a malformed IOC CIDR match every connection.
+    #
+    # The confirmed signal is a PUBLIC IP LITERAL. Deliberately NOT "anything that isn't
+    # RFC1918": the most common healthy corporate setting is an internal HOSTNAME
+    # (proxy.corp.local:8080), which is not an RFC1918 address and would have false-positived.
+    # Loopback is also excluded — corporate DLP, Fiddler and dev tooling all use 127.0.0.1,
+    # and this operator's own box is a dev machine.
+    $zbPxSev  = $SEV_POSSIBLE
+    $zbPxAct  = "Info"
+    $zbPxWhy  = "This is the shape of a legitimate corporate proxy (internal hostname or private address), so it is reported for review and NOT auto-cleared."
+    # Escalation gate lives in the loader as Get-ProxyPublicIp so it is unit-testable — it decides
+    # whether an auto-selected destructive RunCmd fires, so it gets its own test table.
+    $zbPxPub = Get-ProxyPublicIp $ps.ProxyServer
+    if ($zbPxPub) {
+        $zbPxSev = $SEV_CRITICAL
+        $zbPxAct = "RunCmd"
+        $zbPxWhy = "The proxy points at the PUBLIC IP LITERAL $zbPxPub. A legitimate corporate proxy is an internal hostname or a private address, so this is the shape of a proxy hijack / traffic-interception relay."
+    }
     # A FixParam must never point into a ZB_UH_* mount — remediation runs in a later process.
-    $zbPxAct  = "RunCmd"
-    $zbPxFp   = "Set-ItemProperty -Path '$proxyPath' -Name ProxyEnable -Value 0 -Force; Remove-ItemProperty -Path '$proxyPath' -Name ProxyServer -Force"
+    $zbPxFp   = ""
+    if ($zbPxAct -eq "RunCmd") {
+        $zbPxFp = "Set-ItemProperty -Path '$proxyPath' -Name ProxyEnable -Value 0 -Force; Remove-ItemProperty -Path '$proxyPath' -Name ProxyServer -Force"
+    }
     $zbPxHint = ""
-    $zbPxSev  = $SEV_CRITICAL
     if ($zbHive.Source -eq 'RegLoad') {
         $zbPxAct  = "Info"
         $zbPxFp   = ""
         $zbPxSev  = $SEV_HIGH   # contract: a reg-loaded (logged-off) hive caps at HIGH + Info
         $zbPxHint = " That profile's hive is only temporarily mounted by this scan — clear by hand: reg load HKU\ZBFIX '$($zbHive.NtUserDat)' ; Set-ItemProperty -Path 'Registry::HKEY_USERS\ZBFIX\$zbProxyRel' -Name ProxyEnable -Value 0 -Force ; reg unload HKU\ZBFIX"
     }
-    Out-Typewriter "  -> PROXY ENABLED FOR $($zbHive.User): $($ps.ProxyServer)" "CRIT"
+    if ($zbPxPub) { $zbProxyPub++ }
+    Out-Typewriter "  -> PROXY ENABLED FOR $($zbHive.User): $($ps.ProxyServer)" $(if ($zbPxPub) { "CRIT" } else { "WARN" })
     Add-Finding -ID "PROXY_ENABLE_$(Get-StableId "$($zbHive.Sid)|$proxyPath")" -Phase "PHASE 35" -ThreatType "Proxy Hijack" -Severity $zbPxSev `
-        -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: proxy configured for that user: $($ps.ProxyServer). NOTE this fires on ANY configured proxy, including a legitimate corporate one — confirm the address is not an attacker relay before clearing it.$zbPxHint" `
+        -Description "User $($zbHive.User) [hive source: $($zbHive.Source)]: proxy configured for that user: $($ps.ProxyServer). $zbPxWhy$zbPxHint" `
         -Target "[$($zbHive.User)] $proxyPath|ProxyEnable" -FixAction $zbPxAct -FixParam $zbPxFp `
-        -Group "Proxy / Network Hijack"
+        -Group "Proxy / Network Hijack" -EvidenceSource $zbHive.Source `
+        -Confidence $(if ($zbPxPub) { "HIGH" } else { "LOW" })
 }
 if ($zbProxyHits -gt 0) {
     # Emitted ONCE, machine-scope. Split out of the per-user RunCmd above so it cannot run N times.
-    Add-Finding -ID "PROXY_WINHTTP_MACHINE" -Phase "PHASE 35" -ThreatType "Proxy Hijack" -Severity $SEV_CRITICAL `
-        -Description "[MACHINE] $zbProxyHits user profile(s) have a proxy configured ($($zbProxyWho -join '; ')). The machine-wide WinHTTP proxy (used by services and the OS itself, NOT per-user) is reset separately and only once — confirm no legitimate corporate WinHTTP proxy is in use before applying." `
-        -Target "[MACHINE] WinHTTP proxy" -FixAction "RunCmd" -FixParam "netsh winhttp reset proxy" `
-        -Group "Proxy / Network Hijack"
+    # Graded on the same evidence as the per-user findings: `netsh winhttp reset proxy` is a real
+    # configuration change, so it must not auto-select just because a corporate proxy exists.
+    $zbPxMSev = $SEV_POSSIBLE
+    $zbPxMAct = "Info"
+    $zbPxMFp  = ""
+    $zbPxMWhy = "No profile's proxy resolves to a public IP literal, so this looks like legitimate corporate configuration. The reset command is provided for an operator to run by hand: netsh winhttp reset proxy"
+    if ($zbProxyPub -gt 0) {
+        $zbPxMSev = $SEV_CRITICAL
+        $zbPxMAct = "RunCmd"
+        $zbPxMFp  = "netsh winhttp reset proxy"
+        $zbPxMWhy = "$zbProxyPub profile(s) point at a PUBLIC IP literal, so the machine-wide WinHTTP proxy is reset too."
+    }
+    Add-Finding -ID "PROXY_WINHTTP_MACHINE" -Phase "PHASE 35" -ThreatType "Proxy Hijack" -Severity $zbPxMSev `
+        -Description "[MACHINE] $zbProxyHits user profile(s) have a proxy configured ($($zbProxyWho -join '; ')). The machine-wide WinHTTP proxy is used by services and the OS itself, NOT per-user, so it is handled once here rather than per profile. $zbPxMWhy" `
+        -Target "[MACHINE] WinHTTP proxy" -FixAction $zbPxMAct -FixParam $zbPxMFp `
+        -Group "Proxy / Network Hijack" -Confidence $(if ($zbProxyPub -gt 0) { "HIGH" } else { "LOW" })
 } else { Out-Typewriter "  -> [OK] NO ROGUE PROXY IN ANY READABLE PROFILE." "GOOD" }
 
 if (-not $global:QUICK_MODE) {

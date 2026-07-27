@@ -1871,6 +1871,40 @@ function Get-UserPaths {
     return $zbOut
 }
 
+# Return the first PUBLIC IPv4 literal in a Windows ProxyServer string, or $null.
+#
+# Used by Phase 35 to decide whether a configured proxy is auto-remediable. ProxyEnable=1 means
+# "a proxy is configured", NOT "a proxy is malicious", so grading on it alone auto-selected a
+# destructive RunCmd on every proxied profile of a healthy corporate box (rule #1). This is the
+# escalation gate: CRITICAL only when a public IP literal is POSITIVELY confirmed.
+#
+# FAILS CLOSED by design — every unrecognised, malformed or ambiguous input returns $null, which
+# keeps the caller at POSSIBLE + Info. Deliberately NOT "anything that isn't RFC1918": the most
+# common healthy setting is an internal HOSTNAME (proxy.corp.local:8080), which is not an RFC1918
+# address and would false-positive. Loopback is excluded too — corporate DLP, Fiddler and dev
+# tooling all proxy through 127.0.0.1.
+#
+# Accepts the per-scheme form (`http=1.2.3.4:8080;https=host:443`) as well as a bare `host:port`.
+function Get-ProxyPublicIp {
+    param([string]$ProxyServer)
+    if (-not $ProxyServer) { return $null }
+    foreach ($zbTok in @("$ProxyServer" -split '[;,]')) {
+        $zbHost = (("$zbTok" -replace '^\s*[a-zA-Z]+=', '') -replace ':\d+\s*$', '').Trim()
+        # Only a bare IPv4 literal is evidence; a hostname tells us nothing either way.
+        if ($zbHost -notmatch '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { continue }
+        $zbOk = $true
+        foreach ($zbOct in ($zbHost -split '\.')) {
+            try { if ([int]$zbOct -gt 255) { $zbOk = $false } } catch { $zbOk = $false }
+        }
+        if (-not $zbOk) { continue }                                              # malformed octet
+        if ($zbHost -match '^(127\.|10\.|192\.168\.|169\.254\.|0\.|255\.)') { continue }
+        if ($zbHost -match '^172\.(1[6-9]|2[0-9]|3[01])\.')                { continue }
+        if ($zbHost -match '^100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.') { continue }
+        return $zbHost
+    }
+    return $null
+}
+
 # Resolve a {TOKEN} path template from data\detection_signatures.json against one profile.
 #
 # Why {TOKEN} and not $env: or %VAR% — the two forms already in the data files were BOTH
