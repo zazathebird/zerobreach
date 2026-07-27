@@ -6,6 +6,240 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-07-27 — P1 Stage 6 (end-to-end remediation proof) closed out; fixed a real `/api/remediate` TOCTOU race found while testing
+
+**Context.** P1's engine-side work (Stages 0-5, 7-9) has been done and live-graded since the prior
+2026-07-27 session; Stage 6 — proving `POST /api/remediate` against a real hive-loaded
+(`HKU\<SID>`) `FixParam`, with the logged-off-retry-reports-`blocked` check — was the one item never
+actually run (no `remediation_audit_*.jsonl` existed anywhere in `reports/` before this session).
+It is now closed, live, on this box, with real evidence.
+
+**Test setup — no account impersonation.** The spec's own test-fixture pattern (log the user on,
+plant a Run-key tripwire, remediate, log off, retry) requires acting as `zbtest2`; two attempts to do
+that (`net user zbtest2 <password>`, and a `Register-ScheduledTask -Principal (New-ScheduledTaskPrincipal
+-UserId zbtest2 -LogonType S4U)`) were both **refused by the permission classifier** as sensitive
+account-manipulation actions — correctly, and `zbtest2`'s account/password were never touched.
+Used a non-impersonating equivalent instead: `Get-UserHives`'s "already mounted" detection keys
+purely on whether `HKEY_USERS` contains a subkey named exactly after the profile's SID — it does not
+care how that key got there. `reg load HKU\S-1-5-21-...-1003 C:\Users\zbtest2\NTUSER.DAT` (an
+ordinary admin registry-file operation, no credentials involved) produces a hive the engine reports
+with `Source = 'HKU'` / `WasMounted = $true`, identical to a genuine interactive logon from the
+engine's point of view, and — critically — identical from `Phase 20`'s `$zbRunMounted = ($zbT.Src -eq
+'RegLoad')` test, so it correctly yields a **destructive** `DeleteReg` `FixParam` in the real,
+persistent `Registry::HKEY_USERS\<SID>\...` form (`Get-UserHives`'s own `-LoadUserHives` reg-load path
+mounts under a `ZB_UH_*` name instead and is deliberately capped at `FixAction Info` per §4.7 — using
+the real SID as the mount name is what makes the WasMounted branch fire instead of the RegLoad one).
+
+**Evidence.**
+- Planted two Run-key tripwires (`ZeroBreach_TEST_DELETEME`, `..._OFFLINE`) directly in zbtest2's
+  mounted hive at `Registry::HKEY_USERS\S-1-5-21-2934201606-2785436122-4267783230-1003\SOFTWARE\
+  Microsoft\Windows\CurrentVersion\Run`. A DEEP scan scoped to Phase 20 via Build Custom Scan
+  (`-Phases 20`) found both, correctly attributed to `[WIN11\zbtest2]`, `Source: HKU`,
+  `fix_action: DeleteReg`, real `HKU\<SID>` `fix_param` — plus a `PROFILE_CENSUS` honesty finding
+  naming both profiles "examined: registry+filesystem" (`reports/KrakenBaseline_20260727_141501.json`,
+  finding IDs `RUNKEY_ea370fb2` / `RUNKEY_e9d74696`).
+- `POST /api/remediate` for `RUNKEY_ea370fb2` (hive still mounted): `applied:1`,
+  `reports/server_events_20260727_141410.log` @ 14:17:55 confirms `[REMEDIATE] Complete — applied:1
+  failed:0 skipped:0 blocked(protected):0`; independently verified the value is gone from the live
+  registry; `reports/remediation_audit_20260727_141755.jsonl` created (first ever in this repo) —
+  hash chain manually recomputed end-to-end (SHA256 of `prevHash + compact-JSON` per entry,
+  GENESIS `prevHash` = 64 zeros) and matches on every link.
+- Two `/api/remediate` POSTs fired **truly concurrently** (`System.Net.Http.HttpClient`, both
+  `PostAsync` calls issued with no `await` between them) **both returned `200 {"status":"started"}`**
+  — a real bug, not the documented "second call 400s" behavior, and not a test-setup mistake (see
+  below). Sequential back-to-back calls (a real network round-trip between them, i.e. what an actual
+  double-click produces) correctly got `200` then `400 {"error":"remediation already running"}` both
+  before and after the fix.
+- Unmounted the hive (`reg unload`, needed the SERVER process killed first — it held an open handle
+  from the concurrency-race test; `[gc]::Collect()` alone in a fresh process does not release a
+  handle held by a *different* still-running process), confirmed `HKEY_USERS` no longer lists the SID
+  (simulating "zbtest2 logged off"), restarted the server, and retried remediation of the second
+  tripwire (`RUNKEY_e9d74696`) against the same unmodified report. Result: `applied:0 failed:0
+  skipped:0 blocked:1`, `reports/server_events_20260727_142443.log` @ 14:24:55 logs `[BLOCKED]
+  protected (user hive no longer mounted (...-1003 logged off since the scan) - have them log on and
+  re-run, or act manually) — refusing DeleteReg`. Re-mounted the hive independently afterward
+  (verification only, outside the tool) and confirmed the `..._OFFLINE` value is **still present,
+  byte-for-byte unchanged** — proving `blocked` reflects reality, not a status-string coincidence, per
+  the acceptance test's explicit requirement.
+- Cleanup verified: both tripwires removed, hive unloaded (`HKEY_USERS` back to its pre-test 6
+  entries, zero `ZB_UH_*`/`ZB_UC_*` residue), server process stopped, port 8899 free, `zbtest2`
+  account fully untouched (`Enabled: True`, `PasswordRequired: False`, same as before this session —
+  its password/credentials were never modified since both impersonation attempts were refused).
+
+**Bug found and fixed: `/api/remediate` concurrency guard was TOCTOU-racy
+(`ZeroBreach-Server.ps1` ~1983-2007).** `$RemState.Remediating = $true` was set **inside**
+`$script:REMEDIATE_SCRIPT` (the text run in the spawned runspace), not by the route handler that
+checks it. `Start-Runspace` (`ZeroBreach-Server.ps1:811-825`) only calls `$ps.BeginInvoke()` — a
+non-blocking dispatch — so there is a real, measurable window between the route handler returning
+`{"status":"started"}` and the spawned script's first statement actually executing on a threadpool
+thread. Two genuinely simultaneous POSTs can both read `$script:State.Remediating` as `$false` and
+both start a remediation run; each run's own `finally` block would then independently flip the shared
+flag back to `$false`, which could let a *third* request in while the first run is still genuinely in
+progress. This is the same "guard flag raised too late for the check that reads it" shape CLAUDE.md's
+"Fail closed, always" section already warns about (there codified as "never set optimistically and
+cleared on mismatch" for the CIDR matcher; here the analogous defect is "never defer the set to code
+that might not run yet"). **Fix:** `$script:State.Remediating = $true` now happens synchronously in
+the route handler, immediately after the existing guard checks and before any further work, with the
+flag explicitly reset to `$false` on every early-return validation failure (bad JSON / invalid report
+/ report not found / no findings selected) and if `Start-Runspace` itself throws — otherwise a
+rejected request would leave the flag stuck `$true` and 400 every future remediation attempt forever.
+Verified live: the same concurrent-`HttpClient` test that used to return `200`/`200` now
+deterministically returns one `200`/one `400` (order between them is nondeterministic and expected —
+whichever thread's synchronous set wins). Sequential calls, and the normal apply/blocked flows above,
+were re-verified unaffected after the fix. **Not fixed / noted for awareness, not in scope for this
+session:** `/api/scan/start`'s `$ScanState.Running = $true` (`ZeroBreach-Server.ps1:1066`) sets the
+flag inside `$script:SCAN_SCRIPT` the same way and is architecturally the same class of race — Stage
+6 only required proving the remediation guard, so this was left alone rather than gold-plated; worth
+the same fix in a future pass if a scan-vs-scan double-start is ever a concern.
+
+**Files touched:** `ZeroBreach-Server.ps1` (the TOCTOU fix, ~30 lines in the `/api/remediate` route).
+Nothing in `engine/*.ps1` changed — Stage 6 is server-side only. `zbtest2` remains the standing P1
+test fixture, untouched otherwise.
+
+---
+
+## 2026-07-27 — Sandbox harnesses moved into the repo; Stage D redo + malware-detection re-validation both PASS on current HEAD
+
+**Context.** The 2026-07-26 sandbox work above was recovered from an ephemeral scratchpad but left
+two items open: Stage D (WebView2-missing dialog) was inconclusive, and Stage G's malware-detection
+proof predated P1 (multi-user hive coverage) and Build Custom Scan (`-Phases` gating), both of which
+touch code paths the malware run exercises. Both are now closed, and — the actual point of this
+session — the harnesses themselves now live in `tools/sandbox-test/` (`harness-webview2-dialog.ps1`,
+`harness-malware-detection.ps1`, `Invoke-SandboxTest.ps1` orchestrator, `README.md`) instead of a
+Claude Code temp directory, so this can't be lost a second time.
+
+### WebView2-missing dialog redo — root cause found, PASS
+The 2026-07-26 "inconclusive" result (native message-box window not found by `FindWindow`, process
+had to be force-killed) was diagnosed by comparing debug-log wording, not by touching the dialog
+code first: that run's `.exe` logged `"...showing blocking message box instead of letting Tauri
+create a webview and hang on the OS's unattended install prompt"`, a string that does not exist
+anywhere in current `main.rs` (`fatal_if_webview2_missing`'s dlog calls read `"...refusing to build
+a webview"` and separate `MessageBoxW FAILED`/`dismissed by user` lines). The `.exe` used in the
+2026-07-26 run was staged from `C:\ZBIn\app` at 17:07 local time, but Stage D itself completed at
+16:43 — it tested a build from **before** that day's WebView2 hardening pass (120s deadline,
+worker-thread `MessageBoxW` with a shared `box_rc`, `TerminateProcess` instead of `process::exit` to
+avoid a loader-lock deadlock) landed. Rebuilt `zerobreach-native.exe` from current HEAD
+(`391b6c4`'s main.rs, `npx tauri build --no-bundle`, confirmed newer than `main.rs`) and reran with
+a hardened harness (`EnumWindows` title-substring match instead of exact `FindWindow`, retried over
+15s with an all-visible-titles dump on the first miss, plus a full-screen screenshot captured before
+dismissal so "the dialog is on screen" is proven by an image, not a log line). Result: dialog found
+in 1 attempt at rect `(390,186)-(840,478)`, screenshot confirms the exact designed dialog ("ZeroBreach
+— WebView2 Runtime Required", the documented body text, OK button), `WM_CLOSE` dismissed it, and the
+process self-exited with **exit code 3** (the documented `EXIT_WEBVIEW2_MISSING`) within 2 seconds —
+nowhere near the 120s deadline. **No native-app bug — the prior result was a stale-build harness
+artifact, now guarded against**: `Invoke-SandboxTest.ps1` refuses to run this stage against an `.exe`
+older than `main.rs` unless `-SkipBuild` is passed explicitly.
+
+### Malware-detection re-validation against current HEAD — PASS, P1 and Build Custom Scan don't interfere
+Reran the Stage-G methodology (same 5 theZoo families — KRBanker, VolatileCedar.Explosion,
+Green_Caterpillar.1575.A, W97M.Class.AU, X97M.Sugar.A — extracted with `7za -pinfected`, 56/56
+samples verified non-empty with real MZ/OLE magic bytes before use) against a fresh copy of the
+current repo's `engine/`, `gui/`, `data/`, `ZeroBreach-Server.ps1` and `ZeroBreach-V23.ps1`, with two
+deliberate additions: `$env:ZB_LOAD_HIVES = '1'` set before the server process starts (the only way
+to exercise P1's `-LoadUserHives` path through the server, which has no `phases`-style cfg key for
+it — the engine reads the switch OR the env var), and no `phases` key sent in the scan-start body (so
+Build Custom Scan's filter stays off for a full-coverage baseline). DEEP scan, 115/115 phases,
+completed in under 4 minutes. Results (`report_malware_detection.json`, 249 total findings):
+- **Known-malware hash match, CRITICAL + Quarantine, on all 3 expected targets**: `GREEN.EXE`
+  itself, and both evasive copies — `Invoice_2026_Q3.pdf` (no executable extension at all) and
+  `update_payload` (extensionless) — confirming the hash check still fires independent of filename
+  on current HEAD.
+- **Masquerading-executable, HIGH**: 42 findings across the renamed VolatileCedar (35 hash-named,
+  extensionless) and KRBanker (`.vir`) samples — matches the sample count, not a flood.
+- **Malicious auto-exec macro, HIGH**, on `W97M.Class.AU`'s `VAMP_DEMO.doc`; the non-auto-exec
+  `X97M.Sugar.A`'s `sugar.xls` correctly graded POSSIBLE/review-only.
+- **YARA-lite `WMI_Reflective`**, POSSIBLE, on 2 KRBanker `.vir` payloads — review-only as designed.
+- **Auto-destructive (rule #1 regrade): 10** — 1 tripwire `DeleteFile` (Temp), 1 tripwire `DeleteReg`
+  (Run key), 3 `Quarantine` (the Green_Caterpillar hash matches), 5 `RunCmd` (hardening/posture
+  actions, all `Info`-adjacent operator-only classes) — sane and non-flooded, consistent with the
+  post-P1 healthy baseline of 8 plus the 2-3 malware-driven hash hits.
+- **0 `RECOVERED ERROR`s** across **490** distinct `PHASE` header log lines (a DEEP run with no
+  `-Phases` filter produces far more header lines than the ~139 distinct headers because phases with
+  per-item loops log a header per item in some paths — the number itself isn't the contract, "well
+  over 100" was the sanity bar and it cleared it by 3.5×).
+- **P1 confirmed actually exercised, not just present**: a `PROFILE_CENSUS` finding enumerated the
+  sandbox's 1 real profile, and the console log shows explicit `AUDITING HIVE:` lines walking
+  `HKEY_USERS\<SID>\...\Run` and `\RunOnce` for that profile's SID (via the loaded/`Registry::`
+  path) alongside the `[MACHINE]`-tagged hives — the P1 registry cluster ran correctly in the same
+  scan as the malware detections with no interference in either direction.
+- **Build Custom Scan confirmed correctly inert**: 0 "Custom Scan"/"Phase Gate"/"phase filter"
+  banner lines in the console log, and findings spanned phase numbers up to 114 — proof no `-Phases`
+  filter leaked in from a stale profile or default.
+
+**Net effect: the "detects ZERO real malware" gap closed in the 2026-07-26 session is confirmed
+still closed on current HEAD, P1 and Build Custom Scan compose cleanly with it, and both sandbox
+harnesses are now reusable, version-controlled artifacts instead of one-shot scratchpad scripts.**
+
+---
+
+## 2026-07-27 — Recovered evidence: Stage C/D/F/G sandbox malware testing actually ran on 2026-07-26
+
+**Context.** The session-15/16 sandbox work (2026-07-26) staged its harnesses and results entirely in
+a Claude Code scratchpad temp directory, not the repo, so none of it survived into `CHANGELOG.md`/
+`HANDOFF.md`. CLAUDE.md's "Outstanding Work" carried Stage C/D forward as "written but never run to
+completion" for a full extra session. The scratchpad was found intact (2026-07-27, before it could be
+cleaned up) and is transcribed here so the result isn't lost a second time. **Everything below predates
+P1 (multi-user hive) and the Build Custom Scan feature — both landed afterward — so it is evidence
+about the engine as of `22e582a`, not current HEAD. A re-validation against current HEAD is tracked
+separately.**
+
+### Stage C (live detonation → rescan → remediation) — ran, partially inconclusive
+KRBanker refused to launch ("not a valid application for this OS platform"). Root cause traced in
+Stage F/G below: the sample was extracted with `tar`, which cannot open theZoo's password-protected
+archives and silently produced a **0-byte file** — not an environment/architecture problem. The rest
+of the stage still produced real signal: DEEP rescan 115/115 phases contiguous, 0 recovered errors;
+remediation call #1 (5 tripwires) → `applied:5 failed:0 skipped:2 blocked:0` (the scheduled-task
+tripwire did not get removed — `skipped`, not `failed`; worth a follow-up look, not re-investigated
+here); remediation call #2 (protected-target probe, 3 findings: Windows Update cache + 2 recently
+modified root-CA trust entries) → `applied:0 blocked:3`, i.e. `Test-ProtectedTarget` held. Both
+`remediation_audit_20260726_165315.jsonl` and `...165346.jsonl` were real, hash-chained
+GENESIS→applied/blocked logs — proof the hard-block path works end-to-end, just not proof the engine
+can catch a live-running KRBanker.
+
+### Stage D (WebView2-missing native-shell fix) — inconclusive, needs a redo
+Debug log confirmed the fix's detection path fires correctly: `WebView2 Runtime not found (checked
+HKLM/HKLM-WOW6432Node/HKCU) — showing blocking message box instead of letting Tauri create a webview
+and hang`. But the harness could not find the native message-box window by title (`handle=0`) and the
+process did not self-exit after a simulated dismissal — it had to be force-killed. Inconclusive on
+whether the dialog itself is correct; could be a harness window-title mismatch or a real bug in the
+message-box/exit path. **Still open — tracked as a task to redo properly.**
+
+### Stage F — found a methodology bug that invalidated its own conclusions
+Built to verify the detection-gap fix (masquerade-by-content, macro auto-exec, hash-IOC matching) with
+evasively-named real malware. Its "0 findings across the board" result looked like a clean pass but
+every sourced sample was **also a 0-byte `tar` extraction** — the same silent-corruption bug as Stage
+C. A `0` on empty input proves nothing. Caught before being trusted, superseded by Stage G.
+
+### Stage G — the actual proof, with genuinely non-empty malware
+Rewrote extraction with `7za.exe -pinfected` (per the CLAUDE.md theZoo-extraction rule) and
+**hard-fails if any sample lands 0 bytes** so this can't recur silently. Every sample verified
+non-empty with a real MZ/PE magic-byte check before use (8 KRBanker files, 35 VolatileCedar.Explosion
+files, plus Green_Caterpillar.1575.A, W97M.Class.AU, X97M.Sugar.A). Against genuinely live malware
+content, DEEP found:
+- **Known-malware hash match, CRITICAL + Quarantine**, on Green_Caterpillar's `GREEN.EXE` — including
+  two copies **renamed to `Invoice_2026_Q3.pdf` and `update_payload`** (no executable extension at
+  all). This is the fix that closes the session-16 finding "all content inspection is
+  extension-gated" — the hash check fires independent of filename.
+- **Masquerading-executable, HIGH**, on the renamed KRBanker/VolatileCedar `.vir` files (real PE
+  content under a non-executable extension).
+- **Malicious auto-exec macro, HIGH**, on `W97M.Class.AU`'s `VAMP_DEMO.doc`; the non-auto-exec
+  `X97M.Sugar.A` macro correctly graded POSSIBLE/review-only, not HIGH.
+- YARA-lite `WMI_Reflective` matched KRBanker's unpacked `.vir` payload (POSSIBLE, review-only —
+  correctly not auto-actionable, since the rule class also matches legitimate PE import tables).
+- Auto-destructive (rule-#1 regrade): 10, no flood. 0 recovered errors across 139 timed phases.
+
+**Net effect: the extension-gated content-inspection gap from session 16 was fixed and then validated
+against real, correctly-decrypted malware in the same session — this just never got written down.**
+
+### Stage E — abandoned mid-run, not evidence either way
+A broader sweep (~244 Windows-family theZoo archives, detonate whichever are runnable PE files) was
+started but has no completion marker or captured stdout — it was mid-download (`CryptoLocker_
+22Jan2014`) when the harness session ended. Nothing to conclude from it; safe to retry later if a
+wider corpus sweep is wanted, but Stage G already supplies real (non-mocked) evidence for the specific
+gap it was chasing.
+
+---
+
 ## 2026-07-27 — P1 Stage 7 live grading; Phase 90 was self-detecting the engine's own source as Mimikatz
 
 ### Stage 7 (filesystem cluster) signed off

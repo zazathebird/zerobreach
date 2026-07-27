@@ -605,12 +605,27 @@ expansion). Since then:
 - **Native shell (Milestone 1) — built and live-verified.** Real `.exe` rendering the real GUI,
   Job-Object-tied child process (force-kill verified), WebView2 preflight. The Three.js 3D GUI
   redesign it is a stepping stone to has **not** been started.
-- **Sandbox malware testing (2026-07-26) — partially complete.** Stage A (FULL, tripwires + EICAR:
+- **Sandbox malware testing — DONE, re-validated against current HEAD 2026-07-27, harnesses now
+  live in `tools/sandbox-test/` (not a scratchpad).** History: Stage A (FULL, tripwires + EICAR:
   80/80 phases, 0 recovered errors) and Stage B (DEEP × 2 against 5 real theZoo families incl.
   KRBanker: 115/115 phases, 0 recovered errors, auto-destructive set == the known tripwires) both
-  passed in Windows Sandbox. **Stage C (live detonation → rescan → remediation) and Stage D
-  (WebView2-fix confirmation) are written but have NOT been run to completion** — treat both as
-  unverified.
+  passed 2026-07-26. Stage C ran: KRBanker's detonation failed (traced to a `tar` 0-byte-extraction
+  bug, not env/arch), but the remediation applied/blocked split and hash-chained audit logs were
+  real and correct. Stage F found its own samples were 0-byte (same `tar` bug) so its "clean"
+  result was meaningless; Stage G fixed the extraction (`7za -pinfected`, hard-fail on any 0-byte
+  sample) and was the actual proof malware IS caught by content. **Both open items from that round
+  are now closed:** (1) the WebView2-missing dialog redo — the 2026-07-26 "inconclusive" result was
+  proven to be a stale pre-hardening `.exe` (its debug-log wording didn't even match current
+  `main.rs`), not a real bug; a fresh build + `tools/sandbox-test/harness-webview2-dialog.ps1`
+  produced a fully conclusive PASS (screenshot-verified dialog on screen, exit code 3, see
+  CHANGELOG 2026-07-27). (2) Re-validation of the content-detection fix against current HEAD
+  (post-P1, post-Build-Custom-Scan) via `tools/sandbox-test/harness-malware-detection.ps1` — also a
+  clean PASS: known-hash IOC match (incl. on `Invoice_2026_Q3.pdf`), masquerading-PE, macro
+  auto-exec, and YARA-lite findings all fired correctly, P1's `-LoadUserHives` path was actively
+  exercised with no interference, Build Custom Scan's `-Phases` filter stayed off as expected,
+  auto-destructive = 10 (sane), 0 `RECOVERED ERROR`s across 490 phase-header lines. See CHANGELOG
+  2026-07-27 for full numbers. Run either harness again via
+  `tools/sandbox-test/Invoke-SandboxTest.ps1 -Stage WebView2Dialog|MalwareDetection`.
 - **Still open / unverified:** the user-driven **browser click-through** (destructive PURGE +
   protected HARD block, export downloads, IOC save→re-scan, STEALTH, live ticker/chips, banner
   glyphs); the **USB foreign-box field test**; the **NSIS installer** (built, never installed);

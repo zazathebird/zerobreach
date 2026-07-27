@@ -1985,24 +1985,56 @@ function Handle-Request {
             if ($script:State.Running)     { Write-JsonResponse $Ctx '{"error":"scan in progress"}' 400; return }
             if ($script:State.Remediating) { Write-JsonResponse $Ctx '{"error":"remediation already running"}' 400; return }
 
+            # TOCTOU fix (found + fixed during P1 Stage 6 live testing, 2026-07-27): the
+            # guard above used to be the ONLY check, and $RemState.Remediating = $true was set
+            # deep inside $script:REMEDIATE_SCRIPT (see Start-Runspace: RunspaceFactory::
+            # CreateRunspace + Open + BeginInvoke all have real overhead, so the flag was not
+            # actually raised until the spawned runspace's script text began executing on a
+            # threadpool thread, measurably later than this route returning "started"). Two
+            # /api/remediate POSTs fired truly concurrently (proven live with
+            # System.Net.Http.HttpClient issuing both PostAsync calls back-to-back with no
+            # await in between) BOTH passed the check above and BOTH got "started" — i.e. two
+            # overlapping remediation runspaces, each capable of independently flipping
+            # $RemState.Remediating back to $false in its own `finally`, which would let a
+            # THIRD request in while the first run is still genuinely in progress. This is the
+            # same class of defect CLAUDE.md's "Fail closed, always" section warns about: a
+            # guard flag must be raised atomically with the check that reads it, not
+            # optimistically deferred to code that may not run for a measurable interval.
+            # Fix: raise the flag SYNCHRONOUSLY on this request thread, immediately adjacent to
+            # the check, before any further work — and reset it on every early-return path
+            # below so a rejected/invalid request never leaves it stuck true. (Sequential
+            # "back-to-back" calls — e.g. a real double-click, which always has a network
+            # round trip between them — were already correctly rejected before this fix; only
+            # genuinely simultaneous concurrent POSTs exploited the gap.)
+            $script:State.Remediating = $true
+
             $parsed = Read-JsonBody $Ctx
-            if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
+            if (-not $parsed) { $script:State.Remediating = $false; Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
 
             # Security: report must be a recognized file inside reports/ (basename only).
             $reportName = [System.IO.Path]::GetFileName("$($parsed.report)")
-            if ($reportName -notmatch '^(KrakenBaseline_|audit_).*\.json$') { Write-JsonResponse $Ctx '{"error":"invalid report"}' 400; return }
+            if ($reportName -notmatch '^(KrakenBaseline_|audit_).*\.json$') { $script:State.Remediating = $false; Write-JsonResponse $Ctx '{"error":"invalid report"}' 400; return }
             $reportPath = Join-Path $script:REPORTS $reportName
-            if (-not (Test-Path -LiteralPath $reportPath)) { Write-JsonResponse $Ctx '{"error":"report not found"}' 404; return }
+            if (-not (Test-Path -LiteralPath $reportPath)) { $script:State.Remediating = $false; Write-JsonResponse $Ctx '{"error":"report not found"}' 404; return }
 
             $ids = @($parsed.ids) | Where-Object { $_ }
-            if (-not $ids -or @($ids).Count -eq 0) { Write-JsonResponse $Ctx '{"error":"no findings selected"}' 400; return }
+            if (-not $ids -or @($ids).Count -eq 0) { $script:State.Remediating = $false; Write-JsonResponse $Ctx '{"error":"no findings selected"}' 400; return }
 
-            Start-Runspace -Script $script:REMEDIATE_SCRIPT -Vars @{
-                RemState   = $script:State
-                RemReports = $script:REPORTS
-                ReportPath = $reportPath
-                FixIds     = @($ids)
-            } | Out-Null
+            try {
+                Start-Runspace -Script $script:REMEDIATE_SCRIPT -Vars @{
+                    RemState   = $script:State
+                    RemReports = $script:REPORTS
+                    ReportPath = $reportPath
+                    FixIds     = @($ids)
+                } | Out-Null
+            } catch {
+                # Start-Runspace itself failed before the spawned script could ever reach its
+                # own `finally` (which normally clears the flag) -- clear it here or every
+                # future remediation attempt would 400 forever.
+                $script:State.Remediating = $false
+                Write-JsonResponse $Ctx '{"error":"failed to start remediation"}' 500
+                return
+            }
             Write-JsonResponse $Ctx '{"status":"started"}'
         }
 

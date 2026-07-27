@@ -32,6 +32,11 @@ native-app/src-tauri/icons/android/
 native-app/src-tauri/icons/ios/
 native-app/src-tauri/gen/
 
+# Sandbox test harness scratch (tools/sandbox-test/) - staged payloads, downloaded malware
+# samples, screenshots and JSON reports from Invoke-SandboxTest.ps1 runs. Only the harness/
+# orchestrator scripts themselves are committed.
+tools/sandbox-test/work/
+
 # OS noise
 Thumbs.db
 desktop.ini
