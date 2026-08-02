@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code (claude.ai/code) working in this repo.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 > **`BLUEPRINT.md` is the product map** (architecture, data contracts, safety model, roadmap) —
 > read it first for orientation. **Detailed bug-fix history and the FP-tuning rounds live in
@@ -38,6 +38,88 @@ The native shell is built from `native-app/` (`npm install` → `npx tauri build
 `src-tauri/target/release/zerobreach-native.exe`). It requires the **WebView2 Runtime** at run time
 and refuses to start without it (exit code 3 + a message box).
 
+## Commands
+
+There is **no test runner, linter or package manager for the engine** — it is plain PowerShell 5.1.
+"Lint" here means *parse-check on the real 5.1 runtime*; "test" means *run a scan and grade the
+output*. Run all of these from the project root.
+
+**Parse-check (the mandatory gate — run after EVERY engine edit).** Prints nothing on success.
+Use real `powershell.exe` 5.1, never `pwsh` 7: the failure modes that matter (single-element unwrap,
+`(try{}catch{})` as a sub-expression, `,$arr`, Windows-1252 decoding of a BOM-less file) do not
+reproduce on 7.
+
+```powershell
+# All 6 engine files + the server
+foreach ($f in 'ZeroBreach-V23.ps1','ZeroBreach-Server.ps1','engine\Phases-1.ps1',
+                'engine\Phases-2.ps1','engine\Phases-3.ps1','engine\Summary.ps1','engine\FixMode.ps1') {
+  $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile(
+    (Resolve-Path $f), [ref]$null, [ref]$e); if ($e) { "$f"; $e }
+}
+# BOM check — the first 3 bytes of every repo .ps1 MUST be 239 187 191 (EF BB BF)
+Get-Content .\engine\Phases-1.ps1 -Encoding Byte -TotalCount 3
+```
+
+`ParseFile` on `ZeroBreach-Server.ps1` does **not** cover its `@'...'@` here-strings
+(`$script:SCAN_SCRIPT` / `$script:REMEDIATE_SCRIPT` are runspace scripts) — a syntax error inside
+one is invisible until it runs. Extract and `ParseInput`-check them separately after editing either.
+
+**Run the engine headlessly** (no server, no GUI — the fastest edit→verify loop):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Mode FULL -Hours 0 -Auto
+powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Mode DEEP -Hours 0 -Auto -LoadUserHives
+```
+
+**Run ONE phase (the closest thing to a single-test run).** `-Phases` is an opt-in *additive*
+filter layered on every existing gate — it can only narrow a run, never widen it, and an unset
+value is a hard no-op. Fractional-safe:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Mode DEEP -Hours 0 -Auto -Phases "74.5"
+powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Mode DEEP -Hours 0 -Auto -Phases "20,29,68.5,105"
+```
+
+**Grade a run.** The engine writes `reports/KrakenBaseline_<stamp>.json` +
+`reports/KrakenConsole_<stamp>.log`. The two checks that catch real regressions:
+
+```powershell
+# 1. Phase contiguity — a HARD GAP right after a RECOVERED ERROR means a module trap is missing
+Select-String 'PHASE .* took|RECOVERED ERROR' .\reports\KrakenConsole_<stamp>.log
+# 2. Auto-destructive count — CRITICAL/HIGH + a destructive FixAction (see rule #1)
+$j = Get-Content .\reports\KrakenBaseline_<stamp>.json -Raw | ConvertFrom-Json
+@($j.Findings | Where-Object { $_.Severity -in 'CRITICAL','HIGH' -and
+   $_.FixAction -in 'DeleteFile','DeleteReg','DeleteRegKey','KillProcess','RunCmd','Quarantine' }).Count
+```
+
+**Sandbox / harness tests** (Windows Sandbox; see `tools/sandbox-test/README.md` and the harness
+rules below before trusting any result):
+
+```powershell
+.\tools\sandbox-test\Invoke-SandboxTest.ps1 -Stage WebView2Dialog
+.\tools\sandbox-test\Invoke-SandboxTest.ps1 -Stage MalwareDetection -TimeoutMinutes 90
+```
+
+**Frontend + native:**
+
+```powershell
+node --check gui\static\js\app.js          # syntax only
+node tools\check-visuals.mjs               # headless-Chrome FX/theme audit → fx-audit/*.png
+cd native-app; npm install; npx tauri build # then LAUNCH the .exe — compiling is not running
+```
+
+Check `$LASTEXITCODE` after every native command (`npx`, `cargo`, `node`) —
+`$ErrorActionPreference='Stop'` does **not** apply to native exit codes, so a failed build silently
+leaves a stale binary under test.
+
+**Release zip** (validates parse + BOM + JSON of every runtime file, then writes
+`dist/ZeroBreach-V23_<stamp>.zip` + a `.sha256` sidecar):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Build-Release.ps1
+powershell -ExecutionPolicy Bypass -File tools\Build-Release.ps1 -OutDir D:\ -IncludePython
+```
+
 ## Architecture
 
 **Data flow (both servers):** Browser → POST `/api/scan/start` → server spawns `ZeroBreach-V23.ps1`
@@ -64,7 +146,8 @@ and refuses to start without it (exit code 3 + a message box).
 │   │                           category — phases run in numeric order and reuse vars across
 │   │                           phases; dot-sourcing into the loader's ONE scope preserves that.
 │   ├── Phases-1.ps1            Sections 1-11, phases 1-58 (incl. 10.5/10.6/17.5/…/55.5)
-│   ├── Phases-2.ps1            Sections 12-16 front, phases 59-89 (incl. 69 mutex, 74.5–74.9)
+│   ├── Phases-2.ps1            Sections 12-16 front, phases 59-89 (incl. 69 hollowing/injection
+│   │                           + its WS2 mutex sub-probe, 74.5–74.9)
 │   ├── Phases-3.ps1            if($PhasePlan.Advanced) 90-107 (incl. 97.5/99.5/100.5) +
 │   │                           if($PhasePlan.Integrity) 108-115
 │   ├── Summary.ps1             risk score + audit summary + stealth/auto exits
@@ -89,13 +172,18 @@ and refuses to start without it (exit code 3 + a message box).
 │                               engine/server/gui — never edit those; they are build output.
 ├── tools/
 │   ├── Build-Release.ps1       Portable release-zip builder (parse+BOM+JSON gate, SHA256 sidecar)
-│   └── check-visuals.mjs       Headless-Chrome FX/theme audit → writes fx-audit/*.png (gitignored)
+│   ├── check-visuals.mjs       Headless-Chrome FX/theme audit → writes fx-audit/*.png (gitignored)
+│   └── sandbox-test/           Windows Sandbox harnesses + orchestrator (Invoke-SandboxTest.ps1
+│                               -Stage WebView2Dialog|MalwareDetection). READ the harness rules
+│                               below before trusting a result — these have reported false green.
 ├── _python/                    Parked Flask/SocketIO server + PyInstaller spec (see README there)
 ├── data/
 │   ├── ioc_defaults.json            Default IOC list for -IocFile
 │   ├── detection_signatures.json    Malware signatures + fp_allowlists. Loaded by Get-Sig. KEPT IN
 │   │                                DATA so AMSI/Defender doesn't flag the engine (see rules).
 │   ├── mitre_mapping.json           MITRE ATT&CK technique map (wired into findings)
+│   ├── scan_categories.json         Build-Custom-Scan category → phase-list map, consumed by
+│   │                                POST /api/scan/analyze-text to build the -Phases filter
 │   ├── coverage_matrix.json         Phase-by-phase coverage/gap matrix (WS0 reference — re-audit
 │   │                                pending; was generated against the work-rig engine)
 │   └── permission_baseline.json     ACL/owner baseline for the perm-integrity phases (108-115)
@@ -111,7 +199,7 @@ Self-elevates (`Start-Process -Verb RunAs`, re-passing args). Params:
 
 | Param | Values | Notes |
 |---|---|---|
-| `-Mode` | `QUICK \| FULL \| DEEP \| PARANOID \| STEALTH` | Empty = interactive menu |
+| `-Mode` | `QUICK \| FULL \| DEEP \| PARANOID \| STEALTH \| TRIAGE` | Empty = interactive menu |
 | `-Hours` | int | `0` = all time, `N` = last N hours, `-1` (default) = interactive menu |
 | `-Auto` | switch | Skip all menus (servers always pass this) |
 | `-Html` | switch | Also emit an HTML report |
@@ -119,14 +207,27 @@ Self-elevates (`Start-Process -Verb RunAs`, re-passing args). Params:
 | `-OutDir` | path | Defaults to `reports/`; servers pass an absolute path |
 | `-IocFile` | path | Custom IOC list (format mirrors `data/ioc_defaults.json`) |
 | `-Baseline` | path | Prior-run baseline for diffing |
+| `-Phases` | csv string | Build-Custom-Scan filter, fractional-safe (`"20,29,68.5,105"`). **Additive/narrowing only** — layered on top of every other gate, never widens a run; empty = hard no-op. Single choke point is `Test-PhaseGate` |
+| `-LoadUserHives` | switch | P1: permit `reg load` of a **logged-off** user's `NTUSER.DAT`. OFF by default, never active in STEALTH. **Not reachable from the GUI** (see Outstanding Work) |
 | `-Schedule` | `DAILY \| WEEKLY` | Registers a SYSTEM scheduled task (02:00), then **exits before scanning** |
 | `-SmtpTo` / `-SmtpFrom` / `-SmtpServer` | string | Email delivery for scheduled runs |
+
+**`TRIAGE` is a sixth real mode, not an alias.** It is "the QUICK 30-phase core **plus** everything
+from 81 up": it reuses the `$global:QUICK_MODE` gate to drop the 54 non-triage phases in 1–80, then
+forces Universal (81–89) + Advanced (90–107) + Integrity (108–115) **on** — the only way to reach
+Phase 114, the Defender-tamper check. `FULL` stops at 80 and therefore gates out every phase an
+alert triage actually needs (90 hash/YARA, 91 MoTW, 92 UAC-bypass, 99.5 cmdline heuristics, 105
+correlation heatmap, 107 event-log hunting, 114). `$PhasePlan.Max` stays the **label** ceiling 115.
+`$global:TRIAGE_MODE` is set but **no phase module reads it yet** — inert today by design.
 
 ### Output parsing + events
 
 **Live findings come from structured lines, not text classification (since 2026-07-02).**
 `Add-Finding` (loader) emits one `[FINDING] {compact JSON}` stdout line per registered finding
-in non-interactive, non-stealth runs (keys: `id, sev, phase, tt, desc, target, fix, group`);
+in non-interactive, non-stealth runs (base keys: `id, sev, phase, tt, desc, target, fix, group` —
+plus up to 18 **optional P10 evidence keys**, emitted only when the phase supplies them:
+`sha256, signer, sigstat, ftime, fage, fsize, zone, url, refurl, proc, pproc, esrc, etime, tname,
+conf, verdict, corrob, caveat`; `ZeroBreach-V23.ps1:624-641,682`);
 the server's scan runspace converts CRITICAL/HIGH/POSSIBLE ones into SSE `finding` events
 (exact severity, canonical threat bucket, MITRE-resolved) and drops the raw JSON line from the
 log view. **Never re-add a text-severity → finding path in the server** (it would double-count
@@ -149,8 +250,9 @@ advance the GUI counter/progress as real plan steps, findings carry the true fra
 both `Resolve-Mitre` copies look up the fractional `phase_map` key first (integer-floor fallback).
 
 **Ceiling ≠ count — do not conflate them.** `phase_total` is the plan *ceiling* per mode
-(QUICK 30 / FULL 80 / DEEP+ 115, mirroring the loader's `$PhasePlan.Max`, mirrored again in the
-server's `$MODE_PHASES`). Because every expansion since WS2 has been inserted as a **fractional**
+(QUICK 30 / FULL 80 / TRIAGE + DEEP+ 115, mirroring the loader's `$PhasePlan.Max`, mirrored again in
+the server's `$MODE_PHASES` = `@{QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115; TRIAGE=115}`
+at `ZeroBreach-Server.ps1:948`). Because every expansion since WS2 has been inserted as a **fractional**
 number, the highest label is still 115 while the number of headers that actually execute is larger:
 as of 2026-07-26 the engine has **~140 distinct headers** (Phases-1: 70, 1–58 + 12 fractionals;
 Phases-2: 40, 59–89 + 9 fractionals; Phases-3: 30, 90–115 + 97.5/99.5/100.5, plus a conditional
@@ -171,10 +273,10 @@ side alone — a mismatch renders every box-drawing banner as mojibake in the GU
 | Event (server→client) | Key payload fields |
 |---|---|
 | `log_line` | `text, severity, phase, elapsed` |
-| `finding` | `id, line, severity, threat_type, phase, mitre {id,name,tactic,url}, mitre_id, fix_action, target, timestamp` |
+| `finding` | `id, line, severity, threat_type, phase, mitre {id,name,tactic,url}, mitre_id, fix_action, target, timestamp` — **plus the optional P10 evidence fields**, copied through under expanded names via `$EVMAP` (`ZeroBreach-Server.ps1:1182-1194`): `sha256, signer, signature_status, file_write_time, file_age_hours, file_size, zone_id, host_url, referrer_url, process_name, parent_process, evidence_source, event_time, threat_name, confidence, verdict, corroboration, caveat`. **`verdict = LIKELY-FALSE-POSITIVE` has behaviour attached — it suppresses auto-selection.** |
 | `scan_state` | `phase, phase_total, phase_name, section, elapsed, threat_counts, running` |
 | `scan_complete` | `findings_count, threat_counts, elapsed, results_path, engine_report` |
-| `remediation_complete` | `applied, failed, skipped, blocked` |
+| `remediation_complete` | `applied, failed, skipped, blocked, snapshot` (rollback `.reg` path), `auditLog` (hash-chained `remediation_audit_*.jsonl` path) |
 | `sync` (PS server) | Full state snapshot on connect/reconnect |
 
 ---
@@ -392,7 +494,9 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **The phase counter is MONOTONIC — never let a parsed phase number move it backwards.**
   `Summary.ps1`'s end-of-run "10 SLOWEST" table prints `PHASE N — …` lines in *descending duration*
   order, and the phase regex matches every one of them: a finished DEEP reported 89/115 until this
-  was fixed (2026-07-22). Both servers now ignore a lower number. Any new trailing output that
+  was fixed (2026-07-22). The server ignores a lower number (`ZeroBreach-Server.ps1:1220`
+  `if ($newPhase -gt $ScanState.Phase)`, with `PhaseIdx` clamped to `PhaseTotal` at `:1226`); the
+  parked Python server carries its own copy. Any new trailing output that
   mentions a phase is automatically safe because of this — keep it that way.
 - **Never send `Access-Control-Allow-Origin: *`, and route every state-changing request through
   `Test-RequestAllowed` BEFORE the route table.** "Locally bound" is not "only the GUI can reach
@@ -523,14 +627,14 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   answers, and the plan's whole verdict layer depends on `UNPROVEN` being distinguishable from
   `CLEAN` (2026-07-26, Phases 12/91/107).
 - **A shared budget spread across N roots silently zeroes coverage for roots 2..N — scale it, signal
-  truncation, and NEVER conclude from a truncated walk.** `Get-ScanFiles` caps at
-  `SCAN_MAX_FILES = 20000` / `SCAN_DEADLINE_S = 20` and `return`s the instant a cap is hit, walking
+  truncation, and NEVER conclude from a truncated walk.** Historically `Get-ScanFiles` capped at
+  `SCAN_MAX_FILES = 20000` / `SCAN_DEADLINE_S = 20` and `return`ed the instant a cap was hit, walking
   roots **in the order given**. Measured on a live box: `C:\Users\<one-user>` alone yields **20,000
   files in 1.0 s**. When P1 changed ~20 filesystem sites from one profile to "all profiles in one
-  call", the caps were not scaled — so on a multi-user box the first SID consumes the entire budget
-  and every later profile gets **zero** coverage, after which the phase prints
-  `[OK] NO TUNNELING TOOLS FOUND.` `Get-ScanFiles` returns **no truncation signal**, so the phase
-  cannot even detect that it happened. Three compounding traps: `-TimeScoped` does not help (under the
+  call", the caps were not scaled — so on a multi-user box the first SID consumed the entire budget
+  and every later profile got **zero** coverage, after which the phase printed
+  `[OK] NO TUNNELING TOOLS FOUND.` (finding **P1-1**.) Three compounding traps: `-TimeScoped` does not
+  help (under the
   default ALL TIME `Test-InScope` is unconditionally `$true`); machine-wide roots appended *after* the
   per-profile ones become unreachable; and a `break` on budget exhaustion (Phase 10) abandons the
   remainder with no `Add-Finding`, so the durable report has no record. **Phase 12
@@ -538,16 +642,49 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   tests for truncation, and emits `PREFETCH_CORR_SKIPPED` instead of concluding. Also de-dupe nested
   roots by **prefix**, not exact string (`Temp` ⊂ `LocalAppData`; under OneDrive KFM `Documents` ⊂
   `OneDrive`) or the same tree is walked 2-3× out of the same budget (2026-07-27).
+
+  > **⚠ STATE AS OF 2026-08-01 — half-fixed, UNCOMMITTED, and the helper is DEAD CODE.**
+  > The working tree (`ZeroBreach-V23.ps1`, +131/−40, **not committed**) rewrites `Get-ScanFiles`
+  > with (a) round-robin **fair-share** walking — one directory per root per rotation, per-root quota
+  > `ceil(MaxFiles/N)`, quotas lifted once every root stalls so leftover budget is still spent;
+  > single-root calls start relaxed and are byte-identical to the old behaviour for the ~30 legacy
+  > call sites — (b) **scaled caps** when `N > 1` and the caller didn't pass caps explicitly
+  > (`min(100000, 20000+10000*(N-1))` / `min(60, 20+6*(N-1))`), and (c) a **truncation signal**:
+  > `$global:SCAN_FILES_TRUNCATED`, `Test-ScanTruncated`, `$global:SCAN_FILE_CACHE_TRUNC` (so cache
+  > hits stay honest), plus an `Add-ScanGapFinding` helper emitting INFO + `FixAction Info` +
+  > `Verdict UNPROVEN`.
+  >
+  > **`Test-ScanTruncated` and `Add-ScanGapFinding` have ZERO callers.** All 75 `Get-ScanFiles` call
+  > sites (Phases-1: 30, Phases-2: 23, Phases-3: 22) ignore the flag, so the *false all-clear* half of
+  > P1-1 is untouched: `Phases-3.ps1:1916` still prints `[OK] NO SUSPICIOUS DUMP FILES OR DUMPER
+  > TOOLS.` and `Phases-2.ps1:2247` still prints `[OK] NO TUNNELING TOOLS FOUND.` on a truncated walk.
+  > **The signal is per-call state — read it (or `Test-ScanTruncated`) IMMEDIATELY after the call,
+  > before any other `Get-ScanFiles` runs**, and emit `Add-ScanGapFinding` *instead of*, never as well
+  > as, the clean line. Prefix de-dupe of nested roots is still not implemented.
+  >
+  > **⚠ DO NOT COMMIT THIS WALK CHANGE BEFORE FIXING P1-2/P1-3/P1-4.** Budget exhaustion was
+  > accidentally *masking* three rule-#1 violations. Giving profiles 2..N real files for the first
+  > time makes them reachable **×N**: Phase 106 auto-deletes signed Microsoft ProcDump, Phase 31
+  > auto-deletes every developer's PowerShell profile, Phase 74 writes hardening into other users'
+  > hives. Landing the fix first makes a healthy multi-user box **strictly more dangerous than it is
+  > today**.
 - **Multiplying a per-user site by N profiles re-grades its severity — re-check rule #1 at the new
   cardinality.** A finding that was tolerable once per box may be intolerable N times. Three live
-  cases from the P1 migration, none visible on the 2-profile dev box whose baseline is 8: Phase 106
-  `DUMPTOOL` is CRITICAL + **DeleteFile** on a bare `procdump*.exe` glob with no signature gate — it
+  cases from the P1 migration, none visible on the 2-profile dev box whose baseline is 8 (all three
+  re-verified still open 2026-08-01): **Phase 106** `DUMPTOOL` (`Phases-3.ps1:1911-1913`) is CRITICAL
+  + **DeleteFile** on a bare `procdump*.exe` glob with no signature gate — it
   deletes signed Microsoft Sysinternals ProcDump, per profile (Phase 90 documents this exact failure
-  and fixed it with a sig gate; Phase 106 never got one); Phase 31 is CRITICAL + DeleteFile on
-  `IEX|DownloadString|Invoke-Expression`, which is the documented init line for oh-my-posh, starship,
+  and fixed it with a sig gate; Phase 106 never got one — the whole block `1876-1915` contains no
+  `Get-AuthSig` call); **Phase 31** (`Phases-1.ps1:2249-2255`) is CRITICAL + DeleteFile on
+  `IEX|DownloadString|WebClient|Invoke-Expression|Start-Process.*hidden` — **broader than previously
+  documented here**, and the documented init line for oh-my-posh, starship,
   zoxide and scoop — on a 5-developer box that is 5 auto-selected deletions of users' PowerShell
-  profiles; Phase 74 `MACRO_TRUST` is HIGH + RunCmd **writing into other users' hives**, which the
-  sibling hardening sites at `Phases-2.ps1:1452/1562` deliberately refuse to do. **A single-box,
+  profiles; **Phase 74** `MACRO_TRUST` (`Phases-2.ps1:979-982`) is HIGH + RunCmd **writing into other
+  users' hives** (`Set-ItemProperty '<HKU\…\SID\…>' -Name VBAWarnings -Value 4`), which the
+  sibling hardening sites at `Phases-2.ps1:1452/1562` deliberately refuse to do. *Nuance: Phase 74
+  only reaches HIGH + RunCmd when `$zbHive.Source -ne 'RegLoad'` (`:973-975`) — a reg-loaded offline
+  hive degrades to `Info`, so the ×N auto-select hazard is real for **mounted** (logged-on) hives
+  only.* **A single-box,
   single-profile baseline cannot see any of this by construction** — grade multi-profile before
   claiming a per-user migration is safe (2026-07-27).
 - **A written plan's premises are claims, not facts — measure them before implementing.**
@@ -576,25 +713,37 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **MITRE ATT&CK tagging** — server loads `data/mitre_mapping.json` into the scan runspace;
   `Resolve-Mitre`/`Resolve-MitreMain` resolve each finding (keyword → threat-type → phase map) and
   attach `mitre {id,name,tactic,url}`. Frontend renders a clickable `.item-mitre` badge.
-- **HTTP routes** (`ZeroBreach-Server.ps1`): `GET|POST /api/profiles` (scan profiles — 4 read-only
-  built-ins from `$script:PROFILE_BUILTINS` + user presets in `reports/scan_profiles.json`; save is
+- **HTTP routes** (`ZeroBreach-Server.ps1`, dispatch `switch -Regex` at `:1857`): `GET|POST
+  /api/profiles` (scan profiles — **5** read-only built-ins at `:105-111` (Triage/Standard/Alert
+  Triage/Incident/Silent) + user presets in `reports/scan_profiles.json`; save is
   upsert-by-name with fail-closed validation; built-ins deliberately carry **no `ioc_file` key** so
-  applying one never blanks the IOC Manager's path. **All POST bodies parse via `Read-JsonBody` —
+  applying one never blanks the IOC Manager's path. **POST bodies parse via `Read-JsonBody` —
   never inline `ConvertFrom-Json -EA SilentlyContinue`, which on PS 5.1 throws a terminating error
-  on bad JSON and hangs the client with no response**); `GET /api/export/html|csv` (server-rendered
+  on bad JSON and hangs the client with no response.** Sole exception: `/api/scan/start` (`:2207`)
+  uses `Read-RequestBody` + an explicit `ConvertFrom-Json -EA Stop` inside a try/catch — it fails
+  closed with a 400, so it is safe, but it is a real counterexample to "all POST bodies");
+  `GET /api/export/html|csv` (server-rendered
   download from current findings); `GET|POST /api/ioc` (IOC Manager — POST writes both the JSON sidecar and
   `reports/custom_iocs.ioc` in the engine's **prefixed** text format `hash:`/`ip:`/`domain:`/`regex:`/
   `file:`, then feeds it to the next scan via `-IocFile`); `GET /api/report?name=<file>` (rich engine
-  findings with `FixAction`/`FixParam`, MITRE-enriched; name validated `^(KrakenBaseline_|audit_).*\.json$`);
+  findings with `FixAction`/`FixParam`, MITRE-enriched; name validated `^(KrakenBaseline_|audit_).*\.json$`
+  at `:1915`, same regex on the remediate body at `:2016`; `/api/report/diff` is stricter —
+  `^KrakenBaseline_.*\.json$` at `:1942` — correctly, since diffs are baseline-only);
   `POST /api/remediate {report, ids[]}` (spawns `$script:REMEDIATE_SCRIPT`, mirrors the engine's
-  `Invoke-FixMode` switch — DeleteFile/DeleteReg/DeleteRegKey/KillProcess/RunCmd/Quarantine — streams
+  `Invoke-FixMode` switch — DeleteFile/DeleteReg/DeleteRegKey/KillProcess/RunCmd/Quarantine **plus an
+  `Info` arm** — streams
   `[FIX]` lines then `remediation_complete`; report path basename-locked to `reports/`; **responds
   `{"status":"started"}` immediately — see the harness rules for how to actually verify it**).
+  **The two switches are NOT an exact mirror:** the server has a `default { …no automated action…
+  $skipped++ }` arm (`:1787`) that `engine/FixMode.ps1`'s switch lacks — there, an unrecognized
+  `FixAction` falls through silently with `$ok = $false` and is counted in *neither* applied, failed,
+  nor skipped. Keep that in mind before adding a seventh action.
   Also live, and easy to miss when auditing the route table: `GET /api/csrf` (per-process token),
   `GET /api/findings` (live findings array), `GET /api/reports` (report file list),
   `GET /api/report/diff?a=&b=` (baseline compare), `GET|POST /api/schedule`, `GET /api/sysinfo`,
   `GET /api/state`, `GET /api/events`, `POST /api/scan/start|abort` (POST-only, 405 otherwise),
-  `GET /favicon.ico` (204), plus `/` and `/static/`.
+  `POST /api/scan/analyze-text` (`:2111` — Build Custom Scan text→IOC/category analysis, POST-only,
+  50,000-char cap, calls `Get-TextScanAnalysis`), `GET /favicon.ico` (204), plus `/` and `/static/`.
 - **Remediation audit trail** — both remediation paths append a tamper-evident hash-chained
   `reports/remediation_audit_<stamp>.jsonl`; the GUI path also writes a rollback `.reg` snapshot
   first when the launchpad checkbox is set. Read these, not the HTTP response, to confirm an action.
@@ -697,6 +846,17 @@ Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
 > The forward plan is `ENGINE_REWRITE_PLAN.md` (Rust evidence sidecar + incremental detection port
 > behind a differential harness). **It is sequenced deliberately behind fixing the findings and
 > repairing the harness** — see its §2.2 for why starting the rewrite first would be unsafe.
+>
+> **Re-verified 2026-08-01: `HEAD` is still `a8a9a99`. Nothing below has been committed since.**
+> The only working-tree state is the uncommitted `Get-ScanFiles` rewrite in `ZeroBreach-V23.ps1`
+> (see the P1-1 note below and the boxed warning in the shared-budget rule) and one untracked file,
+> `ZEROBREACH_ENGINE_SPEC_FOR_REBUILD.md`. **That spec is referenced by no other document in the
+> repo and is in tension with `ENGINE_REWRITE_PLAN.md`**: the plan's §2.1 argues the irreplaceable
+> asset is the *tuning, not the code*, and prescribes an incremental Rust sidecar behind a
+> differential harness; the spec's §8 recommends PowerShell as the rebuild target and closes by
+> saying to start greenfield "with just a handful of high-signal checks." **Resolve which is
+> authoritative before acting on either.** Note also that `ENGINE_REWRITE_PLAN.md` has only §0-§7 —
+> the "§8 order" pointer below correctly refers to `EVIDENCE_ENGINE_PLAN.md`, not the rewrite plan.
 
 The bulk of the original roadmap is **done** (scan-blocking prompts, re-run handling, MITRE, IOC
 Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–6, engine
@@ -725,7 +885,12 @@ expansion). Since then:
   roots to **one** `Get-ScanFiles` call whose caps were never scaled — measured live, a single profile
   exhausts the 20,000-file / 20-second budget in **~1 second**, so profiles 2..N get **zero**
   filesystem coverage and the phases then print `[OK] NO SUSPICIOUS DUMP FILES…` (finding **P1-1**, the
-  highest-leverage fix in the queue). Also open: **three rule-#1 violations created by the ×N
+  highest-leverage fix in the queue). **P1-1 is now HALF-FIXED IN THE WORKING TREE AND UNCOMMITTED:**
+  `Get-ScanFiles` has gained fair-share round-robin walking, scaled caps and a truncation signal, but
+  `Test-ScanTruncated`/`Add-ScanGapFinding` have **zero callers** across all 75 call sites, so the
+  false all-clear is unchanged — **and the change must not be committed before the three rule-#1
+  violations below are fixed** (see the boxed warning in the shared-budget rule for why landing it
+  first makes a multi-user box more dangerous). Also open: **three rule-#1 violations created by the ×N
   multiplication** (Phase 106 auto-deletes signed Microsoft ProcDump; Phase 31 auto-deletes every
   developer's PowerShell profile; Phase 74 writes hardening into other users' hives), a browser-
   extension ID that **silently discards** the Edge copy of a Chrome finding, a console-remediation path
