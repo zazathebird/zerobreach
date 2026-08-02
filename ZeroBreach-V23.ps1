@@ -906,6 +906,29 @@ $global:SCAN_PRUNE_DIRS  = @(
     'cachestorage','dawncache','blob_storage','indexeddb','media cache','crashpad',
     'minidump','cef','gpucache','shadercache','componentstore'
 )
+# ---- Truncation signal + fair-share walk (P1-1, 2026-07-27) -----------------
+# Get-ScanFiles used to (a) return NO indication that a walk had been cut short by
+# MaxFiles or the deadline, and (b) walk roots strictly in the order given, so the
+# FIRST root could consume the entire budget. Measured on a live box: ONE profile
+# root yields 20,000 files in 1.0 s. After P1 made ~20 filesystem sites pass EVERY
+# profile's roots to a single call, that meant profiles 2..N got literally zero
+# coverage — and the phase then printed "[OK] NO ... FOUND." on an incident host.
+# Two changes, both required:
+#   1. FAIR SHARE. Roots are walked ROUND-ROBIN, one directory per root per rotation,
+#      each root limited to ceil(MaxFiles / rootCount) files. Once every root has
+#      finished or reached its quota the quotas are LIFTED and any leftover budget is
+#      spent, so a small root never wastes its share. Single-root calls (the ~30
+#      pre-P1 call sites) start in the relaxed state and behave EXACTLY as before.
+#   2. TRUNCATION SIGNAL. $global:SCAN_FILES_TRUNCATED is set by every call and is
+#      restored on a cache hit. It is PER-CALL state: read it (or Test-ScanTruncated)
+#      IMMEDIATELY after the call, before any other Get-ScanFiles call runs.
+# A phase that concludes "nothing found" from a truncated walk is stating a fact it
+# does not have. Use Add-ScanGapFinding instead of the clean line -- see Phase 12
+# (Phases-1.ps1) for the original in-tree model this generalises.
+$global:SCAN_FILES_TRUNCATED  = $false   # did the LAST Get-ScanFiles call hit a cap?
+$global:SCAN_FILES_LAST_ROOTS = 0        # how many roots that call actually walked
+$global:SCAN_FILE_CACHE_TRUNC = @{}      # ck -> truncation flag, so cache hits stay honest
+function Test-ScanTruncated { return [bool]$global:SCAN_FILES_TRUNCATED }
 function Get-ScanFiles {
     param(
         [string[]]$Path,
@@ -915,61 +938,129 @@ function Get-ScanFiles {
         [int]$DeadlineSecs  = $global:SCAN_DEADLINE_S,
         [string[]]$PruneDirs = $global:SCAN_PRUNE_DIRS
     )
+    $global:SCAN_FILES_TRUNCATED  = $false
+    $global:SCAN_FILES_LAST_ROOTS = 0
+    $zbRoots = @(@($Path) | Where-Object { $_ })
+    # Budget scaling. A caller that accepted the defaults and hands over N roots is the
+    # P1 "every profile in one call" pattern; a fixed 20k/20s budget across N roots is a
+    # per-root budget of 20000/N. Scale it (capped, so a wide root set cannot run away)
+    # and leave callers that pass caps EXPLICITLY (Phase 12) exactly as written.
+    if ($zbRoots.Count -gt 1) {
+        if (-not $PSBoundParameters.ContainsKey('MaxFiles')) {
+            $MaxFiles = [int][Math]::Min(100000, $global:SCAN_MAX_FILES + 10000 * ($zbRoots.Count - 1))
+        }
+        if (-not $PSBoundParameters.ContainsKey('DeadlineSecs')) {
+            $DeadlineSecs = [int][Math]::Min(60, $global:SCAN_DEADLINE_S + 6 * ($zbRoots.Count - 1))
+        }
+    }
     # Per-scan memo: only byte-identical (roots, filter, timescope, caps, prune) calls share.
     # Roots keep CALLER ORDER in the key (no sort): under the MaxFiles/deadline truncation the
     # walk order decides WHICH files make the cut, so same-set-different-order calls must not
     # alias. (All current multi-root aliases pass identical order — this guards future sites.)
-    $ck = ((@($Path) | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() }) -join '|') +
+    $ck = (($zbRoots | ForEach-Object { $_.ToLowerInvariant() }) -join '|') +
           "|F=$Filter|T=$([bool]$TimeScoped)|M=$MaxFiles|D=$DeadlineSecs|P=" +
           ((@($PruneDirs) | Sort-Object) -join ',')
-    if ($global:SCAN_FILE_CACHE_ON -and $global:SCAN_FILE_CACHE.ContainsKey($ck)) { $global:SCAN_FILE_CACHE_HITS++; return ,$global:SCAN_FILE_CACHE[$ck] }
+    if ($global:SCAN_FILE_CACHE_ON -and $global:SCAN_FILE_CACHE.ContainsKey($ck)) {
+        $global:SCAN_FILE_CACHE_HITS++
+        $global:SCAN_FILES_TRUNCATED  = [bool]$global:SCAN_FILE_CACHE_TRUNC[$ck]
+        $global:SCAN_FILES_LAST_ROOTS = $zbRoots.Count
+        return ,$global:SCAN_FILE_CACHE[$ck]
+    }
     $results  = New-Object System.Collections.Generic.List[System.IO.FileInfo]
     $deadline = [datetime]::UtcNow.AddSeconds($DeadlineSecs)
     $prune    = @{}; foreach ($d in $PruneDirs) { $prune[$d.ToLower()] = $true }
-    foreach ($root in $Path) {
-        if (-not $root) { continue }
+    # One stack per REACHABLE root. An unreachable root is dropped here, not skipped mid-walk,
+    # so the quota is shared only between roots that can actually contribute files.
+    $stacks = New-Object System.Collections.Generic.List[object]
+    foreach ($root in $zbRoots) {
         try { if (-not (Test-Path -LiteralPath $root)) { continue } } catch { continue }
-        $stack = New-Object System.Collections.Generic.Stack[string]
-        try { $stack.Push((Convert-Path -LiteralPath $root)) } catch { continue }
-        while ($stack.Count -gt 0) {
-            if ([datetime]::UtcNow -ge $deadline -or $results.Count -ge $MaxFiles) {
-                $arr = $results.ToArray()
-                # Cache only DETERMINISTIC truncations: a MaxFiles cap cuts at the same file every
-                # time on a static tree, but a deadline hit is load-dependent — caching it would
-                # poison every later identical call with a partial set a fresh budgeted walk may beat.
-                if ($global:SCAN_FILE_CACHE_ON -and $results.Count -ge $MaxFiles) { $global:SCAN_FILE_CACHE[$ck] = $arr }
-                return ,$arr
+        $st = New-Object System.Collections.Generic.Stack[string]
+        try { $st.Push((Convert-Path -LiteralPath $root)) } catch { continue }
+        $stacks.Add($st)
+    }
+    $nRoots = $stacks.Count
+    $global:SCAN_FILES_LAST_ROOTS = $nRoots
+    if ($nRoots -gt 0) {
+        $counts  = New-Object 'int[]' $nRoots
+        $quota   = [int][Math]::Ceiling($MaxFiles / [double]$nRoots)
+        $relaxed = ($nRoots -eq 1)          # single root: quota is meaningless, keep pre-P1 behaviour
+        $stop    = $false
+        while (-not $stop) {
+            $progressed = $false
+            for ($ri = 0; $ri -lt $nRoots; $ri++) {
+                if ([datetime]::UtcNow -ge $deadline -or $results.Count -ge $MaxFiles) {
+                    $global:SCAN_FILES_TRUNCATED = $true; $stop = $true; break
+                }
+                $st = $stacks[$ri]
+                if ($st.Count -eq 0) { continue }
+                # Quota is enforced at DIRECTORY granularity only: breaking out mid-directory
+                # would discard the rest of that directory's files with no way to resume it.
+                if (-not $relaxed -and $counts[$ri] -ge $quota) { continue }
+                $progressed = $true
+                $dir = $st.Pop()
+                try {
+                    foreach ($f in [System.IO.Directory]::EnumerateFiles($dir, $Filter)) {
+                        if ($results.Count -ge $MaxFiles) { $global:SCAN_FILES_TRUNCATED = $true; break }
+                        try {
+                            $fi   = New-Object System.IO.FileInfo $f
+                            $attr = [int]$fi.Attributes
+                            if ($attr -band 0x1000)   { continue }   # Offline (cloud-only)
+                            if ($attr -band 0x400000) { continue }   # RecallOnDataAccess (OneDrive placeholder)
+                            if ($TimeScoped -and -not (Test-InScope $fi.LastWriteTime)) { continue }
+                            $results.Add($fi); $counts[$ri]++
+                        } catch {}
+                    }
+                } catch {}
+                try {
+                    foreach ($sd in [System.IO.Directory]::EnumerateDirectories($dir)) {
+                        $leaf = [System.IO.Path]::GetFileName($sd).ToLower()
+                        if ($prune.ContainsKey($leaf)) { continue }
+                        try {
+                            $di = New-Object System.IO.DirectoryInfo $sd
+                            if ([int]$di.Attributes -band [int][IO.FileAttributes]::ReparsePoint) { continue }
+                        } catch {}
+                        $st.Push($sd)
+                    }
+                } catch {}
             }
-            $dir = $stack.Pop()
-            try {
-                foreach ($f in [System.IO.Directory]::EnumerateFiles($dir, $Filter)) {
-                    if ($results.Count -ge $MaxFiles) { break }
-                    try {
-                        $fi   = New-Object System.IO.FileInfo $f
-                        $attr = [int]$fi.Attributes
-                        if ($attr -band 0x1000)   { continue }   # Offline (cloud-only)
-                        if ($attr -band 0x400000) { continue }   # RecallOnDataAccess (OneDrive placeholder)
-                        if ($TimeScoped -and -not (Test-InScope $fi.LastWriteTime)) { continue }
-                        $results.Add($fi)
-                    } catch {}
-                }
-            } catch {}
-            try {
-                foreach ($sd in [System.IO.Directory]::EnumerateDirectories($dir)) {
-                    $leaf = [System.IO.Path]::GetFileName($sd).ToLower()
-                    if ($prune.ContainsKey($leaf)) { continue }
-                    try {
-                        $di = New-Object System.IO.DirectoryInfo $sd
-                        if ([int]$di.Attributes -band [int][IO.FileAttributes]::ReparsePoint) { continue }
-                    } catch {}
-                    $stack.Push($sd)
-                }
-            } catch {}
+            if ($stop) { break }
+            if (-not $progressed) {
+                # Nobody could advance: either every stack is empty (done) or every non-empty
+                # stack is quota-capped. Lift the quotas ONCE and spend what is left.
+                if (-not $relaxed) { $relaxed = $true; continue }
+                break
+            }
         }
     }
     $arr = $results.ToArray()
-    if ($global:SCAN_FILE_CACHE_ON) { $global:SCAN_FILE_CACHE[$ck] = $arr }   # ZB_NOCACHE runs stay truly cache-free
+    # Cache only DETERMINISTIC results: a complete walk, or a MaxFiles cap (which cuts at the
+    # same file every time on a static tree). A deadline hit is load-dependent — caching it
+    # would poison every later identical call with a partial set a fresh budgeted walk may beat.
+    if ($global:SCAN_FILE_CACHE_ON -and ((-not $global:SCAN_FILES_TRUNCATED) -or $results.Count -ge $MaxFiles)) {
+        $global:SCAN_FILE_CACHE[$ck]       = $arr                             # ZB_NOCACHE runs stay truly cache-free
+        $global:SCAN_FILE_CACHE_TRUNC[$ck] = [bool]$global:SCAN_FILES_TRUNCATED
+    }
     return ,$arr
+}
+# Honesty finding for a filesystem check whose walk was cut short. CLAUDE.md: "couldn't
+# check" and "nothing there" are different answers — a phase that hits this must emit it
+# INSTEAD of its clean line, never as well as. INFO + Info so it can never be auto-acted on.
+function Add-ScanGapFinding {
+    param(
+        [string]$ID,                 # must be unique per SITE (phase + scope), not per box
+        [string]$Phase,
+        [string]$What,               # what the phase was looking for, e.g. "credential-dumper tools"
+        [string]$Target = "",
+        [int]$Files     = -1,
+        [int]$Roots     = -1,
+        [string]$Group  = "Scan Coverage"
+    )
+    if ($Roots -lt 0) { $Roots = [int]$global:SCAN_FILES_LAST_ROOTS }
+    $zbSeen = if ($Files -ge 0) { "$Files file(s) were examined" } else { "the walk was cut short" }
+    Add-Finding -ID $ID -Phase $Phase -ThreatType "Scan Coverage" -Severity $SEV_INFO `
+        -Description "COVERAGE GAP - the search for $What did not complete: the file walk over $Roots root(s) hit its budget ($zbSeen) and returned early, so any location it had not reached yet was NOT inspected. This is NOT a clean result. Re-run with fewer roots (scan one profile at a time), narrow the time window, or raise `$global:SCAN_MAX_FILES / `$global:SCAN_DEADLINE_S." `
+        -Target $Target -FixAction "Info" -Group $Group -Verdict "UNPROVEN" `
+        -Caveat "Result is UNPROVEN, not CLEAN: the enumeration was truncated by a budget cap."
 }
 
 # Per-scan Win32_Process snapshot memo (WS4): 7 phases each ran their own full
