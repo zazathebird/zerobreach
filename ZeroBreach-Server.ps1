@@ -417,10 +417,88 @@ function Test-VendorTrusted {
 # else ''. Deliberately conservative: a real threat in one of these locations is *audited*
 # but never auto-acted-on (the operator handles it manually). Mirrored verbatim in the
 # REMEDIATE_SCRIPT runspace below — keep both copies in sync.
+# ── Guard input normalisation (audit H7) ───────────────────────────────────────
+# Test-ProtectedTarget used to regex the RAW FixParam string, so a path that merely
+# LOOKED different slipped past. Testing proved the unanchored (System32|SysWOW64|
+# WinSxS) clause already caught 8.3 short names, UNC admin shares, \\?\, GLOBALROOT,
+# %SystemRoot%, .. traversal and trailing spaces — but NOT forward slashes:
+# "C:/Windows/System32/evil.exe" and "C:/Users/bob/.ssh/id_rsa" were both ALLOWED.
+# Everything the guard tests now goes through here first.
+function ConvertTo-GuardPath {
+    param([string]$Path)
+    $q = "$Path"
+    if ([string]::IsNullOrWhiteSpace($q)) { return '' }
+    $q = $q.Trim()
+    $q = $q -replace '/', '\'                                  # the confirmed bypass
+    try { $q = [Environment]::ExpandEnvironmentVariables($q) } catch {}
+    $q = $q -replace '(?i)^\\\\\?\\GLOBALROOT\\', '\'          # \\?\GLOBALROOT\Device\...
+    $q = $q -replace '(?i)^\\\\\?\\UNC\\', '\\'                # \\?\UNC\host\share
+    $q = $q -replace '(?i)^\\\\\?\\', ''                       # \\?\C:\...
+    # Canonicalise real filesystem paths (resolves .., trailing dots/spaces, doubled
+    # separators). Only single-letter drive paths — never PS drives like HKLM:\ or Cert:\.
+    if ($q -match '^[a-zA-Z]:\\') {
+        try { $q = [System.IO.Path]::GetFullPath($q) } catch {}
+    }
+    return $q
+}
+
+# ── Destructive RunCmd content inspection (audit H7b) ──────────────────────────
+# RunCmd is the single most dangerous action (executed via [scriptblock]::Create),
+# and the guard never looked at the command STRING at all — only at path-shaped
+# params. Every one of `vssadmin delete shadows /all`, `cipher /w:C`, `wbadmin delete
+# catalog`, `bcdedit /set safeboot minimal`, `Stop-Service WinDefend` and
+# `net user administrator <pw>` passed untouched.
+#
+# These patterns are deliberately DIRECTION-AWARE. The engine legitimately emits
+# `netsh advfirewall reset`, `Set-MpPreference -DisableRealtimeMonitoring $false`,
+# `bcdedit /set {default} recoveryenabled Yes` and `Stop-Service WinRM` as real
+# remediations — blocking those would break the product. Only the sabotage direction
+# is matched. Anything added here must be checked against the engine's own RunCmd
+# inventory first.
+$script:RUNCMD_DESTRUCTIVE = @(
+    @{ rx = '(?i)vssadmin[^\n]*\bdelete\b[^\n]*\bshadow';               why = 'deletes volume shadow copies (destroys rollback + ransomware recovery)' }
+    @{ rx = '(?i)(wmic[^\n]*shadowcopy[^\n]*delete|Win32_ShadowCopy[^\n]*(Delete|Remove))'; why = 'deletes volume shadow copies via WMI' }
+    @{ rx = '(?i)\bwbadmin\b[^\n]*\bdelete\b';                          why = 'deletes the Windows backup catalog' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*\bsafeboot\b';                        why = 'alters Safe Mode boot configuration' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*recoveryenabled[^\n]*\bno\b';         why = 'disables Windows recovery' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*bootstatuspolicy[^\n]*ignoreallfailures'; why = 'suppresses boot failure recovery' }
+    @{ rx = '(?i)Set-MpPreference[^\n]*-Disable\w*[^\n]*\$?true';       why = 'disables Microsoft Defender protection' }
+    @{ rx = '(?i)Add-MpPreference[^\n]*-Exclusion';                     why = 'adds a Defender exclusion (evasion, not remediation)' }
+    @{ rx = '(?i)(Stop-Service|sc(\.exe)?\s+(stop|delete)|net\s+stop)[^\n]*\b(WinDefend|Sense|WdNisSvc|SecurityHealthService)\b'; why = 'stops or deletes a Defender service' }
+    @{ rx = '(?i)\bcipher\b[^\n]*\/w';                                  why = 'securely wipes free space (anti-forensic, irreversible)' }
+    @{ rx = '(?i)\b(format|diskpart)\b[^\n]*(\/(fs|q|y)\b|clean)';      why = 'formats or wipes a disk' }
+    @{ rx = '(?i)(wevtutil[^\n]*\bcl\b|Clear-EventLog|Remove-EventLog)'; why = 'clears Windows event logs (anti-forensic)' }
+    @{ rx = '(?i)(net\s+user\s+\S+\s+\S+|New-LocalUser|net\s+localgroup[^\n]*administrators[^\n]*\/add|Add-LocalGroupMember[^\n]*Administrators)'; why = 'creates or alters a local account / grants admin' }
+    @{ rx = '(?i)netsh[^\n]*advfirewall[^\n]*\bstate\s+off';            why = 'turns the Windows firewall off' }
+    @{ rx = '(?i)Set-NetFirewallProfile[^\n]*-Enabled\s+\$?false';      why = 'turns the Windows firewall off' }
+    @{ rx = '(?i)\bicacls\b[^\n]*\/reset[^\n]*\/t';                     why = 'recursively resets ACLs (CLAUDE.md forbids this outright)' }
+    @{ rx = '(?i)\btakeown\b[^\n]*\/f[^\n]*\/r';                        why = 'recursively takes ownership of a tree' }
+    @{ rx = '(?i)reg(\.exe)?\s+delete[^\n]*HK(LM|EY_LOCAL_MACHINE)\\(SOFTWARE|SYSTEM)\s*(\/f)?\s*$'; why = 'deletes an entire registry hive' }
+    @{ rx = '(?i)EnableLUA[^\n]*(-Value\s*0|\s0\s*$)';                  why = 'disables UAC' }
+    @{ rx = '(?i)(Remove-Item|rd|rmdir|del)\b[^\n]*\b[a-z]:\\(\s|$|["'']|\\\*)'; why = 'recursive delete at a drive root' }
+    @{ rx = '(?i)(Remove-Item|rd|rmdir|del)\b[^\n]*[a-z]:\\Windows\\?\s*["'']?\s*(-recurse|\/s)'; why = 'recursive delete of the Windows directory' }
+)
+
+function Test-DestructiveRunCmd {
+    param([string]$Cmd)
+    if ([string]::IsNullOrWhiteSpace($Cmd)) { return '' }
+    foreach ($r in $script:RUNCMD_DESTRUCTIVE) {
+        if ($Cmd -match $r.rx) { return $r.why }
+    }
+    return ''
+}
+
 function Test-ProtectedTarget {
     param([string]$Action, [string]$Param, [string]$Target, [string]$Desc)
-    $p = "$Param"; $t = "$Target"; $d = "$Desc"
+    # Normalise BEFORE any pattern test (audit H7).
+    $p = ConvertTo-GuardPath "$Param"; $t = "$Target"; $d = "$Desc"
     $hay = "$p`n$t`n$d"
+
+    # RunCmd carries a command, not a path — inspect the command itself (audit H7b).
+    if ($Action -eq 'RunCmd') {
+        $bad = Test-DestructiveRunCmd "$Param"
+        if ($bad) { return "destructive command — $bad" }
+    }
 
     # Certificate trust store — deleting root/CA certs breaks TLS / Windows Update / code-signing.
     if ($p -match '(?i)Cert:\\' -or $hay -match '(?i)(root\s+ca|trusted\s+root|certificate\s+(store|authority))') {
@@ -1184,9 +1262,64 @@ function RLog { param([string]$Text, [string]$Sev = 'INFO') REnqueue @{ type='lo
 # SAFETY: hard backstop — mirror of Test-ProtectedTarget (main thread). The tool must NEVER
 # damage the system, so even a manually-selected finding is refused if it touches a protected
 # resource. Keep in sync with the main-thread copy in Get-EngineReportFindings's vicinity.
+# Mirrors ConvertTo-GuardPath / Test-DestructiveRunCmd / Test-ProtectedTarget from the
+# main thread. CLAUDE.md requires these stay in sync — change one, change the other.
+function ConvertTo-RGuardPath {
+    param([string]$Path)
+    $q = "$Path"
+    if ([string]::IsNullOrWhiteSpace($q)) { return '' }
+    $q = $q.Trim()
+    $q = $q -replace '/', '\'
+    try { $q = [Environment]::ExpandEnvironmentVariables($q) } catch {}
+    $q = $q -replace '(?i)^\\\\\?\\GLOBALROOT\\', '\'
+    $q = $q -replace '(?i)^\\\\\?\\UNC\\', '\\'
+    $q = $q -replace '(?i)^\\\\\?\\', ''
+    if ($q -match '^[a-zA-Z]:\\') {
+        try { $q = [System.IO.Path]::GetFullPath($q) } catch {}
+    }
+    return $q
+}
+
+$RUNCMD_DESTRUCTIVE_R = @(
+    @{ rx = '(?i)vssadmin[^\n]*\bdelete\b[^\n]*\bshadow';               why = 'deletes volume shadow copies (destroys rollback + ransomware recovery)' }
+    @{ rx = '(?i)(wmic[^\n]*shadowcopy[^\n]*delete|Win32_ShadowCopy[^\n]*(Delete|Remove))'; why = 'deletes volume shadow copies via WMI' }
+    @{ rx = '(?i)\bwbadmin\b[^\n]*\bdelete\b';                          why = 'deletes the Windows backup catalog' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*\bsafeboot\b';                        why = 'alters Safe Mode boot configuration' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*recoveryenabled[^\n]*\bno\b';         why = 'disables Windows recovery' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*bootstatuspolicy[^\n]*ignoreallfailures'; why = 'suppresses boot failure recovery' }
+    @{ rx = '(?i)Set-MpPreference[^\n]*-Disable\w*[^\n]*\$?true';       why = 'disables Microsoft Defender protection' }
+    @{ rx = '(?i)Add-MpPreference[^\n]*-Exclusion';                     why = 'adds a Defender exclusion (evasion, not remediation)' }
+    @{ rx = '(?i)(Stop-Service|sc(\.exe)?\s+(stop|delete)|net\s+stop)[^\n]*\b(WinDefend|Sense|WdNisSvc|SecurityHealthService)\b'; why = 'stops or deletes a Defender service' }
+    @{ rx = '(?i)\bcipher\b[^\n]*\/w';                                  why = 'securely wipes free space (anti-forensic, irreversible)' }
+    @{ rx = '(?i)\b(format|diskpart)\b[^\n]*(\/(fs|q|y)\b|clean)';      why = 'formats or wipes a disk' }
+    @{ rx = '(?i)(wevtutil[^\n]*\bcl\b|Clear-EventLog|Remove-EventLog)'; why = 'clears Windows event logs (anti-forensic)' }
+    @{ rx = '(?i)(net\s+user\s+\S+\s+\S+|New-LocalUser|net\s+localgroup[^\n]*administrators[^\n]*\/add|Add-LocalGroupMember[^\n]*Administrators)'; why = 'creates or alters a local account / grants admin' }
+    @{ rx = '(?i)netsh[^\n]*advfirewall[^\n]*\bstate\s+off';            why = 'turns the Windows firewall off' }
+    @{ rx = '(?i)Set-NetFirewallProfile[^\n]*-Enabled\s+\$?false';      why = 'turns the Windows firewall off' }
+    @{ rx = '(?i)\bicacls\b[^\n]*\/reset[^\n]*\/t';                     why = 'recursively resets ACLs (CLAUDE.md forbids this outright)' }
+    @{ rx = '(?i)\btakeown\b[^\n]*\/f[^\n]*\/r';                        why = 'recursively takes ownership of a tree' }
+    @{ rx = '(?i)reg(\.exe)?\s+delete[^\n]*HK(LM|EY_LOCAL_MACHINE)\\(SOFTWARE|SYSTEM)\s*(\/f)?\s*$'; why = 'deletes an entire registry hive' }
+    @{ rx = '(?i)EnableLUA[^\n]*(-Value\s*0|\s0\s*$)';                  why = 'disables UAC' }
+    @{ rx = '(?i)(Remove-Item|rd|rmdir|del)\b[^\n]*\b[a-z]:\\(\s|$|["'']|\\\*)'; why = 'recursive delete at a drive root' }
+    @{ rx = '(?i)(Remove-Item|rd|rmdir|del)\b[^\n]*[a-z]:\\Windows\\?\s*["'']?\s*(-recurse|\/s)'; why = 'recursive delete of the Windows directory' }
+)
+
+function Test-RDestructiveRunCmd {
+    param([string]$Cmd)
+    if ([string]::IsNullOrWhiteSpace($Cmd)) { return '' }
+    foreach ($r in $RUNCMD_DESTRUCTIVE_R) {
+        if ($Cmd -match $r.rx) { return $r.why }
+    }
+    return ''
+}
+
 function Test-RProtected {
     param([string]$Action, [string]$Param, [string]$Target, [string]$Desc)
-    $p = "$Param"; $t = "$Target"; $d = "$Desc"; $hay = "$p`n$t`n$d"
+    $p = ConvertTo-RGuardPath "$Param"; $t = "$Target"; $d = "$Desc"; $hay = "$p`n$t`n$d"
+    if ($Action -eq 'RunCmd') {
+        $badCmd = Test-RDestructiveRunCmd "$Param"
+        if ($badCmd) { return "destructive command — $badCmd" }
+    }
     if ($p -match '(?i)Cert:\\' -or $hay -match '(?i)(root\s+ca|trusted\s+root|certificate\s+(store|authority))') { return 'certificate trust store' }
     if ($p -match '(?i)^[a-z]:\\windows\\' -or $p -match '(?i)\\(System32|SysWOW64|WinSxS)\\') { return 'Windows system directory' }
     if ($p -match '(?i)\\(desktop\.ini|iconcache\.db|thumbs\.db|ntuser\.dat|usrclass\.dat)' -or $p -match '(?i)\.library-ms$') { return 'Windows shell/system file' }
