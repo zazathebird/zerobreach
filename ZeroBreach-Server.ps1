@@ -126,6 +126,15 @@ $script:State = [hashtable]::Synchronized(@{
     Remediating  = $false
     EventLog     = [System.Collections.ArrayList]::Synchronized(
                        [System.Collections.ArrayList]::new())
+    # audit M2: EventLog is a BOUNDED ring. It used to grow for the whole 115-phase
+    # scan and every new SSE client replayed it from index 0, so a few browser
+    # refreshes during a DEEP run meant re-serialising tens of thousands of lines
+    # each time. EventLogBase = how many entries have been trimmed off the front,
+    # so an SSE cursor stays an ABSOLUTE event index across trims. Nothing is lost
+    # for forensics: every event is also teed to $script:EVENT_LOG on disk.
+    EventLogBase = 0
+    EventLogMax  = 6000   # trim once the list exceeds this
+    EventLogKeep = 4000   # ...back down to this
     Findings     = [System.Collections.ArrayList]::Synchronized(
                        [System.Collections.ArrayList]::new())
     ThreatCounts = [hashtable]::Synchronized(@{
@@ -157,8 +166,6 @@ $script:SEV_PATTERNS = [ordered]@{
     INFO     = [regex]'\[INFO\]|\[VER\]|EXECUTED|EVALUATED'
     HUNT     = [regex]'\[HUNT\]|SCANNING|CHECKING|AUDITING'
 }
-
-$script:PHASE_RE = [regex]'PHASE\s+(\d+)[^\d]'
 
 # ── Request authentication (audit C1) ──────────────────────────────────────────
 # This API deletes files, kills processes and runs commands AS ADMIN. Before this
@@ -638,8 +645,25 @@ function Get-SysInfoJson {
 }
 
 # ── Background runspace launcher ────────────────────────────────────────────────
+# audit M2: every /api/events connection starts a runspace, so a browser refresh used
+# to leak one permanently — nothing was ever disposed. Handles are tracked here and
+# reaped once their script has returned (the SSE loop ends when the client's socket
+# dies, at the latest on the 20 s keep-alive write).
+$script:RUNSPACES = [System.Collections.ArrayList]::Synchronized([System.Collections.ArrayList]::new())
+
+function Clear-FinishedRunspaces {
+    foreach ($e in @($script:RUNSPACES)) {
+        if (-not $e.Handle.IsCompleted) { continue }
+        try { [void]$e.PS.EndInvoke($e.Handle) } catch {}
+        try { $e.PS.Runspace.Dispose() } catch {}
+        try { $e.PS.Dispose() } catch {}
+        try { $script:RUNSPACES.Remove($e) } catch {}
+    }
+}
+
 function Start-Runspace {
     param([string]$Script, [hashtable]$Vars = @{})
+    Clear-FinishedRunspaces
     $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
     $rs.Open()
     foreach ($k in $Vars.Keys) {
@@ -648,7 +672,8 @@ function Start-Runspace {
     $ps = [System.Management.Automation.PowerShell]::Create()
     $ps.Runspace = $rs
     [void]$ps.AddScript($Script)
-    $null = $ps.BeginInvoke()
+    $handle = $ps.BeginInvoke()
+    [void]$script:RUNSPACES.Add(@{ PS = $ps; Handle = $handle })
     return $ps
 }
 
@@ -711,12 +736,32 @@ try {
         # boundary where the refilled count momentarily equalled the stale cursor and
         # silently drop the new scan's first events for an already-open tab.
         if ($SseState.ScanEpoch -ne $epoch) { $idx = 0; $epoch = $SseState.ScanEpoch }
-        $count = $SseState.EventLog.Count
-        if ($idx -gt $count) { $idx = 0 }   # extra safety: cursor past end (shouldn't happen)
-        while ($idx -lt $count) {
-            Push $SseState.EventLog[$idx]
-            $idx++
+
+        # audit M2: $idx is an ABSOLUTE event index and the log is a bounded ring, so
+        # translate through EventLogBase. Snapshot the pending slice under the list's
+        # lock, then write to the socket OUTSIDE it — a slow client must never stall
+        # the scan runspace's Enqueue.
+        $batch   = [System.Collections.Generic.List[string]]::new()
+        $dropped = 0
+        $sync    = $SseState.EventLog.SyncRoot
+        [System.Threading.Monitor]::Enter($sync)
+        try {
+            $base  = [int]$SseState.EventLogBase
+            $count = $base + $SseState.EventLog.Count
+            if ($idx -gt $count) { $idx = 0 }   # extra safety: cursor past end (shouldn't happen)
+            if ($idx -lt $base)  { $dropped = $base - $idx; $idx = $base }
+            while ($idx -lt $count) {
+                $batch.Add([string]$SseState.EventLog[$idx - $base])
+                $idx++
+            }
+        } finally { [System.Threading.Monitor]::Exit($sync) }
+
+        if ($dropped -gt 0) {
+            Push (@{ type='log_line'; severity='INFO'; phase=0; elapsed=$SseState.Elapsed
+                     text="[LOG] $dropped earlier line(s) trimmed from the live buffer — the full log is on disk." } |
+                  ConvertTo-Json -Compress)
         }
+        foreach ($b in $batch) { Push $b }
         if (([datetime]::Now - $last).TotalSeconds -gt 20) {
             Ping
             $last = [datetime]::Now
@@ -789,7 +834,18 @@ function Classify {
 function Enqueue {
     param([hashtable]$Ev)
     $json = $Ev | ConvertTo-Json -Compress -Depth 4
-    [void]$ScanState.EventLog.Add($json)
+    # audit M2: add + trim as one atomic step, under the SAME SyncRoot the SSE
+    # reader takes, so a client can never index into a list that is mid-trim.
+    $sync = $ScanState.EventLog.SyncRoot
+    [System.Threading.Monitor]::Enter($sync)
+    try {
+        [void]$ScanState.EventLog.Add($json)
+        if ($ScanState.EventLog.Count -gt $ScanState.EventLogMax) {
+            $drop = $ScanState.EventLog.Count - $ScanState.EventLogKeep
+            $ScanState.EventLog.RemoveRange(0, $drop)
+            $ScanState.EventLogBase += $drop
+        }
+    } finally { [System.Threading.Monitor]::Exit($sync) }
     # Tee to the durable event log (runspace output never reaches the console — see header).
     if ($ScanState.EventLogFile) {
         $line = ('{0} {1}{2}' -f (Get-Date -Format 'HH:mm:ss'), $json, [Environment]::NewLine)
@@ -861,6 +917,7 @@ $ScanState.ExitCode     = $null
 $ScanState.StartTime    = [datetime]::Now
 $ScanState.Findings.Clear()
 $ScanState.EventLog.Clear()
+$ScanState.EventLogBase = 0   # cursors are absolute indices; clearing resets the origin
 $ScanState.ScanEpoch++   # signal already-open SSE tabs to rewind to event 0 for this new scan
 foreach ($k in @($ScanState.ThreatCounts.Keys)) { $ScanState.ThreatCounts[$k] = 0 }
 
@@ -1104,8 +1161,15 @@ try {
                 $audit = $jsonLine | ConvertFrom-Json
                 foreach ($ef in @($audit.Findings)) {
                     $sev = "$($ef.Severity)".ToUpper()
-                    $tt  = "$($ef.ThreatType)"
-                    if (-not $tt) { $tt = $null }
+                    # audit M4: canonicalise the threat bucket exactly like the live
+                    # [FINDING] path. The engine's ThreatType is free text; this block
+                    # used to pass it through raw and skip the tally entirely when it
+                    # was empty, so STEALTH threat counters undercounted findings_count.
+                    $ttRaw = "$($ef.ThreatType)"
+                    $tt = $null
+                    foreach ($k in $TKW.Keys) { if ($ttRaw -match "^$k") { $tt = $k; break } }
+                    if (-not $tt) { $tt = (Classify ("$ttRaw $($ef.Description)")).tt }
+                    if (-not $tt) { $tt = 'Other' }
                     $phNum = 0
                     $pm2 = [regex]::Match("$($ef.Phase)", '\d+(?:\.\d+)?')
                     if ($pm2.Success) { $phNum = if ($pm2.Value.Contains('.')) { [double]$pm2.Value } else { [int]$pm2.Value } }
@@ -1124,13 +1188,16 @@ try {
                             phase       = $phNum
                             mitre       = $mit
                             mitre_id    = if ($mit) { $mit.id } else { $null }
+                            # audit M4: carry the same fix_action/target the live path
+                            # sets, or the GUI falls back to inferAction()'s text guess
+                            # and the remediation view loses the engine's real verdict.
+                            fix_action  = "$($ef.FixAction)"
+                            target      = "$($ef.Target)"
                             timestamp   = [datetime]::Now.ToString('HH:mm:ss')
                         }
                         [void]$ScanState.Findings.Add($f)
-                        if ($tt) {
-                            if ($ScanState.ThreatCounts.ContainsKey($tt)) { $ScanState.ThreatCounts[$tt]++ }
-                            else { $ScanState.ThreatCounts['Other']++ }
-                        }
+                        if ($ScanState.ThreatCounts.ContainsKey($tt)) { $ScanState.ThreatCounts[$tt]++ }
+                        else { $ScanState.ThreatCounts['Other']++ }
                         Enqueue $f
                     }
                 }
@@ -1249,7 +1316,17 @@ $script:REMEDIATE_SCRIPT = @'
 function REnqueue {
     param([hashtable]$Ev)
     $json = $Ev | ConvertTo-Json -Compress -Depth 4
-    [void]$RemState.EventLog.Add($json)
+    # audit M2 — mirror of Enqueue's bounded ring (see the main-thread state block).
+    $sync = $RemState.EventLog.SyncRoot
+    [System.Threading.Monitor]::Enter($sync)
+    try {
+        [void]$RemState.EventLog.Add($json)
+        if ($RemState.EventLog.Count -gt $RemState.EventLogMax) {
+            $drop = $RemState.EventLog.Count - $RemState.EventLogKeep
+            $RemState.EventLog.RemoveRange(0, $drop)
+            $RemState.EventLogBase += $drop
+        }
+    } finally { [System.Threading.Monitor]::Exit($sync) }
     if ($RemState.EventLogFile) {
         $line = ('{0} {1}{2}' -f (Get-Date -Format 'HH:mm:ss'), $json, [Environment]::NewLine)
         for ($i = 0; $i -lt 3; $i++) {
@@ -1515,8 +1592,12 @@ try {
                         $ok = $true
                     }
                 }
-                'Info'  { RLog "  -> informational; review manually." 'INFO'; $skipped++; $ok = $true }
-                default { RLog "  -> no automated action for this finding." 'INFO'; $skipped++; $ok = $true }
+                # audit M3: neither of these may set $ok. The trailing counter reads $ok
+                # as "a real action ran", and an unrecognised FixAction is not in the
+                # Info/None/'' exclusion list — so it was counted as skipped AND applied,
+                # and remediation_complete never reconciled.
+                'Info'  { RLog "  -> informational; review manually." 'INFO'; $skipped++ }
+                default { RLog "  -> no automated action for FixAction '$($f.FixAction)'." 'INFO'; $skipped++ }
             }
         } catch {
             RLog "  -> ERROR: $($_.Exception.Message)" 'CRITICAL'; $failed++
@@ -1939,6 +2020,7 @@ try {
             $ctx = $null
             $ctx = $Listener.GetContext()
             Handle-Request $ctx
+            Clear-FinishedRunspaces   # audit M2 — reap disconnected SSE runspaces
         }
         catch [System.Net.HttpListenerException] {
             if ($script:State.Listening) {
