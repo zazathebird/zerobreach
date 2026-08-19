@@ -1147,6 +1147,19 @@ function Get-RegVal {
     param([string]$Path, [string]$Name)
     try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
 }
+function ConvertTo-CsvSafeCell {
+    # Neutralise CSV/Excel formula injection (audit H8). Correct CSV quoting does NOT
+    # help: Excel strips the quotes and then evaluates a leading = + - @ tab or CR as a
+    # formula. The Description column is malware-controlled text (file names, task
+    # names, registry values), and exporting findings to CSV and mailing them to a
+    # client is this product's actual workflow — so the payload lands on a DIFFERENT
+    # machine than the one being remediated. Mirror of the server's copy in
+    # ZeroBreach-Server.ps1; keep both in sync.
+    param([string]$Value)
+    $v = "$Value"
+    if ($v -match '^[=+\-@\t\r\n]') { $v = "'" + $v }
+    return '"' + ($v -replace '"','""') + '"'
+}
 function Get-KillParam {
     # Builds the FixParam for a KillProcess finding. A bare PID is not enough: the
     # operator remediates minutes or hours after the scan, and Windows recycles PIDs

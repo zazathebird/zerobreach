@@ -133,10 +133,21 @@ function Write-HtmlReport {
         $tgt  = [System.Net.WebUtility]::HtmlEncode($_.Target)
         $phase= [System.Net.WebUtility]::HtmlEncode($_.Phase)
         $type = [System.Net.WebUtility]::HtmlEncode($_.ThreatType)
-        $csvData += """$($_.Severity)"",""$($_.Phase)"",""$($_.ThreatType)"",""$($_.Description -replace '"','""')"",""$($_.Target -replace '"','""')"",""$($_.FixAction)"",""$($_.Timestamp)""`n"
+        # audit H8: quoting alone does not stop Excel evaluating a leading = + - @ tab
+        # or CR as a formula, and Description/Target are malware-controlled.
+        $csvData += (@($_.Severity, $_.Phase, $_.ThreatType, $_.Description, $_.Target, $_.FixAction, $_.Timestamp) |
+                     ForEach-Object { ConvertTo-CsvSafeCell $_ }) -join ','
+        $csvData += "`n"
         "<tr class='sev-$($_.Severity.ToLower())'><td><span class='badge' style='background:$col'>$($_.Severity)</span></td><td>$phase</td><td>$type</td><td>$desc</td><td class='tgt' title='$tgt'>$tgt</td><td>$($_.FixAction)</td></tr>"
     }
-    $csvDataJs = $csvData -replace '\\','\\' -replace "'","\\'"
+    # The CSV payload is embedded in the report's inline <script>. The old escaping
+    # left RAW NEWLINES inside a single-quoted JS literal, which is a syntax error —
+    # that broke the ENTIRE script block, so Export CSV, the search box, the severity
+    # filters and column sorting were all dead in every HTML report. It also emitted
+    # \\' for a quote instead of \'. ConvertTo-Json produces a correctly escaped
+    # string literal (quotes, backslashes, newlines, unicode) in one step; the <\/ pass
+    # stops a finding containing '</script>' from breaking out of the script element.
+    $csvDataJs = ($csvData | ConvertTo-Json -Compress) -replace '</','<\/'
     $tallyHtml = ""
     foreach ($k in @("RAT","Rootkit","Ransomware","Keylogger","Miner","Worm","Spyware","Trojan","Backdoor","UACBypass")) {
         $v   = $auditCache.ThreatTally.$k
@@ -248,7 +259,7 @@ function filterSev(s,b){document.querySelectorAll('.filters .btn').forEach(funct
 function applyFilters(){document.querySelectorAll('#tbl tbody tr').forEach(function(r){var sevOk=curSev==='ALL'||r.classList.contains('sev-'+curSev.toLowerCase());var txtOk=!curQ||r.innerText.toLowerCase().includes(curQ);r.style.display=(sevOk&&txtOk)?'':'none'})}
 var sortDir={};
 function sortTable(col){var tbl=document.getElementById('tbl');var rows=Array.from(tbl.tBodies[0].rows);var asc=sortDir[col]!==1;sortDir={};sortDir[col]=asc?1:-1;rows.sort(function(a,b){var va=a.cells[col].innerText.trim();var vb=b.cells[col].innerText.trim();return asc?va.localeCompare(vb,undefined,{numeric:true}):vb.localeCompare(va,undefined,{numeric:true})});rows.forEach(function(r){tbl.tBodies[0].appendChild(r)})}
-function exportCSV(){var csv=$([char]39)$csvDataJs$([char]39);var blob=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ZeroBreach_V22_$HOST_NAME_$(Get-Date -Format 'yyyyMMdd').csv';a.click()}
+function exportCSV(){var csv=$csvDataJs;var blob=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ZeroBreach_V22_$HOST_NAME_$(Get-Date -Format 'yyyyMMdd').csv';a.click()}
 </script></body></html>
 "@
     $html | Out-File -FilePath $OutPath -Encoding UTF8 -ErrorAction SilentlyContinue
