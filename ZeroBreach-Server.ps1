@@ -1047,13 +1047,29 @@ $script:SCAN_SCRIPT = @'
 # dict named $SEV is SHADOWED inside Classify by its local `$sev = 'INFO'`, making
 # $SEV.Keys read the string 'INFO' (→ $null) and every line classify as INFO. This
 # exact bug shipped and silently killed severity classification for weeks.
+# The engine's own bracket tag is AUTHORITATIVE — matched before the prose fallback.
+# audit 2026-08-18 §5.1: the prose words below are bare substrings, and the engine
+# prints its own hunt/summary prose ("CHECKING FOR SUSPICIOUS DRIVERS...",
+# "-> [OK ] NO ANOMALOUS SERVICES."). Matching CRITICAL/SUSPICIOUS/ANOMAL against a
+# line that already says [HUNT] or [OK ] painted a perfectly clean scan's own
+# progress log red. Tag first, prose only for untagged lines.
+$SEV_TAG = [ordered]@{
+    CRITICAL = [regex]'\[CRIT\]|\[!!\]'
+    HIGH     = [regex]'\[HIGH\]|\[WARN\]'
+    POSSIBLE = [regex]'\[POSSIBLE\]'
+    CLEAN    = [regex]'\[OK\s*\]'
+    INFO     = [regex]'\[INFO\]|\[VER\]'
+    HUNT     = [regex]'\[HUNT\]'
+}
+
+# Prose fallback — consulted ONLY when a line carries no tag at all.
 $SEV_RX = [ordered]@{
-    CRITICAL = [regex]'\[CRIT\]|CRITICAL|\[!!\]|THREAT BANNER|IOC HIT|BLATANT'
-    HIGH     = [regex]'\[HIGH\]|HIGH SEVERITY|\[WARN\]|SUSPICIOUS'
-    POSSIBLE = [regex]'\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMAL'
-    CLEAN    = [regex]'\[OK\s*\]|CLEAN|NO .* FOUND|->\s*\[OK\s*\]'
-    INFO     = [regex]'\[INFO\]|\[VER\]|EXECUTED|EVALUATED'
-    HUNT     = [regex]'\[HUNT\]|SCANNING|CHECKING|AUDITING'
+    CRITICAL = [regex]'CRITICAL|THREAT BANNER|IOC HIT|BLATANT'
+    HIGH     = [regex]'HIGH SEVERITY|SUSPICIOUS'
+    POSSIBLE = [regex]'POSSIBLE|FLAGGED|ANOMAL'
+    CLEAN    = [regex]'CLEAN|NO .* FOUND'
+    INFO     = [regex]'EXECUTED|EVALUATED'
+    HUNT     = [regex]'SCANNING|CHECKING|AUDITING'
 }
 
 $TKW = @{
@@ -1083,8 +1099,10 @@ $MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115 }
 
 function Classify {
     param([string]$L)
-    $sev = 'INFO'
-    foreach ($k in $SEV_RX.Keys) { if ($SEV_RX[$k].IsMatch($L)) { $sev = $k; break } }
+    $sev = $null
+    foreach ($k in $SEV_TAG.Keys) { if ($SEV_TAG[$k].IsMatch($L)) { $sev = $k; break } }
+    if (-not $sev) { foreach ($k in $SEV_RX.Keys) { if ($SEV_RX[$k].IsMatch($L)) { $sev = $k; break } } }
+    if (-not $sev) { $sev = 'INFO' }
     $ll = $L.ToLower()
     $tt = $null
     foreach ($k in $TKW.Keys) {

@@ -118,6 +118,14 @@ line, but **only for `log_line` coloring**: `[CRIT]`/`[WARN]`/`[OK ]` (padded �
 trailing space)/`[HUNT]`/`[INFO]` → `CRITICAL | HIGH | POSSIBLE | CLEAN | INFO | HUNT`; threat
 keywords → `RAT | Rootkit | Ransomware | Keylogger | Worm | Miner | Trojan | Spyware | Fileless
 | Other`.
+**The engine's bracket tag is AUTHORITATIVE; the prose keywords are a FALLBACK for untagged
+lines only** (`$SEV_TAG` then `$SEV_RX`; `SEVERITY_TAGS` then `SEVERITY_PATTERNS` in the Python
+mirror — keep the two in sync). Reason: the prose words are bare substrings and the engine prints
+its own banners — `[HUNT] CHECKING FOR SUSPICIOUS DRIVERS...` classified HIGH and
+`-> [OK ] NO ANOMALOUS SERVICES.` classified POSSIBLE, so a perfectly clean scan painted its own
+progress log red (audit §5.1, fixed 2026-08-19). **Never move a bracket tag into the prose table
+or a prose word into the tag table.** `Classify`'s threat bucket is only a *fallback* for a
+finding whose own `tt` doesn't map — it cannot influence the threat chips from ordinary log lines.
 
 Phase headers: `PHASE\s+(\d+(?:\.\d+)?)[^\d]` — **fractional phases (55.5, 74.5/.6/.7, 99.5) keep
 their decimal** (since 2026-07-02): they advance the GUI counter/progress as real plan steps,
@@ -362,12 +370,25 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   report from an earlier launch is allowed but called out in the console.
 
 ### Security regression suite
-- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 235
-  assertions covering C1/H1/H2/H5/H7/H7b/H8 and M1-M11, the parse+BOM gate, and the embedded runspace
-  here-strings. Every test pulls the real functions out of the shipped source **via the AST**, so a
-  test cannot drift from the code it guards. **`ParseFile` on `ZeroBreach-Server.ps1` does NOT
-  validate the runspace here-strings** (`$script:SCAN_SCRIPT`, `SSE_SCRIPT`, `REMEDIATE_SCRIPT`) —
-  `Test-EmbeddedRunspaces.ps1` is what catches a syntax error in those.
+- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 289
+  assertions covering C1/H1/H2/H5/H7/H7b/H8, M1-M11 and the §5 FP anchors, the parse+BOM gate, and
+  the embedded runspace here-strings. Every test pulls the real functions out of the shipped source
+  **via the AST**, so a test cannot drift from the code it guards. **`ParseFile` on
+  `ZeroBreach-Server.ps1` does NOT validate the runspace here-strings** (`$script:SCAN_SCRIPT`,
+  `SSE_SCRIPT`, `REMEDIATE_SCRIPT`) — `Test-EmbeddedRunspaces.ps1` is what catches a syntax error
+  in those.
+- **The suite runs on Linux. `tools\tests\Verify-OnWindows.ps1` is the other half** and must be run
+  from an **elevated Windows PowerShell 5.1** prompt before a release: the real 5.1 parser, the
+  `reports\` ACL hardening (M9), the `netsh http add/delete urlacl` fallback (M5), the log-retention
+  pruner and an `HttpListener` bind. `-Live` additionally starts the real server on a loopback port
+  and drives the token/Origin/IOC-validation/traversal surface over HTTP. It works only in TEMP and
+  on a free port, runs no scan and remediates nothing, and it ends by printing the short list of
+  things a script genuinely cannot check (GUI/CSP/PURGE/exports).
+- **Two traps when writing a test here:** `-match` parses as TokenKind **`Imatch`**, not `Match`
+  (case-insensitive is the default), so an AST search for `Match` silently finds nothing; and
+  **one-letter helper functions collide with built-in aliases** — `H` is `Get-History` and aliases
+  outrank functions in command resolution. Prove every new test fails when you revert the fix it
+  guards, or it is agreeing for the wrong reason.
 
 ### Server / display
 - **The GUI phase counter is driven by `scan_state`, throttled to every 12 log lines** — any UI element

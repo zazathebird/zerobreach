@@ -1,5 +1,54 @@
-# RESUME HANDOFF — updated 2026-08-19 (session 12: security audit remediation, MEDIUM tier)
+# RESUME HANDOFF — updated 2026-08-19 (session 13: audit §5 FP anchors + the Windows verifier)
 
+> ## ▶ START HERE after /clear — SESSION 13 (2026-08-19, later)
+> **Still on branch `security/audit-2026-08-18` (from `main` @ `22e582a`). Nothing is pushed;
+> `main` is untouched.** Session 13 was done from the Linux box while the Windows laptop was not
+> available, so it deliberately covers only what does not need Windows.
+>
+> **What changed (working tree — NOT yet committed):**
+> - `ZeroBreach-Server.ps1` + `_python/server.py` — §5.1: the engine's bracket tag is now
+>   authoritative for log severity (`$SEV_TAG` / `SEVERITY_TAGS`), prose keywords are a fallback
+>   for untagged lines only. A clean scan no longer paints its own `[HUNT]`/`[OK ]` banners red.
+> - `engine/Phases-2.ps1` — §5.3: miner-task heuristic no longer matches bare `coin` (Coinbase,
+>   Coinstar, CoinTracker) or `pool\.` inside `liverpool.exe`. That branch is CRITICAL +
+>   `RunCmd Unregister-ScheduledTask`, i.e. **auto-selected** — it was a rule-#1 violation.
+> - `engine/Phases-1.ps1` — §5.4: rogue-task heuristic anchored (`\bcmd\b`, path-component
+>   `AppData`/`Temp`, `\.jse?\b`). Bare `\.js` was flagging every `--config foo.json`.
+> - `tools/tests/Test-FpAnchors.ps1` — **new**, 54 assertions, wired into `Run-SecurityTests.ps1`
+>   (suite now **289**, all green under pwsh 7.4.6). Confirmed it fails when the fixes are reverted.
+> - `tools/tests/Verify-OnWindows.ps1` — **new**, the Windows half of validation (see below).
+> - `CLAUDE.md`, `CHANGELOG.md`, `AUDIT_2026-08-18_INDEPENDENT.md` updated.
+>
+> **▶ THE ONE THING TO DO ON THE LAPTOP.** From an **elevated Windows PowerShell 5.1** prompt at
+> the project root:
+> ```
+> powershell -NoProfile -File tools\tests\Verify-OnWindows.ps1 -Live
+> ```
+> That runs, for the first time ever on Windows: the real 5.1 parse+BOM gate over all 7 shipped
+> files **and** the three runspace here-strings; the whole regression suite under 5.1; a
+> `Protect-ReportsDirectory` ACL round-trip on a scratch dir (M9 — non-admin write downgraded,
+> **read survives**, SYSTEM/Admins untouched); the log-retention pruner (M10); an `HttpListener`
+> bind; a real `netsh http add → show → delete → confirm-gone` urlacl cycle (M5); and with
+> `-Live`, the real server on a loopback port — tokenless `/api/*` → 401, correct token → 200,
+> foreign `Origin` refused, static page still served untokenised, IOC CRLF-injection and `(a+)+$`
+> both refused, `/api/report` traversal refused. It works only in `$env:TEMP` on a free port, runs
+> **no scan** and remediates nothing. It finishes by printing the 10 things that still need your
+> eyes (GUI/CSP/QUICK counter/forced-failure panel/tripwire PURGE/Restore.cmd/non-elevated report
+> open/409 on a modified report/STEALTH/startup lines).
+>
+> **Honest verification status.** Everything above was validated on **Linux with pwsh 7.4.6**
+> (binary lives in a scratchpad, not the repo). Sections 1/2/4 of `Verify-OnWindows.ps1` were
+> smoke-tested here; sections 3/5/6 are Windows-only by construction and **have never run**.
+> PS 7 parse-clean is still not PS 5.1 parse-clean.
+>
+> **Still open after this session:** audit §5.5 (`C:\Windows\Temp` is inside the protected guard
+> — a decision, not a bug) and §5.7 (an alert-triage entry point — a feature, not a fix); the GUI
+> pass; and the live Windows run itself. §5.2 was examined and is **not** a defect as filed —
+> `Classify`'s threat bucket is only a fallback for a finding whose own `tt` doesn't map, so
+> ordinary log lines can't inflate the threat chips.
+>
+> ---
+>
 > ## ▶ START HERE after /clear — SESSION 12 (2026-08-19)
 > **Still on branch `security/audit-2026-08-18` (from `main` @ `22e582a`). Nothing is pushed;
 > `main` is untouched.** Sessions 11 + 12 together close **every CRITICAL, HIGH and MEDIUM

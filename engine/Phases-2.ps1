@@ -203,7 +203,15 @@ foreach ($task in $allTasks) {
     $exe = $task.Actions[0].Execute
     $isMinerTask = $false
     foreach ($m in $KNOWN_MINER_PROCS) { if ($exe -match [regex]::Escape($m)) { $isMinerTask = $true } }
-    if (-not $isMinerTask) { $isMinerTask = ($exe -match "xmr|stratum|pool\.|mining|coin|hashrate") }
+    # Anchored 2026-08-19 (audit §5.3). $exe is a PATH, and this branch is CRITICAL +
+    # a destructive RunCmd (Unregister-ScheduledTask), i.e. AUTO-SELECTED — so a bare
+    # substring here unregisters healthy software's tasks on a clean box (user rule #1):
+    #   bare "coin"   matched \Coinbase\, \Coinstar\, any vendor path containing coin
+    #                 -> coin.?miner|coinhive (the actual miner-family names)
+    #   bare "pool\." matched \liverpool.exe                      -> \bpool\.
+    # Same lesson Phase 63 already learned (see miner_config_benign_paths in the
+    # signature JSON). The exact-name $KNOWN_MINER_PROCS pass above is untouched.
+    if (-not $isMinerTask) { $isMinerTask = ($exe -match "xmr|stratum|\bpool\.|mining|coin.?miner|coinhive|hashrate") }
     if ($isMinerTask) {
         Out-ThreatBanner "MINER SCHEDULED TASK" $task.TaskName
         Add-Finding -ID "MINERTASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 64" -ThreatType "Cryptominer" `

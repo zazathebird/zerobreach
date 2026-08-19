@@ -778,7 +778,17 @@ if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseco
 $tasks = Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskPath -notmatch "\\Microsoft\\" }
 foreach ($task in $tasks) {
     $exe = $task.Actions[0].Execute; $args = $task.Actions[0].Arguments
-    if (($exe + " " + $args) -match "wscript|cscript|mshta|powershell.*-enc|powershell.*-nop|cmd|AppData|Temp|\.js|\.vbs|\.hta|regsvr32|rundll32|certutil|IEX|DownloadString|EncodedCommand") {
+    # Anchored per the project rule "folder names bind to path COMPONENTS, never bare
+    # substrings" (audit 2026-08-18 §5.4). This is CRITICAL + a destructive RunCmd, i.e.
+    # auto-selected, so a loose alternation unregisters healthy third-party tasks:
+    #   bare "cmd"     matched foocmd.exe / \cmdlets\ / -cmdline   -> \bcmd\b
+    #   bare "Temp"    matched Template / Temporary / Attempt        -> [\\/%]Temp[\\/%]
+    #   bare "AppData" unanchored                                    -> [\\/%]AppData[\\/%]
+    #   bare "\.js"    matched every "--config foo.json"             -> \.jse?\b
+    # Nothing is removed from the alternation; each term only binds tighter. cmd.exe,
+    # %TEMP%\x.vbs and \AppData\Local\... all still match (and so does the CLAUDE.md tripwire).
+    $taskCmd = $exe + " " + $args
+    if ($taskCmd -match "wscript|cscript|mshta|powershell.*-enc|powershell.*-nop|\bcmd\b|[\\/%]AppData[\\/%]|[\\/%]Temp[\\/%]|\.jse?\b|\.vbs\b|\.hta\b|regsvr32|rundll32|certutil|\bIEX\b|DownloadString|EncodedCommand") {
         $taskNameEsc = $task.TaskName -replace "'","''"
         Out-Decrypt -Text $task.TaskName -Prefix "  [ROGUE TASK] "
         Add-Finding -ID "TASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 29" -ThreatType "Task Persistence" `

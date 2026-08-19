@@ -111,11 +111,30 @@ Two things worth flagging because they change the audit's own conclusions:
 protected-target guard at all**. A third mirror (`Test-EProtected` and its tables) now lives in the
 loader and hard-blocks there, reporting `BLOCKED (PROTECTED)` in the fix summary and the report log.
 
+### Session 4 (2026-08-19, later) — §5 items 1, 3 and 4 closed
+
+Three of the seven §5 hypotheses could be settled by reading the code and testing the regexes
+directly — no lab, no clean-machine baseline — so they are fixed and locked down by
+`tools/tests/Test-FpAnchors.ps1` (54 assertions; verified to fail when the fixes are reverted).
+
+| Item | Outcome |
+|---|---|
+| **§5.1** severity prose mis-colours | **Fixed.** The engine's bracket tag is now authoritative; the prose table is a fallback for untagged lines only. `[HUNT] CHECKING FOR SUSPICIOUS...` no longer grades HIGH, `-> [OK ] NO ANOMALOUS SERVICES.` no longer grades POSSIBLE. Mirrored in `_python/server.py` (whose `\[OK\]` also missed the engine's padded `[OK ]`). |
+| **§5.2** threat buckets too broad | **Not a defect as filed.** `Classify`'s bucket is only a *fallback* for a finding whose own `tt` doesn't map to one of the 10 canonical names — ordinary log lines never reach the threat chips. A mis-bucketed finding is cosmetic. No change. |
+| **§5.3** miner-task `coin` | **Fixed.** `coin` → `coin.?miner\|coinhive`, `pool\.` → `\bpool\.`. Was CRITICAL + `RunCmd Unregister-ScheduledTask` (auto-selected) firing on Coinbase/Coinstar/CoinTracker/`liverpool.exe` — a user-rule-#1 violation on a healthy box. |
+| **§5.4** rogue-task bare `cmd` | **Fixed.** `\bcmd\b`, `[\\/%]AppData[\\/%]`, `[\\/%]Temp[\\/%]`, `\.jse?\b`. Bare `\.js` had been flagging every `--config foo.json`. All 11 true-positive vectors, including the CLAUDE.md tripwire, still fire. |
+| **§5.5** `C:\Windows\Temp` unremediable | Open — a **decision**, not a bug. |
+| **§5.7** alert-triage entry point | Open — a **feature**, not a fix. |
+
+Also added `tools/tests/Verify-OnWindows.ps1`: the Windows half of validation (real 5.1 parse gate
+incl. the runspace here-strings, the M9 ACL round-trip, the M5 urlacl add/delete cycle, log
+retention, `HttpListener` bind, and with `-Live` the token/Origin/IOC/traversal surface over HTTP).
+
 ### Still open
 
-§5 detection-quality work and the GUI pass. **And the live Windows run** — nothing in sessions 2
-or 3 has been executed on Windows; the ACL and `netsh` code paths added for M5/M9 in particular
-have never run.
+§5.5 and §5.7 (a decision and a feature), the GUI pass, and **the live Windows run** — nothing in
+sessions 2, 3 or 4 has been executed on Windows; the ACL and `netsh` code paths added for M5/M9
+still have never run. `Verify-OnWindows.ps1` exists precisely to make that run one command.
 
 ---
 

@@ -6,6 +6,76 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-08-19 (later) — Audit §5: false-positive anchoring + honest log colouring
+
+Same branch (`security/audit-2026-08-18`). The CRITICAL/HIGH/MEDIUM tiers were already closed;
+this is the first bite of **§5 "detection quality"**, which the audit filed as *hypotheses, not
+measurements*. Three of its seven items could be settled by reading the code and testing the
+regexes directly, with no lab and no clean-machine baseline — so those three are done and the
+rest still wait for a measured run.
+
+**§5.1 — a clean scan painted its own progress log red.** `Classify` matched the prose words
+`CRITICAL` / `SUSPICIOUS` / `ANOMAL` / `BLATANT` as bare substrings against *every* line,
+including the engine's own banners. `[HUNT] CHECKING FOR SUSPICIOUS DRIVERS...` came out HIGH;
+`  -> [OK ] NO ANOMALOUS SERVICES.` came out POSSIBLE. The engine's bracket tag is now
+authoritative (`$SEV_TAG`), and the prose table (`$SEV_RX`) is consulted **only** for a line that
+carries no tag at all. Mirrored in `_python/server.py` (`SEVERITY_TAGS` / `SEVERITY_PATTERNS`),
+where the parked server's `\[OK\]` also failed to allow the engine's padded `[OK ]` — fixed.
+Cosmetic by design (log colouring only), but "confusing red lines on a clean box" is exactly what
+teaches an operator to stop reading the log.
+
+**§5.3 — Phase 64 unregistered healthy scheduled tasks.** The miner heuristic tested a task's exe
+**path** against `xmr|stratum|pool\.|mining|coin|hashrate`. Bare `coin` matches
+`C:\Program Files\Coinbase\...`, `Coinstar`, `CoinTracker`; bare `pool\.` matches
+`liverpool.exe`. That branch is `$SEV_CRITICAL` + `RunCmd Unregister-ScheduledTask`, i.e.
+**auto-selected** — a straight user-rule-#1 violation on a healthy box. Now
+`xmr|stratum|\bpool\.|mining|coin.?miner|coinhive|hashrate`. The exact-name `$KNOWN_MINER_PROCS`
+pass is untouched. (Phase 63 learned this same lesson earlier — see `miner_config_benign_paths`.)
+
+**§5.4 — Phase 29 flagged ordinary third-party tasks as malicious persistence.** The rogue-task
+alternation was matched against `exe + " " + args` and contained bare `cmd`, `AppData`, `Temp`
+and `\.js`. So `vendorcmd.exe`, `--cmdlets all`, `-Template default`, `/attempt 3`, `TempoSoft`
+and **every `--config foo.json`** graded CRITICAL + `RunCmd Unregister-ScheduledTask`, again
+auto-selected. Each term now binds tighter — `\bcmd\b`, `[\\/%]AppData[\\/%]`,
+`[\\/%]Temp[\\/%]`, `\.jse?\b` — per the project's own rule that folder names anchor to path
+**components**. Nothing was removed from the alternation: all 11 true-positive vectors still fire,
+including the CLAUDE.md tripwire (`cmd.exe /c rem ...`) and forward-slash paths. The second loop
+in that phase (task XML content) was already `POSSIBLE` + `Info`, so it was left alone.
+
+**Not touched, deliberately:** §5.2 (threat-keyword buckets) — re-reading the code shows
+`Classify`'s bucket is only a *fallback* for a finding whose own `tt` doesn't map to one of the 10
+canonical names, so it cannot inflate the threat chips from ordinary log lines the way the audit
+assumed; a mis-bucketed *finding* is cosmetic. §5.5 (`C:\Windows\Temp` inside the protected
+guard) is a decision, not a bug. §5.6 is a compliment. §5.7 (alert-triage entry point) is a
+feature, not a fix.
+
+**New tests.** `tools/tests/Test-FpAnchors.ps1` — 54 assertions. It pulls both regexes out of the
+shipped source **through the AST** and runs a true-positive / false-positive vector table over
+them, asserts the anchors themselves are present, and loads `$SEV_TAG`/`$SEV_RX`/`Classify` out of
+the `$script:SCAN_SCRIPT` here-string to check the colouring. Verified the test *fails* when the
+fixes are reverted (26 failures) — a green test that agrees for the wrong reason is the trap this
+project has hit before. Suite is now **289 assertions**, all green under pwsh 7.4.6.
+
+**New: `tools/tests/Verify-OnWindows.ps1`.** Sessions 2 and 3 of the audit were written entirely
+on Linux, so the `reports\` ACL hardening (M9) and the `netsh http add/delete urlacl` fallback (M5)
+had **never executed once**. This script is the Windows half of validation: parse + BOM on the real
+5.1 parser (including the three runspace here-strings, which `ParseFile` never reaches), the whole
+regression suite under that host, a `Protect-ReportsDirectory` round-trip on a scratch directory
+(non-admin write downgraded, **read survives**, SYSTEM/Administrators untouched, inheritance
+broken), the log-retention pruner, an `HttpListener` bind, and a real urlacl add → show → delete →
+confirm-gone cycle. `-Live` starts the actual server on a free loopback port and drives the HTTP
+surface: tokenless `/api/*` → 401, correct token → 200, foreign `Origin` refused, static page
+still served untokenised, IOC CRLF-injection and `(a+)+$` both refused, `/api/report` traversal
+refused. Everything runs in `$env:TEMP` on a free port; no scan, no remediation, no registry.
+It ends by printing the 10 things a script cannot check. Sections 1/2/4 were smoke-tested here on
+Linux; 3/5/6 are Windows-only by construction and remain unexecuted.
+
+**Two test-writing traps found the hard way:** `-match` parses as TokenKind `Imatch`, not `Match`,
+so the first AST extractor silently found zero matches; and a helper named `H` was shadowed by the
+built-in `Get-History` alias, because aliases outrank functions in command resolution.
+
+---
+
 ## 2026-08-19 — Security audit remediation: MEDIUM tier, M1-M11 (branch `security/audit-2026-08-18`)
 
 Closes every MEDIUM finding in `AUDIT_2026-08-18_INDEPENDENT.md`, plus the "newly noted" gap

@@ -31,6 +31,7 @@ $tests = @(
     @{ Name = 'H7  guard equivalence (3 copies)';     File = 'Test-GuardMirrorSync.ps1' }
     @{ Name = 'H8  CSV injection + report JS';        File = 'Test-H8-CsvInjection.ps1' }
     @{ Name = 'M   medium-tier fixes (M2-M8)';        File = 'Test-M-Tier.ps1' }
+    @{ Name = '§5  FP anchors + log severity';        File = 'Test-FpAnchors.ps1' }
 )
 
 $failed = 0

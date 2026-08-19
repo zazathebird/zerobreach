@@ -74,21 +74,43 @@ THREAT_MAP = {
     "Other": ["backdoor", "rootkit", "exploit", "cve-", "lolbin", "uac bypass"]
 }
 
+# Mirror of $SEV_TAG / $SEV_RX in ZeroBreach-Server.ps1 — keep the two in sync.
+# The engine's bracket tag is authoritative; the prose words are bare substrings and
+# the engine prints its own prose ("CHECKING FOR SUSPICIOUS DRIVERS...",
+# "-> [OK ] NO ANOMALOUS SERVICES."), which used to colour a clean scan red.
+# Note "[OK ]" is PADDED by the engine — \s* is required.
+SEVERITY_TAGS = {
+    "CRITICAL": re.compile(r"\[CRIT\]|\[!!\]", re.I),
+    "HIGH":     re.compile(r"\[HIGH\]|\[WARN\]", re.I),
+    "POSSIBLE": re.compile(r"\[POSSIBLE\]", re.I),
+    "CLEAN":    re.compile(r"\[OK\s*\]", re.I),
+    "INFO":     re.compile(r"\[INFO\]|\[VER\]", re.I),
+    "HUNT":     re.compile(r"\[HUNT\]", re.I),
+}
+
+# Prose fallback — consulted ONLY when a line carries no tag at all.
 SEVERITY_PATTERNS = {
-    "CRITICAL": re.compile(r"\[CRIT\]|CRITICAL|\[!!\]|THREAT BANNER|IOC HIT|BLATANT", re.I),
-    "HIGH":     re.compile(r"\[HIGH\]|HIGH SEVERITY|\[WARN\]|SUSPICIOUS", re.I),
-    "POSSIBLE": re.compile(r"\[POSSIBLE\]|POSSIBLE|FLAGGED|ANOMAL", re.I),
-    "CLEAN":    re.compile(r"\[OK\]|CLEAN|NO .* FOUND|-> \[OK\]", re.I),
-    "INFO":     re.compile(r"\[INFO\]|\[VER\]|EXECUTED|EVALUATED", re.I),
-    "HUNT":     re.compile(r"\[HUNT\]|SCANNING|CHECKING|AUDITING", re.I),
+    "CRITICAL": re.compile(r"CRITICAL|THREAT BANNER|IOC HIT|BLATANT", re.I),
+    "HIGH":     re.compile(r"HIGH SEVERITY|SUSPICIOUS", re.I),
+    "POSSIBLE": re.compile(r"POSSIBLE|FLAGGED|ANOMAL", re.I),
+    "CLEAN":    re.compile(r"CLEAN|NO .* FOUND", re.I),
+    "INFO":     re.compile(r"EXECUTED|EVALUATED", re.I),
+    "HUNT":     re.compile(r"SCANNING|CHECKING|AUDITING", re.I),
 }
 
 def classify_line(line: str) -> dict:
-    severity = "INFO"
-    for sev, pat in SEVERITY_PATTERNS.items():
+    severity = None
+    for sev, pat in SEVERITY_TAGS.items():
         if pat.search(line):
             severity = sev
             break
+    if severity is None:
+        for sev, pat in SEVERITY_PATTERNS.items():
+            if pat.search(line):
+                severity = sev
+                break
+    if severity is None:
+        severity = "INFO"
 
     threat_type = None
     ll = line.lower()
