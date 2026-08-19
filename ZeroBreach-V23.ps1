@@ -237,7 +237,12 @@ $REPORT_PATH   = Join-Path $OUT_ROOT "KrakenReport_$STAMP.txt"
 $HTML_PATH     = Join-Path $OUT_ROOT "KrakenReport_$STAMP.html"
 $AUDIT_JSON    = Join-Path $env:TEMP "ZeroBreach_AuditCache_$(Get-Date -Format 'yyyyMMdd').json"
 $BASELINE_PATH = Join-Path $OUT_ROOT "KrakenBaseline_$STAMP.json"
-$SNAPSHOT_PATH = Join-Path $OUT_ROOT "KrakenSnapshot_$STAMP.reg"
+# audit H1: this used to be a single .reg file built by concatenating five `reg export`
+# outputs behind a banner line. regedit /S requires "Windows Registry Editor Version 5.00"
+# as the FIRST line, so that bundle could never be imported — the advertised safety net
+# did not work. It is now a folder holding each export as its own valid .reg plus a
+# generated Restore.cmd.
+$SNAPSHOT_DIR  = Join-Path $OUT_ROOT "KrakenSnapshot_$STAMP"
 $LOG_LINES  = [System.Collections.Generic.List[string]]::new()
 $rng        = [System.Random]::new()
 

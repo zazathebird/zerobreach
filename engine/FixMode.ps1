@@ -10,7 +10,8 @@ Write-Host ""
 Write-Host "  ┌─ PROCEED TO FIX / REMEDIATION MODE? ──────────────────────────────────┐" -ForegroundColor Yellow
 Write-Host "  │  Audit found $($findingCount) findings ($critCount CRITICAL, $highCount HIGH, $possibleCount POSSIBLE).            │" -ForegroundColor Yellow
 Write-Host "  │  Fix mode will present a checkbox list for review before ANY action.   │" -ForegroundColor Yellow
-Write-Host "  │  A registry/VSS rollback snapshot will be created BEFORE any fixes.    │" -ForegroundColor Yellow
+Write-Host "  │  A REGISTRY snapshot + a System Restore point are attempted first.    │" -ForegroundColor Yellow
+Write-Host "  │  NOTE: deleted FILES are NOT recoverable from either. Quarantine is.   │" -ForegroundColor Yellow
 Write-Host "  │                                                                         │" -ForegroundColor Yellow
 Write-Host "  │   [Y]  Yes — Enter Fix/Remediation Mode                                │" -ForegroundColor Yellow
 Write-Host "  │   [N]  No  — Exit (audit log saved)                                    │" -ForegroundColor Yellow
@@ -29,32 +30,99 @@ if ($fixEntry -ne "y" -and $fixEntry -ne "yes") {
 Out-Typewriter "CREATING ROLLBACK SNAPSHOT BEFORE ANY CHANGES..." "ACT"
 Invoke-QuantumBar "REGISTRY EXPORT IN PROGRESS" 10 160
 $snapshotOk = $false
+$restorePointOk = $false
 try {
+    # Each key exports to its OWN file, so every one is a valid, importable .reg
+    # (audit H1). The old code concatenated all five behind a banner line, which
+    # regedit /S rejects outright — the "safety net" never worked.
+    if (-not (Test-Path -LiteralPath $SNAPSHOT_DIR)) {
+        New-Item -ItemType Directory -Path $SNAPSHOT_DIR -Force -ErrorAction Stop | Out-Null
+    }
     $regExports = @(
-        @{H="HKCU"; K="SOFTWARE\Microsoft\Windows\CurrentVersion\Run";      F="$env:TEMP\KB_Run_HKCU.reg"},
-        @{H="HKLM"; K="SOFTWARE\Microsoft\Windows\CurrentVersion\Run";      F="$env:TEMP\KB_Run_HKLM.reg"},
-        @{H="HKLM"; K="SYSTEM\CurrentControlSet\Services";                  F="$env:TEMP\KB_Services.reg"},
-        @{H="HKLM"; K="SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"; F="$env:TEMP\KB_Winlogon.reg"},
-        @{H="HKCU"; K="SOFTWARE\Classes\CLSID";                             F="$env:TEMP\KB_CLSID.reg"}
+        @{H="HKCU"; K="SOFTWARE\Microsoft\Windows\CurrentVersion\Run";         F="01_Run_HKCU.reg"},
+        @{H="HKLM"; K="SOFTWARE\Microsoft\Windows\CurrentVersion\Run";         F="02_Run_HKLM.reg"},
+        @{H="HKLM"; K="SYSTEM\CurrentControlSet\Services";                       F="03_Services.reg"},
+        @{H="HKLM"; K="SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"; F="04_Winlogon.reg"},
+        @{H="HKCU"; K="SOFTWARE\Classes\CLSID";                                  F="05_CLSID_HKCU.reg"}
     )
     $snapshotFiles = @()
     foreach ($re in $regExports) {
-        reg export "$($re.H)\$($re.K)" $re.F /y 2>$null | Out-Null
-        if (Test-Path $re.F) { $snapshotFiles += $re.F }
+        $dest = Join-Path $SNAPSHOT_DIR $re.F
+        # Services and CLSID are large on a real machine; this is synchronous by design
+        # so nothing is remediated before the snapshot exists.
+        reg export "$($re.H)\$($re.K)" "$dest" /y 2>$null | Out-Null
+        if (Test-Path -LiteralPath $dest) { $snapshotFiles += $re.F }
     }
-    # Bundle into single snapshot file
-    $snapshotContent = @("ZEROBREACH V22 SNAPSHOT | $(Get-Date) | Host: $HOST_NAME", "="*80)
-    foreach ($sf in $snapshotFiles) {
-        $snapshotContent += Get-Content $sf -Raw -ErrorAction SilentlyContinue
-        Remove-Item $sf -Force -ErrorAction SilentlyContinue
+
+    if ($snapshotFiles.Count -gt 0) {
+        # Generated restorer — imports each export in order. Written as ASCII/CRLF so
+        # cmd.exe parses it on any box.
+        $rc = @()
+        $rc += '@echo off'
+        # ASCII only in this file: ASCIIEncoding would turn an em-dash into '?'.
+        $rc += 'REM ZeroBreach registry rollback - generated ' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' on ' + $HOST_NAME
+        $rc += 'REM Restores the registry keys captured BEFORE remediation ran.'
+        $rc += 'REM Deleted FILES are not covered here (see the vault note below).'
+        $rc += 'net session >nul 2>&1 || (echo Run this as Administrator. & pause & exit /b 1)'
+        $rc += 'echo Restoring ZeroBreach registry snapshot...'
+        foreach ($sf in $snapshotFiles) {
+            $rc += ('reg import "%~dp0' + $sf + '" || echo FAILED: ' + $sf)
+        }
+        $rc += 'echo Done. A reboot is recommended.'
+        $rc += 'pause'
+        [System.IO.File]::WriteAllText(
+            (Join-Path $SNAPSHOT_DIR 'Restore.cmd'),
+            ($rc -join "`r`n") + "`r`n",
+            (New-Object System.Text.ASCIIEncoding))
+
+        $readme = @(
+            "ZEROBREACH ROLLBACK SNAPSHOT",
+            "Created : $(Get-Date)",
+            "Host    : $HOST_NAME",
+            "",
+            "WHAT THIS COVERS",
+            "  The $($snapshotFiles.Count) registry key(s) exported below, as they were BEFORE remediation.",
+            "  Restore them by right-clicking Restore.cmd -> Run as administrator.",
+            "",
+            ($snapshotFiles | ForEach-Object { "    $_" }),
+            "",
+            "WHAT THIS DOES *NOT* COVER",
+            "  * Files removed by a DeleteFile action. Those are gone; there is no file",
+            "    rollback. Prefer Quarantine, which moves a file to reports\quarantine\",
+            "    with a .quar.json manifest and is fully reversible.",
+            "  * Anything a RunCmd action changed outside the keys listed above.",
+            "  * Registry keys not in the list above."
+        )
+        $readme | Out-File -FilePath (Join-Path $SNAPSHOT_DIR 'README.txt') -Encoding UTF8 -ErrorAction SilentlyContinue
+
+        $snapshotOk = $true
+        Out-Typewriter "REGISTRY SNAPSHOT SAVED: $SNAPSHOT_DIR ($($snapshotFiles.Count) KEYS)" "GOOD"
+        Out-Typewriter "  -> TO ROLL BACK: RUN `"$SNAPSHOT_DIR\Restore.cmd`" AS ADMINISTRATOR" "WARN"
+    } else {
+        Out-Typewriter "REGISTRY SNAPSHOT PRODUCED NO FILES — NO REGISTRY ROLLBACK AVAILABLE." "WARN"
     }
-    $snapshotContent | Out-File -FilePath $SNAPSHOT_PATH -Encoding Unicode -ErrorAction Stop
-    $snapshotOk = $true
-    Out-Typewriter "SNAPSHOT SAVED TO: $SNAPSHOT_PATH" "GOOD"
-    Out-Typewriter "  -> IF FIXES CAUSE ISSUES, RESTORE WITH: regedit /S `"$SNAPSHOT_PATH`"" "WARN"
 } catch {
-    Out-Typewriter "SNAPSHOT FAILED — PROCEEDING WITHOUT ROLLBACK (USE CAUTION)." "WARN"
+    Out-Typewriter "REGISTRY SNAPSHOT FAILED — NO REGISTRY ROLLBACK AVAILABLE." "WARN"
 }
+
+# The old banner promised a "registry/VSS" snapshot, but nothing in the engine ever
+# created one — no Checkpoint-Computer, no vssadmin, no SystemRestore (audit H1).
+# Attempt a real restore point, and say plainly whether it worked.
+try {
+    Out-Typewriter "REQUESTING SYSTEM RESTORE POINT..." "ACT"
+    Checkpoint-Computer -Description "ZeroBreach pre-fix" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+    $restorePointOk = $true
+    Out-Typewriter "  -> SYSTEM RESTORE POINT CREATED." "GOOD"
+} catch {
+    # Common and not fatal: System Restore disabled, a Server SKU, or Windows' own
+    # once-per-24h rate limit. The operator needs to know it is absent, not assume it.
+    Out-Typewriter "  -> NO SYSTEM RESTORE POINT (disabled, unsupported, or rate-limited)." "WARN"
+}
+
+if (-not $snapshotOk -and -not $restorePointOk) {
+    Out-Typewriter "WARNING: NO ROLLBACK OF ANY KIND IS AVAILABLE. PROCEED WITH CAUTION." "WARN"
+}
+Out-Typewriter "REMINDER: DELETED FILES CANNOT BE ROLLED BACK. QUARANTINE IS REVERSIBLE." "WARN"
 
 Out-Typewriter "LOADING REMEDIATION INTERFACE..." "ACT"
 Invoke-QuantumBar "BUILDING CHECKBOX MANIFEST" 10 80
@@ -791,7 +859,7 @@ function Invoke-FixMode {
     # Append fix log to report file
     @("","="*80,"FIX MODE LOG — $(Get-Date)",
       "Selected: $($SelectedFindings.Count) | OK: $fixOK | Failed: $fixFail | Skipped: $fixSkip",
-      "Snapshot: $SNAPSHOT_PATH","="*80) + $fixLog |
+      "Snapshot: $SNAPSHOT_DIR","="*80) + $fixLog |
         Add-Content -Path $REPORT_PATH -Encoding UTF8 -ErrorAction SilentlyContinue
 
     Write-Host ""
@@ -802,12 +870,22 @@ function Invoke-FixMode {
     Write-Host "  FIX FAILURES      : " -NoNewline -ForegroundColor DarkGray
     Write-Host $fixFail -ForegroundColor $(if ($fixFail -gt 0) {"Red"} else {"Green"})
     Write-Host "  INFO / SKIPPED    : " -NoNewline -ForegroundColor DarkGray; Write-Host $fixSkip -ForegroundColor DarkGray
-    Write-Host "  SNAPSHOT          : " -NoNewline -ForegroundColor DarkGray; Write-Host $SNAPSHOT_PATH -ForegroundColor Yellow
+    Write-Host "  SNAPSHOT          : " -NoNewline -ForegroundColor DarkGray
+    Write-Host $(if ($snapshotOk) { $SNAPSHOT_DIR } else { 'NONE — no registry rollback available' }) -ForegroundColor $(if ($snapshotOk) {'Yellow'} else {'Red'})
+    Write-Host "  RESTORE POINT     : " -NoNewline -ForegroundColor DarkGray
+    Write-Host $(if ($restorePointOk) { 'created' } else { 'NONE' }) -ForegroundColor $(if ($restorePointOk) {'Green'} else {'Red'})
     Write-Host "  FULL REPORT       : " -NoNewline -ForegroundColor DarkGray; Write-Host $REPORT_PATH   -ForegroundColor Cyan
     Write-Host ("─"*80) -ForegroundColor DarkCyan
     if ($fixFail -gt 0 -or $global:VerifyFails -gt 0) {
         Write-Host "  STATUS: REBOOT RECOMMENDED — PENDING DELETIONS QUEUED." -ForegroundColor Yellow
-        Write-Host "  ROLLBACK: regedit /S `"$SNAPSHOT_PATH`"" -ForegroundColor DarkGray
+        # audit H1: this used to advertise `regedit /S` against a file that could never
+        # be imported. Point at the generated restorer, and only when it actually exists.
+        if ($snapshotOk) {
+            Write-Host "  ROLLBACK: run `"$SNAPSHOT_DIR\Restore.cmd`" as administrator" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  ROLLBACK: unavailable — no registry snapshot was captured." -ForegroundColor Red
+        }
+        Write-Host "  NOTE: deleted files are NOT recoverable; quarantined files are." -ForegroundColor DarkGray
     } else {
         Write-Host "  STATUS: REMEDIATION COMPLETE. REVIEW REPORT FOR MANUAL ITEMS." -ForegroundColor Cyan
     }
@@ -846,7 +924,7 @@ if ($selectedFixes.Count -eq 0) {
     Write-Host ""
     Write-Host "  ┌─ FINAL CONFIRMATION ───────────────────────────────────────────────────┐" -ForegroundColor Red
     Write-Host "  │  About to execute $($selectedFixes.Count) remediation action(s).                           │" -ForegroundColor Red
-    Write-Host "  │  Snapshot: $(Split-Path $SNAPSHOT_PATH -Leaf)                        │" -ForegroundColor Yellow
+    Write-Host "  │  Snapshot: $(if ($snapshotOk) { Split-Path $SNAPSHOT_DIR -Leaf } else { 'NONE — no rollback!' })" -ForegroundColor Yellow
     Write-Host "  │  Type  CONFIRM  to proceed. Anything else aborts.                    │" -ForegroundColor Red
     Write-Host "  └─────────────────────────────────────────────────────────────────────────┘" -ForegroundColor Red
     Write-Host "  COMMAND> " -NoNewline -ForegroundColor DarkGray
