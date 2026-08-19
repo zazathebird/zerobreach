@@ -5,6 +5,68 @@
 
 'use strict';
 
+/* ── Launch token (audit C1) ──────────────────────────────────────────────────
+   The server mints a fresh random token every launch and opens the console at
+   /?t=<token>; every /api/* call must carry it, or the server answers 401. This
+   is what stops a random web page the operator has open from sweeping loopback
+   and POSTing to an admin-privileged remediation API.
+
+   The token is stashed in sessionStorage so a reload keeps working (the inline
+   boot watchdog in index.html reloads on a slow start), then stripped from the
+   visible URL so it can't leak through a screenshot or a copy-pasted link.
+   sessionStorage is per-tab and dies with it, which matches the token's lifetime. */
+const ZB_TOKEN = (function () {
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get('t');
+    if (fromUrl) {
+      sessionStorage.setItem('zb_token', fromUrl);
+      try {
+        const clean = window.location.pathname + window.location.hash;
+        window.history.replaceState(null, '', clean);
+      } catch (e) { /* replaceState unavailable — harmless, token just stays visible */ }
+      return fromUrl;
+    }
+    return sessionStorage.getItem('zb_token') || '';
+  } catch (e) {
+    return '';
+  }
+})();
+
+/* Append the launch token to an API path. Every /api/* URL in this file goes
+   through here — if you add a new endpoint call, wrap it too or it will 401. */
+function zbApi(url) {
+  if (!ZB_TOKEN) return url;
+  return url + (url.indexOf('?') === -1 ? '?' : '&') + 't=' + encodeURIComponent(ZB_TOKEN);
+}
+
+/* A tokenless load is a dead console — every API call will 401. Say so loudly and
+   in plain language instead of leaving the operator staring at an empty grey UI. */
+function zbTokenGuard() {
+  if (ZB_TOKEN) return true;
+  if (document.getElementById('zb-token-error')) return false;
+  const box = document.createElement('div');
+  box.id = 'zb-token-error';
+  box.setAttribute('role', 'alert');
+  box.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;' +
+    'justify-content:center;background:rgba(4,6,12,.96);backdrop-filter:blur(4px);' +
+    'font-family:"JetBrains Mono",Consolas,monospace;padding:24px;text-align:center;';
+  box.innerHTML =
+    '<div style="max-width:640px;border:1px solid #ff9500;border-radius:10px;padding:28px 32px;background:#0b0f18;">' +
+      '<div style="color:#ff9500;font-size:18px;letter-spacing:2px;margin-bottom:14px;">\u26A0 LAUNCH TOKEN MISSING</div>' +
+      '<div style="color:#cfd6e4;font-size:13px;line-height:1.7;">' +
+        'This console was opened without its per-launch security token, so the ' +
+        'scan API will refuse every request.<br><br>' +
+        'Go back to the <b style="color:#39ff9a;">ZeroBreach server window</b> and open the ' +
+        'full URL it printed &mdash; the one ending in <code style="color:#39ff9a;">?t=&hellip;</code>' +
+        '<br><br><span style="color:#6b7280;">A new token is minted every launch, so an old ' +
+        'bookmark or a copied link will not work.</span>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(box);
+  return false;
+}
+
+
 // ── State ────────────────────────────────────────────────────────────────────
 const STATE = {
   sse: null,
@@ -85,6 +147,10 @@ function finishBoot() {
     try {
       initApp();
       window.__ZB_BOOTED = true;                       // tell the inline watchdog we made it
+      // Tokenless load = every API call 401s. Warn AFTER initApp so the UI is up
+      // behind the notice, and after __ZB_BOOTED so the watchdog stops reloading
+      // (a missing token is not something a reload can fix).
+      zbTokenGuard();
       try { sessionStorage.removeItem('zb_boot_retry'); } catch (e) {}
     } catch (err) {
       // initApp blew up (a sibling script lost the launch race, etc.). Rather than
@@ -149,7 +215,7 @@ function restoreGodBadge() {
 
 // ── Server-Sent Events ────────────────────────────────────────────────────────
 function initSSE() {
-  STATE.sse = new EventSource('/api/events');
+  STATE.sse = new EventSource(zbApi('/api/events'));
 
   STATE.sse.onopen = () => setConnected(true);
 
@@ -414,7 +480,7 @@ function initProfiles() {
 }
 
 function loadProfiles(selectName) {
-  fetch('/api/profiles')
+  fetch(zbApi('/api/profiles'))
     .then(r => r.json())
     .then(j => { SCAN_PROFILES = j.profiles || []; renderProfileOptions(selectName); })
     .catch(() => {});
@@ -464,7 +530,7 @@ function saveProfile() {
     ioc_file: $('ioc-path').value.trim(),
   };
   PROFILE_TOGGLES.forEach(([id, k]) => { profile[k] = $(id).checked; });
-  fetch('/api/profiles', {
+  fetch(zbApi('/api/profiles'), {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ action: 'save', profile }),
@@ -485,7 +551,7 @@ function deleteProfile() {
   const p = SCAN_PROFILES.find(x => x.name === name);
   if (!p) { ZBSound.play('error'); return; }
   if (p.builtin) { showToast('Built-in profiles cannot be deleted'); ZBSound.play('error'); return; }
-  fetch('/api/profiles', {
+  fetch(zbApi('/api/profiles'), {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ action: 'delete', name }),
@@ -744,7 +810,7 @@ function startScan() {
 
   switchView('scanmonitor');
 
-  fetch('/api/scan/start', {
+  fetch(zbApi('/api/scan/start'), {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(config),
@@ -768,7 +834,7 @@ function startScan() {
 function initScanMonitor() {
   $('btn-abort').addEventListener('click', () => {
     ZBSound.play('error');
-    fetch('/api/scan/abort', { method: 'POST' });
+    fetch(zbApi('/api/scan/abort'), { method: 'POST' });
     STATE.scanning = false;
     $('btn-abort').disabled = true;
     $('sb-status').textContent = '● ABORTED';
@@ -937,7 +1003,7 @@ function onScanComplete(data) {
 
 // Replace the live SSE findings with the engine's authoritative report findings.
 function loadEngineFindings(name) {
-  fetch('/api/report?name=' + encodeURIComponent(name))
+  fetch(zbApi('/api/report?name=' + encodeURIComponent(name)))
     .then(r => r.json())
     .then(list => {
       if (!Array.isArray(list)) return;
@@ -1288,7 +1354,7 @@ function executeRemediation(findings) {
   STATE.remediating = true;
   $$('#action-queue .queue-item .queue-status').forEach(s => { s.textContent = '⏳'; });
 
-  fetch('/api/remediate', {
+  fetch(zbApi('/api/remediate'), {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ report: STATE.engineReport, ids }),
@@ -1335,7 +1401,7 @@ function initIocView() {
 }
 
 function loadIoc() {
-  return fetch('/api/ioc')
+  return fetch(zbApi('/api/ioc'))
     .then(r => r.json())
     .then(data => {
       STATE.ioc = Object.assign(emptyIoc(), data);
@@ -1430,7 +1496,7 @@ function saveIoc() {
   const payload = {};
   IOC_CATS.forEach(c => payload[c] = STATE.ioc[c] || []);
   $('btn-ioc-save').disabled = true;
-  fetch('/api/ioc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+  fetch(zbApi('/api/ioc'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     .then(r => r.json())
     .then(res => {
       if (res.error) throw new Error(res.error);
@@ -1579,7 +1645,7 @@ function showWarnModal(message, onConfirm, onCancel) {
 
 // ── System Info & Vitals ──────────────────────────────────────────────────────
 function loadSysInfo() {
-  fetch('/api/sysinfo').then(r => r.json()).then(d => {
+  fetch(zbApi('/api/sysinfo')).then(r => r.json()).then(d => {
     if (d.error) return;
     $('si-host').textContent = d.hostname || '—';
     $('si-user').textContent = d.username || '—';
@@ -1592,7 +1658,7 @@ function loadSysInfo() {
 
 function startVitalsPoller() {
   function poll() {
-    fetch('/api/sysinfo').then(r => r.json()).then(d => {
+    fetch(zbApi('/api/sysinfo')).then(r => r.json()).then(d => {
       if (d.error) return;
       const cpuPct = d.cpu    || 0;
       const ramPct = d.ram_used || 0;
@@ -1653,7 +1719,7 @@ function exportReport(format) {
     // Server renders from current scan state (includes MITRE tags) and streams a download.
     ZBSound.play('click');
     const a = document.createElement('a');
-    a.href = `/api/export/${format}`;
+    a.href = zbApi(`/api/export/${format}`);
     a.download = '';
     document.body.appendChild(a);
     a.click();

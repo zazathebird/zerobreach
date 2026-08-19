@@ -157,6 +157,70 @@ $script:SEV_PATTERNS = [ordered]@{
 
 $script:PHASE_RE = [regex]'PHASE\s+(\d+)[^\d]'
 
+# ── Request authentication (audit C1) ──────────────────────────────────────────
+# This API deletes files, kills processes and runs commands AS ADMIN. Before this
+# guard it had no authentication at all and answered every caller with
+# `Access-Control-Allow-Origin: *`, so any web page the operator happened to have
+# open could sweep loopback for the /api/sysinfo oracle and then POST /api/remediate.
+# Two independent barriers now stand in that path:
+#   1. a per-launch random token, required on every /api/* request; and
+#   2. an Origin check on every route — browsers attach Origin to cross-site
+#      requests, and any value other than this server's own is refused outright.
+# The token rides in the query string (?t=) because EventSource cannot set headers;
+# an X-ZB-Token header is honoured too, for callers that can send one.
+# Crypto RNG, not Get-Random: Get-Random is a seeded System.Random, and a token an
+# attacker can predict is the same as no token at all. 32 bytes -> 64 hex chars.
+$script:AUTH_TOKEN = $(
+    $rngBytes = [byte[]]::new(32)
+    $rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
+    try   { $rng.GetBytes($rngBytes) }
+    finally { $rng.Dispose() }
+    -join ($rngBytes | ForEach-Object { $_.ToString('x2') })
+)
+
+# Populated in Main once the port is known. Only the exact origin this server is
+# reachable at is ever allowed — 'localhost' is deliberately NOT in the list, because
+# the listener is bound to 127.0.0.1 and http.sys rejects any other Host outright.
+$script:ALLOWED_ORIGINS = @()
+
+# Sent on every response. The CSP is what keeps a compromised box from feeding this
+# admin-privileged page third-party JavaScript (audit C3) — every asset is local now,
+# so 'self' is the whole allowlist. 'unsafe-inline' stays because index.html carries
+# the inline boot watchdog and themes.js sets theme vars as an inline body style.
+$script:SECURITY_HEADERS = [ordered]@{
+    'X-Content-Type-Options' = 'nosniff'
+    'Referrer-Policy'        = 'no-referrer'
+    'X-Frame-Options'        = 'DENY'
+    'Content-Security-Policy' = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+}
+
+function Add-SecurityHeaders {
+    param($Response)
+    try {
+        foreach ($h in $script:SECURITY_HEADERS.Keys) {
+            $Response.Headers[$h] = $script:SECURITY_HEADERS[$h]
+        }
+    } catch {}
+}
+
+function Test-RequestAuth {
+    param($Ctx)
+    $tok = $Ctx.Request.QueryString['t']
+    if ([string]::IsNullOrEmpty($tok)) { $tok = $Ctx.Request.Headers['X-ZB-Token'] }
+    if ([string]::IsNullOrEmpty($tok)) { return $false }
+    # Ordinal compare — never culture-fold a secret.
+    return [string]::Equals([string]$tok, $script:AUTH_TOKEN, [System.StringComparison]::Ordinal)
+}
+
+function Test-RequestOrigin {
+    param($Ctx)
+    # Same-origin GETs carry no Origin header at all; browsers do attach it to every
+    # cross-site request and to same-origin POSTs. Absent = allow, foreign = refuse.
+    $origin = $Ctx.Request.Headers['Origin']
+    if ([string]::IsNullOrEmpty($origin)) { return $true }
+    return ($script:ALLOWED_ORIGINS -contains $origin)
+}
+
 # ── Helpers ────────────────────────────────────────────────────────────────────
 function Get-FreePort {
     $l = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
@@ -172,8 +236,7 @@ function Write-JsonResponse {
         $r = $Ctx.Response
         $r.StatusCode    = $Code
         $r.ContentType   = 'application/json; charset=utf-8'
-        $r.Headers['Access-Control-Allow-Origin']  = '*'
-        $r.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+        Add-SecurityHeaders $r
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
         $r.ContentLength64 = $bytes.Length
         $r.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -194,7 +257,7 @@ function Send-StaticFile {
         $r = $Ctx.Response
         $r.StatusCode  = 200
         $r.ContentType = $mime
-        $r.Headers['Access-Control-Allow-Origin'] = '*'
+        Add-SecurityHeaders $r
         $bytes = [System.IO.File]::ReadAllBytes($FilePath)
         $r.ContentLength64 = $bytes.Length
         $r.OutputStream.Write($bytes, 0, $bytes.Length)
@@ -208,7 +271,7 @@ function Write-DownloadResponse {
         $r = $Ctx.Response
         $r.StatusCode  = 200
         $r.ContentType = $ContentType
-        $r.Headers['Access-Control-Allow-Origin'] = '*'
+        Add-SecurityHeaders $r
         $r.Headers['Content-Disposition'] = "attachment; filename=`"$FileName`""
         $bytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
         $r.ContentLength64 = $bytes.Length
@@ -516,7 +579,7 @@ $response.StatusCode = 200
 $response.ContentType = 'text/event-stream; charset=utf-8'
 $response.Headers['Cache-Control']       = 'no-cache, no-store'
 $response.Headers['X-Accel-Buffering']   = 'no'
-$response.Headers['Access-Control-Allow-Origin'] = '*'
+$response.Headers['X-Content-Type-Options'] = 'nosniff'
 $response.Headers['Connection']          = 'keep-alive'
 $response.SendChunked = $true
 
@@ -1170,13 +1233,29 @@ function Handle-Request {
     $path   = $req.Url.AbsolutePath
     $method = $req.HttpMethod
 
-    # CORS preflight
+    # ── C1 gate ────────────────────────────────────────────────────────────────
+    # Origin lockdown covers EVERY route, static assets included. A request with no
+    # Origin header is a same-origin navigation or a local tool; one carrying a
+    # foreign Origin is a cross-site caller and gets nothing.
+    if (-not (Test-RequestOrigin $Ctx)) {
+        Write-JsonResponse $Ctx '{"error":"forbidden","detail":"cross-origin request refused"}' 403
+        return
+    }
+
+    # Preflight: no cross-origin caller is welcome here, so answer with no
+    # Access-Control-Allow-* headers at all. A cross-site fetch fails at this step.
     if ($method -eq 'OPTIONS') {
         $Ctx.Response.StatusCode = 204
-        $Ctx.Response.Headers['Access-Control-Allow-Origin']  = '*'
-        $Ctx.Response.Headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
-        $Ctx.Response.Headers['Access-Control-Allow-Headers'] = 'Content-Type'
+        Add-SecurityHeaders $Ctx.Response
         try { $Ctx.Response.Close() } catch {}
+        return
+    }
+
+    # Launch token on the privileged surface. Static assets stay open deliberately:
+    # a tokenless browser must still be able to load the page so it can TELL the
+    # operator what is wrong instead of showing a dead grey screen.
+    if ($path -like '/api/*' -and -not (Test-RequestAuth $Ctx)) {
+        Write-JsonResponse $Ctx '{"error":"unauthorized","detail":"missing or invalid launch token"}' 401
         return
     }
 
@@ -1456,13 +1535,17 @@ function Handle-Request {
 if ($Port -eq 0) { $Port = Get-FreePort }
 
 $Listener = [System.Net.HttpListener]::new()
-$Listener.Prefixes.Add("http://localhost:$Port/")
+# Bound to the literal loopback address, not 'localhost': http.sys matches the request's
+# Host header against this prefix, so a DNS-rebound hostname is refused with a 400
+# before any handler runs (audit C1).
+$Listener.Prefixes.Add("http://127.0.0.1:$Port/")
+$script:ALLOWED_ORIGINS = @("http://127.0.0.1:$Port")
 
 try { $Listener.Start() }
 catch [System.Net.HttpListenerException] {
     # Locked-down machine: the URL namespace may need an explicit reservation.
     Write-Host ('[ZeroBreach] Listener blocked (' + $_.Exception.Message + '); adding URL ACL...') -ForegroundColor Yellow
-    $acl = "http://localhost:$Port/"
+    $acl = "http://127.0.0.1:$Port/"
     & netsh http add urlacl url=$acl "user=$env:USERDOMAIN\$env:USERNAME" | Out-Null
     try { $Listener.Start() }
     catch {
@@ -1475,7 +1558,8 @@ catch {
     exit 1
 }
 
-$Url = "http://localhost:$Port"
+$Url      = "http://127.0.0.1:$Port"
+$UrlToken = "$Url/?t=$script:AUTH_TOKEN"
 
 Write-Host ""
 Write-Host "  ╔══════════════════════════════════════════════════╗" -ForegroundColor Cyan
@@ -1486,23 +1570,30 @@ Write-Host "  ╚═════════════════════
 Write-Host ""
 Write-Host ('[ZeroBreach] Serving GUI at ' + $Url) -ForegroundColor Green
 Write-Host ('[ZeroBreach] Scan engine: ' + $script:SCAN_PS) -ForegroundColor DarkCyan
+Write-Host ''
+Write-Host '  [ZeroBreach] This console requires a launch token. Open THIS exact URL:' -ForegroundColor Yellow
+Write-Host ("  $UrlToken") -ForegroundColor White
+Write-Host '  (A new token is minted every launch. Without it the API answers 401.)' -ForegroundColor DarkGray
+Write-Host ''
 
 if (-not $NoBrowser) {
-    $urlCapture = $Url
+    $urlCapture   = $Url
+    $tokenCapture = $UrlToken
     # Don't open the browser on a fixed timer — poll until the server actually answers
     # a request, THEN launch. This both (a) guarantees the first browser paint never
     # races the listener and (b) pre-warms the static-file path, fixing the occasional
     # blank/grey screen seen right after the UAC launch. The accept loop (below, on the
     # main thread) serves these probe requests.
-    $null = Start-Job -ArgumentList $urlCapture {
-        param($u)
+    $null = Start-Job -ArgumentList $urlCapture, $tokenCapture {
+        param($u, $ut)
         for ($i = 0; $i -lt 50; $i++) {
             try {
                 $r = Invoke-WebRequest -Uri $u -UseBasicParsing -TimeoutSec 2
                 if ($r.StatusCode -eq 200) { break }
             } catch { Start-Sleep -Milliseconds 150 }
         }
-        Start-Process $u
+        # Probe the tokenless root (static, always 200); launch the tokenised URL.
+        Start-Process $ut
     }
 }
 
