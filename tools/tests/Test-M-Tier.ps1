@@ -160,5 +160,54 @@ Check 'bare PID falls back to the description' `
 Check 'bare PID, benign description, allowed' `
     (Test-ProtectedTarget 'KillProcess' '4321' 'PID:4321' 'miner.exe burning CPU') ''
 
+Write-Host "`n== M5  the URL ACL is temporary ==" -ForegroundColor Yellow
+Check 'reservation is tracked'      ($src -match '\$script:URLACL_ADDED = \$acl') $true
+Check 'reservation removed on exit' ($src -match 'netsh http delete urlacl url=\$script:URLACL_ADDED') $true
+Check 'netsh failure is reported'   ($src -match 'netsh http add urlacl FAILED') $true
+
+Write-Host "`n== M9  reports\ lockdown + report integrity ==" -ForegroundColor Yellow
+Check 'ACL hardening runs at startup'  ($src -match 'Protect-ReportsDirectory \$script:REPORTS') $true
+Check 'read access is preserved'       ($src -match '\$R::ReadAndExecute') $true
+Check 'SYSTEM/Admins/CreatorOwner kept'($src -match "@\('S-1-5-18', 'S-1-5-32-544', 'S-1-3-0'\)") $true
+Check 'ACL failure is reported'        ($src -match 'could not lock down reports') $true
+Check 'report hash recorded on scan'   ($src -match '\$ScanState\.ReportHashes\[\$kb\.Name\]') $true
+Check 'remediate re-hashes the report' ($src -match '\$script:State\.ReportHashes\["\$reportName"\]') $true
+Check 'mismatch refuses with 409'      ($src -match 'refusing to remediate.*409|report modified since the scan produced it') $true
+
+Write-Host "`n== M10 retention ==" -ForegroundColor Yellow
+# Functional: 25 fake logs of each kind, keep the newest 20.
+$fnR = $ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OldServerLogs'}, $true)
+. ([scriptblock]::Create($fnR[0].Extent.Text))
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("zbret_" + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+$base = Get-Date
+foreach ($i in 1..25) {
+    foreach ($k in @('console','events')) {
+        $f = Join-Path $tmp ("server_{0}_{1:d3}.log" -f $k, $i)
+        Set-Content -LiteralPath $f -Value 'x'
+        (Get-Item -LiteralPath $f).LastWriteTime = $base.AddMinutes(-$i)
+    }
+}
+Set-Content -LiteralPath (Join-Path $tmp 'KrakenBaseline_20260819.json') -Value '{}'
+$removed = Remove-OldServerLogs $tmp 20
+Check 'pruned to the newest 20 per kind' $removed 10
+Check 'console logs kept'      (@(Get-ChildItem $tmp -Filter 'server_console_*.log').Count) 20
+Check 'events logs kept'       (@(Get-ChildItem $tmp -Filter 'server_events_*.log').Count) 20
+Check 'newest survives'        (Test-Path (Join-Path $tmp 'server_console_001.log')) $true
+Check 'oldest pruned'          (Test-Path (Join-Path $tmp 'server_console_025.log')) $false
+Check 'reports are never touched' (Test-Path (Join-Path $tmp 'KrakenBaseline_20260819.json')) $true
+Check 'KeepLogs 0 keeps everything' (Remove-OldServerLogs $tmp 0) 0
+Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+Check 'quarantine footprint reported' ($src -match 'Quarantine vault: \{0\} item\(s\)') $true
+
+Write-Host "`n== M11 failures are no longer swallowed ==" -ForegroundColor Yellow
+Check 'Write-ServerFault exists'   ($src -match 'function Write-ServerFault') $true
+Check 'JSON response reports'      ($src -match "catch \{ Write-ServerFault 'JSON response failed' \`$_ \}") $true
+Check 'static file reports'        ($src -match 'catch \{ Write-ServerFault \("static file failed') $true
+Check 'download reports'           ($src -match 'catch \{ Write-ServerFault \("download failed') $true
+Check 'MITRE load failure reported'($src -match 'MITRE map failed to load') $true
+Check 'transcript failure reported'($src -match 'Console transcript unavailable') $true
+Check 'client disconnect stays quiet' ($src -match 'closed\|aborted\|cannot access a disposed') $true
+
 Write-Host ("`n{0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail -eq 0){'Green'}else{'Red'})
 if($fail){exit 1}

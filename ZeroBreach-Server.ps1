@@ -15,7 +15,15 @@
 [CmdletBinding()]
 param(
     [int]$Port      = 0,
-    [switch]$NoBrowser
+    [switch]$NoBrowser,
+    # audit M10 — retention for the per-launch logs in reports\. They carry hostnames,
+    # usernames, full paths and every finding, and an MSP console touches many clients'
+    # machines, so they do not accumulate forever any more. 0 keeps everything.
+    [int]$KeepLogs  = 20,
+    # audit M9 — reports\ holds the report that drives RunCmd. If a non-admin can write
+    # there they can author one and wait for an admin to remediate. Locked down at
+    # startup unless this is passed.
+    [switch]$NoHardenReports
 )
 
 Set-StrictMode -Off
@@ -28,6 +36,8 @@ if (-not $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     $argStr = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
     if ($Port -gt 0) { $argStr += " -Port $Port" }
     if ($NoBrowser)  { $argStr += " -NoBrowser" }
+    if ($NoHardenReports) { $argStr += " -NoHardenReports" }
+    if ($PSBoundParameters.ContainsKey('KeepLogs')) { $argStr += " -KeepLogs $KeepLogs" }
     Start-Process powershell $argStr -Verb RunAs
     exit
 }
@@ -54,6 +64,76 @@ try {
         }
     }
 } catch {}
+# ── reports\ hardening + retention (audit M9, M10) ────────────────────────────
+function Protect-ReportsDirectory {
+    # reports\ holds the KrakenBaseline_*.json that drives RunCmd remediation. The
+    # project usually lives under a user profile (Downloads\), where reports\ inherits
+    # ACLs that let a STANDARD user write — and a standard user who can drop a report
+    # there can wait for an admin to remediate it and get their commands run as admin
+    # (audit M9). Inheritance is broken and every non-admin ALLOW rule that carries any
+    # write right is downgraded to read-only. Read access is deliberately kept: the
+    # operator opens exported HTML/CSV reports from here in a non-elevated Explorer.
+    # Returns '' on success, otherwise the reason — this is never silent.
+    param([string]$Path)
+    try {
+        $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+        $acl.SetAccessRuleProtection($true, $true)   # break inheritance, keep a copy of the rules
+        $keep = @('S-1-5-18', 'S-1-5-32-544', 'S-1-3-0')   # SYSTEM, Administrators, CREATOR OWNER
+        $R = [System.Security.AccessControl.FileSystemRights]
+        $writeMask = [int]($R::Write -bor $R::Modify -bor $R::FullControl -bor $R::Delete -bor
+                           $R::DeleteSubdirectoriesAndFiles -bor $R::ChangePermissions -bor $R::TakeOwnership)
+        $downgraded = 0
+        foreach ($rule in @($acl.Access)) {
+            if ($rule.AccessControlType -ne [System.Security.AccessControl.AccessControlType]::Allow) { continue }
+            $sid = ''
+            try { $sid = $rule.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch { $sid = "$($rule.IdentityReference)" }
+            if ($keep -contains $sid) { continue }
+            if (([int]$rule.FileSystemRights -band $writeMask) -eq 0) { continue }
+            [void]$acl.RemoveAccessRule($rule)
+            [void]$acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+                $rule.IdentityReference, $R::ReadAndExecute, 'ContainerInherit, ObjectInherit', 'None', 'Allow')))
+            $downgraded++
+        }
+        Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+        if ($downgraded -gt 0) {
+            Write-Host ("[ZeroBreach] reports\ locked down: {0} non-admin write rule(s) downgraded to read-only." -f $downgraded) -ForegroundColor DarkGray
+        }
+        return ''
+    } catch { return $_.Exception.Message }
+}
+
+function Remove-OldServerLogs {
+    # Keep the newest $Keep of each per-launch log; delete the rest (audit M10).
+    param([string]$Path, [int]$Keep)
+    if ($Keep -le 0) { return 0 }
+    $removed = 0
+    foreach ($pattern in @('server_console_*.log', 'server_events_*.log')) {
+        $old = @(Get-ChildItem -LiteralPath $Path -Filter $pattern -File -ErrorAction SilentlyContinue |
+                 Sort-Object LastWriteTime -Descending | Select-Object -Skip $Keep)
+        foreach ($f in $old) {
+            try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop; $removed++ } catch {}
+        }
+    }
+    return $removed
+}
+
+function Show-QuarantineFootprint {
+    # Quarantined items are live malware plus a restore manifest — never auto-deleted
+    # (they are evidence, and deleting them is the operator's call), but an MSP console
+    # should say out loud what it is carrying between client sites (audit M10).
+    param([string]$Path)
+    $vault = Join-Path $Path 'quarantine'
+    if (-not (Test-Path -LiteralPath $vault)) { return }
+    $items = @(Get-ChildItem -LiteralPath $vault -Filter '*.quar' -File -ErrorAction SilentlyContinue)
+    if ($items.Count -eq 0) { return }
+    $mb = [Math]::Round((($items | Measure-Object -Property Length -Sum).Sum / 1MB), 1)
+    $c  = if ($items.Count -ge 50 -or $mb -ge 250) { 'Yellow' } else { 'DarkGray' }
+    Write-Host ("[ZeroBreach] Quarantine vault: {0} item(s), {1} MB in {2}" -f $items.Count, $mb, $vault) -ForegroundColor $c
+    if ($c -eq 'Yellow') {
+        Write-Host '             Review and clear it before taking this console to another client site.' -ForegroundColor Yellow
+    }
+}
+
 $script:SCAN_PS   = Join-Path $ROOT 'ZeroBreach-V23.ps1'
 $script:GUI_DIR   = Join-Path $ROOT 'gui'
 $script:REPORTS   = Join-Path $ROOT 'reports'
@@ -68,6 +148,18 @@ if (-not (Test-Path $script:REPORTS)) {
     }
 }
 
+if (-not $NoHardenReports) {
+    $aclErr = Protect-ReportsDirectory $script:REPORTS
+    if ($aclErr) {
+        Write-Host ('[ZeroBreach] WARNING: could not lock down reports\ — ' + $aclErr) -ForegroundColor Yellow
+        Write-Host '             A non-admin who can write there could author a report that runs commands as admin.' -ForegroundColor Yellow
+    }
+}
+$pruned = Remove-OldServerLogs $script:REPORTS $KeepLogs
+if ($pruned -gt 0) { Write-Host ("[ZeroBreach] Retention: removed {0} old server log(s), keeping the newest {1} per kind." -f $pruned, $KeepLogs) -ForegroundColor DarkGray }
+Show-QuarantineFootprint $script:REPORTS
+
+
 # ── Durable logging ─────────────────────────────────────────────────────────────
 # Post-run validation needs more than the (ephemeral) browser/console. Two files in reports\:
 #   • server_console_*.log — main-thread server console (banners, listener/request errors),
@@ -80,7 +172,24 @@ if (-not (Test-Path $script:REPORTS)) {
 $script:LOG_STAMP   = Get-Date -Format 'yyyyMMdd_HHmmss'
 $script:EVENT_LOG   = Join-Path $script:REPORTS ('server_events_{0}.log'  -f $script:LOG_STAMP)
 $script:CONSOLE_LOG = Join-Path $script:REPORTS ('server_console_{0}.log' -f $script:LOG_STAMP)
-try { Start-Transcript -LiteralPath $script:CONSOLE_LOG -Force -ErrorAction Stop | Out-Null } catch {}
+$script:TRANSCRIPT_ON = $false
+try { Start-Transcript -LiteralPath $script:CONSOLE_LOG -Force -ErrorAction Stop | Out-Null; $script:TRANSCRIPT_ON = $true }
+catch { Write-Host ('[ZeroBreach] Console transcript unavailable: ' + $_.Exception.Message) -ForegroundColor Yellow }
+
+# audit M11: the server runs with Set-StrictMode -Off, $ErrorActionPreference =
+# 'SilentlyContinue' and a scattering of `catch {}`. Combined with H2 that made it
+# close to undebuggable in the field — a failed response, a missing MITRE map or an
+# unreadable static file all looked exactly like success. Nothing changes behaviour
+# here; failures are now SAID OUT LOUD, into the console transcript that ships in
+# reports\. Client disconnects mid-response are ordinary and stay quiet.
+function Write-ServerFault {
+    param([string]$Where, $Err, [switch]$Quiet)
+    $msg = if ($Err -is [System.Management.Automation.ErrorRecord]) { $Err.Exception.Message } else { "$Err" }
+    # A browser that navigated away kills the response stream — noise, not a fault.
+    if ($msg -match '(?i)(closed|aborted|cannot access a disposed|broken pipe|forcibly closed|non-blocking socket)') { return }
+    if ($Quiet) { return }
+    Write-Host ("[ZeroBreach] {0}: {1}" -f $Where, $msg) -ForegroundColor DarkYellow
+}
 
 # ── MITRE ATT&CK map (loaded once; injected into the scan runspace for tagging) ─
 # data/*.json is NOT AMSI-scanned, so this is safe to load at runtime.
@@ -88,7 +197,12 @@ $script:MITRE_MAP = $null
 $mitrePath = Join-Path $ROOT 'data\mitre_mapping.json'
 if (Test-Path $mitrePath) {
     try { $script:MITRE_MAP = Get-Content -LiteralPath $mitrePath -Raw -ErrorAction Stop | ConvertFrom-Json }
-    catch { $script:MITRE_MAP = $null }
+    catch {
+        $script:MITRE_MAP = $null
+        Write-Host ('[ZeroBreach] MITRE map failed to load (findings will carry no technique): ' + $_.Exception.Message) -ForegroundColor Yellow
+    }
+} else {
+    Write-Host ("[ZeroBreach] MITRE map not found at $mitrePath — findings will carry no technique.") -ForegroundColor Yellow
 }
 
 # ── Built-in scan profiles (read-only presets served by /api/profiles) ─────────
@@ -123,6 +237,11 @@ $script:State = [hashtable]::Synchronized(@{
     ScanEpoch    = 0      # bumped each time EventLog is cleared for a new scan; SSE clients rewind on change
     Process      = $null
     EngineReport = ''     # filename of the engine's rich KrakenBaseline_*.json from the last scan
+    # audit M9: SHA256 of every report this launch produced, taken the moment the
+    # engine finished writing it. Remediation re-hashes and refuses a report that
+    # changed underneath us — the reports\ ACL is the primary defence, this is the
+    # one that still holds if the directory could not be locked down.
+    ReportHashes = [hashtable]::Synchronized(@{})
     Remediating  = $false
     EventLog     = [System.Collections.ArrayList]::Synchronized(
                        [System.Collections.ArrayList]::new())
@@ -251,7 +370,7 @@ function Write-JsonResponse {
         $r.ContentLength64 = $bytes.Length
         $r.OutputStream.Write($bytes, 0, $bytes.Length)
         $r.OutputStream.Close()
-    } catch {}
+    } catch { Write-ServerFault 'JSON response failed' $_ }
 }
 
 function Send-StaticFile {
@@ -272,7 +391,7 @@ function Send-StaticFile {
         $r.ContentLength64 = $bytes.Length
         $r.OutputStream.Write($bytes, 0, $bytes.Length)
         $r.OutputStream.Close()
-    } catch {}
+    } catch { Write-ServerFault ("static file failed ($FilePath)") $_ }
 }
 
 function Write-DownloadResponse {
@@ -287,7 +406,7 @@ function Write-DownloadResponse {
         $r.ContentLength64 = $bytes.Length
         $r.OutputStream.Write($bytes, 0, $bytes.Length)
         $r.OutputStream.Close()
-    } catch {}
+    } catch { Write-ServerFault ("download failed ($FileName)") $_ }
 }
 
 # Build a self-contained HTML report from the current scan findings.
@@ -1398,7 +1517,12 @@ try {
         $kb = Get-ChildItem -LiteralPath $ScanReports -Filter 'KrakenBaseline_*.json' -ErrorAction SilentlyContinue |
               Where-Object { $_.LastWriteTime -ge $ScanState.StartTime.AddSeconds(-5) } |
               Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        if ($kb) { $engineReport = $kb.Name }
+        if ($kb) {
+            $engineReport = $kb.Name
+            try {
+                $ScanState.ReportHashes[$kb.Name] = (Get-FileHash -LiteralPath $kb.FullName -Algorithm SHA256 -ErrorAction Stop).Hash
+            } catch {}
+        }
     } catch {}
     $ScanState.EngineReport = $engineReport
 
@@ -1885,6 +2009,23 @@ function Handle-Request {
             $reportPath = Join-Path $script:REPORTS $reportName
             if (-not (Test-Path -LiteralPath $reportPath)) { Write-JsonResponse $Ctx '{"error":"report not found"}' 404; return }
 
+            # audit M9 — every RunCmd in this file is about to run as admin. If this
+            # launch wrote the report, its content must still be exactly what we wrote.
+            $recorded = $script:State.ReportHashes["$reportName"]
+            if ($recorded) {
+                $now = ''
+                try { $now = (Get-FileHash -LiteralPath $reportPath -Algorithm SHA256 -ErrorAction Stop).Hash } catch {}
+                if ("$now" -ne "$recorded") {
+                    Write-Host ("[ZeroBreach] REFUSED remediation: $reportName changed after the scan wrote it.") -ForegroundColor Red
+                    Write-JsonResponse $Ctx '{"error":"report modified since the scan produced it — refusing to remediate"}' 409
+                    return
+                }
+            } else {
+                # An older or hand-picked report. Allowed (operators do re-open past
+                # scans), but say so — it did not come from this launch.
+                Write-Host ("[ZeroBreach] NOTE: remediating $reportName, which this launch did not produce.") -ForegroundColor Yellow
+            }
+
             $ids = @($parsed.ids) | Where-Object { $_ }
             if (-not $ids -or @($ids).Count -eq 0) { Write-JsonResponse $Ctx '{"error":"no findings selected"}' 400; return }
 
@@ -2140,15 +2281,26 @@ $Listener = [System.Net.HttpListener]::new()
 $Listener.Prefixes.Add("http://127.0.0.1:$Port/")
 $script:ALLOWED_ORIGINS = @("http://127.0.0.1:$Port")
 
+$script:URLACL_ADDED = ''
 try { $Listener.Start() }
 catch [System.Net.HttpListenerException] {
-    # Locked-down machine: the URL namespace may need an explicit reservation.
-    Write-Host ('[ZeroBreach] Listener blocked (' + $_.Exception.Message + '); adding URL ACL...') -ForegroundColor Yellow
+    # Locked-down machine: the URL namespace may need an explicit reservation. This
+    # writes a PERMANENT, system-wide reservation, and a portable IR tool must not leave
+    # one behind on a client's machine (audit M5) — remember it and remove it on exit.
+    # It is also no longer silent about failing.
+    Write-Host ('[ZeroBreach] Listener blocked (' + $_.Exception.Message + '); adding a TEMPORARY URL ACL...') -ForegroundColor Yellow
     $acl = "http://127.0.0.1:$Port/"
-    & netsh http add urlacl url=$acl "user=$env:USERDOMAIN\$env:USERNAME" | Out-Null
+    $aclOut = (& netsh http add urlacl url=$acl "user=$env:USERDOMAIN\$env:USERNAME" 2>&1) -join ' '
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ('[ZeroBreach] netsh http add urlacl FAILED: ' + $aclOut) -ForegroundColor Red
+    } else {
+        $script:URLACL_ADDED = $acl
+        Write-Host ('[ZeroBreach] URL ACL added; it will be removed when this console exits.') -ForegroundColor DarkGray
+    }
     try { $Listener.Start() }
     catch {
         Write-Host ('[ZeroBreach] Failed to start listener after URL ACL: ' + $_.Exception.Message) -ForegroundColor Red
+        if ($script:URLACL_ADDED) { & netsh http delete urlacl url=$script:URLACL_ADDED | Out-Null }
         exit 1
     }
 }
@@ -2222,6 +2374,12 @@ try {
 finally {
     $script:State.Listening = $false
     try { $Listener.Stop(); $Listener.Close() } catch {}
+    # audit M5: never leave a system-wide URL reservation behind on a client machine.
+    if ($script:URLACL_ADDED) {
+        $delOut = (& netsh http delete urlacl url=$script:URLACL_ADDED 2>&1) -join ' '
+        if ($LASTEXITCODE -eq 0) { Write-Host ('[ZeroBreach] Temporary URL ACL removed.') -ForegroundColor DarkGray }
+        else { Write-Host ("[ZeroBreach] Could NOT remove the URL ACL — remove it by hand: netsh http delete urlacl url=$script:URLACL_ADDED  ($delOut)") -ForegroundColor Red }
+    }
     Write-Host '[ZeroBreach] Server stopped.' -ForegroundColor Cyan
     if ($script:EVENT_LOG)   { Write-Host ('[ZeroBreach] Event log:   ' + $script:EVENT_LOG)   -ForegroundColor DarkCyan }
     if ($script:CONSOLE_LOG) { Write-Host ('[ZeroBreach] Console log: ' + $script:CONSOLE_LOG) -ForegroundColor DarkCyan }
