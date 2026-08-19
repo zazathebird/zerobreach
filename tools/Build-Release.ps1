@@ -46,6 +46,12 @@ $requiredFiles = @(
     'gui\static\js\themes.js'
     'gui\static\js\fx.js'
     'gui\static\js\kraken.js'
+    # Vendored third-party assets (audit C3). Without these the "portable" zip is
+    # not self-contained: the console silently loses the threat radar chart and
+    # falls back to system fonts on any box with no route to cdnjs/Google Fonts.
+    'gui\static\js\vendor\gsap.min.js'
+    'gui\static\js\vendor\chart.umd.min.js'
+    'gui\static\css\fonts.css'
     'data\detection_signatures.json'
     'data\mitre_mapping.json'
     'data\ioc_defaults.json'
@@ -54,13 +60,24 @@ $requiredFiles = @(
 # Optional extras packed if present (not fatal when missing)
 $optionalFiles = @('data\coverage_matrix.json')
 
+# Whole directories copied verbatim. The vendored web fonts are 27 woff2 subset
+# files — a hand-maintained list would rot the first time a weight changes, so the
+# folder is copied wholesale and its emptiness is what's treated as fatal.
+$requiredDirs = @('gui\static\css\fonts')
+
 $missing = @($requiredFiles | Where-Object { -not (Test-Path (Join-Path $root $_)) })
+foreach ($d in $requiredDirs) {
+    $dp = Join-Path $root $d
+    if (-not (Test-Path $dp) -or -not (Get-ChildItem -LiteralPath $dp -File -ErrorAction SilentlyContinue)) {
+        $missing += "$d\  (directory missing or empty)"
+    }
+}
 if ($missing.Count) {
     Write-Host "[Build-Release] FATAL — required files missing:" -ForegroundColor Red
     $missing | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
     exit 1
 }
-Write-Host "[Build-Release] Manifest OK ($($requiredFiles.Count) required files present)"
+Write-Host "[Build-Release] Manifest OK ($($requiredFiles.Count) required files + $($requiredDirs.Count) required dir(s) present)"
 
 # ── Validation gate (parse + BOM on scripts, JSON validity on data) ─────────────
 if (-not $SkipValidation) {
@@ -102,6 +119,13 @@ foreach ($rel in ($requiredFiles + ($optionalFiles | Where-Object { Test-Path (J
     $dstDir = Split-Path -Parent $dst
     if (-not (Test-Path $dstDir)) { New-Item -ItemType Directory -Path $dstDir -Force | Out-Null }
     Copy-Item -LiteralPath $src -Destination $dst -Force
+}
+
+foreach ($rel in $requiredDirs) {
+    $src = Join-Path $root $rel
+    $dst = Join-Path $stageRoot $rel
+    if (-not (Test-Path $dst)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+    Copy-Item -LiteralPath (Join-Path $src '*') -Destination $dst -Recurse -Force
 }
 
 if ($IncludePython) {

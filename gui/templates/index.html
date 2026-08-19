@@ -29,10 +29,19 @@
     });
   })();
 </script>
+<link rel="stylesheet" href="/static/css/fonts.css">
 <link rel="stylesheet" href="/static/css/main.css">
 <link rel="stylesheet" href="/static/css/fx.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<!-- Vendored locally (audit C3). These were loaded from cdnjs with no integrity=,
+     render-blocking in <head>, into a page that can call the admin remediation API —
+     on machines whose DNS/proxy/CA trust this very tool exists to check. They are
+     now served from /static/js/vendor/ and deferred, so an offline or proxy-blocked
+     box no longer stalls the parser waiting on a connect timeout.
+     Verified at vendoring time against cdnjs's published SRI:
+       gsap.min.js       sha512-16esztaSRplJROstbIIdwX3N97V1+pZvV33ABoG1H2OyTttBxEGkTsoIVsiP1iaTtM8b3+hu2kB6pQ4Clr5yug==
+       chart.umd.min.js  sha512-SIMGYRUjwY8+gKg7nn9EItdD8LCADSDfJNutF9TPrvEo86sQmFMh6MyralfIyhADlajSxqc7G0gs7+MwWF/ogQ== -->
+<script defer src="/static/js/vendor/gsap.min.js"></script>
+<script defer src="/static/js/vendor/chart.umd.min.js"></script>
 </head>
 <body>
 

@@ -3,7 +3,8 @@
    Hollywood-grade tactical cyber ops aesthetic
    ═══════════════════════════════════════════════════════════════════════════ */
 
-@import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=JetBrains+Mono:wght@300;400;500;700&display=swap');
+/* Fonts are vendored locally — see fonts.css, linked ahead of this file in
+   index.html (audit C3: no third-party origin in an admin-privileged page). */
 
 /* ── THEME VARIABLES ─────────────────────────────────────────────────────── */
 :root {
