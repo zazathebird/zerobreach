@@ -87,15 +87,35 @@ the Windows filesystem or registry is still `[NEEDS REPRO]`.
 Each test pulls the real functions out of the shipped source via the AST, so a test cannot
 drift from the code it guards.
 
+### Session 3 (2026-08-19) — MEDIUM tier closed
+
+**M1–M11 are all closed**, along with the "newly noted" gap below. Commits `a62e132` (M2/M3/M4/M7),
+`66eb11b` (M6/M8), `21e6ce5` (M1 + the engine guard), `6bd7410` (M5/M9/M10/M11). Narrative in
+`CHANGELOG.md` → 2026-08-19; durable rules in `CLAUDE.md`.
+
+Two things worth flagging because they change the audit's own conclusions:
+
+* **M1 was bigger than reported, and part of it was a guard bug.** Running every engine
+  `Add-Finding` through the real guard found **six** always-blocked fixes, not two. It also found
+  the guard refusing *legitimate repairs*: the `RunCmd` path rules matched a path merely
+  **mentioned** in a command (so restoring Winlogon `Userinit` was blocked by its own restore
+  value), and `KillProcess` matched critical process names against the finding's **prose** (so
+  "SYSTEM-level process running from user path" was blocked by the word SYSTEM). Both are now
+  precise; deleting/renaming/overwriting a protected path is still refused.
+* **`Test-GuardMirrorSync.ps1` had a hole.** It never loaded the guard's regex tables, so both
+  copies were matching `''` — which matches everything — and agreeing for the wrong reason. It now
+  loads every table and compares **three** copies (the engine's `Invoke-FixMode` guard is the new
+  one).
+
+**Newly noted (closed):** `engine/FixMode.ps1`'s interactive `Invoke-FixMode` had **no
+protected-target guard at all**. A third mirror (`Test-EProtected` and its tables) now lives in the
+loader and hard-blocks there, reporting `BLOCKED (PROTECTED)` in the fix summary and the report log.
+
 ### Still open
 
-**All MEDIUM (M1–M11)**, §5 detection-quality work, and the GUI pass.
-
-**Newly noted, not in the original audit:** `engine/FixMode.ps1`'s interactive `Invoke-FixMode`
-has **no protected-target guard at all** — `Test-ProtectedTarget` exists only in the server and
-its runspace mirror. The engine is audit-only under `-Auto` (the servers' path), so this affects
-only the interactive CLI fix mode, but it is a fourth executor with none of the three layers of
-defence CLAUDE.md describes.
+§5 detection-quality work and the GUI pass. **And the live Windows run** — nothing in sessions 2
+or 3 has been executed on Windows; the ACL and `netsh` code paths added for M5/M9 in particular
+have never run.
 
 ---
 

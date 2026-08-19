@@ -6,6 +6,99 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-08-19 — Security audit remediation: MEDIUM tier, M1-M11 (branch `security/audit-2026-08-18`)
+
+Closes every MEDIUM finding in `AUDIT_2026-08-18_INDEPENDENT.md`, plus the "newly noted" gap
+that session recorded (the engine's interactive fix mode had no protected-target guard). Four
+commits: `a62e132` M2/M3/M4/M7, `66eb11b` M6/M8, `21e6ce5` M1 + the engine guard, `6bd7410`
+M5/M9/M10/M11. Durable rules are in `CLAUDE.md`.
+
+**M1 — fixes that were auto-selected and then blocked every single time.** The audit named two;
+measuring found six. Every `Add-Finding` in the engine was pulled out via the AST (213 calls, 87
+auto-destructive) and its `FixParam` run through the real guard. `STICKY_*` (rename a System32
+accessibility binary), `SYS32_UNSIGNED` (rename a tampered System32 binary), `HOSTS_PURGE`
+(rewrite `hosts` inside System32 — and it discarded legitimate corporate entries),
+`SVCMASQ`/`SVCPATH` (kill a process named svchost) and `SOFTDIST_CACHE` (`DeleteFile` on a
+*directory* in `C:\Windows`) all became `FixAction Info` carrying the exact manual command. The
+detections keep their severity; only the remediation moved to the operator.
+
+Two guard rules were themselves wrong and refused **real repairs**:
+- The path rules matched a path *mentioned* anywhere in a `RunCmd` string. Restoring a hijacked
+  Winlogon `Userinit` writes the value `C:\Windows\system32\userinit.exe,`, so the guard called
+  the repair a System32 write and refused it — on every box, forever. Path rules now apply to a
+  `RunCmd` only when it carries a verb that can mutate what it names (`$RUNCMD_MUTATING`).
+- `KillProcess` matched the critical-process list against the finding's **prose**, so "SYSTEM-level
+  process running from user path: evil.exe" was blocked because it contains the word SYSTEM. Since
+  H5 the FixParam carries the authoritative name (`pid|name|startTicks`), so the guard reads that,
+  falling back to the description only for a bare-PID legacy report.
+- `DeleteReg` of a `Debugger`/`GlobalFlag` **value** under Image File Execution Options is now
+  allowed — that value IS the sticky-keys backdoor. The key itself stays protected.
+
+**The fourth executor now has the guard too.** `engine/FixMode.ps1`'s interactive `Invoke-FixMode`
+had none of the three layers of defence: a third copy (`Test-EProtected` + tables) lives in the
+loader and hard-blocks there, reporting a `BLOCKED (PROTECTED)` count in the fix summary and the
+report log. `Test-GuardMirrorSync.ps1` is now a three-way comparison — and it also had a latent
+hole of its own: it never loaded the regex tables, so both sides were matching `''` (which matches
+everything) and agreeing for the wrong reason.
+
+**M2 — leaks.** `/api/events` started a runspace per connection and nothing was ever disposed, so a
+browser refresh leaked one (plus its 40 ms poll thread) for the life of the console. Handles are
+tracked and reaped. `$State.EventLog` was unbounded and replayed from index 0 to every new client;
+it is now a 6000/4000 ring with an `EventLogBase` so an SSE cursor stays an absolute index across
+trims, add+trim and the reader's slice share the `SyncRoot`, and the socket write happens outside
+the lock. A client that fell behind a trim is told how many lines it missed; the full log is on disk.
+
+**M3 — `applied` double-counted.** The remediation switch's `default` branch set `$skipped++` *and*
+`$ok = $true`, and an unknown action isn't in the `Info/None/''` exclusion list, so the trailing
+counter also fired `$applied++`. `remediation_complete` never reconciled.
+
+**M4 — STEALTH findings were second-class.** They were built without `fix_action`/`target` (so the
+GUI fell back to `inferAction()`'s text guess) and only tallied `ThreatCounts` when the engine's
+free-text `ThreatType` was non-empty. They now go through the live path's canonicalisation.
+
+**M5 — a permanent side-effect on a client's machine.** The `HttpListenerException` fallback ran
+`netsh http add urlacl` (a system-wide reservation) and ignored its own failure. It is now removed
+on exit, with the manual command printed if the delete fails.
+
+**M6 — IOC ingestion was unvalidated.** `POST /api/ioc` wrote caller strings straight into
+`custom_iocs.ioc` as `<prefix>:<value>` lines: a CR/LF injected extra IOC lines, and the engine's
+`Import-CustomIocs` classifies anything it can't recognise as a **regex**, so a "domain" could
+smuggle in a pattern. Regexes were never compiled or bounded either — a catastrophic-backtracking
+pattern hung the next scan from inside the engine. `ConvertTo-IocSet` validates per category
+(control chars refused outright, hashes/IPs/CIDR/domains checked, regexes compiled and run against
+backtracking bait under a 150 ms timeout), dedupes, length- and count-caps, and reports every
+refusal to the operator; the GUI lists them in place and re-seeds from what the server wrote.
+
+**M7 — a dead, fraction-blind `$script:PHASE_RE`** sitting next to the runspace's correct `$PREX`.
+Deleted; a wrong copy beside a right one is exactly how the `Classify`/`$SEV` shadowing bug happened.
+
+**M8 — escaping.** `escapeHtml` didn't escape `'` (safe only by accident — every sink used
+double-quoted attributes), and `finding.id`, `severity`, `phase`, `results_path`, the report card's
+`threat_type` and the MITRE href fallback were interpolated raw.
+
+**M9 — local privilege escalation via `reports\`.** That directory holds the report whose `RunCmd`
+strings run as admin, and under a user profile it inherits ACLs that let a standard user write
+there. Startup breaks inheritance and downgrades non-admin **write** rules to read-only (read is
+kept — operators open exported reports unelevated), and `/api/remediate` re-hashes the report
+against the SHA256 recorded when the engine wrote it, refusing a modified file with 409.
+
+**M10 — retention.** Per-launch logs carry hostnames, usernames, paths and every finding; the
+newest 20 of each kind are kept (`-KeepLogs`). Quarantined live malware is never auto-deleted (it
+is evidence) but its footprint is printed at startup, in yellow past 50 items or 250 MB.
+
+**M11 — the server was close to undebuggable.** `catch {}` in `Write-JsonResponse`,
+`Send-StaticFile`, `Write-DownloadResponse` and the MITRE load made a failed response, a missing
+technique map and an unreadable asset all look like success. `Write-ServerFault` names them in the
+console transcript; an ordinary mid-response client disconnect still stays quiet.
+
+**Validation.** `tools/tests/Test-M-Tier.ps1` added (82 assertions, AST-extracted like the rest);
+suite is now **235 assertions, all green**, plus 7/7 files parse-clean with BOMs intact and the
+three runspace here-strings parse-clean. The IOC validator, the event-log ring and the log pruner
+were exercised functionally, not just grepped. **Still unverified: everything needing live Windows
+— the ACL and `netsh` paths in particular have never been executed.**
+
+---
+
 ## 2026-08-18 — Security audit remediation: CRITICAL + HIGH tier (branch `security/audit-2026-08-18`)
 
 Driven by `AUDIT_2026-08-18_INDEPENDENT.md`. Ten findings closed. Full rationale is in the

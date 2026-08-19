@@ -274,11 +274,18 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   `StandardError.ReadToEndAsync()`: .NET keeps draining (so no buffer deadlock) and the text
   survives for the log.
 
-### Guard mirrors + destructive-command inspection (added 2026-08-18, audit H5/H6/H7/H7b)
-- **Three functions are duplicated between the main thread and `$script:REMEDIATE_SCRIPT` and must
-  change together:** `ConvertTo-GuardPath`/`ConvertTo-RGuardPath`,
-  `Test-DestructiveRunCmd`/`Test-RDestructiveRunCmd`, `Test-ProtectedTarget`/`Test-RProtected`.
-  `tools/tests/Test-GuardMirrorSync.ps1` fails if they diverge — run it after touching either.
+### Guard mirrors + destructive-command inspection (added 2026-08-18, audit H5/H6/H7/H7b; extended 2026-08-19, M1)
+- **The guard exists in THREE copies and they must change together:** the main thread
+  (`ConvertTo-GuardPath` / `Test-DestructiveRunCmd` / `Test-ProtectedTarget` in
+  `ZeroBreach-Server.ps1`), the remediation runspace (`…-RGuardPath` / `Test-RDestructiveRunCmd` /
+  `Test-RProtected`, inside `$script:REMEDIATE_SCRIPT`), and the **engine** (`ConvertTo-EGuardPath`
+  / `Test-EDestructiveRunCmd` / `Test-EProtected` in the loader, used by `Invoke-FixMode` — the
+  interactive CLI is the fourth executor and had no guard at all until 2026-08-19). The tables
+  `$…RUNCMD_DESTRUCTIVE`, `$…RUNCMD_MUTATING`, `$…KILL_CRITICAL_NAME_RX`, `$…KILL_CRITICAL_DESC_RX`
+  are mirrored too. `tools/tests/Test-GuardMirrorSync.ps1` compares all three on every vector and
+  fails on divergence — run it after touching any copy. **It must also LOAD every table it relies
+  on**: an unloaded regex is `$null`, `-match ''` is true, and the test then agrees for the wrong
+  reason (caught 2026-08-19).
 - **Normalise before you match.** Guards used to regex the raw `FixParam`, and
   `C:/Windows/System32/evil.exe` sailed straight through. Everything goes through
   `ConvertTo-GuardPath` first (separators, env vars, `\\?\`/GLOBALROOT prefixes, `GetFullPath`).
@@ -289,9 +296,31 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   **real remediations**. Only the sabotage direction may be matched. **Before adding a pattern,
   diff it against the engine's own RunCmd inventory** (`grep -o '-FixAction "RunCmd" -FixParam .*'
   engine/*.ps1`) or you will silently break a fix.
+- **The `RunCmd` path rules only fire on a MUTATING command** (`$script:RUNCMD_MUTATING`). A command
+  is not a path: restoring a hijacked Winlogon `Userinit` writes the value
+  `C:\Windows\system32\userinit.exe,`, and matching that mention blocked the tool's own repair on
+  every box (audit M1). Deleting/renaming/overwriting a protected path is still refused, and
+  `$RUNCMD_DESTRUCTIVE` applies unconditionally. If you add a rule, keep it verb-anchored.
 - **`KillProcess` FixParams are `pid|name|startTicks`** (built by `Get-KillParam`). Windows recycles
   PIDs and remediation runs long after the scan, so both executors re-verify identity and skip on a
-  mismatch. A bare PID (old report) is honoured but logged as unverifiable.
+  mismatch. A bare PID (old report) is honoured but logged as unverifiable. **The guard reads the
+  critical-process list against that NAME field**, not the finding's prose — "SYSTEM-level process
+  running from user path: evil.exe" is a finding about malware, and matching the word `SYSTEM` in
+  the text refused the kill every time. A bare-PID report still falls back to the description.
+- **Deleting the `Debugger`/`GlobalFlag` VALUE under Image File Execution Options is allowed** —
+  that value *is* the sticky-keys/IFEO backdoor and removing it restores stock behaviour. The IFEO
+  key itself (`DeleteRegKey`) and every other value under it stay protected.
+
+### Never ship a fix that is auto-selected and then always blocked (added 2026-08-19, audit M1)
+- A CRITICAL/HIGH finding with a destructive `FixAction` is **auto-selected** in the GUI. If its
+  target is a protected resource, the operator sees the tool's headline detection pre-ticked and
+  reported `blocked` — every time, on every machine. That teaches operators to distrust the guard,
+  which is the one thing that must never happen. **The guard is not the thing to loosen; the
+  remediation design is.** Put the exact manual command (plus an `sfc`/`DISM` restore path where
+  it applies) in the finding's **description** and use `FixAction Info`. Done for `STICKY_*`,
+  `SYS32_UNSIGNED`, `HOSTS_PURGE`, `SVCMASQ`/`SVCPATH`, `SOFTDIST_CACHE`.
+- `tools/tests/Test-M-Tier.ps1` sweeps every `Add-Finding` in the engine via the AST and **fails if
+  any CRIT/HIGH destructive fix is refused by the guard**, so the class cannot come back.
 - **`DeleteFile` deletes a FILE**: no `-Recurse`, reparse points and directories refused, and the
   guard re-run on the *resolved* path. Use `-LiteralPath` everywhere — `-Path` globs, and malware
   filenames contain `[` and `*`.
@@ -306,9 +335,35 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   Correct CSV quoting does not stop Excel evaluating a leading `= + - @ \t \r` as a formula, and
   exporting findings and mailing them to a client is this product's actual workflow.
 
+### Untrusted input, retention and side-effects (added 2026-08-19, audit M2/M5/M6/M8/M9/M10)
+- **Everything posted to `/api/ioc` is validated by `ConvertTo-IocSet` before it is written.** Line
+  breaks and control characters are **refused, never stripped** — the engine's `Import-CustomIocs`
+  treats an unclassifiable line as a **regex**, so a CRLF in a "domain" injects an arbitrary IOC.
+  Regexes must compile *and* survive backtracking bait under a 150 ms match timeout (a catastrophic
+  pattern otherwise hangs the next scan from inside the engine). Values are deduped, length-capped
+  and capped at 2000 per category, and everything refused is reported to the operator — the GUI
+  re-seeds its table from the set the server actually wrote. POST bodies over `$script:MAX_BODY_BYTES`
+  get a 413.
+- **`escapeHtml` in `app.js` escapes `& < > " '`** and every interpolation into `innerHTML` goes
+  through it — including `finding.id`, `severity`, `phase` and `results_path`. Most engine IDs are
+  sanitised, but `CTRL114_*`/`DEFTAMP114_*`/`CONTENT_*` come straight from `data/*.json`.
+- **`$State.EventLog` is a bounded ring** (`EventLogMax`/`EventLogKeep`, with `EventLogBase` so an
+  SSE cursor stays an absolute index across trims). Add+trim and the reader's slice take the same
+  `SyncRoot`; the socket write happens **outside** the lock. Clearing the log must reset
+  `EventLogBase`. Runspaces are tracked and disposed by `Clear-FinishedRunspaces` — `/api/events`
+  starts one per connection, so a browser refresh used to leak one for the life of the console.
+- **Leave nothing behind on a client machine.** The `netsh http add urlacl` fallback is removed on
+  exit; `reports\` is ACL-hardened at startup (non-admin **write** downgraded to read-only, read
+  kept so the operator can open exported reports unelevated); per-launch logs are pruned to the
+  newest 20 (`-KeepLogs`). Quarantined malware is never auto-deleted — it is evidence — but its
+  footprint is printed at startup.
+- **Remediation re-hashes the report.** The SHA256 of each report this launch produced is recorded
+  when the engine finishes writing it; `/api/remediate` refuses with 409 if the file changed. A
+  report from an earlier launch is allowed but called out in the console.
+
 ### Security regression suite
-- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 135
-  assertions covering C1/H1/H2/H5/H7/H7b/H8, the parse+BOM gate, and the embedded runspace
+- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 235
+  assertions covering C1/H1/H2/H5/H7/H7b/H8 and M1-M11, the parse+BOM gate, and the embedded runspace
   here-strings. Every test pulls the real functions out of the shipped source **via the AST**, so a
   test cannot drift from the code it guards. **`ParseFile` on `ZeroBreach-Server.ps1` does NOT
   validate the runspace here-strings** (`$script:SCAN_SCRIPT`, `SSE_SCRIPT`, `REMEDIATE_SCRIPT`) —

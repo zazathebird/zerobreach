@@ -1,4 +1,58 @@
-# RESUME HANDOFF — updated 2026-08-18 (session 11: security audit remediation, CRITICAL + HIGH)
+# RESUME HANDOFF — updated 2026-08-19 (session 12: security audit remediation, MEDIUM tier)
+
+> ## ▶ START HERE after /clear — SESSION 12 (2026-08-19)
+> **Still on branch `security/audit-2026-08-18` (from `main` @ `22e582a`). Nothing is pushed;
+> `main` is untouched.** Sessions 11 + 12 together close **every CRITICAL, HIGH and MEDIUM
+> finding** in `AUDIT_2026-08-18_INDEPENDENT.md`, plus the fourth-executor gap that session 11
+> noted.
+>
+> **Session 12 commits (newest first):**
+> - `6bd7410` M5/M9/M10/M11 — temporary URL ACL, `reports\` lockdown + report re-hash, log
+>   retention + quarantine footprint, failures no longer swallowed
+> - `21e6ce5` M1 — six always-blocked fixes moved to `Info`; two guard rules made precise; the
+>   engine's interactive fix mode finally gets the guard (third mirror)
+> - `66eb11b` M6/M8 — IOC ingestion validation (injection + catastrophic regex), GUI escaping
+> - `a62e132` M2/M3/M4/M7 — bounded event log + runspace reaping, counter fix, STEALTH parity,
+>   dead phase regex deleted
+>
+> **Verification status — same honest limits as session 11.** Everything was validated on **Linux
+> with pwsh 7.4.6** (installed into the scratchpad; not in the repo):
+> - `tools/tests/Run-SecurityTests.ps1` — **235 assertions, all green** (was 135). New file:
+>   `tools/tests/Test-M-Tier.ps1` (82 assertions). `Test-GuardMirrorSync.ps1` now compares
+>   **three** guard copies on 35 vectors.
+> - 7/7 files parse clean with BOMs intact; all three embedded runspace here-strings parse clean;
+>   `node --check` clean on `app.js`.
+> - Exercised functionally, not just grepped: the IOC validator (injection / backtracking / caps),
+>   the event-log ring + SSE cursor (no gaps, no dupes, dropped+delivered == produced), the log
+>   retention pruner, and the guard behaviour table (23 allow/block vectors).
+> - **NOT verified: anything requiring live Windows.** No HttpListener started, no scan run, no
+>   remediation executed. The **ACL hardening (`Get-Acl`/`Set-Acl`) and the `netsh http` paths added
+>   this session have never been executed at all** — they are Windows-only. PS 7 parse-clean is not
+>   PS 5.1 parse-clean. **The next session's first job is still a live Windows run.**
+>
+> **What to check first on Windows** — everything in the session-11 list below, plus:
+> 1. Startup now prints: any `reports\` ACL downgrade, a retention line if old logs were pruned,
+>    and the quarantine vault footprint. Confirm none of them error, and that you can still open an
+>    exported HTML report from `reports\` in a **non-elevated** Explorer (read access is meant to
+>    survive the lockdown). `-NoHardenReports` skips the ACL step; `-KeepLogs 0` keeps every log.
+> 2. Remediate a report, then edit that report on disk and try again — the second attempt must be
+>    refused with "report modified since the scan produced it" (409).
+> 3. IOC Manager: paste a value containing a newline and one containing `(a+)+$`. Both must be
+>    refused, listed under the table, and absent from `reports\custom_iocs.ioc`.
+> 4. Confirm the M1 findings now read as **INFO with a command in the description** (sticky keys,
+>    tampered System32 binary, hosts purge, svchost masquerade) — and that a Winlogon `Userinit`
+>    hijack repair is now *actionable* instead of reporting `blocked`.
+> 5. Interactive `Invoke-FixMode` (run the engine directly, not via the GUI): a protected target
+>    must print `BLOCKED: PROTECTED RESOURCE (...)` and appear in the `Blocked(protected)` count.
+>
+> **Still open:** §5 detection-quality work, the GUI pass, and the live Windows run.
+>
+> ---
+>
+<details>
+<summary>Session 11 handoff (2026-08-18) and older</summary>
+
+# (session 11) RESUME HANDOFF — updated 2026-08-18 (security audit remediation, CRITICAL + HIGH)
 
 > ## ▶ START HERE after /clear — SESSION 11 (2026-08-18)
 > **Working on branch `security/audit-2026-08-18` (branched from `main` @ `22e582a`). Nothing is
@@ -535,5 +589,7 @@ node tools/check-visuals.mjs   # FX audit, expect PASS 13/13 (kill stray zb-vfx-
 
 Newest engine report analyzed: `reports/KrakenBaseline_20260623_135347.json`.
 Test tripwires (still on the machine, named `ZeroBreach_TEST_DELETEME`): recreate/cleanup in CLAUDE.md.
+
+</details>
 
 </details>
