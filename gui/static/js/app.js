@@ -1040,7 +1040,7 @@ function onScanComplete(data) {
     <div class="complete-stat"><span class="complete-stat-num">${data.findings_count}</span><span class="complete-stat-label">TOTAL FINDINGS</span></div>
     <div class="complete-stat"><span class="complete-stat-num" style="color:var(--threat-high)">${total}</span><span class="complete-stat-label">THREAT DETECTIONS</span></div>
     <div class="complete-stat"><span class="complete-stat-num" style="color:var(--threat-clean)">${formatTime(data.elapsed)}</span><span class="complete-stat-label">SCAN DURATION</span></div>
-    <div style="margin-top:8px;font-size:10px;color:var(--text-dim)">Results saved: ${data.results_path || 'N/A'}</div>
+    <div style="margin-top:8px;font-size:10px;color:var(--text-dim)">Results saved: ${escapeHtml(data.results_path || 'N/A')}</div>
   `;
   $('modal-complete').classList.remove('hidden');
   ZBSound.play('open');
@@ -1215,13 +1215,13 @@ function renderFindingsTree() {
       if (finding.protected) item.classList.add('protected');
       if (finding.vendor_trusted) item.classList.add('vendor-trusted');
       item.innerHTML = `
-        <input type="checkbox" data-id="${finding.id}" ${autoCheck ? 'checked' : ''} ${finding.protected ? 'disabled' : ''}>
-        <span class="item-sev ${finding.severity}"></span>
+        <input type="checkbox" data-id="${escapeHtml(finding.id)}" ${autoCheck ? 'checked' : ''} ${finding.protected ? 'disabled' : ''}>
+        <span class="item-sev ${escapeHtml(finding.severity)}"></span>
         <span class="item-text">${escapeHtml(shortText)}</span>
         ${protectedBadge(finding)}
         ${vendorBadge(finding)}
         ${mitreBadge(finding)}
-        <span class="item-phase">PH${finding.phase}</span>
+        <span class="item-phase">PH${escapeHtml(finding.phase)}</span>
       `;
 
       if (firstPass && autoEligible) STATE.selectedFindings.add(finding.id);
@@ -1335,7 +1335,7 @@ function renderFindingsTreeMini(findings) {
     const item = document.createElement('div');
     item.className = 'tree-item';
     const dot  = { CRITICAL: '🔴', HIGH: '🟠', POSSIBLE: '🟡' }[f.severity] || '⚪';
-    item.innerHTML = `<span class="item-sev ${f.severity}"></span><span class="item-text">${dot} ${escapeHtml((f.line || '').substring(0, 100))}</span>`;
+    item.innerHTML = `<span class="item-sev ${escapeHtml(f.severity)}"></span><span class="item-text">${dot} ${escapeHtml((f.line || '').substring(0, 100))}</span>`;
     container.appendChild(item);
   });
 }
@@ -1345,7 +1345,7 @@ function mitreBadge(finding) {
   const m = finding.mitre;
   if (!m || !m.id) return '';
   const title = escapeHtml(`${m.id} — ${m.name || ''}${m.tactic ? ' · ' + m.tactic : ''}`);
-  const href  = m.url ? escapeHtml(m.url) : `https://attack.mitre.org/techniques/${m.id.replace('.', '/')}/`;
+  const href  = m.url ? escapeHtml(m.url) : `https://attack.mitre.org/techniques/${escapeHtml(String(m.id).replace('.', '/'))}/`;
   return `<a class="item-mitre" href="${href}" target="_blank" rel="noopener" title="${title}">${escapeHtml(m.id)}</a>`;
 }
 
@@ -1548,6 +1548,25 @@ function importIocFile(e) {
   e.target.value = '';
 }
 
+// Refused indicators are shown in the manager itself, not just a toast — an MSP
+// pasting a client's IOC list needs to see WHICH lines the console would not take.
+function renderIocRejects(list, total) {
+  let box = $('ioc-rejects');
+  if (!box) {
+    const anchor = $('ioc-tbody') && $('ioc-tbody').closest('table');
+    if (!anchor || !anchor.parentNode) return;
+    box = document.createElement('div');
+    box.id = 'ioc-rejects';
+    box.className = 'ioc-rejects';
+    anchor.parentNode.insertBefore(box, anchor.nextSibling);
+  }
+  if (!list.length) { box.style.display = 'none'; box.textContent = ''; return; }
+  box.style.display = 'block';
+  box.innerHTML = `<div class="ioc-rejects-hd">⚠ ${total} INDICATOR(S) REFUSED — NOT SAVED</div>` +
+    list.map(r => `<div class="ioc-rejects-row">${escapeHtml(String(r))}</div>`).join('') +
+    (total > list.length ? `<div class="ioc-rejects-row">…and ${total - list.length} more (see console)</div>` : '');
+}
+
 function saveIoc() {
   if (!STATE.ioc) STATE.ioc = emptyIoc();
   const payload = {};
@@ -1559,10 +1578,22 @@ function saveIoc() {
       if (res.error) throw new Error(res.error);
       STATE.ioc._path = res.path;
       STATE.ioc._custom = true;
+      // The server validates every indicator (audit M6) and answers with the set it
+      // actually wrote. Re-seed from that, so the table never shows an entry the
+      // next scan will not receive.
+      if (res.accepted) IOC_CATS.forEach(c => { STATE.ioc[c] = Array.isArray(res.accepted[c]) ? res.accepted[c] : []; });
       if ($('ioc-path')) $('ioc-path').value = res.path;   // scans now pass this via -IocFile
       renderIocTable();
-      showToast(`Saved ${res.count} IOCs → scans will use this file`);
-      ZBSound.play('complete');
+      if (res.rejected > 0) {
+        showToast(`Saved ${res.count} IOCs — ${res.rejected} refused`);
+        console.warn('[ZeroBreach] IOC entries refused:\n  ' + (res.rejected_detail || []).join('\n  '));
+        renderIocRejects(res.rejected_detail || [], res.rejected);
+        ZBSound.play('alert');
+      } else {
+        renderIocRejects([], 0);
+        showToast(`Saved ${res.count} IOCs → scans will use this file`);
+        ZBSound.play('complete');
+      }
     })
     .catch(e => { showToast(`IOC save failed: ${e.message}`); ZBSound.play('alert'); })
     .finally(() => { $('btn-ioc-save').disabled = false; });
@@ -1583,7 +1614,7 @@ function buildReport() {
   STATE.findings.filter(f => f.severity === 'CRITICAL').slice(0, 6).forEach(f => {
     const card = document.createElement('div');
     card.className = 'report-card critical';
-    card.innerHTML = `<div class="card-sev" style="color:var(--threat-critical)">🔴 CRITICAL — ${f.threat_type || 'Unknown'} ${mitreBadge(f)}</div><div class="card-text">${escapeHtml((f.line || '').substring(0, 100))}</div>`;
+    card.innerHTML = `<div class="card-sev" style="color:var(--threat-critical)">🔴 CRITICAL — ${escapeHtml(f.threat_type || 'Unknown')} ${mitreBadge(f)}</div><div class="card-text">${escapeHtml((f.line || '').substring(0, 100))}</div>`;
     cardsEl.appendChild(card);
   });
   if (!STATE.findings.some(f => f.severity === 'CRITICAL')) {
@@ -1733,10 +1764,14 @@ function startVitalsPoller() {
 // (legacy particle background removed — superseded by the ZBFX layer in fx.js)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+// Audit M8: `'` was missing. Every sink today uses double-quoted attributes, so it
+// was safe by accident — the first single-quoted attribute anyone added would have
+// been an injection point. Escape both quote characters and stop relying on that.
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 // Transient bottom-right notification.

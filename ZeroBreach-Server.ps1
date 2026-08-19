@@ -607,6 +607,113 @@ function ConvertTo-Flag {
     return ("$v" -match '^(?i)(true|1|yes)$')
 }
 
+# ── IOC ingestion validation (audit M6) ────────────────────────────────────────
+# POST /api/ioc used to write caller strings straight into custom_iocs.ioc as
+# "<prefix>:<value>" lines. Two holes: (1) a value containing CR/LF injected extra
+# IOC lines, and the engine's Import-CustomIocs treats any unprefixed line it can't
+# classify as a REGEX — so a "domain" could smuggle in a pattern; (2) regex entries
+# were never compiled or bounded, so a catastrophic-backtracking pattern hung the
+# NEXT scan from inside the engine. Everything is validated per category here, and
+# whatever is rejected is reported back to the operator rather than silently dropped.
+$script:MAX_BODY_BYTES  = 4MB
+$script:IOC_MAX_PER_CAT = 2000
+$script:IOC_MAX_LEN     = 512
+$script:IOC_MAX_REGEX   = 200
+
+function Test-IocRegexSafe {
+    # Returns '' when the pattern is safe, else the reason it was refused.
+    param([string]$Pattern)
+    $rx = $null
+    try {
+        $rx = New-Object System.Text.RegularExpressions.Regex(
+                  $Pattern,
+                  [System.Text.RegularExpressions.RegexOptions]::IgnoreCase,
+                  [timespan]::FromMilliseconds(150))
+    } catch { return 'not a valid regular expression' }
+    # Bait strings shaped to detonate nested quantifiers. The match timeout is what
+    # actually catches it — a pattern that can't finish 150 ms against these will
+    # not finish against a real filesystem walk either.
+    $bait = @(
+        ('a' * 96) + '!'
+        ('ab' * 48) + '!'
+        'C:\Users\operator\AppData\Local\Temp\' + ('x' * 64) + '.exe'
+        ('0123456789' * 12) + ' '
+    )
+    foreach ($b in $bait) {
+        try { [void]$rx.IsMatch($b) }
+        catch [System.Text.RegularExpressions.RegexMatchTimeoutException] {
+            return 'too slow (catastrophic backtracking) — it would hang the next scan'
+        }
+        catch { return 'failed to evaluate' }
+    }
+    return ''
+}
+
+function Test-IocIpValue {
+    param([string]$V)
+    $addr = $V; $bits = $null
+    if ($V.Contains('/')) {
+        $parts = $V -split '/', 2
+        $addr = $parts[0]; $bits = $parts[1]
+    }
+    $ip = [System.Net.IPAddress]::Any
+    if (-not [System.Net.IPAddress]::TryParse($addr, [ref]$ip)) { return $false }
+    if ($null -ne $bits) {
+        $n = 0
+        if (-not [int]::TryParse($bits, [ref]$n)) { return $false }
+        $max = if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) { 128 } else { 32 }
+        if ($n -lt 0 -or $n -gt $max) { return $false }
+    }
+    return $true
+}
+
+function ConvertTo-IocSet {
+    # Validate + normalise a posted IOC set. Returns @{ Set = <ordered categories>;
+    # Rejected = <list of "value — reason"> }.
+    param($Parsed)
+    $rejected = [System.Collections.Generic.List[string]]::new()
+    $set = [ordered]@{
+        hashes = [System.Collections.Generic.List[string]]::new()
+        ips     = [System.Collections.Generic.List[string]]::new()
+        domains = [System.Collections.Generic.List[string]]::new()
+        regex   = [System.Collections.Generic.List[string]]::new()
+        files   = [System.Collections.Generic.List[string]]::new()
+    }
+    foreach ($cat in @('hashes','ips','domains','regex','files')) {
+        $seen = @{}
+        foreach ($raw in @($Parsed.$cat)) {
+            if ($null -eq $raw) { continue }
+            $v = "$raw"
+            if ($set[$cat].Count -ge $script:IOC_MAX_PER_CAT) {
+                $rejected.Add("$cat — more than $script:IOC_MAX_PER_CAT entries; the rest were dropped")
+                break
+            }
+            # Line breaks and control characters are the injection vector — refuse the
+            # whole value rather than stripping, so nothing is silently rewritten.
+            if ($v -match '[\x00-\x1F\x7F]') { $rejected.Add("$($v -replace '[\x00-\x1F\x7F]','?') — contains a line break or control character"); continue }
+            $v = $v.Trim()
+            if (-not $v) { continue }
+            $cap = if ($cat -eq 'regex') { $script:IOC_MAX_REGEX } else { $script:IOC_MAX_LEN }
+            if ($v.Length -gt $cap) { $rejected.Add("$($v.Substring(0,40))… — longer than $cap characters"); continue }
+
+            $why = ''
+            switch ($cat) {
+                'hashes'  { if ($v -notmatch '^[a-fA-F0-9]{32}$|^[a-fA-F0-9]{40}$|^[a-fA-F0-9]{64}$') { $why = 'not an MD5/SHA1/SHA256 hash' } else { $v = $v.ToLower() } }
+                'ips'     { if (-not (Test-IocIpValue $v)) { $why = 'not an IP address or CIDR range' } }
+                'domains' { if ($v -notmatch '^(?=.{1,253}$)([a-zA-Z0-9_](?:[a-zA-Z0-9_\-]{0,61}[a-zA-Z0-9_])?\.)+[a-zA-Z]{2,63}$') { $why = 'not a domain name' } else { $v = $v.ToLower() } }
+                'regex'   { $why = Test-IocRegexSafe $v }
+                'files'   { if ($v.Length -gt 260) { $why = 'longer than a Windows path' } }
+            }
+            if ($why) { $rejected.Add("$v — $why"); continue }
+            $key = $v.ToLower()
+            if ($seen.ContainsKey($key)) { continue }
+            $seen[$key] = $true
+            $set[$cat].Add($v)
+        }
+    }
+    return @{ Set = $set; Rejected = $rejected }
+}
+
 function Write-Utf8Json {
     # UTF-8 WITHOUT BOM — raw ConvertFrom-Json readers and the engine's file
     # parsers choke on a BOM'd data file (Set-Content -Encoding UTF8 adds one on 5.1).
@@ -1647,6 +1754,14 @@ function Handle-Request {
         return
     }
 
+    # Body size ceiling (audit M6). Every POST body is read into a string and parsed;
+    # the largest legitimate one is an IOC set or a scan profile. Refuse before
+    # reading so a bad or hostile caller can't make the console allocate at will.
+    if ($method -eq 'POST' -and $req.ContentLength64 -gt $script:MAX_BODY_BYTES) {
+        Write-JsonResponse $Ctx '{"error":"payload too large"}' 413
+        return
+    }
+
     switch -Regex ($path) {
 
         '^/$' {
@@ -1753,12 +1868,13 @@ function Handle-Request {
             if ($method -eq 'POST') {
                 $parsed = Read-JsonBody $Ctx
                 if (-not $parsed) { Write-JsonResponse $Ctx '{"error":"invalid JSON"}' 400; return }
+                # audit M6 — nothing reaches custom_iocs.ioc unvalidated.
+                $vetted   = ConvertTo-IocSet $parsed
+                $rejected = @($vetted.Rejected)
                 $cats = @{
-                    hashes  = @($parsed.hashes)  | Where-Object { $_ }
-                    ips     = @($parsed.ips)     | Where-Object { $_ }
-                    domains = @($parsed.domains) | Where-Object { $_ }
-                    regex   = @($parsed.regex)   | Where-Object { $_ }
-                    files   = @($parsed.files)   | Where-Object { $_ }
+                    hashes  = @($vetted.Set.hashes);  ips   = @($vetted.Set.ips)
+                    domains = @($vetted.Set.domains); regex = @($vetted.Set.regex)
+                    files   = @($vetted.Set.files)
                 }
                 try {
                     # JSON sidecar (UI reload)
@@ -1781,7 +1897,15 @@ function Handle-Request {
                     [System.IO.File]::WriteAllText($iocText, ($lines -join "`r`n"), $u8)
 
                     $count = $cats.hashes.Count + $cats.ips.Count + $cats.domains.Count + $cats.regex.Count + $cats.files.Count
-                    Write-JsonResponse $Ctx (@{ status='saved'; path=$iocText; json_path=$iocJson; count=$count } | ConvertTo-Json -Compress)
+                    Write-JsonResponse $Ctx (@{
+                        status = 'saved'; path = $iocText; json_path = $iocJson; count = $count
+                        rejected = $rejected.Count
+                        rejected_detail = @($rejected | Select-Object -First 20)
+                        accepted = @{
+                            hashes = @($cats.hashes); ips = @($cats.ips); domains = @($cats.domains)
+                            regex  = @($cats.regex);  files = @($cats.files)
+                        }
+                    } | ConvertTo-Json -Compress -Depth 4)
                 } catch {
                     Write-JsonResponse $Ctx (@{ error="$($_.Exception.Message)" } | ConvertTo-Json -Compress) 500
                 }
