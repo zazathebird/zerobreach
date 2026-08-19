@@ -486,6 +486,16 @@ $script:RUNCMD_DESTRUCTIVE = @(
     @{ rx = '(?i)(Remove-Item|rd|rmdir|del)\b[^\n]*[a-z]:\\Windows\\?\s*["'']?\s*(-recurse|\/s)'; why = 'recursive delete of the Windows directory' }
 )
 
+# A RunCmd FixParam is a COMMAND, and the path rules in the protected-target guard
+# match a path MENTIONED anywhere in a string. Those two facts together blocked the
+# engine's own repairs: restoring a hijacked Winlogon Userinit writes the value
+# 'C:\Windows\system32\userinit.exe,', so the guard saw "\system32\", called it a
+# Windows-system-directory write, and refused — every time, on every box (audit M1,
+# same class as STICKY_*). The path rules are therefore applied to a RunCmd only when
+# the command carries a verb that can actually mutate what it names. Everything in
+# $RUNCMD_DESTRUCTIVE above still applies unconditionally.
+$script:RUNCMD_MUTATING = '(?i)(Remove-Item|Remove-ItemProperty|Rename-Item|Move-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|Copy-Item|Set-Acl|Invoke-Expression|\biex\b|Start-Process|\bicacls\b|\btakeown\b|\battrib\b|\bcacls\b|\b(del|erase|rd|rmdir|move|ren|rename|copy|xcopy|robocopy)\s|\breg(\.exe)?\s+(delete|add)\b|\bcmd(\.exe)?\b|\bpowershell(\.exe)?\b|\bpwsh(\.exe)?\b|>)'
+
 function Test-DestructiveRunCmd {
     param([string]$Cmd)
     if ([string]::IsNullOrWhiteSpace($Cmd)) { return '' }
@@ -494,6 +504,11 @@ function Test-DestructiveRunCmd {
     }
     return ''
 }
+
+# KillProcess guard lists. The name form is matched against the FixParam's name field
+# (whole-string, optional .exe); the description form is the bare-PID fallback.
+$script:KILL_CRITICAL_NAME_RX = '(?i)^(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)(\.exe)?$|(?i)(claude|zerobreach)'
+$script:KILL_CRITICAL_DESC_RX = '(?i)(\b(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)\b|claude|zerobreach)'
 
 function Test-ProtectedTarget {
     param([string]$Action, [string]$Param, [string]$Target, [string]$Desc)
@@ -505,6 +520,10 @@ function Test-ProtectedTarget {
     if ($Action -eq 'RunCmd') {
         $bad = Test-DestructiveRunCmd "$Param"
         if ($bad) { return "destructive command — $bad" }
+        # A command that only NAMES a protected path (e.g. writing the correct
+        # userinit.exe value back into Winlogon) is not a write to it — see the
+        # $script:RUNCMD_MUTATING comment. No mutating verb, no path check.
+        if ("$Param" -notmatch $script:RUNCMD_MUTATING) { return '' }
     }
 
     # Certificate trust store — deleting root/CA certs breaks TLS / Windows Update / code-signing.
@@ -527,13 +546,31 @@ function Test-ProtectedTarget {
     }
     # SafeBoot registry — deleting it breaks Safe Mode boot.
     if ($p -match '(?i)\\SafeBoot') { return 'SafeBoot registry (deleting breaks Safe Mode)' }
-    # Core OS registry hives.
+    # Core OS registry hives. One exception (audit M1): a Debugger or GlobalFlag
+    # VALUE under Image File Execution Options *is* the sticky-keys/IFEO backdoor,
+    # and deleting that value restores stock behaviour — it is the fix, not damage.
+    # The KEY itself stays protected (DeleteRegKey), as does every other value.
     if ($Action -match '(?i)DeleteReg' -and $p -match '(?i)\\(SYSTEM\\CurrentControlSet\\(Services|Control)|Microsoft\\Windows NT\\CurrentVersion\\(Winlogon|Image File Execution Options|SystemRestore)|Cryptography)') {
-        return 'core OS registry'
+        $ifeoValueFix = ($Action -eq 'DeleteReg' -and
+                         $p -match '(?i)\\Image File Execution Options\\' -and
+                         $p -match '(?i)\|\s*(Debugger|GlobalFlag)\s*$')
+        if (-not $ifeoValueFix) { return 'core OS registry' }
     }
-    # Critical processes / the IR tool itself (KillProcess). FixParam is a PID, so match the name in the description.
-    if ($Action -eq 'KillProcess' -and $d -match '(?i)(\b(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)\b|claude|zerobreach)') {
-        return 'critical system process or the IR tool itself'
+    # Critical processes / the IR tool itself (KillProcess). Since H5 the FixParam is
+    # "pid|name|startTicks" (Get-KillParam), so the authoritative process NAME is right
+    # there — use it, and fall back to the description only for a bare-PID (older)
+    # report. Matching the prose was blocking real kills: "SYSTEM-level process running
+    # from user path: evil.exe" is a finding ABOUT malware, not about the System
+    # process, and it was refused every time (audit M1).
+    if ($Action -eq 'KillProcess') {
+        $kpName = ''
+        $kpParts = "$Param" -split '\|'
+        if ($kpParts.Count -ge 2) { $kpName = "$($kpParts[1])".Trim() }
+        if ($kpName) {
+            if ($kpName -match $script:KILL_CRITICAL_NAME_RX) { return 'critical system process or the IR tool itself' }
+        } elseif ($d -match $script:KILL_CRITICAL_DESC_RX) {
+            return 'critical system process or the IR tool itself'
+        }
     }
     return ''
 }
@@ -1488,6 +1525,16 @@ $RUNCMD_DESTRUCTIVE_R = @(
     @{ rx = '(?i)(Remove-Item|rd|rmdir|del)\b[^\n]*[a-z]:\\Windows\\?\s*["'']?\s*(-recurse|\/s)'; why = 'recursive delete of the Windows directory' }
 )
 
+# A RunCmd FixParam is a COMMAND, and the path rules in the protected-target guard
+# match a path MENTIONED anywhere in a string. Those two facts together blocked the
+# engine's own repairs: restoring a hijacked Winlogon Userinit writes the value
+# 'C:\Windows\system32\userinit.exe,', so the guard saw "\system32\", called it a
+# Windows-system-directory write, and refused — every time, on every box (audit M1,
+# same class as STICKY_*). The path rules are therefore applied to a RunCmd only when
+# the command carries a verb that can actually mutate what it names. Everything in
+# $RUNCMD_DESTRUCTIVE_R above still applies unconditionally.
+$RUNCMD_MUTATING_R = '(?i)(Remove-Item|Remove-ItemProperty|Rename-Item|Move-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|Copy-Item|Set-Acl|Invoke-Expression|\biex\b|Start-Process|\bicacls\b|\btakeown\b|\battrib\b|\bcacls\b|\b(del|erase|rd|rmdir|move|ren|rename|copy|xcopy|robocopy)\s|\breg(\.exe)?\s+(delete|add)\b|\bcmd(\.exe)?\b|\bpowershell(\.exe)?\b|\bpwsh(\.exe)?\b|>)'
+
 function Test-RDestructiveRunCmd {
     param([string]$Cmd)
     if ([string]::IsNullOrWhiteSpace($Cmd)) { return '' }
@@ -1497,20 +1544,32 @@ function Test-RDestructiveRunCmd {
     return ''
 }
 
+$KILL_CRITICAL_NAME_RX_R = '(?i)^(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)(\.exe)?$|(?i)(claude|zerobreach)'
+$KILL_CRITICAL_DESC_RX_R = '(?i)(\b(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)\b|claude|zerobreach)'
+
 function Test-RProtected {
     param([string]$Action, [string]$Param, [string]$Target, [string]$Desc)
     $p = ConvertTo-RGuardPath "$Param"; $t = "$Target"; $d = "$Desc"; $hay = "$p`n$t`n$d"
     if ($Action -eq 'RunCmd') {
         $badCmd = Test-RDestructiveRunCmd "$Param"
         if ($badCmd) { return "destructive command — $badCmd" }
+        if ("$Param" -notmatch $RUNCMD_MUTATING_R) { return '' }
     }
     if ($p -match '(?i)Cert:\\' -or $hay -match '(?i)(root\s+ca|trusted\s+root|certificate\s+(store|authority))') { return 'certificate trust store' }
     if ($p -match '(?i)^[a-z]:\\windows\\' -or $p -match '(?i)\\(System32|SysWOW64|WinSxS)\\') { return 'Windows system directory' }
     if ($p -match '(?i)\\(desktop\.ini|iconcache\.db|thumbs\.db|ntuser\.dat|usrclass\.dat)' -or $p -match '(?i)\.library-ms$') { return 'Windows shell/system file' }
     if ($p -match '(?i)\\Users\\[^\\]+\\\.[^\\]+$' -or $p -match '(?i)\\\.(ssh|gnupg|aws|azure|kube|docker|config)\\' -or $p -match '(?i)\\\.(bashrc|bash_profile|bash_history|profile|zshrc|gitconfig|npmrc|claude\.json)($|[^a-z])' -or $p -match '(?i)\\\.claude\\') { return 'user shell/git/ssh/cloud config (dotfile)' }
     if ($p -match '(?i)\\SafeBoot') { return 'SafeBoot registry (breaks Safe Mode)' }
-    if ($Action -match '(?i)DeleteReg' -and $p -match '(?i)\\(SYSTEM\\CurrentControlSet\\(Services|Control)|Microsoft\\Windows NT\\CurrentVersion\\(Winlogon|Image File Execution Options|SystemRestore)|Cryptography)') { return 'core OS registry' }
-    if ($Action -eq 'KillProcess' -and $d -match '(?i)(\b(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)\b|claude|zerobreach)') { return 'critical system process or the IR tool itself' }
+    if ($Action -match '(?i)DeleteReg' -and $p -match '(?i)\\(SYSTEM\\CurrentControlSet\\(Services|Control)|Microsoft\\Windows NT\\CurrentVersion\\(Winlogon|Image File Execution Options|SystemRestore)|Cryptography)') {
+        $ifeoValueFix = ($Action -eq 'DeleteReg' -and $p -match '(?i)\\Image File Execution Options\\' -and $p -match '(?i)\|\s*(Debugger|GlobalFlag)\s*$')
+        if (-not $ifeoValueFix) { return 'core OS registry' }
+    }
+    if ($Action -eq 'KillProcess') {
+        $kpName = ''; $kpParts = "$Param" -split '\|'
+        if ($kpParts.Count -ge 2) { $kpName = "$($kpParts[1])".Trim() }
+        if ($kpName) { if ($kpName -match $KILL_CRITICAL_NAME_RX_R) { return 'critical system process or the IR tool itself' } }
+        elseif ($d -match $KILL_CRITICAL_DESC_RX_R) { return 'critical system process or the IR tool itself' }
+    }
     return ''
 }
 

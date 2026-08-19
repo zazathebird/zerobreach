@@ -467,17 +467,28 @@ if ($PhasePlan.Advanced) {
         $par = $allW | Where-Object { $_.ProcessId -eq $sp.ParentProcessId }
         if ($par -and $par.Name -ne "services.exe") {
             Out-ThreatBanner "SVCHOST PARENT MASQUERADE" "PID:$($sp.ProcessId) parent=$($par.Name)"
+            # audit M1: a KillProcess on something *named* svchost is refused by the
+            # protected-target guard by design — killing the real svchost can bugcheck
+            # the box — so shipping this as CRITICAL + KillProcess meant it was
+            # auto-selected and then blocked every time. Verified by hand instead.
             Add-Finding -ID "SVCMASQ_$($sp.ProcessId)" -Phase "PHASE 102" -ThreatType "Process Masquerade" `
-                -Severity $SEV_CRITICAL -Description "svchost.exe PID:$($sp.ProcessId) parent is '$($par.Name)' (expected: services.exe)" `
-                -Target "PID:$($sp.ProcessId)" -FixAction "KillProcess" -FixParam (Get-KillParam $sp.ProcessId) `
+                -Severity $SEV_CRITICAL -Description ("svchost.exe PID:$($sp.ProcessId) parent is '$($par.Name)' (expected: services.exe). " +
+                    "Never auto-killed — a wrong svchost kill can bugcheck the machine. Verify, then act by hand: " +
+                    "Get-CimInstance Win32_Process -Filter 'ProcessId=$($sp.ProcessId)' | Select-Object Name,ExecutablePath,CommandLine,ParentProcessId; " +
+                    "Stop-Process -Id $($sp.ProcessId) -Force") `
+                -Target "PID:$($sp.ProcessId)" -FixAction "Info" `
                 -Group "Process Masquerade"
             $svcHits++; $global:RootkitHits++
         }
         if ($sp.ExecutablePath -and $sp.ExecutablePath -notmatch "^C:\\Windows\\(System32|SysWOW64)\\svchost\.exe$") {
             Out-ThreatBanner "SVCHOST ANOMALOUS PATH" $sp.ExecutablePath
+            # audit M1 — same shape as SVCMASQ above.
             Add-Finding -ID "SVCPATH_$($sp.ProcessId)" -Phase "PHASE 102" -ThreatType "Process Masquerade" `
-                -Severity $SEV_CRITICAL -Description "svchost.exe running from anomalous path: $($sp.ExecutablePath)" `
-                -Target "PID:$($sp.ProcessId)" -FixAction "KillProcess" -FixParam (Get-KillParam $sp.ProcessId) `
+                -Severity $SEV_CRITICAL -Description ("svchost.exe running from anomalous path: $($sp.ExecutablePath). " +
+                    "Never auto-killed — verify, then act by hand: " +
+                    "Get-CimInstance Win32_Process -Filter 'ProcessId=$($sp.ProcessId)' | Select-Object Name,ExecutablePath,CommandLine,ParentProcessId; " +
+                    "Stop-Process -Id $($sp.ProcessId) -Force") `
+                -Target "PID:$($sp.ProcessId)" -FixAction "Info" `
                 -Group "Process Masquerade"
             $svcHits++
         }

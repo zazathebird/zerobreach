@@ -1160,6 +1160,136 @@ function ConvertTo-CsvSafeCell {
     if ($v -match '^[=+\-@\t\r\n]') { $v = "'" + $v }
     return '"' + ($v -replace '"','""') + '"'
 }
+# ══════════════════════════════════════════════════════════════════════════════
+#  SYSTEM-DAMAGE GUARD — THIRD COPY (audit, 2026-08-19)
+#  Invoke-FixMode is the FOURTH executor in this product and until now it had none
+#  of the three layers of defence the server path has: the server tags protected
+#  findings, the GUI refuses to tick them, and the remediation runspace refuses to
+#  run them. An operator driving the engine's own interactive fix mode on a client
+#  machine had no such backstop at all. These are mirrors of ConvertTo-GuardPath /
+#  Test-DestructiveRunCmd / Test-ProtectedTarget in ZeroBreach-Server.ps1 — the three
+#  copies MUST stay in sync, and tools/tests/Test-GuardMirrorSync.ps1 fails if they
+#  diverge on any vector. Read the server's copies for the reasoning behind each rule.
+# ══════════════════════════════════════════════════════════════════════════════
+$global:RUNCMD_DESTRUCTIVE_E = @(
+    @{ rx = '(?i)vssadmin[^\n]*\bdelete\b[^\n]*\bshadow';               why = 'deletes volume shadow copies (destroys rollback + ransomware recovery)' }
+    @{ rx = '(?i)(wmic[^\n]*shadowcopy[^\n]*delete|Win32_ShadowCopy[^\n]*(Delete|Remove))'; why = 'deletes volume shadow copies via WMI' }
+    @{ rx = '(?i)\bwbadmin\b[^\n]*\bdelete\b';                          why = 'deletes the Windows backup catalog' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*\bsafeboot\b';                        why = 'alters Safe Mode boot configuration' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*recoveryenabled[^\n]*\bno\b';         why = 'disables Windows recovery' }
+    @{ rx = '(?i)\bbcdedit\b[^\n]*bootstatuspolicy[^\n]*ignoreallfailures'; why = 'suppresses boot failure recovery' }
+    @{ rx = '(?i)Set-MpPreference[^\n]*-Disable\w*[^\n]*\$?true';       why = 'disables Microsoft Defender protection' }
+    @{ rx = '(?i)Add-MpPreference[^\n]*-Exclusion';                     why = 'adds a Defender exclusion (evasion, not remediation)' }
+    @{ rx = '(?i)(Stop-Service|sc(\.exe)?\s+(stop|delete)|net\s+stop)[^\n]*\b(WinDefend|Sense|WdNisSvc|SecurityHealthService)\b'; why = 'stops or deletes a Defender service' }
+    @{ rx = '(?i)\bcipher\b[^\n]*\/w';                                  why = 'securely wipes free space (anti-forensic, irreversible)' }
+    @{ rx = '(?i)\b(format|diskpart)\b[^\n]*(\/(fs|q|y)\b|clean)';      why = 'formats or wipes a disk' }
+    @{ rx = '(?i)(wevtutil[^\n]*\bcl\b|Clear-EventLog|Remove-EventLog)'; why = 'clears Windows event logs (anti-forensic)' }
+    @{ rx = '(?i)(net\s+user\s+\S+\s+\S+|New-LocalUser|net\s+localgroup[^\n]*administrators[^\n]*\/add|Add-LocalGroupMember[^\n]*Administrators)'; why = 'creates or alters a local account / grants admin' }
+    @{ rx = '(?i)netsh[^\n]*advfirewall[^\n]*\bstate\s+off';            why = 'turns the Windows firewall off' }
+    @{ rx = '(?i)Set-NetFirewallProfile[^\n]*-Enabled\s+\$?false';      why = 'turns the Windows firewall off' }
+    @{ rx = '(?i)\bicacls\b[^\n]*\/reset[^\n]*\/t';                     why = 'recursively resets ACLs (CLAUDE.md forbids this outright)' }
+    @{ rx = '(?i)\btakeown\b[^\n]*\/f[^\n]*\/r';                        why = 'recursively takes ownership of a tree' }
+    @{ rx = '(?i)reg(\.exe)?\s+delete[^\n]*HK(LM|EY_LOCAL_MACHINE)\\(SOFTWARE|SYSTEM)\s*(\/f)?\s*$'; why = 'deletes an entire registry hive' }
+    @{ rx = '(?i)EnableLUA[^\n]*(-Value\s*0|\s0\s*$)';                  why = 'disables UAC' }
+    @{ rx = '(?i)(Remove-Item|rd|rmdir|del)\b[^\n]*\b[a-z]:\\(\s|$|["'']|\\\*)'; why = 'recursive delete at a drive root' }
+    @{ rx = '(?i)(Remove-Item|rd|rmdir|del)\b[^\n]*[a-z]:\\Windows\\?\s*["'']?\s*(-recurse|\/s)'; why = 'recursive delete of the Windows directory' }
+)
+$global:RUNCMD_MUTATING_E = '(?i)(Remove-Item|Remove-ItemProperty|Rename-Item|Move-Item|Set-Content|Add-Content|Clear-Content|Out-File|New-Item|Copy-Item|Set-Acl|Invoke-Expression|\biex\b|Start-Process|\bicacls\b|\btakeown\b|\battrib\b|\bcacls\b|\b(del|erase|rd|rmdir|move|ren|rename|copy|xcopy|robocopy)\s|\breg(\.exe)?\s+(delete|add)\b|\bcmd(\.exe)?\b|\bpowershell(\.exe)?\b|\bpwsh(\.exe)?\b|>)'
+$global:KILL_CRITICAL_NAME_RX_E = '(?i)^(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)(\.exe)?$|(?i)(claude|zerobreach)'
+$global:KILL_CRITICAL_DESC_RX_E = '(?i)(\b(System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|explorer|powershell|pwsh|conhost|RuntimeBroker|MsMpEng)\b|claude|zerobreach)'
+
+function ConvertTo-EGuardPath {
+    param([string]$Path)
+    $q = "$Path"
+    if ([string]::IsNullOrWhiteSpace($q)) { return '' }
+    $q = $q.Trim()
+    $q = $q -replace '/', '\'                                  # the confirmed bypass
+    try { $q = [Environment]::ExpandEnvironmentVariables($q) } catch {}
+    $q = $q -replace '(?i)^\\\\\?\\GLOBALROOT\\', '\'          # \\?\GLOBALROOT\Device\...
+    $q = $q -replace '(?i)^\\\\\?\\UNC\\', '\\'                # \\?\UNC\host\share
+    $q = $q -replace '(?i)^\\\\\?\\', ''                       # \\?\C:\...
+    # Canonicalise real filesystem paths (resolves .., trailing dots/spaces, doubled
+    # separators). Only single-letter drive paths — never PS drives like HKLM:\ or Cert:\.
+    if ($q -match '^[a-zA-Z]:\\') {
+        try { $q = [System.IO.Path]::GetFullPath($q) } catch {}
+    }
+    return $q
+}
+
+function Test-EDestructiveRunCmd {
+    param([string]$Cmd)
+    if ([string]::IsNullOrWhiteSpace($Cmd)) { return '' }
+    foreach ($r in $global:RUNCMD_DESTRUCTIVE_E) {
+        if ($Cmd -match $r.rx) { return $r.why }
+    }
+    return ''
+}
+
+function Test-EProtected {
+    param([string]$Action, [string]$Param, [string]$Target, [string]$Desc)
+    # Normalise BEFORE any pattern test (audit H7).
+    $p = ConvertTo-EGuardPath "$Param"; $t = "$Target"; $d = "$Desc"
+    $hay = "$p`n$t`n$d"
+
+    # RunCmd carries a command, not a path — inspect the command itself (audit H7b).
+    if ($Action -eq 'RunCmd') {
+        $bad = Test-EDestructiveRunCmd "$Param"
+        if ($bad) { return "destructive command — $bad" }
+        # A command that only NAMES a protected path (e.g. writing the correct
+        # userinit.exe value back into Winlogon) is not a write to it — see the
+        # $global:RUNCMD_MUTATING_E comment. No mutating verb, no path check.
+        if ("$Param" -notmatch $global:RUNCMD_MUTATING_E) { return '' }
+    }
+
+    # Certificate trust store — deleting root/CA certs breaks TLS / Windows Update / code-signing.
+    if ($p -match '(?i)Cert:\\' -or $hay -match '(?i)(root\s+ca|trusted\s+root|certificate\s+(store|authority))') {
+        return 'certificate trust store (deleting breaks HTTPS / code-signing)'
+    }
+    # Windows / system directories and shell/system files.
+    if ($p -match '(?i)^[a-z]:\\windows\\' -or $p -match '(?i)\\(System32|SysWOW64|WinSxS)\\') {
+        return 'Windows system directory'
+    }
+    if ($p -match '(?i)\\(desktop\.ini|iconcache\.db|thumbs\.db|ntuser\.dat|usrclass\.dat)' -or $p -match '(?i)\.library-ms$') {
+        return 'Windows shell/system file'
+    }
+    # User shell / git / ssh / cloud config (dotfiles in the profile, or known config dirs).
+    if ($p -match '(?i)\\Users\\[^\\]+\\\.[^\\]+$' -or
+        $p -match '(?i)\\\.(ssh|gnupg|aws|azure|kube|docker|config)\\' -or
+        $p -match '(?i)\\\.(bashrc|bash_profile|bash_history|profile|zshrc|gitconfig|npmrc|claude\.json)($|[^a-z])' -or
+        $p -match '(?i)\\\.claude\\') {
+        return 'user shell/git/ssh/cloud config (dotfile)'
+    }
+    # SafeBoot registry — deleting it breaks Safe Mode boot.
+    if ($p -match '(?i)\\SafeBoot') { return 'SafeBoot registry (deleting breaks Safe Mode)' }
+    # Core OS registry hives. One exception (audit M1): a Debugger or GlobalFlag
+    # VALUE under Image File Execution Options *is* the sticky-keys/IFEO backdoor,
+    # and deleting that value restores stock behaviour — it is the fix, not damage.
+    # The KEY itself stays protected (DeleteRegKey), as does every other value.
+    if ($Action -match '(?i)DeleteReg' -and $p -match '(?i)\\(SYSTEM\\CurrentControlSet\\(Services|Control)|Microsoft\\Windows NT\\CurrentVersion\\(Winlogon|Image File Execution Options|SystemRestore)|Cryptography)') {
+        $ifeoValueFix = ($Action -eq 'DeleteReg' -and
+                         $p -match '(?i)\\Image File Execution Options\\' -and
+                         $p -match '(?i)\|\s*(Debugger|GlobalFlag)\s*$')
+        if (-not $ifeoValueFix) { return 'core OS registry' }
+    }
+    # Critical processes / the IR tool itself (KillProcess). Since H5 the FixParam is
+    # "pid|name|startTicks" (Get-KillParam), so the authoritative process NAME is right
+    # there — use it, and fall back to the description only for a bare-PID (older)
+    # report. Matching the prose was blocking real kills: "SYSTEM-level process running
+    # from user path: evil.exe" is a finding ABOUT malware, not about the System
+    # process, and it was refused every time (audit M1).
+    if ($Action -eq 'KillProcess') {
+        $kpName = ''
+        $kpParts = "$Param" -split '\|'
+        if ($kpParts.Count -ge 2) { $kpName = "$($kpParts[1])".Trim() }
+        if ($kpName) {
+            if ($kpName -match $global:KILL_CRITICAL_NAME_RX_E) { return 'critical system process or the IR tool itself' }
+        } elseif ($d -match $global:KILL_CRITICAL_DESC_RX_E) {
+            return 'critical system process or the IR tool itself'
+        }
+    }
+    return ''
+}
+
 function Get-KillParam {
     # Builds the FixParam for a KillProcess finding. A bare PID is not enough: the
     # operator remediates minutes or hours after the scan, and Windows recycles PIDs

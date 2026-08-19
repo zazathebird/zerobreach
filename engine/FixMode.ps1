@@ -683,12 +683,25 @@ function Invoke-FixMode {
     $fixLog = [System.Collections.Generic.List[string]]::new()
     $fixOK = 0; $fixFail = 0; $fixSkip = 0
 
+    $fixBlocked = 0
     foreach ($f in $SelectedFindings) {
         $ts = (Get-Date).ToString("HH:mm:ss.fff")
         $d = $f.Description; if ($d.Length -gt 60) { $d = $d.Substring(0,57)+"..." }
         Write-Host "[$ts] " -NoNewline -ForegroundColor DarkGray
         Write-Host "FIX: " -NoNewline -ForegroundColor (Get-AccentColor)
         Write-Host $d -ForegroundColor White
+
+        # HARD BLOCK — same backstop the server's remediation runspace applies, and for
+        # the same reason: nothing this tool does may damage the machine, whatever was
+        # selected. This is the fourth executor; until 2026-08-19 it was the only one
+        # without the guard. The operator can still run the command by hand.
+        $blockWhy = Test-EProtected "$($f.FixAction)" "$($f.FixParam)" "$($f.Target)" "$($f.Description)"
+        if ($blockWhy) {
+            Out-Typewriter "  -> BLOCKED: PROTECTED RESOURCE ($blockWhy) — REFUSING $($f.FixAction)." "WARN"
+            $fixLog.Add("[$ts] BLOCKED ($blockWhy): $($f.FixAction) $($f.FixParam)")
+            $fixBlocked++
+            continue
+        }
 
         $ok = $false
         try {
@@ -858,7 +871,7 @@ function Invoke-FixMode {
 
     # Append fix log to report file
     @("","="*80,"FIX MODE LOG — $(Get-Date)",
-      "Selected: $($SelectedFindings.Count) | OK: $fixOK | Failed: $fixFail | Skipped: $fixSkip",
+      "Selected: $($SelectedFindings.Count) | OK: $fixOK | Failed: $fixFail | Skipped: $fixSkip | Blocked(protected): $fixBlocked",
       "Snapshot: $SNAPSHOT_DIR","="*80) + $fixLog |
         Add-Content -Path $REPORT_PATH -Encoding UTF8 -ErrorAction SilentlyContinue
 
@@ -870,6 +883,8 @@ function Invoke-FixMode {
     Write-Host "  FIX FAILURES      : " -NoNewline -ForegroundColor DarkGray
     Write-Host $fixFail -ForegroundColor $(if ($fixFail -gt 0) {"Red"} else {"Green"})
     Write-Host "  INFO / SKIPPED    : " -NoNewline -ForegroundColor DarkGray; Write-Host $fixSkip -ForegroundColor DarkGray
+    Write-Host "  BLOCKED (PROTECTED): " -NoNewline -ForegroundColor DarkGray
+    Write-Host $fixBlocked -ForegroundColor $(if ($fixBlocked -gt 0) {"Yellow"} else {"DarkGray"})
     Write-Host "  SNAPSHOT          : " -NoNewline -ForegroundColor DarkGray
     Write-Host $(if ($snapshotOk) { $SNAPSHOT_DIR } else { 'NONE — no registry rollback available' }) -ForegroundColor $(if ($snapshotOk) {'Yellow'} else {'Red'})
     Write-Host "  RESTORE POINT     : " -NoNewline -ForegroundColor DarkGray

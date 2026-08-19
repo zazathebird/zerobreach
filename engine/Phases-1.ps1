@@ -377,9 +377,12 @@ Show-PhaseHeader "PHASE 14" "DISM COMPONENT STORE RESTORATION"
 Out-Typewriter "FLUSHING WUAUSERV CACHE..." "ACT"
 Stop-Service -Name wuauserv -Force -ErrorAction SilentlyContinue
 if (Test-Path "$env:WINDIR\SoftwareDistribution\Download") {
+    # audit M1: DeleteFile on a DIRECTORY inside C:\Windows — refused by the executor
+    # (files only, since H6) and by the protected-target guard. Offer the command.
     Add-Finding -ID "SOFTDIST_CACHE" -Phase "PHASE 14" -ThreatType "System Integrity" -Severity $SEV_INFO `
-        -Description "Windows Update download cache present — can be cleared." `
-        -Target "$env:WINDIR\SoftwareDistribution\Download" -FixAction "DeleteFile" -FixParam "$env:WINDIR\SoftwareDistribution\Download" -Group "System Hardening"
+        -Description ("Windows Update download cache present — can be cleared by hand: " +
+            "Stop-Service wuauserv -Force; Remove-Item '$env:WINDIR\SoftwareDistribution\Download\*' -Recurse -Force; Start-Service wuauserv") `
+        -Target "$env:WINDIR\SoftwareDistribution\Download" -FixAction "Info" -Group "System Hardening"
 }
 Start-Service -Name wuauserv -ErrorAction SilentlyContinue
 if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) {
@@ -427,10 +430,16 @@ foreach ($sf in $recentSysFiles) {
         $foundSys = $true
         Out-Decrypt -Text $sf.FullName -Prefix "  [UNSIGNED SYS32 BINARY] "
         if ($sigStatus -eq "HashMismatch" -or $sigStatus -eq "NotTrusted") {
-            $newName = "$($sf.FullName).kraken"
+            # audit M1: same permanently-impossible fix as STICKY_* above — CRITICAL +
+            # RunCmd on a System32 path is auto-selected and then always blocked. The
+            # detection is right and stays CRITICAL; the remediation is the operator's.
             Add-Finding -ID "SYS32_UNSIGNED_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 15" -ThreatType "Rootkit/Trojan" `
-                -Severity $SEV_CRITICAL -Description "Tampered/untrusted binary in System32 ($sigStatus): $($sf.Name) — possible rootkit/trojan dropper" `
-                -Target $sf.FullName -FixAction "RunCmd" -FixParam "Rename-Item -LiteralPath '$(ConvertTo-PsLiteral $sf.FullName)' -NewName '$(ConvertTo-PsLiteral $newName)' -Force -ErrorAction SilentlyContinue" -Group "Unsigned System32 Binaries"
+                -Severity $SEV_CRITICAL -Description ("Tampered/untrusted binary in System32 ($sigStatus): $($sf.Name) — possible rootkit/trojan dropper. " +
+                    "System32 is never auto-remediated. Verify and restore by hand: " +
+                    "Get-AuthenticodeSignature '$($sf.FullName)' | Format-List, then 'sfc /scannow' " +
+                    "(or 'DISM /Online /Cleanup-Image /RestoreHealth' first if SFC cannot repair). " +
+                    "Treat the box as compromised until the file verifies clean.") `
+                -Target $sf.FullName -FixAction "Info" -Group "Unsigned System32 Binaries"
             $global:RootkitHits++
         } else {
             Add-Finding -ID "SYS32_UNSIGNED_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 15" -ThreatType "Rootkit/Trojan" `
@@ -970,10 +979,17 @@ if (Test-Path $hostsPath) {
             Add-Finding -ID "HOSTS_$($bh.GetHashCode())" -Phase "PHASE 33" -ThreatType "DNS Hijack" -Severity $SEV_HIGH `
                 -Description "Suspicious hosts entry: $bh" -Target $hostsPath -FixAction "Info" -Group "Hosts File Hijack"
         }
+        # audit M1: this shipped as HIGH + RunCmd, so it was auto-selected — and then
+        # hard-blocked every time, because the command writes into System32. Blocking
+        # it is right twice over: the purge also discards LEGITIMATE custom entries
+        # (an MSP box may carry deliberate corporate overrides). The command is offered
+        # to the operator instead, with a backup step in front of it.
         Add-Finding -ID "HOSTS_PURGE" -Phase "PHASE 33" -ThreatType "DNS Hijack" -Severity $SEV_HIGH `
-            -Description "Hosts file contains $($badHosts.Count) non-standard entries — purge all?" `
-            -Target $hostsPath -FixAction "RunCmd" `
-            -FixParam "`$h = Get-Content '$hostsPath'; `$clean = `$h | Where-Object { `$_ -match '^#' -or `$_ -notmatch '\S' -or `$_ -match '^(127\.0\.0\.1|::1|0\.0\.0\.0)\s+(localhost|ip6)' }; `$clean | Set-Content '$hostsPath'" `
+            -Description ("Hosts file contains $($badHosts.Count) non-standard entries. Review them above first — some may be " +
+                "deliberate. To back up and purge by hand (System32 is never auto-remediated): " +
+                "Copy-Item '$hostsPath' '$hostsPath.zbbak' -Force; " +
+                "(Get-Content '$hostsPath') | Where-Object { `$_ -match '^#' -or `$_ -notmatch '\S' -or `$_ -match '^(127\.0\.0\.1|::1|0\.0\.0\.0)\s+(localhost|ip6)' } | Set-Content '$hostsPath'") `
+            -Target $hostsPath -FixAction "Info" `
             -Group "Hosts File Hijack"
     } else { Out-Typewriter "  -> [OK] HOSTS FILE CLEAN." "GOOD" }
 }
@@ -1259,10 +1275,19 @@ foreach ($af in $accessFiles) {
         $sig = Get-AuthSig $af
         if ($sig.Status -ne "Valid") {
             Out-Typewriter "  -> UNSIGNED ACCESSIBILITY BINARY: $af" "CRIT"
+            # audit M1: this shipped as CRITICAL + RunCmd (rename the System32 binary),
+            # so it was auto-selected in the GUI and then hard-blocked by the protected-
+            # target guard EVERY time — the operator saw the tool's #1 classic backdoor
+            # found, pre-ticked, and reported "blocked". The guard is right; renaming a
+            # System32 binary is not a fix. Info + the exact manual restore path instead.
             Add-Finding -ID "STICKY_$([IO.Path]::GetFileNameWithoutExtension($af))" -Phase "PHASE 45" `
                 -ThreatType "Sticky Keys / Accessibility Backdoor" -Severity $SEV_CRITICAL `
-                -Description "Unsigned accessibility binary: $af — classic sticky-keys shell backdoor" `
-                -Target $af -FixAction "RunCmd" -FixParam "Rename-Item '$(ConvertTo-PsLiteral $af)' '$(ConvertTo-PsLiteral $af).kraken' -Force" -Group "Accessibility Shell Backdoors"
+                -Description ("Unsigned accessibility binary: $af — classic sticky-keys shell backdoor. " +
+                    "System32 is never auto-remediated. Restore it by hand: 'sfc /scannow' (or " +
+                    "'DISM /Online /Cleanup-Image /RestoreHealth' first if SFC cannot repair), then re-run this scan. " +
+                    "Also check for an IFEO debugger on this filename: " +
+                    "reg query 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\$([IO.Path]::GetFileName($af))'") `
+                -Target $af -FixAction "Info" -Group "Accessibility Shell Backdoors"
         } else { Out-Typewriter "  -> [OK] VALID: $af" "GOOD" }
     }
 }

@@ -28,7 +28,7 @@ $tests = @(
     @{ Name = 'H2  engine exit / stderr verdict';     File = 'Test-H2-EngineExit.ps1' }
     @{ Name = 'H5  KillProcess identity re-check';    File = 'Test-H5-KillIdentity.ps1' }
     @{ Name = 'H7  guard normalisation + RunCmd';     File = 'Test-H7-Guard.ps1' }
-    @{ Name = 'H7  main/mirror guard equivalence';    File = 'Test-GuardMirrorSync.ps1' }
+    @{ Name = 'H7  guard equivalence (3 copies)';     File = 'Test-GuardMirrorSync.ps1' }
     @{ Name = 'H8  CSV injection + report JS';        File = 'Test-H8-CsvInjection.ps1' }
     @{ Name = 'M   medium-tier fixes (M2-M8)';        File = 'Test-M-Tier.ps1' }
 )
