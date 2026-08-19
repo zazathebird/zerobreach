@@ -105,6 +105,9 @@ $script:PROFILE_BUILTINS = @(
 $script:State = [hashtable]::Synchronized(@{
     Running      = $false
     ScanComplete = $false
+    ScanFailed   = $false   # engine died (non-zero exit / no phase output) — NOT a clean result
+    FailReason   = ''
+    ExitCode     = $null
     Phase        = 0
     PhaseIdx     = 0      # count of distinct PHASE headers seen this scan; QUICK's display counter
     PhaseTotal   = 115
@@ -607,6 +610,8 @@ $syncObj = [ordered]@{
     type          = 'sync'
     running       = $SseState.Running
     scan_complete = $SseState.ScanComplete
+    scan_failed   = $SseState.ScanFailed
+    fail_reason   = $SseState.FailReason
     phase         = $syncPhase
     phase_total   = $SseState.PhaseTotal
     phase_name    = $SseState.PhaseName
@@ -772,6 +777,9 @@ $ScanState.LineCount    = 0
 $ScanState.ResultsPath  = ''
 $ScanState.Running      = $true
 $ScanState.ScanComplete = $false
+$ScanState.ScanFailed   = $false
+$ScanState.FailReason   = ''
+$ScanState.ExitCode     = $null
 $ScanState.StartTime    = [datetime]::Now
 $ScanState.Findings.Clear()
 $ScanState.EventLog.Clear()
@@ -796,12 +804,21 @@ $psi.CreateNoWindow         = $true
 $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
 
 $proc = $null
+# Engine-exit verdict, set after WaitForExit and consumed in the finally (audit H2).
+$engineFailed = $false
+$failReason   = ''
+$engineStderr = ''
+$engineExit   = $null
 try {
     $proc = [System.Diagnostics.Process]::Start($psi)
     $ScanState.Process = $proc
 
-    # Drain stderr asynchronously so its buffer never fills and deadlocks the child
-    $proc.BeginErrorReadLine()
+    # Drain stderr asynchronously so its buffer never fills and deadlocks the child.
+    # BeginErrorReadLine() with no ErrorDataReceived handler drained it straight to
+    # /dev/null, which is how an engine that died at load looked identical to a clean
+    # machine (audit H2). ReadToEndAsync hands the draining to .NET — deadlock-free,
+    # no PowerShell event pump needed inside this runspace — and keeps the text.
+    $stderrTask = $proc.StandardError.ReadToEndAsync()
 
     # STEALTH mode: the engine suppresses all formatted output and emits a single
     # compressed-JSON audit blob to stdout at the very end. We buffer raw lines and
@@ -951,6 +968,46 @@ try {
 
     $proc.WaitForExit()
 
+    # ── Engine exit verdict (audit H2) ────────────────────────────────────────────
+    # A false all-clear is the worst failure an IR tool can produce, so anything
+    # other than a clean exit is reported as a FAILED scan, never as a finished one.
+    # An operator abort is not a failure: $ScanState.Running is already $false there.
+    $wasAborted = -not $ScanState.Running
+    $engineExit = -1
+    try { $engineExit = $proc.ExitCode } catch {}
+    $ScanState.ExitCode = $engineExit
+    try { $engineStderr = $stderrTask.Result } catch { $engineStderr = '' }
+
+    if (-not $wasAborted) {
+        if ($engineExit -ne 0) {
+            $engineFailed = $true
+            $failReason   = "scan engine exited with code $engineExit"
+        }
+        elseif ($ScanState.PhaseIdx -le 0) {
+            # Exit 0 but not a single PHASE header parsed: the engine never really ran
+            # (AMSI blocking the script at load is the documented case). Nothing was
+            # scanned, so there is nothing to call clean.
+            $engineFailed = $true
+            $failReason   = 'scan engine produced no phase output — nothing was actually scanned'
+        }
+    }
+
+    if ($engineStderr) {
+        # stderr is the single most useful artifact when a field scan goes wrong; it
+        # now reaches both the GUI log and the durable server event log.
+        foreach ($eline in ($engineStderr -split "`r?`n")) {
+            if ($eline.Trim()) {
+                Enqueue @{
+                    type     = 'log_line'
+                    text     = "[ENGINE STDERR] $eline"
+                    severity = $(if ($engineFailed) { 'CRITICAL' } else { 'HIGH' })
+                    phase    = $ScanState.Phase
+                    elapsed  = $ScanState.Elapsed
+                }
+            }
+        }
+    }
+
     # ── STEALTH post-processing: parse the engine's JSON audit blob into findings ──
     if ($stealth -and $ScanState.Running) {
         $ScanState.Elapsed = [int]([datetime]::Now - $ScanState.StartTime).TotalSeconds
@@ -1017,9 +1074,15 @@ try {
         phase    = $ScanState.Phase
         elapsed  = $ScanState.Elapsed
     }
+    # The engine never got to run (couldn't spawn, stream died mid-read...). That is a
+    # failed scan, not an empty one (audit H2).
+    $engineFailed = $true
+    $failReason   = "scan aborted by server error: $($_.Exception.Message)"
 } finally {
     $ScanState.Running    = $false
     $ScanState.ScanComplete = $true
+    $ScanState.ScanFailed = $engineFailed
+    $ScanState.FailReason = $failReason
 
     # Save JSON report
     $ts = [datetime]::Now.ToString('yyyyMMdd_HHmmss')
@@ -1063,14 +1126,38 @@ try {
         running       = $false
     }
 
-    # Complete event
-    Enqueue @{
-        type           = 'scan_complete'
-        findings_count = $ScanState.Findings.Count
-        threat_counts  = $ScanState.ThreatCounts
-        elapsed        = $ScanState.Elapsed
-        results_path   = $ScanState.ResultsPath
-        engine_report  = $engineReport
+    # Completion event. A failed engine emits scan_failed and NEVER scan_complete —
+    # the GUI's clean-bill-of-health banner hangs off scan_complete, and a scan that
+    # did not run must never reach it (audit H2).
+    if ($engineFailed) {
+        Enqueue @{
+            type           = 'scan_failed'
+            reason         = $failReason
+            exit_code      = $engineExit
+            stderr         = $engineStderr
+            findings_count = $ScanState.Findings.Count
+            threat_counts  = $ScanState.ThreatCounts
+            elapsed        = $ScanState.Elapsed
+            phase          = $ScanState.Phase
+            results_path   = $ScanState.ResultsPath
+            engine_report  = $engineReport
+        }
+        Enqueue @{
+            type     = 'log_line'
+            text     = "[SCAN FAILED] $failReason — results are INCOMPLETE and must not be read as a clean result."
+            severity = 'CRITICAL'
+            phase    = $ScanState.Phase
+            elapsed  = $ScanState.Elapsed
+        }
+    } else {
+        Enqueue @{
+            type           = 'scan_complete'
+            findings_count = $ScanState.Findings.Count
+            threat_counts  = $ScanState.ThreatCounts
+            elapsed        = $ScanState.Elapsed
+            results_path   = $ScanState.ResultsPath
+            engine_report  = $engineReport
+        }
     }
 }
 '@
@@ -1287,6 +1374,9 @@ function Handle-Request {
                 elapsed       = $script:State.Elapsed
                 threat_counts = $script:State.ThreatCounts
                 scan_complete = $script:State.ScanComplete
+                scan_failed   = $script:State.ScanFailed
+                fail_reason   = $script:State.FailReason
+                exit_code     = $script:State.ExitCode
             }
             Write-JsonResponse $Ctx ($s | ConvertTo-Json -Compress -Depth 3)
         }

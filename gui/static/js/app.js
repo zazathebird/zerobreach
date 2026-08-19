@@ -75,6 +75,7 @@ const STATE = {
   scanHours: 0,
   scanning: false,
   scanComplete: false,
+  scanFailed: false,     // engine exited non-zero / produced nothing — never a clean result (H2)
   findings: [],
   threatCounts: {},
   selectedFindings: new Set(),
@@ -285,8 +286,18 @@ function dispatchEvent(data) {
     case 'scan_complete':
       STATE.scanning     = false;
       STATE.scanComplete = true;
+      STATE.scanFailed   = false;
       if (data.threat_counts) STATE.threatCounts = data.threat_counts;
       onScanComplete(data);
+      break;
+    case 'scan_failed':
+      // The engine did not finish. Deliberately does NOT set scanComplete or unlock
+      // remediation — acting on a partial finding list is how an operator ends up
+      // trusting a scan that never ran (audit H2).
+      STATE.scanning   = false;
+      STATE.scanFailed = true;
+      if (data.threat_counts) STATE.threatCounts = data.threat_counts;
+      onScanFailed(data);
       break;
     case 'remediation_complete':
       onRemediationComplete(data);
@@ -308,7 +319,12 @@ function handleSync(data) {
     $('sb-status').textContent = '● SCANNING';
     $('sb-status').style.color = 'var(--threat-high)';
   }
-  if (data.scan_complete && !data.running) {
+  if (data.scan_failed) {
+    // Reconnecting after a failed scan: show the failure, don't unlock remediation.
+    STATE.scanFailed = true;
+    $('sb-status').textContent = '● SCAN FAILED';
+    $('sb-status').style.color = 'var(--threat-critical)';
+  } else if (data.scan_complete && !data.running) {
     STATE.scanComplete = true;
     $('nav-remediation').classList.add('unlocked');
     $('nav-remediation').querySelector('.nav-lock-icon').textContent = '🔓';
@@ -968,6 +984,47 @@ function updateBadge() {
 }
 
 // ── Scan Complete ─────────────────────────────────────────────────────────────
+/* The engine crashed, was blocked at load by AMSI, or exited non-zero. This must
+   read as a FAILURE, never as a clean bill of health: no completion chime, no green
+   status, no remediation unlock, and the reason + stderr shown verbatim so the
+   operator can act on it (audit H2). */
+function onScanFailed(data) {
+  ZBSound.play('error');
+  $('btn-abort').disabled    = true;
+  $('sb-status').textContent = '● SCAN FAILED';
+  $('sb-status').style.color = 'var(--threat-critical)';
+
+  const stderr = (data.stderr || '').trim();
+  $('modal-summary').innerHTML = `
+    <div style="grid-column:1/-1;text-align:left;border-left:3px solid var(--threat-critical);padding:10px 14px;background:rgba(255,56,56,.08)">
+      <div style="color:var(--threat-critical);font-weight:700;letter-spacing:1px;margin-bottom:8px">
+        ⚠ SCAN DID NOT COMPLETE — THIS IS NOT A CLEAN RESULT
+      </div>
+      <div style="font-size:12px;line-height:1.6;color:var(--text-dim)">
+        ${escapeHtml(data.reason || 'the scan engine terminated unexpectedly')}<br>
+        Engine exit code: <b>${escapeHtml(String(data.exit_code))}</b> &middot;
+        stopped at phase <b>${escapeHtml(String(data.phase))}</b> after ${formatTime(data.elapsed)}.<br><br>
+        ${data.findings_count} finding(s) were collected before it stopped. They may be
+        valid, but the machine has <b>not</b> been fully scanned &mdash; do not treat this
+        as an all-clear. Re-run the scan; if it fails again, check the server console
+        window and the log in <code>reports/</code>.
+      </div>
+      ${stderr ? `<div style="margin-top:10px;font-size:11px;color:var(--text-dim)">
+        <div style="color:var(--threat-high);margin-bottom:4px">ENGINE STDERR</div>
+        <pre style="white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;margin:0;padding:8px;background:rgba(0,0,0,.35);border-radius:4px">${escapeHtml(stderr)}</pre>
+      </div>` : ''}
+    </div>
+  `;
+  $('modal-complete').classList.remove('hidden');
+  ZBSound.play('open');
+
+  // Findings view stays reachable (partial results are still evidence), but the
+  // remediation lock is left ON — nothing here is trustworthy enough to auto-act on.
+  $('modal-btn-findings').onclick = () => { $('modal-complete').classList.add('hidden'); switchView('findings'); };
+  $('modal-btn-report').onclick   = () => { $('modal-complete').classList.add('hidden'); switchView('report'); };
+  $('modal-btn-close').onclick    = () => $('modal-complete').classList.add('hidden');
+}
+
 function onScanComplete(data) {
   ZBSound.play('complete');
   $('btn-abort').disabled    = true;
