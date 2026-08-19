@@ -626,17 +626,34 @@ function Invoke-FixMode {
         try {
             switch ($f.FixAction) {
                 "DeleteFile" {
-                    if (Test-Path $f.FixParam) {
-                        Remove-Item -Path $f.FixParam -Recurse -Force -ErrorAction Stop
-                        if (Test-Path $f.FixParam) {
-                            # Kernel-queue for locked files
-                            $rp  = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                            $cur = Get-RegVal $rp "PendingFileRenameOperations"
-                            if ($null -eq $cur) { $cur = @() }
-                            Set-ItemProperty $rp "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$($f.FixParam)", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
-                            Out-Typewriter "  -> QUEUED FOR REBOOT DELETION." "WARN"
-                        } else { Out-Typewriter "  -> DELETED: $($f.FixParam)" "GOOD" }
-                        $global:KillCount++; $ok = $true
+                    # audit H6: was Remove-Item -Path <param> -Recurse -Force. Three problems,
+                    # all fixed here and kept in sync with the server's remediation runspace:
+                    #   1. -Recurse on an action named DeleteFILE deleted whole trees when the
+                    #      FixParam resolved to a directory;
+                    #   2. a junction planted at a flagged path could turn one approved delete
+                    #      into mass data loss, so reparse points are refused outright;
+                    #   3. -Path globs, so a literal '[' or '*' in a malware filename either
+                    #      matched the wrong thing or nothing at all — -LiteralPath does not.
+                    if (Test-Path -LiteralPath $f.FixParam) {
+                        $ditem = Get-Item -LiteralPath $f.FixParam -Force -ErrorAction Stop
+                        if ($ditem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                            Out-Typewriter "  -> BLOCKED: TARGET IS A REPARSE POINT (JUNCTION/SYMLINK), NOT A FILE." "WARN"
+                            $fixFail++
+                        } elseif ($ditem.PSIsContainer) {
+                            Out-Typewriter "  -> BLOCKED: TARGET IS A DIRECTORY; DELETEFILE WILL NOT DELETE TREES." "WARN"
+                            $fixFail++
+                        } else {
+                            Remove-Item -LiteralPath $ditem.FullName -Force -ErrorAction Stop
+                            if (Test-Path -LiteralPath $f.FixParam) {
+                                # Kernel-queue for locked files
+                                $rp  = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+                                $cur = Get-RegVal $rp "PendingFileRenameOperations"
+                                if ($null -eq $cur) { $cur = @() }
+                                Set-ItemProperty $rp "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$($f.FixParam)", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
+                                Out-Typewriter "  -> QUEUED FOR REBOOT DELETION." "WARN"
+                            } else { Out-Typewriter "  -> DELETED: $($f.FixParam)" "GOOD" }
+                            $global:KillCount++; $ok = $true
+                        }
                     } else { Out-Typewriter "  -> ALREADY ABSENT." "VER"; $ok = $true }
                 }
                 "DeleteReg" {
@@ -658,15 +675,47 @@ function Invoke-FixMode {
                     } else { Out-Typewriter "  -> KEY ALREADY ABSENT." "VER"; $ok = $true }
                 }
                 "KillProcess" {
-                    $pid2 = [int]$f.FixParam
-                    $proc = Get-Process -Id $pid2 -ErrorAction SilentlyContinue
-                    if ($proc) {
-                        Stop-Process -Id $pid2 -Force -ErrorAction SilentlyContinue
-                        Start-Sleep -Milliseconds 400
-                        if (-not (Get-Process -Id $pid2 -ErrorAction SilentlyContinue)) {
-                            Out-Typewriter "  -> TERMINATED: PID $pid2 ($($proc.Name))" "GOOD"; $global:KillCount++; $ok = $true
-                        } else { Out-Typewriter "  -> KILL FAILED: PID $pid2" "WARN"; $fixFail++ }
-                    } else { Out-Typewriter "  -> PROCESS ALREADY GONE." "VER"; $ok = $true }
+                    # FixParam is "<pid>|<name>|<startTicks>" (Get-KillParam). Windows recycles
+                    # PIDs, and fix mode runs after the scan, so re-verify identity before
+                    # killing — otherwise "kill the miner" kills whatever holds the PID now
+                    # (audit H5). Kept in sync with the server's remediation runspace.
+                    $kp2 = "$($f.FixParam)" -split '\|'
+                    $pid2 = 0
+                    if (-not [int]::TryParse("$($kp2[0])".Trim(), [ref]$pid2) -or $pid2 -le 0) {
+                        Out-Typewriter "  -> MALFORMED KILL TARGET: $($f.FixParam)" "WARN"; $fixFail++
+                    } else {
+                        $proc = Get-Process -Id $pid2 -ErrorAction SilentlyContinue
+                        if (-not $proc) {
+                            Out-Typewriter "  -> PROCESS ALREADY GONE." "VER"; $ok = $true
+                        } else {
+                            $idOk2 = $true; $why2 = ''
+                            if ($kp2.Count -ge 3) {
+                                $wantName2  = "$($kp2[1])"
+                                $wantTicks2 = [int64]0
+                                [void][int64]::TryParse("$($kp2[2])", [ref]$wantTicks2)
+                                $haveTicks2 = [int64]0
+                                try { $haveTicks2 = $proc.StartTime.Ticks } catch { $haveTicks2 = 0 }
+                                if ($wantName2 -and $proc.ProcessName -ne $wantName2) {
+                                    $idOk2 = $false; $why2 = "NOW '$($proc.ProcessName)', SCAN FLAGGED '$wantName2'"
+                                }
+                                elseif ($wantTicks2 -gt 0 -and $haveTicks2 -gt 0 -and $haveTicks2 -ne $wantTicks2) {
+                                    $idOk2 = $false; $why2 = 'SAME NAME BUT A DIFFERENT START TIME'
+                                }
+                            } else {
+                                Out-Typewriter "  -> NOTE: BARE PID IN REPORT; IDENTITY UNVERIFIABLE." "WARN"
+                            }
+
+                            if (-not $idOk2) {
+                                Out-Typewriter "  -> SKIPPED: PID $pid2 IS NO LONGER THE FLAGGED PROCESS ($why2)." "WARN"
+                            } else {
+                                Stop-Process -Id $pid2 -Force -ErrorAction SilentlyContinue
+                                Start-Sleep -Milliseconds 400
+                                if (-not (Get-Process -Id $pid2 -ErrorAction SilentlyContinue)) {
+                                    Out-Typewriter "  -> TERMINATED: PID $pid2 ($($proc.Name))" "GOOD"; $global:KillCount++; $ok = $true
+                                } else { Out-Typewriter "  -> KILL FAILED: PID $pid2" "WARN"; $fixFail++ }
+                            }
+                        }
+                    }
                 }
                 "RunCmd" {
                     $sb = [scriptblock]::Create($f.FixParam)

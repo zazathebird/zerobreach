@@ -161,7 +161,7 @@ if ($PhasePlan.Advanced) {
                     Add-Finding -ID "INJDLL_$($p.Id)_$([IO.Path]::GetFileName($udll.FileName) -replace '[^a-z0-9]','')" `
                         -Phase "PHASE 93" -ThreatType "DLL Injection" -Severity $SEV_HIGH `
                         -Description "$($p.Name) PID:$($p.Id) loaded unsigned DLL from user path: $($udll.FileName)" `
-                        -Target "PID:$($p.Id)" -FixAction "KillProcess" -FixParam $p.Id `
+                        -Target "PID:$($p.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $p.Id) `
                         -Group "Module Injection"
                     $injFound++
                 }
@@ -380,7 +380,7 @@ if ($PhasePlan.Advanced) {
                 $cmdShort = $p.CommandLine.Substring(0,[Math]::Min(140,$p.CommandLine.Length))
                 Add-Finding -ID "LOLBAS_$($p.ProcessId)_$lb" -Phase "PHASE 99" -ThreatType "LOLBAS Abuse" `
                     -Severity $SEV_HIGH -Description "LOLBAS abuse: $($p.Name) PID:$($p.ProcessId) | $cmdShort" `
-                    -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "LOLBAS Expanded"
+                    -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam (Get-KillParam $p.ProcessId) -Group "LOLBAS Expanded"
                 $lolbasHits++
             }
         }
@@ -469,7 +469,7 @@ if ($PhasePlan.Advanced) {
             Out-ThreatBanner "SVCHOST PARENT MASQUERADE" "PID:$($sp.ProcessId) parent=$($par.Name)"
             Add-Finding -ID "SVCMASQ_$($sp.ProcessId)" -Phase "PHASE 102" -ThreatType "Process Masquerade" `
                 -Severity $SEV_CRITICAL -Description "svchost.exe PID:$($sp.ProcessId) parent is '$($par.Name)' (expected: services.exe)" `
-                -Target "PID:$($sp.ProcessId)" -FixAction "KillProcess" -FixParam $sp.ProcessId `
+                -Target "PID:$($sp.ProcessId)" -FixAction "KillProcess" -FixParam (Get-KillParam $sp.ProcessId) `
                 -Group "Process Masquerade"
             $svcHits++; $global:RootkitHits++
         }
@@ -477,7 +477,7 @@ if ($PhasePlan.Advanced) {
             Out-ThreatBanner "SVCHOST ANOMALOUS PATH" $sp.ExecutablePath
             Add-Finding -ID "SVCPATH_$($sp.ProcessId)" -Phase "PHASE 102" -ThreatType "Process Masquerade" `
                 -Severity $SEV_CRITICAL -Description "svchost.exe running from anomalous path: $($sp.ExecutablePath)" `
-                -Target "PID:$($sp.ProcessId)" -FixAction "KillProcess" -FixParam $sp.ProcessId `
+                -Target "PID:$($sp.ProcessId)" -FixAction "KillProcess" -FixParam (Get-KillParam $sp.ProcessId) `
                 -Group "Process Masquerade"
             $svcHits++
         }

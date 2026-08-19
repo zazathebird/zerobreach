@@ -1197,6 +1197,30 @@ function Test-RProtected {
     return ''
 }
 
+function Get-RRegVal {
+    # Mirror of the engine's Get-RegVal. Get-ItemPropertyValue throws a *terminating*
+    # error when the value is absent, which -EA SilentlyContinue does NOT suppress
+    # (CLAUDE.md rule). PendingFileRenameOperations usually does not exist on a healthy
+    # machine, so the raw cmdlet threw into the per-finding catch the FIRST time a
+    # locked file needed queueing: logged "-> ERROR:", counted as failed, and the
+    # reboot-delete was never queued — while Quarantine had already copied the file to
+    # the vault, leaving the original live on disk (audit H10).
+    param([string]$Path, [string]$Name)
+    try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
+}
+
+function Add-RPendingDelete {
+    # Queue a locked file for deletion at next boot. Returns $true if queued.
+    param([string]$Target)
+    try {
+        $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
+        $cur = Get-RRegVal $rpk "PendingFileRenameOperations"
+        if ($null -eq $cur) { $cur = @() }
+        Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$Target", "")) -Type MultiString -Force -ErrorAction Stop
+        return $true
+    } catch { return $false }
+}
+
 $RemState.Remediating = $true
 $applied = 0; $failed = 0; $skipped = 0; $blocked = 0
 try {
@@ -1222,17 +1246,43 @@ try {
         try {
             switch ("$($f.FixAction)") {
                 'DeleteFile' {
-                    if (Test-Path -LiteralPath $f.FixParam) {
-                        Remove-Item -LiteralPath $f.FixParam -Recurse -Force -ErrorAction Stop
-                        if (Test-Path -LiteralPath $f.FixParam) {
-                            $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                            $cur = Get-ItemPropertyValue $rpk "PendingFileRenameOperations" -ErrorAction SilentlyContinue
-                            if ($null -eq $cur) { $cur = @() }
-                            Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$($f.FixParam)", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
-                            RLog "  -> locked; queued for reboot deletion." 'POSSIBLE'
-                        } else { RLog "  -> deleted: $($f.FixParam)" 'OK' }
-                        $ok = $true
-                    } else { RLog "  -> already absent." 'OK'; $ok = $true }
+                    $dtgt = "$($f.FixParam)"
+                    if (-not (Test-Path -LiteralPath $dtgt)) {
+                        RLog "  -> already absent." 'OK'; $ok = $true
+                    } else {
+                        $ditem = Get-Item -LiteralPath $dtgt -Force -ErrorAction Stop
+
+                        # audit H6: this action is DeleteFILE. -Recurse was being passed, so a
+                        # FixParam that resolved to a directory deleted the whole tree, and a
+                        # junction planted at a flagged path could turn one approved deletion
+                        # into mass data loss. Refuse anything that is not a plain file.
+                        if ($ditem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                            RLog "  -> BLOCKED: target is a reparse point (junction/symlink), not a file: $dtgt" 'CRITICAL'
+                            $blocked++
+                        }
+                        elseif ($ditem.PSIsContainer) {
+                            RLog "  -> BLOCKED: target is a directory; DeleteFile will not delete trees: $dtgt" 'CRITICAL'
+                            $blocked++
+                        }
+                        else {
+                            # audit H6/H7: the guard above ran on the raw string. Re-run it on the
+                            # fully-resolved path so a path that only LOOKS innocuous cannot slip
+                            # a protected target past it.
+                            $dfull = $ditem.FullName
+                            $why2  = Test-RProtected 'DeleteFile' $dfull "$($f.Target)" "$($f.Description)"
+                            if ($why2) {
+                                RLog "[BLOCKED] resolved path is protected ($why2): $dfull" 'CRITICAL'
+                                $blocked++
+                            } else {
+                                Remove-Item -LiteralPath $dfull -Force -ErrorAction Stop
+                                if (Test-Path -LiteralPath $dfull) {
+                                    if (Add-RPendingDelete $dfull) { RLog "  -> locked; queued for reboot deletion." 'POSSIBLE' }
+                                    else { RLog "  -> locked and could NOT be queued for reboot deletion — still on disk." 'CRITICAL'; $failed++ }
+                                } else { RLog "  -> deleted: $dfull" 'OK' }
+                                $ok = $true
+                            }
+                        }
+                    }
                 }
                 'DeleteReg' {
                     $pts = "$($f.FixParam)" -split "\|", 2
@@ -1249,14 +1299,49 @@ try {
                     } else { RLog "  -> key already absent." 'OK'; $ok = $true }
                 }
                 'KillProcess' {
-                    $procId = [int]"$($f.FixParam)"
-                    $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
-                    if ($p) {
-                        Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
-                        Start-Sleep -Milliseconds 300
-                        if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { RLog "  -> terminated PID $procId ($($p.Name))" 'OK'; $ok = $true }
-                        else { RLog "  -> kill failed PID $procId" 'POSSIBLE'; $failed++ }
-                    } else { RLog "  -> process already gone." 'OK'; $ok = $true }
+                    # FixParam is "<pid>|<name>|<startTicks>" (see Get-KillParam). PIDs are
+                    # recycled, and remediation runs long after the scan, so the process
+                    # holding this PID now may be something else entirely (audit H5).
+                    $kp = "$($f.FixParam)" -split '\|'
+                    $procId = 0
+                    if (-not [int]::TryParse($kp[0].Trim(), [ref]$procId) -or $procId -le 0) {
+                        RLog "  -> malformed KillProcess target: $($f.FixParam)" 'POSSIBLE'; $skipped++
+                    } else {
+                        $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+                        if (-not $p) {
+                            RLog "  -> process already gone." 'OK'; $ok = $true
+                        } else {
+                            $idOk = $true; $why = ''
+                            if ($kp.Count -ge 3) {
+                                $wantName  = "$($kp[1])"
+                                $wantTicks = [int64]0
+                                [void][int64]::TryParse("$($kp[2])", [ref]$wantTicks)
+                                $haveTicks = [int64]0
+                                try { $haveTicks = $p.StartTime.Ticks } catch { $haveTicks = 0 }
+                                if ($wantName -and $p.ProcessName -ne $wantName) {
+                                    $idOk = $false
+                                    $why  = "now '$($p.ProcessName)', scan flagged '$wantName'"
+                                }
+                                elseif ($wantTicks -gt 0 -and $haveTicks -gt 0 -and $haveTicks -ne $wantTicks) {
+                                    $idOk = $false
+                                    $why  = 'same name but a different start time'
+                                }
+                            } else {
+                                RLog "  -> NOTE: finding carries a bare PID (older report); identity cannot be verified." 'POSSIBLE'
+                            }
+
+                            if (-not $idOk) {
+                                # Refuse. Killing the wrong process is worse than not killing.
+                                RLog "  -> SKIPPED: PID $procId is no longer the flagged process ($why). PID was recycled." 'POSSIBLE'
+                                $skipped++
+                            } else {
+                                Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+                                Start-Sleep -Milliseconds 300
+                                if (-not (Get-Process -Id $procId -ErrorAction SilentlyContinue)) { RLog "  -> terminated PID $procId ($($p.Name))" 'OK'; $ok = $true }
+                                else { RLog "  -> kill failed PID $procId" 'POSSIBLE'; $failed++ }
+                            }
+                        }
+                    }
                 }
                 'RunCmd' {
                     # FixParam is generated by our own engine into the trusted report file.
@@ -1278,10 +1363,12 @@ try {
                         try { Move-Item -LiteralPath $src -Destination $dest -Force -ErrorAction Stop; $moved = $true }
                         catch {
                             try { Copy-Item -LiteralPath $src -Destination $dest -Force -ErrorAction Stop } catch {}
-                            $rpk = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager"
-                            $cur = Get-ItemPropertyValue $rpk "PendingFileRenameOperations" -ErrorAction SilentlyContinue
-                            if ($null -eq $cur) { $cur = @() }
-                            Set-ItemProperty $rpk "PendingFileRenameOperations" ([string[]]($cur) + @("\??\$src", "")) -Type MultiString -Force -ErrorAction SilentlyContinue
+                            # audit H10: this used the raw Get-ItemPropertyValue, which threw on
+                            # the common case (value absent) and skipped the queue entirely —
+                            # leaving a copy in the vault AND the original live on disk.
+                            if (-not (Add-RPendingDelete $src)) {
+                                RLog "  -> WARNING: original is locked and could NOT be queued for reboot deletion — it is still live on disk." 'CRITICAL'
+                            }
                         }
                         $manifest = @{
                             OriginalPath = $src; QuarantinedAs = $dest; SHA256 = $sha
@@ -1413,12 +1500,24 @@ function Handle-Request {
             $ids = @($parsed.ids) | Where-Object { $_ }
             if (-not $ids -or @($ids).Count -eq 0) { Write-JsonResponse $Ctx '{"error":"no findings selected"}' 400; return }
 
-            Start-Runspace -Script $script:REMEDIATE_SCRIPT -Vars @{
-                RemState   = $script:State
-                RemReports = $script:REPORTS
-                ReportPath = $reportPath
-                FixIds     = @($ids)
-            } | Out-Null
+            # Claim the slot synchronously (audit H9). This one matters more than the
+            # scan slot: two remediation passes racing through the same destructive fix
+            # list is the failure mode, and C1 showed a hostile page could fire them
+            # deliberately.
+            $script:State.Remediating = $true
+
+            try {
+                Start-Runspace -Script $script:REMEDIATE_SCRIPT -Vars @{
+                    RemState   = $script:State
+                    RemReports = $script:REPORTS
+                    ReportPath = $reportPath
+                    FixIds     = @($ids)
+                } | Out-Null
+            } catch {
+                $script:State.Remediating = $false
+                Write-JsonResponse $Ctx '{"error":"failed to start remediation"}' 500
+                return
+            }
             Write-JsonResponse $Ctx '{"status":"started"}'
         }
 
@@ -1584,13 +1683,26 @@ function Handle-Request {
                 $parsed.PSObject.Properties | ForEach-Object { $cfg[$_.Name] = $_.Value }
             }
 
-            Start-Runspace -Script $script:SCAN_SCRIPT -Vars @{
-                ScanState   = $script:State
-                ScanConfig  = $cfg
-                ScanPsPath  = $script:SCAN_PS
-                ScanReports = $script:REPORTS
-                MitreMap    = $script:MITRE_MAP
-            } | Out-Null
+            # Claim the slot HERE, synchronously, before the runspace is launched
+            # (audit H9). The runspace used to set Running itself, so two POSTs landing
+            # before it scheduled would both pass the check above and spawn an engine —
+            # two processes writing the same reports/ directory.
+            $script:State.Running = $true
+
+            try {
+                Start-Runspace -Script $script:SCAN_SCRIPT -Vars @{
+                    ScanState   = $script:State
+                    ScanConfig  = $cfg
+                    ScanPsPath  = $script:SCAN_PS
+                    ScanReports = $script:REPORTS
+                    MitreMap    = $script:MITRE_MAP
+                } | Out-Null
+            } catch {
+                # Never leave the slot claimed by a runspace that never started.
+                $script:State.Running = $false
+                Write-JsonResponse $Ctx '{"error":"failed to start scan"}' 500
+                return
+            }
 
             Write-JsonResponse $Ctx '{"status":"started"}'
         }

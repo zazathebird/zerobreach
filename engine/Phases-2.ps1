@@ -29,7 +29,7 @@ foreach ($lc in $longConns) {
         Out-Typewriter "  -> NON-STANDARD ESTABLISHED CONN: $($proc.Name) -> $($lc.RemoteAddress):$($lc.RemotePort)" "WARN"
         Add-Finding -ID "BEACON_CONN_$($lc.OwningProcess)" -Phase "PHASE 59" -ThreatType "C2 Beacon" `
             -Severity $SEV_POSSIBLE -Description "Unusual established connection: $($proc.Name) -> $($lc.RemoteAddress):$($lc.RemotePort)" `
-            -Target "PID:$($lc.OwningProcess)" -FixAction "KillProcess" -FixParam $lc.OwningProcess -Group "C2 Beacon Indicators"
+            -Target "PID:$($lc.OwningProcess)" -FixAction "KillProcess" -FixParam (Get-KillParam $lc.OwningProcess) -Group "C2 Beacon Indicators"
         $beaconFound = $true; $global:RATHits++
     }
 }
@@ -369,7 +369,7 @@ foreach ($sp in $stealerProcs) {
         Out-ThreatBanner "INFO-STEALER PROCESS IOC" "$($sp.Name) PID:$($sp.Id)"
         Add-Finding -ID "STEALER_$($sp.Id)" -Phase "PHASE 68" -ThreatType "Info-Stealer" `
             -Severity $SEV_CRITICAL -Description "Unsigned info-stealer-named process from user path: $($sp.Name) PID:$($sp.Id) @ $($sp.Path)" `
-            -Target "PID:$($sp.Id)" -FixAction "KillProcess" -FixParam $sp.Id -Group "Info-Stealer"
+            -Target "PID:$($sp.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $sp.Id) -Group "Info-Stealer"
     } else {
         Out-Typewriter "  -> STEALER-NAMED PROCESS (verify): $($sp.Name) PID:$($sp.Id)" "WARN"
         $why = if ($spSignedValid) { "binary is validly signed (likely legit app)" } elseif (-not $sp.Path) { "binary path not readable" } else { "binary is outside user-writable paths" }
@@ -441,7 +441,7 @@ foreach ($proc in $hollowCandidates) {
         Out-Typewriter "  -> POSSIBLE HOLLOW PROCESS: $($proc.Name) PID:$($proc.Id) @ $($proc.Path) (only $($proc.Modules.Count) modules)" "WARN"
         Add-Finding -ID "HOLLOW_$($proc.Id)" -Phase "PHASE 69" -ThreatType "Process Hollowing" `
             -Severity $SEV_HIGH -Description "Possible hollow process: $($proc.Name) PID:$($proc.Id) in AppData/Temp with $($proc.Modules.Count) modules loaded" `
-            -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Process Hollowing / Injection"
+            -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Process Hollowing / Injection"
         $hollowFound = $true
     }
 }
@@ -505,7 +505,7 @@ foreach ($pp in $phishProcs) {
     Out-ThreatBanner "PHISHING/OVERLAY PROCESS" "$($pp.Name) PID:$($pp.Id)"
     Add-Finding -ID "PHISH_$($pp.Id)" -Phase "PHASE 71" -ThreatType "Phishing/Overlay" `
         -Severity $SEV_CRITICAL -Description "Suspected phishing overlay process: $($pp.Name) PID:$($pp.Id)" `
-        -Target "PID:$($pp.Id)" -FixAction "KillProcess" -FixParam $pp.Id -Group "Phishing / Overlay"
+        -Target "PID:$($pp.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $pp.Id) -Group "Phishing / Overlay"
     $global:SpywareHits++
 }
 if ($phishProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO PHISHING OVERLAY PROCESSES." "GOOD" }
@@ -527,7 +527,7 @@ foreach ($conn in ($allConns | Select-Object -First 50)) {
                 Out-ThreatBanner "BOTNET C2 DOMAIN" "$($proc.Name) -> $rdns"
                 Add-Finding -ID "BOTNET_$($conn.RemoteAddress -replace '\.','_')" -Phase "PHASE 72" -ThreatType "Botnet/C2" `
                     -Severity $SEV_CRITICAL -Description "Botnet C2 connection: $($proc.Name) -> $rdns ($($conn.RemoteAddress))" `
-                    -Target "PID:$($conn.OwningProcess)" -FixAction "KillProcess" -FixParam $conn.OwningProcess `
+                    -Target "PID:$($conn.OwningProcess)" -FixAction "KillProcess" -FixParam (Get-KillParam $conn.OwningProcess) `
                     -Group "Botnet / C2 Connections"
                 $global:RATHits++; $botFound = $true
             }
@@ -903,7 +903,7 @@ if ($PhasePlan.Universal) {
             Out-ThreatBanner "LIVE REVERSE SHELL DETECTED" "$($rp.Name) PID:$($rp.Id) -> $($conn.RemoteAddress):$($conn.RemotePort)"
             Add-Finding -ID "REVSHELL_$($rp.Id)" -Phase "PHASE 81" -ThreatType "Reverse Shell" `
                 -Severity $SEV_CRITICAL -Description "Live reverse shell: $($rp.Name) PID:$($rp.Id) -> $($conn.RemoteAddress):$($conn.RemotePort)" `
-                -Target "PID:$($rp.Id)" -FixAction "KillProcess" -FixParam $rp.Id -Group "Reverse Shells"
+                -Target "PID:$($rp.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $rp.Id) -Group "Reverse Shells"
             $global:RATHits++
         }
     }
@@ -945,7 +945,7 @@ if ($PhasePlan.Universal) {
             Out-Typewriter "  -> LOW-MODULE UNSIGNED PROC: $($proc.Name) PID:$($proc.Id) @ $($proc.Path) [$($proc.Modules.Count) modules]" "WARN"
             Add-Finding -ID "HOLLOW_EXT_$($proc.Id)" -Phase "PHASE 83" -ThreatType "Process Hollowing" `
                 -Severity $SEV_HIGH -Description "Unsigned low-module process from user path: $($proc.Name) PID:$($proc.Id) [$($proc.Modules.Count) modules]" `
-                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Process Hollowing / Injection"
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Process Hollowing / Injection"
         }
     }
 
@@ -1034,7 +1034,7 @@ if ($PhasePlan.Universal) {
             Out-Typewriter "  -> UNUSUAL PORT $($ec.RemotePort)/tcp FROM $($proc.Name) -> $($ec.RemoteAddress)" "WARN"
             Add-Finding -ID "EXFIL_$($ec.OwningProcess)" -Phase "PHASE 89" -ThreatType "Data Exfiltration" `
                 -Severity $SEV_HIGH -Description "Unusual outbound connection on mail/FTP port from non-email process: $($proc.Name) -> $($ec.RemoteAddress):$($ec.RemotePort)" `
-                -Target "PID:$($ec.OwningProcess)" -FixAction "KillProcess" -FixParam $ec.OwningProcess -Group "Data Exfiltration"
+                -Target "PID:$($ec.OwningProcess)" -FixAction "KillProcess" -FixParam (Get-KillParam $ec.OwningProcess) -Group "Data Exfiltration"
         }
     }
     # WS0 wiring: externalized to 'stego_tools' (AMSI-safe, same list).

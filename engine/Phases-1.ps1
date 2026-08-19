@@ -56,7 +56,7 @@ if ($suspectProcs) {
         Out-Typewriter "  -> PID:$($proc.ProcessId) | $($proc.Name) | $cmd" "CRIT"
         Add-Finding -ID "PROC_INJ_$($proc.ProcessId)" -Phase "PHASE 3" -ThreatType "Process Injection/Fileless" `
             -Severity $SEV_CRITICAL -Description "Suspect process: $($proc.Name) PID:$($proc.ProcessId) | $cmd" `
-            -Target "PID:$($proc.ProcessId)" -FixAction "KillProcess" -FixParam $proc.ProcessId -Group "Live Malicious Processes"
+            -Target "PID:$($proc.ProcessId)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.ProcessId) -Group "Live Malicious Processes"
     }
 } else { Out-Typewriter "  -> [OK] NO INJECTED/MALICIOUS PROCESS SIGNATURES." "GOOD" }
 
@@ -74,7 +74,7 @@ foreach ($p in (Get-ProcSnapshot)) {
         Out-Decrypt -Text "LOLBIN: $($p.Name) PID:$($p.ProcessId)" -Prefix "  [LOLBIN] "
         Add-Finding -ID "LOLBIN_$($p.ProcessId)" -Phase "PHASE 4" -ThreatType "LoLBin Abuse" `
             -Severity $SEV_HIGH -Description "LOLBin $($p.Name) used with suspicious args: $($p.CommandLine.Substring(0,[Math]::Min(100,$p.CommandLine.Length)))" `
-            -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam $p.ProcessId -Group "Live Malicious Processes"
+            -Target "PID:$($p.ProcessId)" -FixAction "KillProcess" -FixParam (Get-KillParam $p.ProcessId) -Group "Live Malicious Processes"
     }
 }
 if (-not $lolHits) { Out-Typewriter "  -> [OK] NO LOLBIN ABUSE DETECTED." "GOOD" }
@@ -115,7 +115,7 @@ foreach ($proc in $runningProcs) {
             Out-ThreatBanner "RAT PROCESS IOC HIT" "$($proc.Name) PID:$($proc.Id)"
             Add-Finding -ID "RAT_PROC_$($proc.Id)" -Phase "PHASE 6" -ThreatType "RAT" -Severity $SEV_CRITICAL `
                 -Description "Known RAT process: $($proc.Name) (PID $($proc.Id)) matched IOC: $rat" `
-                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Processes"
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Live Malicious Processes"
             $global:RATHits++; $iocHits = $true
         }
     }
@@ -124,7 +124,7 @@ foreach ($proc in $runningProcs) {
             Out-ThreatBanner "CRYPTOMINER PROCESS IOC" "$($proc.Name) PID:$($proc.Id)"
             Add-Finding -ID "MINER_PROC_$($proc.Id)" -Phase "PHASE 6" -ThreatType "Cryptominer" -Severity $SEV_CRITICAL `
                 -Description "Known miner process: $($proc.Name) (PID $($proc.Id)) matched IOC: $miner" `
-                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Processes"
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Live Malicious Processes"
             $global:MinerHits++; $iocHits = $true
         }
     }
@@ -133,7 +133,7 @@ foreach ($proc in $runningProcs) {
             Out-ThreatBanner "KEYLOGGER PROCESS IOC" "$($proc.Name) PID:$($proc.Id)"
             Add-Finding -ID "KL_PROC_$($proc.Id)" -Phase "PHASE 6" -ThreatType "Keylogger" -Severity $SEV_CRITICAL `
                 -Description "Known keylogger process: $($proc.Name) (PID $($proc.Id))" `
-                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Processes"
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Live Malicious Processes"
             $global:KeyloggerHits++; $iocHits = $true
         }
     }
@@ -145,7 +145,7 @@ foreach ($proc in $runningProcs) {
             Out-ThreatBanner "LOADER/BOTNET PROCESS IOC" "$($proc.Name) PID:$($proc.Id)"
             Add-Finding -ID "LOADER_PROC_$($proc.Id)" -Phase "PHASE 6" -ThreatType "Loader/Botnet" -Severity $SEV_CRITICAL `
                 -Description "Known malware-loader process: $($proc.Name) (PID $($proc.Id)) matched IOC: $ldr" `
-                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Processes"
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Live Malicious Processes"
             $global:TrojanHits++; $iocHits = $true
         }
     }
@@ -154,7 +154,7 @@ foreach ($proc in $runningProcs) {
             Out-ThreatBanner "BANKING TROJAN PROCESS IOC" "$($proc.Name) PID:$($proc.Id)"
             Add-Finding -ID "BANKTROJ_PROC_$($proc.Id)" -Phase "PHASE 6" -ThreatType "Banking Trojan" -Severity $SEV_CRITICAL `
                 -Description "Known banking-trojan process: $($proc.Name) (PID $($proc.Id)) matched IOC: $bt" `
-                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Processes"
+                -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Live Malicious Processes"
             $global:TrojanHits++; $iocHits = $true
         }
     }
@@ -1027,7 +1027,7 @@ foreach ($conn in $conns) {
         Out-ThreatBanner "CRYPTOMINER STRATUM CONNECTION" "$($proc.Name) PID:$($proc.Id) -> $($conn.RemoteAddress):$($conn.RemotePort)"
         Add-Finding -ID "STRATUM_$($proc.Id)" -Phase "PHASE 36" -ThreatType "Cryptominer" -Severity $SEV_CRITICAL `
             -Description "Stratum mining connection from $($proc.Name) PID:$($proc.Id) to $($conn.RemoteAddress):$($conn.RemotePort)" `
-            -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Connections"
+            -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Live Malicious Connections"
         $global:MinerHits++
     }
     if ($proc.Path -match "AppData|Temp" -and $conn.RemotePort -notin @(80,443,8080,8443)) {
@@ -1035,7 +1035,7 @@ foreach ($conn in $conns) {
         Out-Typewriter "  -> SUSPECT SOCKET (AppData/Temp proc): $($proc.Name) -> $($conn.RemoteAddress):$($conn.RemotePort)" "CRIT"
         Add-Finding -ID "CONN_$($proc.Id)_$($conn.RemotePort)" -Phase "PHASE 36" -ThreatType "Suspicious Connection" `
             -Severity $SEV_HIGH -Description "$($proc.Name) from AppData/Temp connecting to $($conn.RemoteAddress):$($conn.RemotePort)" `
-            -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Connections"
+            -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Live Malicious Connections"
     }
 }
 # Reverse DNS check for C2 domains
@@ -1048,7 +1048,7 @@ foreach ($conn in ($conns | Select-Object -First 30)) {
                 Out-ThreatBanner "C2 DOMAIN CONNECTION" "$($proc.Name) -> $rdns"
                 Add-Finding -ID "C2_$($proc.Id)" -Phase "PHASE 36" -ThreatType "C2 Beacon/RAT" -Severity $SEV_CRITICAL `
                     -Description "Known C2 domain connection: $($proc.Name) PID:$($proc.Id) -> $rdns ($($conn.RemoteAddress))" `
-                    -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam $proc.Id -Group "Live Malicious Connections"
+                    -Target "PID:$($proc.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.Id) -Group "Live Malicious Connections"
                 $global:RATHits++; $foundConn = $true
             }
         }
@@ -1241,7 +1241,7 @@ foreach ($proc in $elevatedInUS) {
             Out-Typewriter "  -> SYSTEM-LEVEL PROC FROM USER PATH: PID $($proc.ProcessId) | $($proc.Name)" "CRIT"
             Add-Finding -ID "TOKENABUSE_$($proc.ProcessId)" -Phase "PHASE 44" -ThreatType "Privilege Abuse/Trojan" `
                 -Severity $SEV_CRITICAL -Description "SYSTEM-level process running from user path: $($proc.Name) PID:$($proc.ProcessId) @ $($proc.Path)" `
-                -Target "PID:$($proc.ProcessId)" -FixAction "KillProcess" -FixParam $proc.ProcessId -Group "Privilege Abuse"
+                -Target "PID:$($proc.ProcessId)" -FixAction "KillProcess" -FixParam (Get-KillParam $proc.ProcessId) -Group "Privilege Abuse"
         }
     } catch {}
 }
@@ -1309,7 +1309,7 @@ foreach ($p in $rawInputProcs) {
     Out-Typewriter "  -> SUSPICIOUS HID ACCESS: $($p.Name) PID:$($p.Id) @ $($p.Path)" "CRIT"
     Add-Finding -ID "HOOK_$($p.Id)" -Phase "PHASE 47" -ThreatType "Keylogger" -Severity $SEV_HIGH `
         -Description "Process accessing HID/user32 from user path: $($p.Name) PID:$($p.Id) @ $($p.Path)" `
-        -Target "PID:$($p.Id)" -FixAction "KillProcess" -FixParam $p.Id -Group "Keylogger / Hook Detection"
+        -Target "PID:$($p.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $p.Id) -Group "Keylogger / Hook Detection"
     $global:KeyloggerHits++; $hookHits = $true
 }
 if (-not $hookHits) { Out-Typewriter "  -> [OK] NO OBVIOUS HOOK KEYLOGGER PROCESSES." "GOOD" }
@@ -1361,7 +1361,7 @@ foreach ($cp in $capProcs) {
     Out-Typewriter "  -> SUSPICIOUS CAPTURE PROCESS: $($cp.Name) @ $($cp.Path)" "WARN"
     Add-Finding -ID "CAP_$($cp.Id)" -Phase "PHASE 49" -ThreatType "Spyware/Keylogger" -Severity $SEV_HIGH `
         -Description "Clipboard/screen capture process from user path: $($cp.Name)" `
-        -Target "PID:$($cp.Id)" -FixAction "KillProcess" -FixParam $cp.Id -Group "Keylogger / Hook Detection"
+        -Target "PID:$($cp.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $cp.Id) -Group "Keylogger / Hook Detection"
     $global:SpywareHits++
 }
 if ($capProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO OBVIOUS CAPTURE PROCESSES." "GOOD" }
@@ -1376,7 +1376,7 @@ foreach ($up in $uiaProcs) {
     Out-Typewriter "  -> UIAUTOMATION ACCESS FROM USER PATH: $($up.Name) PID:$($up.Id)" "WARN"
     Add-Finding -ID "UIA_$($up.Id)" -Phase "PHASE 50" -ThreatType "Keylogger/Spyware" -Severity $SEV_HIGH `
         -Description "Process using UIAutomation API from user path (keylogger vector): $($up.Name)" `
-        -Target "PID:$($up.Id)" -FixAction "KillProcess" -FixParam $up.Id -Group "Keylogger / Hook Detection"
+        -Target "PID:$($up.Id)" -FixAction "KillProcess" -FixParam (Get-KillParam $up.Id) -Group "Keylogger / Hook Detection"
     $global:KeyloggerHits++
 }
 if ($uiaProcs.Count -eq 0) { Out-Typewriter "  -> [OK] NO UIAUTOMATION ABUSE DETECTED." "GOOD" }

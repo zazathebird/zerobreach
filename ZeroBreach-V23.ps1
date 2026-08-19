@@ -1142,6 +1142,28 @@ function Get-RegVal {
     param([string]$Path, [string]$Name)
     try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
 }
+function Get-KillParam {
+    # Builds the FixParam for a KillProcess finding. A bare PID is not enough: the
+    # operator remediates minutes or hours after the scan, and Windows recycles PIDs
+    # freely, so "kill the miner" could kill whatever now holds that number (audit H5).
+    # Bind the PID to the identity observed at detection time; both executors (the
+    # server runspace and Invoke-FixMode) re-check it and skip on a mismatch.
+    #
+    # Format: "<pid>|<processName>|<startTimeTicks>". Falls back to a bare PID when the
+    # process has already exited or its start time is unreadable (a protected process
+    # denies StartTime) — the executors treat that as legacy/unverifiable and say so.
+    # NOTE: never name a local $pid here — it is an automatic variable (CLAUDE.md rule).
+    param($Id)
+    $pidNum = 0
+    if (-not [int]::TryParse("$Id", [ref]$pidNum) -or $pidNum -le 0) { return "$Id" }
+    try {
+        $pp = Get-Process -Id $pidNum -ErrorAction Stop
+        $ticks = 0
+        try { $ticks = $pp.StartTime.Ticks } catch { $ticks = 0 }
+        if ($ticks -gt 0) { return ('{0}|{1}|{2}' -f $pidNum, $pp.ProcessName, $ticks) }
+        return ('{0}|{1}|0' -f $pidNum, $pp.ProcessName)
+    } catch { return "$pidNum" }
+}
 function Get-WinEventSafe {
     # Safe wrapper. Get-WinEvent -FilterHashtable throws a *terminating* error that
     # -ErrorAction SilentlyContinue does NOT suppress when a ProviderName/LogName isn't
