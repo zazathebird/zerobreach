@@ -67,10 +67,35 @@ the Windows filesystem or registry is still `[NEEDS REPRO]`.
 | **H4** | Module-level `trap { Write-RecoveredError $_; continue }` added as the first statement of `Summary.ps1` and `FixMode.ps1`. |
 | **H8** | Added `ConvertTo-CsvSafeCell` and wired it into `Get-CsvReport` — neutralises leading `= + - @ \t \r \n`. **Note: the engine's HTML report has a *second* CSV writer (`Summary.ps1:251`, `exportCSV()` in embedded JS) that is NOT yet fixed.** |
 
-### Still open (not yet fixed)
+### Session 2 (overnight) — CRITICAL + HIGH tier closed
 
-**C1** (auth + CORS), **C3** (vendor GSAP/Chart.js/Google Fonts), **H1** (rollback), **H2** (exit
-code + stderr), **H5**, **H6**, **H7/H7b**, **H9**, **H10**, all MEDIUM, plus §5 and the GUI pass.
+| Finding | Change |
+|---|---|
+| **C1** | Per-launch 64-hex token from `RNGCryptoServiceProvider` required on every `/api/*` call (`?t=` or `X-ZB-Token`); Origin lockdown on every route; listener rebound to `127.0.0.1`; **all** `Access-Control-Allow-*` headers removed incl. SSE + preflight; nosniff/Referrer-Policy/X-Frame-Options/CSP added. Frontend `zbApi()` wraps all 13 call sites, token cached in sessionStorage then stripped from the URL, tokenless load shows a plain-language overlay. |
+| **C3** | GSAP + Chart.js vendored to `gui/static/js/vendor/` (verified against cdnjs's published SRI), 27 woff2 subsets + `fonts.css` vendored, `@import` removed, both scripts `defer`red, build manifest extended with `$requiredDirs`. **Verified in Chrome: zero non-local requests.** |
+| **H1** | Snapshot is now a folder of individually-valid `.reg` exports + a generated `Restore.cmd` + `README.txt`; `Checkpoint-Computer` actually attempted and honestly reported; banner and all three stale `regedit /S` references corrected. |
+| **H2** | `ReadToEndAsync` replaces the discard-everything `BeginErrorReadLine`; `ExitCode` read; non-zero exit **or** zero phases parsed emits `scan_failed` (never `scan_complete`); stderr surfaced; remediation stays locked; GUI renders a red "NOT A CLEAN RESULT" panel. |
+| **H5** | `Get-KillParam` encodes `pid\|name\|startTicks` at all 26 sites; both executors re-verify identity and skip on a recycled PID. |
+| **H6** | `-Recurse` dropped from `DeleteFile`; reparse points and directories refused; server re-guards the **resolved** path; engine moved to `-LiteralPath`. |
+| **H7** | `ConvertTo-GuardPath` normalises before every test — **the confirmed forward-slash bypass is closed**, and all previously-blocked vectors still block. |
+| **H7b** | `Test-DestructiveRunCmd` + 21 direction-aware patterns. All 8 audit vectors blocked; all 17 real engine `RunCmd` fixes still allowed (`netsh advfirewall reset` is a genuine engine fix despite appearing on the dangerous list). |
+| **H9** | `Running`/`Remediating` claimed synchronously on the request thread, released if the runspace fails to launch. |
+| **H10** | `Get-RRegVal` + `Add-RPendingDelete` mirrors; both reboot-delete sites fixed; failure to queue now reported loudly. |
+| **H8 (completed)** | Engine-side CSV writer now uses `ConvertTo-CsvSafeCell`. **Also fixed a bug not in this audit:** raw newlines were embedded in a single-quoted JS literal, so the HTML report's entire inline `<script>` was a SyntaxError — Export CSV, search, severity filters and column sorting were dead in every report. Rebuilt via `ConvertTo-Json` + `</` → `<\/`. |
+
+**Regression suite added:** `tools/tests/Run-SecurityTests.ps1` — 135 assertions, all green.
+Each test pulls the real functions out of the shipped source via the AST, so a test cannot
+drift from the code it guards.
+
+### Still open
+
+**All MEDIUM (M1–M11)**, §5 detection-quality work, and the GUI pass.
+
+**Newly noted, not in the original audit:** `engine/FixMode.ps1`'s interactive `Invoke-FixMode`
+has **no protected-target guard at all** — `Test-ProtectedTarget` exists only in the server and
+its runspace mirror. The engine is audit-only under `-Auto` (the servers' path), so this affects
+only the interactive CLI fix mode, but it is a fourth executor with none of the three layers of
+defence CLAUDE.md describes.
 
 ---
 

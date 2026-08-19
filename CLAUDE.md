@@ -248,6 +248,72 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Prefer `Quarantine` over `DeleteFile`** for anything not hash-confirmed malware (reversible: moved
   to `reports/quarantine/`, renamed `.quar`, with a `.quar.json` restore manifest).
 
+### API auth + transport security (added 2026-08-18, audit C1/C3)
+- **Every `/api/*` route requires the per-launch token.** The server mints it at startup
+  (`$script:AUTH_TOKEN`, `RNGCryptoServiceProvider` — **never `Get-Random`**, which is a seeded
+  `System.Random` and therefore guessable) and opens the browser at `/?t=<token>`. A new route is
+  gated automatically by the `$path -like '/api/*'` check in `Handle-Request`; a new **frontend**
+  call is not — **wrap every new fetch/EventSource URL in `zbApi()`** or it will 401. Static assets
+  stay ungated on purpose so a tokenless browser can still load the page and explain itself.
+- **Never re-add an `Access-Control-Allow-*` header.** Same-origin needs no CORS, and `ACAO: *` on
+  an elevated remediation API is what made a drive-by web page able to run commands as admin. The
+  Origin check refuses any request whose `Origin` is present and not this server's own.
+- **The listener binds `http://127.0.0.1:$Port/`, not `localhost`** — http.sys matches the Host
+  header against the prefix, so this is what rejects a DNS-rebound hostname. Don't "fix" it back.
+- **No remote origins in the GUI, ever.** Scripts, fonts and styles are vendored under
+  `gui/static/js/vendor/` and `gui/static/css/fonts/`, and the CSP pins the page to `'self'`. This
+  tool runs on boxes whose DNS/proxy/CA trust it is itself checking (phases 36/37/39). New assets
+  get vendored and added to `$requiredFiles`/`$requiredDirs` in `tools/Build-Release.ps1`.
+
+### Reporting the truth about a scan (added 2026-08-18, audit H2)
+- **`scan_complete` means the engine finished. A failed engine emits `scan_failed`, never both.**
+  The GUI's clean-bill-of-health banner hangs off `scan_complete`; a false all-clear is the worst
+  bug an IR tool can ship. Failure = non-zero exit code **or** zero `PHASE` headers parsed (the
+  documented AMSI-blocked-at-load case exits 1 with no output). An operator abort is not a failure.
+- **Never call `BeginErrorReadLine()` without a handler** — that drains stderr to nothing. Use
+  `StandardError.ReadToEndAsync()`: .NET keeps draining (so no buffer deadlock) and the text
+  survives for the log.
+
+### Guard mirrors + destructive-command inspection (added 2026-08-18, audit H5/H6/H7/H7b)
+- **Three functions are duplicated between the main thread and `$script:REMEDIATE_SCRIPT` and must
+  change together:** `ConvertTo-GuardPath`/`ConvertTo-RGuardPath`,
+  `Test-DestructiveRunCmd`/`Test-RDestructiveRunCmd`, `Test-ProtectedTarget`/`Test-RProtected`.
+  `tools/tests/Test-GuardMirrorSync.ps1` fails if they diverge — run it after touching either.
+- **Normalise before you match.** Guards used to regex the raw `FixParam`, and
+  `C:/Windows/System32/evil.exe` sailed straight through. Everything goes through
+  `ConvertTo-GuardPath` first (separators, env vars, `\\?\`/GLOBALROOT prefixes, `GetFullPath`).
+  PS drives (`HKLM:\`, `Cert:\`) deliberately skip `GetFullPath`.
+- **The `RunCmd` blocklist is direction-aware, and that is not optional.** The engine legitimately
+  emits `netsh advfirewall reset`, `Set-MpPreference -DisableRealtimeMonitoring $false`,
+  `bcdedit /set {default} recoveryenabled Yes`, `Stop-Service WinRM|Spooler` and `EnableLUA 1` as
+  **real remediations**. Only the sabotage direction may be matched. **Before adding a pattern,
+  diff it against the engine's own RunCmd inventory** (`grep -o '-FixAction "RunCmd" -FixParam .*'
+  engine/*.ps1`) or you will silently break a fix.
+- **`KillProcess` FixParams are `pid|name|startTicks`** (built by `Get-KillParam`). Windows recycles
+  PIDs and remediation runs long after the scan, so both executors re-verify identity and skip on a
+  mismatch. A bare PID (old report) is honoured but logged as unverifiable.
+- **`DeleteFile` deletes a FILE**: no `-Recurse`, reparse points and directories refused, and the
+  guard re-run on the *resolved* path. Use `-LiteralPath` everywhere — `-Path` globs, and malware
+  filenames contain `[` and `*`.
+
+### Embedding data in generated HTML/JS (added 2026-08-18, audit H8)
+- **Never build a JS string literal with `-replace` chains.** `engine/Summary.ps1` embedded
+  newline-separated CSV inside `'...'`, which is a syntax error — that silently killed the HTML
+  report's *entire* inline `<script>` (export, search, filters, sorting) in every report ever
+  generated. Use `ConvertTo-Json -Compress`, which emits a correctly escaped literal in one step,
+  then `-replace '</','<\/'` so a finding containing `</script>` cannot break out of the element.
+- **CSV cells go through `ConvertTo-CsvSafeCell`** (loader **and** server copies — keep in sync).
+  Correct CSV quoting does not stop Excel evaluating a leading `= + - @ \t \r` as a formula, and
+  exporting findings and mailing them to a client is this product's actual workflow.
+
+### Security regression suite
+- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 135
+  assertions covering C1/H1/H2/H5/H7/H7b/H8, the parse+BOM gate, and the embedded runspace
+  here-strings. Every test pulls the real functions out of the shipped source **via the AST**, so a
+  test cannot drift from the code it guards. **`ParseFile` on `ZeroBreach-Server.ps1` does NOT
+  validate the runspace here-strings** (`$script:SCAN_SCRIPT`, `SSE_SCRIPT`, `REMEDIATE_SCRIPT`) —
+  `Test-EmbeddedRunspaces.ps1` is what catches a syntax error in those.
+
 ### Server / display
 - **The GUI phase counter is driven by `scan_state`, throttled to every 12 log lines** — any UI element
   that must track phase precisely needs a phase-change-triggered emit, not the `%12` tick. When a user

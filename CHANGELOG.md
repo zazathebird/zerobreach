@@ -6,6 +6,69 @@ entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative 
 
 ---
 
+## 2026-08-18 — Security audit remediation: CRITICAL + HIGH tier (branch `security/audit-2026-08-18`)
+
+Driven by `AUDIT_2026-08-18_INDEPENDENT.md`. Ten findings closed. Full rationale is in the
+per-finding commit messages; the durable rules are in `CLAUDE.md`.
+
+**C1 — the API had no authentication and `Access-Control-Allow-Origin: *`.** The server runs
+elevated and exposes `POST /api/remediate` (DeleteFile / DeleteReg / KillProcess / **RunCmd**).
+Any page the operator had open could sweep loopback for the `/api/sysinfo` oracle, read a finding
+ID, and fire a RunCmd fix — arbitrary admin command execution with no operator interaction, since
+the PURGE modal is client-side only. Now: a 64-hex per-launch token (crypto RNG, **not**
+`Get-Random`) required on every `/api/*` request, Origin lockdown on every route, listener bound
+to `127.0.0.1` so http.sys rejects a rebound Host, every CORS header removed, and CSP/nosniff/
+X-Frame-Options added. The frontend threads the token through all 13 call sites and shows a
+plain-language overlay if it is missing.
+
+**C3 — an admin-privileged console pulled JS from cdnjs and CSS from Google Fonts, no SRI.**
+This tool is deployed onto already-compromised machines and detects, in its own phases, the exact
+primitives that control such a fetch (hosts hijack 36, DNS poisoning 37, proxy 37, rogue root CA
+39). Everything is vendored locally now and the CSP pins the page to `self`. Verified in Chrome:
+zero non-local requests, both libraries defined, fonts rendering.
+
+**H2 — a crashed engine was indistinguishable from a clean machine.** `BeginErrorReadLine()` was
+called with no handler (stderr discarded) and `ExitCode` was never read, so the documented
+AMSI-blocks-at-load case produced a green "SYSTEM APPEARS CLEAN" with 0 findings. Now stderr is
+captured via `ReadToEndAsync`, the exit code is judged, and a failed run emits `scan_failed` —
+never `scan_complete` — with remediation left locked.
+
+**H1 — the rollback snapshot could not restore anything.** The `.reg` was five concatenated
+exports behind a banner line, and `regedit /S` requires the version header as line 1. There was
+also no VSS snapshot at all despite the banner claiming one. Now a folder of individually-valid
+exports + a generated `Restore.cmd`, a real `Checkpoint-Computer` attempt reported honestly, and a
+banner that says deleted files are not recoverable while Quarantine is.
+
+**H5/H6/H9/H10 — remediation executor.** PID identity now re-verified before `Stop-Process`
+(PIDs are recycled); `DeleteFile` no longer passes `-Recurse` and refuses reparse points and
+directories; the concurrency flags are claimed synchronously so two remediation passes cannot
+race; and the server's reboot-delete fallback stopped using the raw `Get-ItemPropertyValue` that
+CLAUDE.md already warned about — it threw on the common case and silently never queued the delete.
+
+**H7/H7b — the guard.** Input is normalised before every test, closing the confirmed
+`C:/Windows/...` forward-slash bypass. More importantly, `RunCmd` content was never inspected at
+all — the "HARD BLOCK, defence-in-depth" claim held only for path-shaped params. A 21-pattern
+table now blocks shadow-copy/backup deletion, boot sabotage, Defender disable, event-log clearing,
+account creation and the rest. The patterns are **direction-aware** because the engine legitimately
+emits `netsh advfirewall reset`, `-DisableRealtimeMonitoring $false` and `recoveryenabled Yes` as
+real remediations — a naive blocklist would have broken the product.
+
+**H8 — completed, plus an unrelated bug.** The engine-side CSV writer now neutralises formula
+injection. While fixing it: the HTML report embedded newline-separated CSV into a single-quoted JS
+literal, so **every generated report's inline `<script>` was a SyntaxError** — Export CSV, search,
+severity filters and column sorting have been dead in all of them. Rebuilt with `ConvertTo-Json`
+plus a `</` → `<\/` pass so a finding containing `</script>` cannot break out.
+
+**Added:** `tools/tests/Run-SecurityTests.ps1`, a 135-assertion regression suite. Each test
+extracts the real functions from the shipped source via the AST, so a test cannot drift from the
+code it guards.
+
+**Not done / still open:** all MEDIUM (M1–M11), the §5 detection-quality work, the GUI pass, and
+live-on-Windows validation of everything above. Also newly noted: `Invoke-FixMode` (interactive
+CLI fix mode) has **no** protected-target guard of its own.
+
+---
+
 ## 2026-07-21 — WS4: Win32_Process snapshot memo (`Get-ProcSnapshot`)
 
 Second WS4 caching step (after the `Get-ScanFiles` memo): **7 phases each ran their own full

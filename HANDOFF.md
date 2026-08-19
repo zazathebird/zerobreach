@@ -1,4 +1,62 @@
-# RESUME HANDOFF — updated 2026-07-11 (session 10: review hardening of session-9 work)
+# RESUME HANDOFF — updated 2026-08-18 (session 11: security audit remediation, CRITICAL + HIGH)
+
+> ## ▶ START HERE after /clear — SESSION 11 (2026-08-18)
+> **Working on branch `security/audit-2026-08-18` (branched from `main` @ `22e582a`). Nothing is
+> pushed; `main` is untouched.** 9 commits, all CRITICAL and HIGH findings from
+> `AUDIT_2026-08-18_INDEPENDENT.md` are closed.
+>
+> **Commits (newest first):**
+> - `37c0f72` H8 — engine CSV writer + the HTML report's dead `<script>` block
+> - `515d253` H1 — rollback snapshot made real, banner made honest
+> - `2f35002` H7/H7b — guard normalisation + RunCmd content inspection
+> - `c2e925a` H5/H6/H9/H10 — remediation executor hardening
+> - `dcafd5e` H2 — crashed engine no longer looks like a clean machine
+> - `4d04ff5` C3 — vendored GSAP/Chart.js/fonts, zero remote origins
+> - `e8f3d56` C1 — per-launch token + Origin lockdown
+> - `be6759e` prior session's C2/H3/H4/H8 work + audit docs
+>
+> **Verification status — read this before trusting anything above.** Everything was validated on
+> **Linux with pwsh 7.4.6** (installed to scratch; not in the repo) plus **Chrome for the GUI**:
+> - `tools/tests/Run-SecurityTests.ps1` — **135 assertions, all green.** Tests extract the real
+>   functions from the shipped source via the AST, so they cannot drift from the code.
+> - 7/7 files parse clean with BOMs intact; all 3 embedded runspace here-strings parse clean;
+>   all frontend JS passes `node --check`.
+> - C3 confirmed in a real browser: clean boot, **zero non-local network requests**, gsap + Chart
+>   defined, fonts rendering, and the C1 tokenless-load overlay renders correctly.
+> - **NOT verified: anything requiring a live Windows box.** The HttpListener has never been
+>   started, no scan has been run, no remediation executed. PS 7 parse-clean is **not** PS 5.1
+>   parse-clean. **The next session's first job is a live Windows run.**
+>
+> **What to check first on Windows:**
+> 1. `Launch-GUI.bat` → the console now prints a tokenised URL (`http://127.0.0.1:PORT/?t=<64 hex>`)
+>    and opens the browser at it. Confirm the GUI loads and is NOT showing the orange
+>    "LAUNCH TOKEN MISSING" overlay. Opening bare `http://127.0.0.1:PORT/` *should* show it.
+> 2. Confirm the CSP does not break anything visually (themes, VFX, kraken cinematic, PURGE modal).
+>    If something is blocked, the browser console names the directive — the CSP is one string in
+>    `$script:SECURITY_HEADERS`.
+> 3. Run a QUICK scan; confirm phases advance and `scan_complete` still fires normally.
+> 4. Force a failure (rename `ZeroBreach-V23.ps1` briefly) and confirm you get the red
+>    **"SCAN DID NOT COMPLETE — THIS IS NOT A CLEAN RESULT"** panel, not a green all-clear.
+> 5. Use the tripwires in CLAUDE.md to exercise remediation end-to-end, and check the new
+>    `reports/KrakenSnapshot_<stamp>/Restore.cmd` is generated and imports cleanly.
+> 6. Open an HTML report and confirm Export CSV / search / filters / sorting now work — they have
+>    been broken in every report until this session.
+>
+> **Still open:** all MEDIUM (M1–M11), the §5 detection-quality work, and the GUI pass.
+> **Newly noted, not in the audit:** `engine/FixMode.ps1`'s interactive `Invoke-FixMode` has **no
+> protected-target guard at all** — `Test-ProtectedTarget` lives only in the server and its
+> runspace mirror. Only affects the interactive CLI path (servers run the engine audit-only under
+> `-Auto`), but it is a fourth executor with none of the documented three layers of defence.
+>
+> **One behaviour change worth knowing:** `M1` is still open, so the sticky-keys `STICKY_*` finding
+> is *still* auto-selected and *still* always blocked — now it will also be caught by the new
+> RunCmd content guard if its `Rename-Item` target resolves under System32.
+>
+> ---
+>
+<details>
+<summary>Older handoff history (sessions 1-10)</summary>
+
 
 > ## ▶ START HERE after /clear — SESSION 10 (2026-07-11)
 > **Session 10 = full review of the session-9 (Opus) work + hardening.** Two agent audits found
@@ -477,3 +535,5 @@ node tools/check-visuals.mjs   # FX audit, expect PASS 13/13 (kill stray zb-vfx-
 
 Newest engine report analyzed: `reports/KrakenBaseline_20260623_135347.json`.
 Test tripwires (still on the machine, named `ZeroBreach_TEST_DELETEME`): recreate/cleanup in CLAUDE.md.
+
+</details>
