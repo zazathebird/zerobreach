@@ -993,7 +993,7 @@ if ($PhasePlan.Integrity) {
                 Out-ThreatBanner "DEFENDER TAMPER" $dv.desc
                 Add-Finding -ID "DEFTAMP114_$($dv.name)" -Phase "PHASE 114" -ThreatType "Defender Tamper" `
                     -Severity $SEV_CRITICAL -Description "$($dv.desc): $($dv.key)\$($dv.name) = $cur." `
-                    -Target "$($dv.key)\$($dv.name)" -FixAction "RunCmd" -FixParam "Remove-ItemProperty -LiteralPath '$($dv.key)' -Name '$($dv.name)' -Force -ErrorAction SilentlyContinue" -Group "Security Control Tamper"
+                    -Target "$($dv.key)\$($dv.name)" -FixAction "RunCmd" -FixParam "Remove-ItemProperty -LiteralPath '$(ConvertTo-PsLiteral $dv.key)' -Name '$(ConvertTo-PsLiteral $dv.name)' -Force -ErrorAction SilentlyContinue" -Group "Security Control Tamper"
             }
         }
     }

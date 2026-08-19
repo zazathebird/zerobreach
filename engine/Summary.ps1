@@ -1,4 +1,9 @@
-﻿Stop-PhaseTiming   # close out the final phase's wall-clock
+﻿trap { Write-RecoveredError $_; continue }   # module-level resilience (CLAUDE.md engine-split rule).
+# Load-bearing: without it, a terminating error here unwinds to the LOADER trap, which resumes at the
+# next dot-sourced module — FixMode.ps1 — whose interactive prompts block forever on a server-spawned
+# child with no stdin. That is the -Auto hang this module's [Environment]::Exit(0) calls exist to avoid.
+
+Stop-PhaseTiming   # close out the final phase's wall-clock
 $elapsed    = [Math]::Round(((Get-Date) - $global:START_TIME).TotalMinutes, 2)
 $phaseCount = $PhasePlan.Max
 $totalRisk  = $global:RansomwareRisk + ($global:RootkitHits * 3) + ($global:RATHits * 2) +

@@ -236,7 +236,7 @@ foreach ($dir in $shortcutDirs) {
                 Out-ThreatBanner "BROWSER SHORTCUT HIJACK" "$($lnk.Name) | Args: $($sc.Arguments)"
                 Add-Finding -ID "LNK_HIJACK_$($lnk.Name -replace '[^a-z0-9]','')" -Phase "PHASE 9" -ThreatType "Browser Hijacker" `
                     -Severity $SEV_CRITICAL -Description "Hijacked browser shortcut: $($lnk.Name) | $($sc.Arguments)" `
-                    -Target $lnk.FullName -FixAction "RunCmd" -FixParam "`$_sh=New-Object -ComObject WScript.Shell;`$_sc=`$_sh.CreateShortcut('$($lnk.FullName)');`$_sc.Arguments='';`$_sc.Save()" -Group "Browser Hijacks"
+                    -Target $lnk.FullName -FixAction "RunCmd" -FixParam "`$_sh=New-Object -ComObject WScript.Shell;`$_sc=`$_sh.CreateShortcut('$(ConvertTo-PsLiteral $lnk.FullName)');`$_sc.Arguments='';`$_sc.Save()" -Group "Browser Hijacks"
                 $global:SpywareHits++
             }
         } catch {}
@@ -324,7 +324,7 @@ foreach ($rp in $recentPaths) {
             Out-Typewriter "  -> $($ri.Count) RECENT ITEMS IN: $rp" "INFO"
             Add-Finding -ID "RECENT_DOCS_$($rp -replace '[^a-z0-9]','')" -Phase "PHASE 11" -ThreatType "Browser/File Artifact" `
                 -Severity $SEV_INFO -Description "Recent docs/jump lists found in $rp ($($ri.Count) items)" `
-                -Target $rp -FixAction "RunCmd" -FixParam "Get-ChildItem -LiteralPath '$rp' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue" `
+                -Target $rp -FixAction "RunCmd" -FixParam "Get-ChildItem -LiteralPath '$(ConvertTo-PsLiteral $rp)' -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue" `
                 -Group "Recent Files / Jump Lists"
         } else { Out-Typewriter "  -> [OK] RECENT ITEMS CLEAN." "GOOD" }
     }
@@ -430,7 +430,7 @@ foreach ($sf in $recentSysFiles) {
             $newName = "$($sf.FullName).kraken"
             Add-Finding -ID "SYS32_UNSIGNED_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 15" -ThreatType "Rootkit/Trojan" `
                 -Severity $SEV_CRITICAL -Description "Tampered/untrusted binary in System32 ($sigStatus): $($sf.Name) — possible rootkit/trojan dropper" `
-                -Target $sf.FullName -FixAction "RunCmd" -FixParam "Rename-Item -LiteralPath '$($sf.FullName)' -NewName '$newName' -Force -ErrorAction SilentlyContinue" -Group "Unsigned System32 Binaries"
+                -Target $sf.FullName -FixAction "RunCmd" -FixParam "Rename-Item -LiteralPath '$(ConvertTo-PsLiteral $sf.FullName)' -NewName '$(ConvertTo-PsLiteral $newName)' -Force -ErrorAction SilentlyContinue" -Group "Unsigned System32 Binaries"
             $global:RootkitHits++
         } else {
             Add-Finding -ID "SYS32_UNSIGNED_$($sf.Name -replace '[^a-z0-9]','')" -Phase "PHASE 15" -ThreatType "Rootkit/Trojan" `
@@ -759,7 +759,7 @@ foreach ($svc in $rogueServices) {
     Add-Finding -ID "SVC_$($svc.PSChildName -replace '[^a-z0-9]','')" -Phase "PHASE 28" -ThreatType "Malicious Service" `
         -Severity $SEV_CRITICAL -Description "Rogue service: $($svc.PSChildName) | ImagePath: $($svc.ImagePath)" `
         -Target "Service: $($svc.PSChildName)" -FixAction "RunCmd" `
-        -FixParam "Stop-Service '$($svc.PSChildName)' -Force; Set-Service '$($svc.PSChildName)' -StartupType Disabled; sc.exe delete '$($svc.PSChildName)'" `
+        -FixParam "Stop-Service '$(ConvertTo-PsLiteral $svc.PSChildName)' -Force; Set-Service '$(ConvertTo-PsLiteral $svc.PSChildName)' -StartupType Disabled; sc.exe delete '$(ConvertTo-PsLiteral $svc.PSChildName)'" `
         -Group "Rogue Services"
 }
 
@@ -1076,7 +1076,7 @@ foreach ($rule in $suspectRules) {
     Out-Typewriter "  -> SUSPECT FW RULE: $($rule.DisplayName)" "WARN"
     Add-Finding -ID "FW_$($rule.Name -replace '[^a-z0-9]','')" -Phase "PHASE 38" -ThreatType "Firewall Hole" -Severity $SEV_POSSIBLE `
         -Description "Suspicious inbound firewall rule: $($rule.DisplayName) — Public profile or Any port" `
-        -Target "Firewall Rule: $($rule.Name)" -FixAction "RunCmd" -FixParam "Disable-NetFirewallRule -Name '$($rule.Name)'" -Group "Firewall Audit"
+        -Target "Firewall Rule: $($rule.Name)" -FixAction "RunCmd" -FixParam "Disable-NetFirewallRule -Name '$(ConvertTo-PsLiteral $rule.Name)'" -Group "Firewall Audit"
 }
 if ($suspectRules.Count -eq 0) { Out-Typewriter "  -> [OK] FIREWALL RULES APPEAR CLEAN." "GOOD" }
 Add-Finding -ID "FW_RESET_OPT" -Phase "PHASE 38" -ThreatType "Hardening" -Severity $SEV_INFO `
@@ -1262,7 +1262,7 @@ foreach ($af in $accessFiles) {
             Add-Finding -ID "STICKY_$([IO.Path]::GetFileNameWithoutExtension($af))" -Phase "PHASE 45" `
                 -ThreatType "Sticky Keys / Accessibility Backdoor" -Severity $SEV_CRITICAL `
                 -Description "Unsigned accessibility binary: $af — classic sticky-keys shell backdoor" `
-                -Target $af -FixAction "RunCmd" -FixParam "Rename-Item '$af' '$af.kraken' -Force" -Group "Accessibility Shell Backdoors"
+                -Target $af -FixAction "RunCmd" -FixParam "Rename-Item '$(ConvertTo-PsLiteral $af)' '$(ConvertTo-PsLiteral $af).kraken' -Force" -Group "Accessibility Shell Backdoors"
         } else { Out-Typewriter "  -> [OK] VALID: $af" "GOOD" }
     }
 }

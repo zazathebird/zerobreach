@@ -272,6 +272,19 @@ $(if ($total -gt 0) { "<table><tr><th>Severity</th><th>Phase</th><th>Threat</th>
 "@
 }
 
+# CSV cell hardening. Quoting alone does NOT stop formula injection: Excel/LibreOffice/Sheets
+# strip the quotes and then evaluate a cell whose first character is = + - @ (or a leading tab/CR,
+# which some parsers skip before applying the same rule). Finding text is malware-controlled —
+# file names, task names, registry values — and the product's workflow is to export findings and
+# send them to a client, so the payload detonates on a DIFFERENT machine than the one scanned.
+# Prefixing with an apostrophe forces text interpretation; the apostrophe is not shown as data.
+function ConvertTo-CsvSafeCell {
+    param([string]$Value)
+    $v = "$Value"
+    if ($v -match '^[=+\-@\t\r\n]') { $v = "'" + $v }
+    return '"' + ($v -replace '"','""') + '"'
+}
+
 function Get-CsvReport {
     $findings = @($script:State.Findings)
     $sb = [System.Text.StringBuilder]::new()
@@ -280,7 +293,7 @@ function Get-CsvReport {
         $mid = if ($f.mitre -and $f.mitre.id) { "$($f.mitre.id)" } else { '' }
         $mnm = if ($f.mitre -and $f.mitre.name) { "$($f.mitre.name)" } else { '' }
         $cells = @("$($f.severity)", "PH$($f.phase)", "$($f.threat_type)", $mid, $mnm, "$($f.line)", "$($f.timestamp)")
-        $line = ($cells | ForEach-Object { '"' + ($_ -replace '"','""') + '"' }) -join ','
+        $line = ($cells | ForEach-Object { ConvertTo-CsvSafeCell $_ }) -join ','
         [void]$sb.AppendLine($line)
     }
     return $sb.ToString()

@@ -487,6 +487,29 @@ function Show-ThreatCategoryHeader {
 # ══════════════════════════════════════════════════════════════════════════════
 #  AUDIT FINDING REGISTRATION
 # ══════════════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════════════
+#  RunCmd FixParam SAFETY — single-quoted literal escaping
+# ══════════════════════════════════════════════════════════════════════════════
+# RunCmd FixParams are executed via [scriptblock]::Create($f.FixParam); & $sb — functionally
+# Invoke-Expression, at admin privilege. Phases build those command strings by interpolating
+# ATTACKER-NAMED artifacts (scheduled tasks, WMI __EventFilter/__EventConsumer names, service
+# keys, Defender exclusion paths, firewall rule names, IFEO subkeys, file paths) into
+# single-quoted PowerShell literals. An unescaped apostrophe in any of them closes the literal
+# and everything after it executes — turning a CORRECT detection of a REAL threat into code
+# execution the moment the operator approves the fix.
+#
+# Verified with the shipped code: a task named  Updater';Write-Host 'x';#  makes the Phase 64
+# FixParam parse into TWO statements. Phase 29 (which already escaped) parses into one.
+#
+# Doubling the apostrophe is the COMPLETE fix for a single-quoted literal — PowerShell performs
+# no other escape processing inside '...'. Always wrap the interpolation in single quotes:
+#     -FixParam "Unregister-ScheduledTask -TaskName '$(ConvertTo-PsLiteral $t.TaskName)' ..."
+# NEVER use this for a double-quoted literal or for an unquoted argument — neither is safe.
+function ConvertTo-PsLiteral {
+    param([string]$Value)
+    return ("$Value" -replace "'", "''")
+}
+
 function Add-Finding {
     param(
         [string]$ID,
@@ -1173,13 +1196,25 @@ function Get-SignatureVerdict { param([string]$FilePath)
 #   Safe        = remediation will not delete user data / break the OS (reversible)
 # Returns 'RECOMMENDED+SAFE','RECOMMENDED','SAFE', or '' .
 function Get-FixClass { param([string]$Severity, [string]$FixAction)
-    $destructive = @('DeleteFile','DeleteReg')          # data/registry loss
-    $safe        = @('Info','RunCmd','KillProcess','Quarantine')
+    # Blast-radius classification. Tags are consumed by FixMode.ps1's "RECOMMENDED" and
+    # "SAFE ONLY" presets via -match, so tag names must stay substring-distinct from each other.
+    #
+    # SAFE means "cannot damage the box if this finding turns out to be a false positive."
+    # RunCmd is NOT safe and never was: it is arbitrary PowerShell assembled by the phases, and
+    # Test-ProtectedTarget does no content inspection on it (empirically confirmed — every one of
+    # vssadmin/bcdedit/cipher/wbadmin/reg-delete passes the guard untouched). Labelling it SAFE
+    # put `vssadmin delete shadows /all` one click behind a button captioned "SAFE ONLY".
+    # KillProcess is not data loss, but it can destabilise a live box, so it earns neither tag.
+    # $destructive was previously assigned and never read — it is now load-bearing.
+    $destructive = @('DeleteFile','DeleteReg','DeleteRegKey','RunCmd')  # irreversible, or arbitrary code
+    $safe        = @('Info','Quarantine')                               # no-op, or reversible via the vault
     $isSafe = ($safe -contains $FixAction)
+    $isDest = ($destructive -contains $FixAction)
     $isRec  = (($Severity -eq 'CRITICAL' -or $Severity -eq 'HIGH') -and $FixAction -ne 'Info')
     $tag = @()
     if ($isRec)  { $tag += 'RECOMMENDED' }
     if ($isSafe) { $tag += 'SAFE' }
+    if ($isDest) { $tag += 'DESTRUCTIVE' }
     ($tag -join '+')
 }
 

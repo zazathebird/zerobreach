@@ -20,6 +20,16 @@ build/
 # delete once those are ported. Ignored so it never gets committed into the outer repo.
 zerobreach/
 
+# Same work-rig-drop pattern, 2026-08-18: an untracked zerobreach-main/ folder appeared
+# containing ONLY a Tauri native-app rewrite's Rust build cache (no source — no Cargo.toml,
+# no .rs files) plus two real client scan-report HTML files. No source code was ever found
+# for the native-app rewrite; it's a planned future engine replacement, not yet started here.
+# Contents archived to _archive/zerobreach-main-dump/ (reports/ already caught by the
+# global "reports/" rule above; this covers the Rust build cache specifically — 335MB of
+# fully-reproducible compiler cache with zero source alongside it, never worth committing).
+zerobreach-main/
+_archive/zerobreach-main-dump/native-app/src-tauri/target/
+
 # OS noise
 Thumbs.db
 desktop.ini

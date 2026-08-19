@@ -176,6 +176,14 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
    `FixAction Info` so an operator runs it by hand.
 2. **Datto / CentraStage / Kaseya are legitimate RMM partner tooling** — not malware. Still flag them
    if something is genuinely off (vendor name in a suspicious path, or an independent malicious signal).
+3. **Always tell me when the best time to `/clear` is.** Proactively call it out — I should never
+   have to ask. Say so the moment a natural context boundary arrives: a task is finished and
+   verified, we're switching to an unrelated subsystem, a long debugging/log-dump thread has served
+   its purpose, or the context is getting heavy enough to hurt answer quality. Say it plainly
+   ("good point to `/clear`") and, in the same breath, list what must survive the reset — files
+   touched, the current state, the next step — or write it to `CHANGELOG.md`/`HANDOFF.md` first so
+   nothing is lost. If it is **not** a good time to clear (mid-edit, unsaved reasoning, an
+   in-flight scan), say that too.
 
 ### PowerShell engine safety (`ZeroBreach-V23.ps1`)
 - **PowerShell variables are CASE-INSENSITIVE — never give a local the same letters as a

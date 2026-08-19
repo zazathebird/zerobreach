@@ -208,7 +208,7 @@ foreach ($task in $allTasks) {
         Out-ThreatBanner "MINER SCHEDULED TASK" $task.TaskName
         Add-Finding -ID "MINERTASK_$($task.TaskName -replace '[^a-z0-9]','')" -Phase "PHASE 64" -ThreatType "Cryptominer" `
             -Severity $SEV_CRITICAL -Description "Miner persistence via scheduled task: $($task.TaskName)" `
-            -Target "Task: $($task.TaskName)" -FixAction "RunCmd" -FixParam "Unregister-ScheduledTask -TaskName '$($task.TaskName)' -Confirm:`$false" `
+            -Target "Task: $($task.TaskName)" -FixAction "RunCmd" -FixParam "Unregister-ScheduledTask -TaskName '$(ConvertTo-PsLiteral $task.TaskName)' -Confirm:`$false" `
             -Group "Miner Persistence"
         $global:MinerHits++
     }
@@ -789,7 +789,7 @@ try {
             Out-Typewriter "  -> DEFENDER PATH EXCLUSION: $exc" "CRIT"
             Add-Finding -ID "DEFENDER_EXC_$($exc -replace '[^a-z0-9]','')" -Phase "PHASE 75" -ThreatType "Defender Tampering" `
                 -Severity $SEV_POSSIBLE -Description "Defender path exclusion (review — could be a malware hiding spot or a legit RMM/dev exclusion): $exc" `
-                -Target "Defender Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionPath '$exc'" `
+                -Target "Defender Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionPath '$(ConvertTo-PsLiteral $exc)'" `
                 -Group "Defender Exclusions"
         }
     }
@@ -798,7 +798,7 @@ try {
             Out-Typewriter "  -> DEFENDER PROCESS EXCLUSION: $exc" "WARN"
             Add-Finding -ID "DEFENDER_PROC_EXC_$($exc -replace '[^a-z0-9]','')" -Phase "PHASE 75" -ThreatType "Defender Tampering" `
                 -Severity $SEV_POSSIBLE -Description "Defender process exclusion (review — could aid evasion or be a legit RMM/dev exclusion): $exc" `
-                -Target "Defender Process Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionProcess '$exc'" `
+                -Target "Defender Process Exclusion: $exc" -FixAction "RunCmd" -FixParam "Remove-MpPreference -ExclusionProcess '$(ConvertTo-PsLiteral $exc)'" `
                 -Group "Defender Exclusions"
         }
     }
