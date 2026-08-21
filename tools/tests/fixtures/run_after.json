@@ -1,0 +1,122 @@
+{
+  "Timestamp": "2026-08-19T14:32:07.1234567-04:00",
+  "Host": "WORKSTATION-04",
+  "User": "ACME\\tech",
+  "Mode": "DEEP",
+  "TimeWindow": "LAST 24 HOURS",
+  "RiskScore": 95,
+  "RiskLabel": "GUARDED",
+  "Paranoid": false,
+  "Stealth": false,
+  "Findings": [
+    {
+      "ID": "P10_keep01",
+      "Phase": "PHASE 10",
+      "ThreatType": "SERVICE_ODD",
+      "Severity": "HIGH",
+      "Description": "Service binary lives in a user-writable path.",
+      "Target": "C:\\Svc\\odd.exe",
+      "FixAction": "Info",
+      "FixParam": "",
+      "Group": "PHASE 10",
+      "Selected": true,
+      "Timestamp": "2026-08-19 14:34:02"
+    },
+    {
+      "ID": "P10_esc02",
+      "Phase": "PHASE 10",
+      "ThreatType": "NETWORK_BEACON",
+      "Severity": "HIGH",
+      "Description": "Periodic outbound connection to an uncategorised host, now with data transfer.",
+      "Target": "10.9.9.9:8443",
+      "FixAction": "Info",
+      "FixParam": "",
+      "Group": "PHASE 10",
+      "Selected": true,
+      "Timestamp": "2026-08-19 14:34:03"
+    },
+    {
+      "ID": "P20_deesc03",
+      "Phase": "PHASE 20",
+      "ThreatType": "CREDENTIAL_THEFT",
+      "Severity": "POSSIBLE",
+      "Description": "Credential material found in a world-readable dump file (file now access-restricted).",
+      "Target": "C:\\Temp\\dump.bin",
+      "FixAction": "Info",
+      "FixParam": "",
+      "Group": "PHASE 20",
+      "Selected": false,
+      "Timestamp": "2026-08-19 14:37:15"
+    },
+    {
+      "ID": "P50_new07",
+      "Phase": "PHASE 50",
+      "ThreatType": "PROCESS_INJECTION",
+      "Severity": "CRITICAL",
+      "Description": "Cross-process memory write from an unsigned binary. Injected window title captured verbatim: <img src=x onerror=alert(1)> & \"quoted\".",
+      "Target": "PID 4242",
+      "FixAction": "Quarantine",
+      "FixParam": "PID 4242",
+      "Group": "PHASE 50",
+      "Selected": true,
+      "Timestamp": "2026-08-19 14:41:50"
+    },
+    {
+      "ID": "P40_drift99",
+      "Phase": "PHASE 40",
+      "ThreatType": "DRIVER_UNSIGNED",
+      "Severity": "HIGH",
+      "Description": "Unsigned kernel driver loaded from a non-standard path.",
+      "Target": "C:\\Drivers\\blob.sys",
+      "FixAction": "Info",
+      "FixParam": "",
+      "Group": "PHASE 40",
+      "Selected": true,
+      "Timestamp": "2026-08-19 14:39:12"
+    },
+    {
+      "ID": "P90_info02",
+      "Phase": "PHASE 90",
+      "ThreatType": "INVENTORY",
+      "Severity": "INFO",
+      "Description": "Browser extension inventory recorded (12 extensions).",
+      "Target": "Chrome profile Default",
+      "FixAction": "Info",
+      "FixParam": "",
+      "Group": "PHASE 90",
+      "Selected": false,
+      "Timestamp": "2026-08-19 14:50:00"
+    },
+    {
+      "ID": "GROUPCAP_PHASE30",
+      "Phase": "PHASE 30",
+      "ThreatType": "SCHEDTASK_ODD",
+      "Severity": "INFO",
+      "Description": "Group cap reached for PHASE 30: 100 rows shown, remainder suppressed.",
+      "Target": "PHASE 30",
+      "FixAction": "Info",
+      "FixParam": "",
+      "Group": "PHASE 30",
+      "Selected": false,
+      "Timestamp": "2026-08-19 14:38:00"
+    }
+  ],
+  "PhaseTimings": [
+    { "Phase": "PHASE 10 — SERVICES", "Seconds": 19.4 },
+    { "Phase": "PHASE 20 — CREDENTIAL SURFACES", "Seconds": 30.9 },
+    { "Phase": "PHASE 30 — SCHEDULED TASKS", "Seconds": 17.1 },
+    { "Phase": "PHASE 40 — DRIVERS", "Seconds": 40.3 },
+    { "Phase": "PHASE 50 — PROCESS INTEGRITY", "Seconds": 61.0 },
+    { "Phase": "PHASE 90 — INVENTORY", "Seconds": 54.8 }
+  ],
+  "RecoveredErrors": [],
+  "BaselineDelta": [],
+  "ThreatTally": {
+    "SERVICE_ODD": 1,
+    "NETWORK_BEACON": 1,
+    "CREDENTIAL_THEFT": 1,
+    "PROCESS_INJECTION": 1,
+    "DRIVER_UNSIGNED": 1,
+    "INVENTORY": 1
+  }
+}

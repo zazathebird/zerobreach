@@ -1,0 +1,41 @@
+[OK ] PREFLIGHT: privilege check passed (administrator)
+[OK ] PREFLIGHT: execution policy Bypass for this process
+[INFO] PREFLIGHT: output directory ready
+[INFO] ================ PHASE 1 — BASELINE SNAPSHOT ================
+[OK ] Baseline snapshot captured
+  ⏱  PHASE 1 — BASELINE SNAPSHOT took 12.0s
+TIMING: PHASE 1 — BASELINE SNAPSHOT took 12.0s
+[INFO] ================ PHASE 2 — REGISTRY SWEEP ================
+[WARN] Uncommon run key found under HKCU
+  ⏱  PHASE 2 — REGISTRY SWEEP took 30.0s
+TIMING: PHASE 2 — REGISTRY SWEEP took 30.0s
+[INFO] ================ PHASE 3 — SERVICES ================
+[OK ] 214 services enumerated
+  ⏱  PHASE 3 — SERVICES took 5.5s
+TIMING: PHASE 3 — SERVICES took 5.5s
+[INFO] ================ PHASE 4 — FILE SYSTEM HOTSPOTS ================
+[CRIT] Unsigned binary in a user-writable service path
+[INFO] RECOVERED ERROR: one directory unreadable (access denied); continuing
+  ⏱  PHASE 4 — FILE SYSTEM HOTSPOTS took 20.0s
+TIMING: PHASE 4 — FILE SYSTEM HOTSPOTS took 20.0s
+[INFO] ================ PHASE 5 — NETWORK SESSIONS ================
+[HUNT] Session table captured
+  ⏱  PHASE 5 — NETWORK SESSIONS took 8.0s
+TIMING: PHASE 5 — NETWORK SESSIONS took 8.0s
+[INFO] ================ PHASE 6 — SCHEDULED TASKS ================
+[OK ] 96 tasks read
+  ⏱  PHASE 6 — SCHEDULED TASKS took 4.5s
+TIMING: PHASE 6 — SCHEDULED TASKS took 4.5s
+[INFO] ================ PHASE 7 — ODD <b>TITLE</b> & "QUOTES" ================
+[OK ] title captured verbatim from a data source
+  ⏱  PHASE 7 — ODD <b>TITLE</b> & "QUOTES" took 2.0s
+TIMING: PHASE 7 — ODD <b>TITLE</b> & "QUOTES" took 2.0s
+[INFO] ================ PHASE 74.5 — LATERAL TRACES ================
+[HUNT] Admin share access pattern reviewed
+  ⏱  PHASE 74.5 — LATERAL TRACES took 10.0s
+TIMING: PHASE 74.5 — LATERAL TRACES took 10.0s
+[INFO] scan complete; operator started a second QUICK pass in the same session
+[INFO] ================ PHASE 2 — REGISTRY SWEEP ================
+[OK ] Registry sweep (warm cache)
+  ⏱  PHASE 2 — REGISTRY SWEEP took 3.0s
+TIMING: PHASE 2 — REGISTRY SWEEP took 3.0s

@@ -1,0 +1,12 @@
+{
+  "_comment": "Wall-clock budgets in seconds, consumed by tools/Get-PhaseTimingReport.ps1. A value of 0 means unbudgeted (no gate). mode_totals gates a whole run per mode — QUICK carries the standing two-minute goal. phase_budgets maps a phase number (string; fractional numbers like \"74.5\" keep their decimal) to a per-phase ceiling that applies in any mode; add entries as phases get budgets.",
+  "mode_totals": {
+    "QUICK": 120,
+    "FULL": 0,
+    "DEEP": 0,
+    "PARANOID": 0,
+    "STEALTH": 0,
+    "HUNT": 0
+  },
+  "phase_budgets": {}
+}

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZeroBreach — Offline Report Viewer</title>
+<!-- main.css first so the product theme tokens win when present; viewer.css carries complete
+     fallbacks so this page still looks right when main.css is absent (file copied alone). -->
+<link rel="stylesheet" href="static/css/main.css">
+<link rel="stylesheet" href="static/css/viewer.css">
+</head>
+<body>
+<header class="vw-top">
+  <h1>ZeroBreach offline report viewer</h1>
+  <p class="vw-sub">Open one or two run records (audit_*.json or KrakenBaseline_*.json) copied off
+  a client machine. Everything is parsed in this page — no server, no network requests.</p>
+  <label class="vw-drop" id="drop" for="fileInput">
+    <span>Drop run records here, or <span class="vw-browse">browse</span></span>
+    <input type="file" id="fileInput" accept=".json,application/json" multiple>
+  </label>
+  <p id="loadError" class="vw-error" role="alert" hidden></p>
+</header>
+<main id="app" hidden>
+  <section id="summaries" class="vw-cards" aria-label="Run summaries"></section>
+  <section id="cmp" class="vw-cmp" hidden aria-label="Comparison of the two loaded runs"></section>
+  <section class="vw-findings" aria-label="Findings">
+    <h2>Findings</h2>
+    <div id="tabs" class="vw-tabs" role="tablist"></div>
+    <div id="capNote" class="vw-warn" hidden></div>
+    <div class="vw-controls">
+      <input type="search" id="q" placeholder="Filter text&hellip;" aria-label="Filter findings by text">
+      <span id="sevChips" class="vw-chips"></span>
+      <select id="groupSel" aria-label="Filter by group">
+        <option value="">All groups</option>
+      </select>
+      <button type="button" id="viewToggle" aria-pressed="true">View: groups</button>
+      <button type="button" id="csvBtn">Export CSV (filtered)</button>
+    </div>
+    <div class="vw-tablewrap">
+      <table class="vw-tbl">
+        <thead>
+          <tr><th scope="col">Severity</th><th scope="col">ID</th><th scope="col">Phase</th>
+              <th scope="col">Description</th><th scope="col">Target</th><th scope="col">Action</th></tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <div id="pager" class="vw-pager"></div>
+  </section>
+</main>
+<script src="static/js/viewer.js"></script>
+</body>
+</html>

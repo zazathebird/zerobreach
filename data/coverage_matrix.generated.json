@@ -1,0 +1,182 @@
+{
+  "schema": "zerobreach-coverage-matrix/1",
+  "generated_from": "fixture-demo",
+  "scan": {
+    "phase_header_command": "Write-PhaseHeader",
+    "finding_command": "Add-Finding",
+    "signature_lookup_command": "Get-SignatureSet",
+    "plan_variable": "PhasePlan",
+    "signature_file": "signatures.json",
+    "modules": [
+      "Module-Core.ps1",
+      "Module-Deep.ps1",
+      "Module-Hunt.ps1"
+    ]
+  },
+  "phases": [
+    {
+      "phase": "1",
+      "title": "SYSTEM INVENTORY",
+      "category": "Inventory",
+      "module": "Module-Core.ps1",
+      "mode_gate": "Quick",
+      "severities": [
+        "INFO"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "signature_keys": [
+        "os_builds"
+      ],
+      "finding_calls": 1,
+      "skipped_in_quick": false
+    },
+    {
+      "phase": "2",
+      "title": "STARTUP ITEMS",
+      "category": "Persistence",
+      "module": "Module-Core.ps1",
+      "mode_gate": "Quick",
+      "severities": [
+        "HIGH",
+        "INFO"
+      ],
+      "fix_actions": [
+        "DisableEntry",
+        "Info"
+      ],
+      "signature_keys": [],
+      "finding_calls": 2,
+      "skipped_in_quick": false
+    },
+    {
+      "phase": "9.5",
+      "title": "SHADOW COPY AUDIT",
+      "category": "Recovery",
+      "module": "Module-Core.ps1",
+      "mode_gate": "Full",
+      "severities": [
+        "POSSIBLE"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "signature_keys": [],
+      "finding_calls": 1,
+      "skipped_in_quick": false
+    },
+    {
+      "phase": "12",
+      "title": "ORPHAN SERVICE CHECK",
+      "category": "Services",
+      "module": "Module-Hunt.ps1",
+      "mode_gate": null,
+      "severities": [
+        "POSSIBLE",
+        "INFO"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "signature_keys": [],
+      "finding_calls": 2,
+      "skipped_in_quick": false
+    },
+    {
+      "phase": "41",
+      "title": "UNSIGNED DRIVERS",
+      "category": "Drivers",
+      "module": "Module-Deep.ps1",
+      "mode_gate": "Deep",
+      "severities": [
+        "CRITICAL",
+        "dynamic"
+      ],
+      "fix_actions": [
+        "QuarantineFile"
+      ],
+      "signature_keys": [
+        "driver_blocklist"
+      ],
+      "finding_calls": 2,
+      "skipped_in_quick": true
+    },
+    {
+      "phase": "74.5",
+      "title": "LOLBIN SWEEP",
+      "category": "Execution",
+      "module": "Module-Deep.ps1",
+      "mode_gate": "Deep",
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "Info"
+      ],
+      "signature_keys": [
+        "ghost_key",
+        "lolbins"
+      ],
+      "finding_calls": 1,
+      "skipped_in_quick": true
+    },
+    {
+      "phase": "140",
+      "title": "MEMORY STRINGS SWEEP",
+      "category": "Memory",
+      "module": "Module-Hunt.ps1",
+      "mode_gate": "Hunt",
+      "severities": [
+        "HIGH"
+      ],
+      "fix_actions": [
+        "KillProcess"
+      ],
+      "signature_keys": [],
+      "finding_calls": 1,
+      "skipped_in_quick": true
+    }
+  ],
+  "summary": {
+    "phase_count": 7,
+    "phases_per_module": {
+      "Module-Core.ps1": 3,
+      "Module-Deep.ps1": 2,
+      "Module-Hunt.ps1": 2
+    },
+    "phases_per_mode": {
+      "DEEP": 6,
+      "FULL": 6,
+      "HUNT": 7,
+      "PARANOID": 6,
+      "QUICK": 4,
+      "STEALTH": 6
+    },
+    "phases_per_gate": {
+      "Deep": 2,
+      "Full": 1,
+      "Hunt": 1,
+      "Quick": 2
+    },
+    "phases_per_fix_action": {
+      "DisableEntry": 1,
+      "Info": 5,
+      "KillProcess": 1,
+      "QuarantineFile": 1
+    },
+    "ungated_phases": [
+      "12"
+    ],
+    "duplicate_phases": [],
+    "headers_unparsed": [],
+    "unattributed_finding_calls": 1,
+    "dynamic_signature_reads": 0,
+    "signature_keys_missing_from_file": [
+      "ghost_key"
+    ],
+    "signature_keys_unread": [
+      "dead_weight"
+    ]
+  }
+}
