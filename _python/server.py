@@ -56,10 +56,10 @@ scan_process = None
 scan_lock = threading.Lock()
 
 # ── Phase count per mode ───────────────────────────────────────────────────────
-MODE_PHASES = {"QUICK": 30, "FULL": 80, "DEEP": 107, "PARANOID": 107, "STEALTH": 107}
+MODE_PHASES = {"QUICK": 30, "FULL": 80, "DEEP": 133, "PARANOID": 133, "STEALTH": 133, "HUNT": 162}
 
 # ── Output line parser ─────────────────────────────────────────────────────────
-PHASE_RE = re.compile(r"PHASE\s+(\d+)[^\d]", re.IGNORECASE)
+PHASE_RE = re.compile(r"PHASE\s+(\d+(?:\.\d+)?)[^\d]", re.IGNORECASE)
 SECTION_RE = re.compile(r"SECTION[:\s]+(.+)", re.IGNORECASE)
 THREAT_MAP = {
     "RAT": ["rat", "c2", "beacon", "asyncrat", "njrat", "remcos", "darkcomet"],
@@ -167,7 +167,7 @@ def run_scan(config: dict):
         scan_state["phase"] = 0
         scan_state["findings"] = []
         scan_state["threat_counts"] = {k: 0 for k in scan_state["threat_counts"]}
-        scan_state["phase_total"] = MODE_PHASES.get(config.get("mode", "FULL"), 107)
+        scan_state["phase_total"] = MODE_PHASES.get(config.get("mode", "FULL"), 133)
         scan_state["mode"] = config.get("mode", "FULL")
 
     start_time = time.time()

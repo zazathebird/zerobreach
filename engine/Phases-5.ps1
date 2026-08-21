@@ -1,0 +1,610 @@
+﻿# NOTE - Detection vocabulary in this file is deliberate.
+# Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
+# named malware families, are detection category labels, operator-facing report text, or
+# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# response tool; these strings are what it reports, not what it does. See CLAUDE.md,
+# "The detection vocabulary is deliberate". Do not sanitise them.
+
+trap { Write-RecoveredError $_; continue }   # module-level resilience (see CLAUDE.md engine-split rule)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  HUNT BAND — PHASES 134-162          (-Mode HUNT only, gated on $PhasePlan.Hunt)
+#
+#  WS7. Everything here answers a question the first 133 phases cannot, and the
+#  questions come from ADVERSARY_ANALYSIS.md rather than from a list of families:
+#
+#    134-138  CROSS-VIEW      Ask the OS the same question twice, by two independent
+#                             routes, and report the DISAGREEMENT. This detects an
+#                             implant without knowing anything about the implant —
+#                             it is how a hidden scheduled task, a service the SCM
+#                             does not list, and an API-filtering rootkit surface.
+#    139-140  ANTI-FORENSICS  Tampering with the evidence itself: timestomping and
+#                             filesystem-namespace tricks that hide a file from the
+#                             very APIs the other 133 phases enumerate with.
+#    141-145  MEMORY          The entire category the engine had no surface for.
+#                             Phase 93 walks the module LIST; anything reflectively
+#                             loaded or manually mapped never appears in it.
+#    146      PE STRUCTURE    Parse the binary instead of pattern-matching its name.
+#    147      IDENTITY        Cloud + DevOps credential theft — the 2026 crown jewels.
+#    148-152  LATERAL / AD    What was done TO this host from the network, and what
+#                             this host can be used to do to the rest of it.
+#    153-156  LAN             The only code in ZeroBreach that touches another machine.
+#                             Requires -Mode HUNT *and* -ScanLan. Read-only, rate-limited.
+#    157-159  SURFACE         Remaining persistence, supply chain / dev tooling, UEFI.
+#    160-162  SYNTHESIS       Correlate findings into scored attack chains, then emit
+#                             the super-timeline. No new detection — this is where 700
+#                             independent rows become three incidents an operator can act on.
+#
+#  POSTURE (CLAUDE.md rule #1). **Every finding in this band is FixAction "Info".**
+#  There are no exceptions and there must not be, for a reason specific to this band:
+#  its highest-value phases fire on healthy managed endpoints by construction. An EDR
+#  is, by every signal Phase 134-138 and 141-143 look for, a legitimate rootkit — it
+#  hooks, it hides, it injects unbacked code into everything. A CRITICAL + KillProcess
+#  on an EDR hook would be auto-selected in the GUI and would disarm the customer's
+#  actual security product. Info + a vendor allowlist + a live FP round first.
+#
+#  All literals live in data/detection_signatures.json (AMSI rule). This file carries
+#  none. Allowlists come through Join-AllowRegex, so a missing key becomes '(?!)' and
+#  can never blind a phase — and the loader now additionally REFUSES a universal
+#  allowlist pattern outright (ADVERSARY_ANALYSIS.md E1).
+#
+#  NO P/INVOKE, DELIBERATELY. Every memory signal below is reachable through pure .NET
+#  (ProcessThread.StartAddress, ProcessModule.BaseAddress/ModuleMemorySize). Declaring
+#  OpenProcess/ReadProcessMemory/VirtualQueryEx in an engine that Defender already
+#  AMSI-blocked once is how you ship a scanner that never loads. The region-walk that
+#  genuinely needs P/Invoke is specced in WS7_WORK_ORDER.md with its own mitigation.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Hunt-band helpers ─────────────────────────────────────────────────────────
+# Defined unconditionally (they cost nothing when the band does not run) so the AST
+# tests can find them and so a future phase outside the gate can reuse them.
+
+function Get-ZbTaskTreeLeaves {
+    # Every scheduled task as the REGISTRY sees it, which is the ground truth the
+    # Task Scheduler service itself boots from. Walk TaskCache\Tree; a leaf carrying an
+    # 'Id' value is a task, and its 'SD' value is the security descriptor.
+    #
+    # Deleting that SD value is the hiding trick this phase exists for: the task keeps
+    # running exactly as before, but Get-ScheduledTask, schtasks.exe and the Task
+    # Scheduler UI all stop listing it, because they cannot build a security check for
+    # an entry with no descriptor and silently drop it. It needs no exploit and no
+    # driver, and it works on a fully patched box.
+    #
+    # Read through the 64-bit view: TaskCache lives under HKLM\SOFTWARE, which is
+    # WOW64-redirected, so a 32-bit engine reading it with the normal provider sees
+    # Wow6432Node and finds nothing at all.
+    $root  = 'SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tree'
+    $out   = New-Object System.Collections.Generic.List[object]
+    $stack = New-Object System.Collections.Generic.Stack[string]
+    $stack.Push('')
+    $guard = 0
+    while ($stack.Count -gt 0 -and $guard -lt 20000) {
+        $guard++
+        $rel = $stack.Pop()
+        $key = if ($rel) { "$root\$rel" } else { $root }
+        $names = @(Get-RegNames64 -Hive 'LocalMachine' -SubKey $key)
+        if ($names -contains 'Id') {
+            $out.Add(@{
+                Path  = '\' + $rel
+                Id    = "$(Get-RegVal64 -Hive 'LocalMachine' -SubKey $key -Name 'Id')"
+                HasSD = ($names -contains 'SD')
+            })
+        }
+        foreach ($s in @(Get-RegSubKeys64 -Hive 'LocalMachine' -SubKey $key)) {
+            if ($rel) { $stack.Push("$rel\$s") } else { $stack.Push("$s") }
+        }
+    }
+    # Comma-wrapped so a single leaf does not unwrap to a scalar. ALWAYS assign the
+    # result to a variable — never pipe this directly (CLAUDE.md Get-ScanFiles rule).
+    return ,$out
+}
+
+function ConvertFrom-ZbWmiDate {
+    # WMI CIM_DATETIME -> [datetime], or $null. ManagementDateTimeConverter throws on a
+    # malformed value, and an unhandled throw here would unwind to the module trap and
+    # cost the rest of the phase.
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return $null }
+    try { return [System.Management.ManagementDateTimeConverter]::ToDateTime($Value) } catch { return $null }
+}
+
+function Test-ZbNameAnomaly {
+    # Filename-level anti-forensics (ADVERSARY_ANALYSIS.md E5). Returns a reason string,
+    # or '' when the name is unremarkable. Operates on the LEAF name only.
+    param([string]$Name)
+    if ([string]::IsNullOrEmpty($Name)) { return '' }
+    # Bidirectional override / embedding controls. 'invoice<U+202E>gpj.exe' renders as
+    # 'invoicejpg.exe' in Explorer, in the shell, and in this tool's own output.
+    if ($Name -match '[\u202A-\u202E\u2066-\u2069\u200E\u200F\u061C]') { return 'contains a Unicode bidirectional-override control character, so the name displayed to a human is not the name that executes' }
+    # A trailing dot or space cannot be created by Explorer and is stripped by Win32
+    # path canonicalisation, so the displayed name and the resolvable name differ.
+    if ($Name -match '[ .]$') { return 'ends in a space or dot, which Win32 path canonicalisation strips — the name you can see is not the name that opens' }
+    # Non-ASCII in an executable name where the rest is ASCII: homoglyph substitution
+    # (Cyrillic 'а' for Latin 'a') defeats every name-based allowlist by eye and by string compare.
+    if ($Name -match '\.(exe|dll|scr|com|pif|cpl|sys|ocx)$' -and $Name -match '[^\u0000-\u007F]') { return 'mixes non-ASCII characters into an executable filename, the signature of homoglyph impersonation of a known-good binary' }
+    # Right-to-left of a real extension buried behind whitespace padding.
+    if ($Name -match '\.(pdf|doc|docx|xls|xlsx|jpg|png|txt)\s{2,}.*\.(exe|scr|com|pif|bat|cmd|js|vbs)$') { return 'pads a decoy document extension with whitespace to push the real executable extension out of view' }
+    return ''
+}
+
+if ($PhasePlan.Hunt) {
+    trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
+    if (-not $global:STEALTH_MODE) {
+        Write-Host ""
+        Write-Host ("▓"*80) -ForegroundColor DarkMagenta
+        Write-Host "    ◈  T H R E A T   H U N T   B A N D  —  1 3 4 - 1 6 2" -ForegroundColor Magenta
+        Write-Host ("▓"*80) -ForegroundColor DarkMagenta
+        Invoke-QuantumBar "ENGAGING CROSS-VIEW, MEMORY AND CORRELATION MODULES" 20 90
+    }
+
+    # ── PHASE 134: SCHEDULED TASK CROSS-VIEW ──────────────────────────────────
+    Show-PhaseHeader "PHASE 134" "SCHEDULED TASK CROSS-VIEW (HIDDEN / SD-DELETED TASKS)" "ROOTKIT"
+    Out-Typewriter "COMPARING THE TASK SCHEDULER API AGAINST THE REGISTRY IT BOOTS FROM..." "HUNT"
+    $htLeaves = Get-ZbTaskTreeLeaves
+    $htApi    = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $htApiOk  = $false
+    try {
+        foreach ($t in @(Get-ScheduledTask -ErrorAction SilentlyContinue)) {
+            $full = ("$($t.TaskPath)").TrimEnd('\') + '\' + "$($t.TaskName)"
+            [void]$htApi.Add($full)
+        }
+        $htApiOk = ($htApi.Count -gt 0)
+    } catch { $htApiOk = $false }
+
+    if (-not $htApiOk) {
+        Out-Typewriter "  -> TASK SCHEDULER API RETURNED NOTHING — cross-view not possible." "WARN"
+        Add-Finding -ID "XV134_API_DEAD" -Phase "PHASE 134" `
+            -ThreatType "Rootkit / Cross-View" -Severity $SEV_HIGH `
+            -Description "Get-ScheduledTask returned no tasks at all, while the registry lists $($htLeaves.Count). Every Windows install has scheduled tasks, so either the Task Scheduler service is stopped or something is filtering the API. Check: Get-Service Schedule. If the service is running and this is still empty, treat the API as untrustworthy on this host and work from the registry (TaskCache\Tree) instead." `
+            -Target "Task Scheduler API" -FixAction "Info" -Group "Cross-View Discrepancy"
+    } else {
+        $htHidden = 0; $htNoSd = 0
+        foreach ($lf in $htLeaves) {
+            $lpath = "$($lf.Path)"
+            if ($lpath -match $HUNT_TASK_BENIGN_RE) { continue }
+            if (-not $lf.HasSD) {
+                $htNoSd++
+                Out-Typewriter "  -> TASK WITH NO SECURITY DESCRIPTOR: $lpath" "CRIT"
+                Add-Finding -ID "XV134_NOSD_$([Math]::Abs($lpath.ToLower().GetHashCode()))" -Phase "PHASE 134" `
+                    -ThreatType "Rootkit / Cross-View" -Severity $SEV_HIGH `
+                    -Description "The scheduled task '$lpath' exists in the registry but its SD (security descriptor) value has been REMOVED. The task still runs on schedule; deleting the SD is a known and trivially executed technique for hiding a task from Get-ScheduledTask, schtasks.exe and the Task Scheduler UI, so this entry is invisible to every normal enumeration including phases 29 and 104 of this scan. Windows itself does not create tasks without an SD. Inspect the task definition directly: reg query `"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\$($lf.Id)`" /v Actions — and read the XML at C:\Windows\System32\Tasks$lpath if it is still present." `
+                    -Target "TaskCache\Tree$lpath" -FixAction "Info" -Group "Cross-View Discrepancy"
+            } elseif (-not $htApi.Contains($lpath)) {
+                $htHidden++
+                Out-Typewriter "  -> TASK IN REGISTRY BUT NOT IN API: $lpath" "CRIT"
+                Add-Finding -ID "XV134_HIDDEN_$([Math]::Abs($lpath.ToLower().GetHashCode()))" -Phase "PHASE 134" `
+                    -ThreatType "Rootkit / Cross-View" -Severity $SEV_HIGH `
+                    -Description "The scheduled task '$lpath' is registered in TaskCache\Tree but Get-ScheduledTask does not list it. The registry is what the Task Scheduler service actually boots from, so this task runs while being invisible to the API every other phase of this scan enumerates with. Causes, in order of likelihood: a corrupt or partially-deleted task entry; a task whose SD denies read to Administrators; or an implant filtering the API. Inspect: reg query `"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache\Tasks\$($lf.Id)`" /v Actions" `
+                    -Target "TaskCache\Tree$lpath" -FixAction "Info" -Group "Cross-View Discrepancy"
+            }
+        }
+        if ($htHidden -eq 0 -and $htNoSd -eq 0) {
+            Out-Typewriter "  -> TASK VIEWS AGREE — $($htLeaves.Count) registry entries, $($htApi.Count) via API." "OK"
+        }
+    }
+    Stop-PhaseTiming
+
+    # ── PHASE 135: SERVICE CROSS-VIEW ─────────────────────────────────────────
+    Show-PhaseHeader "PHASE 135" "SERVICE CONTROL MANAGER vs REGISTRY CROSS-VIEW" "ROOTKIT"
+    Out-Typewriter "COMPARING THE SCM's SERVICE LIST AGAINST CurrentControlSet\Services..." "HUNT"
+    $svcApi = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $svcApiOk = $false
+    try {
+        foreach ($s in @(Get-WmiObject Win32_Service -ErrorAction SilentlyContinue)) { [void]$svcApi.Add("$($s.Name)") }
+        $svcApiOk = ($svcApi.Count -gt 0)
+    } catch { $svcApiOk = $false }
+
+    if (-not $svcApiOk) {
+        Out-Typewriter "  -> WIN32_SERVICE RETURNED NOTHING — cross-view not possible." "WARN"
+    } else {
+        $svcGhost = 0
+        foreach ($sn in @(Get-RegSubKeys64 -Hive 'LocalMachine' -SubKey 'SYSTEM\CurrentControlSet\Services')) {
+            # Only compare WIN32 services (Type 16 = own process, 32 = shared process,
+            # +256 = interactive). Driver types (1/2/8) are not SCM services and are
+            # covered by phase 138 — comparing them here would flag half of Windows.
+            $stype = Get-RegVal64 -Hive 'LocalMachine' -SubKey "SYSTEM\CurrentControlSet\Services\$sn" -Name 'Type'
+            if ($null -eq $stype) { continue }
+            $ti = 0; try { $ti = [int]$stype } catch { continue }
+            if (($ti -band 0x30) -eq 0) { continue }
+            if ($svcApi.Contains("$sn")) { continue }
+            if ("$sn" -match $HUNT_SERVICE_BENIGN_RE) { continue }
+            $simg = "$(Get-RegVal64 -Hive 'LocalMachine' -SubKey "SYSTEM\CurrentControlSet\Services\$sn" -Name 'ImagePath')"
+            $svcGhost++
+            Out-Typewriter "  -> SERVICE IN REGISTRY BUT NOT IN SCM: $sn" "WARN"
+            Add-Finding -ID "XV135_GHOST_$($sn -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 135" `
+                -ThreatType "Rootkit / Cross-View" -Severity $SEV_POSSIBLE `
+                -Description "The service '$sn' is defined under SYSTEM\CurrentControlSet\Services with a Win32 service type ($ti) and an image path of '$simg', but Win32_Service does not report it. The registry is what the SCM loads from at boot. A stale key left by a failed uninstall is the common benign cause; an implant that hides its own service from enumeration is the one that matters. Compare: sc.exe qc `"$sn`" against reg query `"HKLM\SYSTEM\CurrentControlSet\Services\$sn`"" `
+                -Target "HKLM\SYSTEM\CurrentControlSet\Services\$sn" -FixAction "Info" -Group "Cross-View Discrepancy"
+        }
+        if ($svcGhost -eq 0) { Out-Typewriter "  -> SERVICE VIEWS AGREE — $($svcApi.Count) services reconcile with the registry." "OK" }
+    }
+    Stop-PhaseTiming
+
+    # ── PHASE 136: PROCESS ANCESTRY INTEGRITY (PPID SPOOFING) ─────────────────
+    Show-PhaseHeader "PHASE 136" "PROCESS ANCESTRY INTEGRITY (PARENT PID SPOOFING)" "INJECTION"
+    Out-Typewriter "VALIDATING PARENT-CHILD CREATION ORDER ACROSS THE PROCESS TABLE..." "HUNT"
+    # UpdateProcThreadAttribute lets a caller name ANY process as the parent of the one
+    # it creates. That defeats every "Office spawned a shell" heuristic in this engine
+    # (phase 3 included) because the recorded parent is whatever the attacker chose.
+    # It cannot, however, fix the clock: a spoofed parent very often turns out to have
+    # been created AFTER its supposed child, which is impossible for a real fork.
+    $paSnap = Get-ProcSnapshot
+    $paById = @{}
+    foreach ($p in $paSnap) { if ($null -ne $p.ProcessId) { $paById["$($p.ProcessId)"] = $p } }
+    $paHits = 0
+    foreach ($p in $paSnap) {
+        $ppid = "$($p.ParentProcessId)"
+        if ([string]::IsNullOrWhiteSpace($ppid) -or $ppid -eq '0') { continue }
+        $par = $paById[$ppid]
+        if ($null -eq $par) { continue }          # parent exited — normal, not evidence
+        $cKid = ConvertFrom-ZbWmiDate "$($p.CreationDate)"
+        $cPar = ConvertFrom-ZbWmiDate "$($par.CreationDate)"
+        if ($null -eq $cKid -or $null -eq $cPar) { continue }
+        # Allow a second of slack: the two timestamps come from the same clock but are
+        # sampled by different subsystems, and a genuine parent created in the same tick
+        # can round the wrong way.
+        if ($cPar -le $cKid.AddSeconds(1)) { continue }
+        $paName = "$($p.Name)"; $parName = "$($par.Name)"
+        if ("$($p.ExecutablePath)" -match $HUNT_PPID_BENIGN_RE) { continue }
+        $paHits++
+        Out-Typewriter "  -> IMPOSSIBLE ANCESTRY: $paName PID:$($p.ProcessId) claims parent $parName PID:$ppid created LATER" "CRIT"
+        Add-Finding -ID "XV136_PPID_$($p.ProcessId)_$($paName -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 136" `
+            -ThreatType "Process Injection / Evasion" -Severity $SEV_HIGH `
+            -Description "$paName (PID $($p.ProcessId), started $($cKid.ToString('yyyy-MM-dd HH:mm:ss'))) reports its parent as $parName (PID $ppid) — but that parent was created at $($cPar.ToString('yyyy-MM-dd HH:mm:ss')), AFTER the child. A process cannot be started by something that did not yet exist. The two explanations are parent-PID spoofing (a documented evasion, MITRE T1134.004, used specifically to defeat the parent-child heuristics this scan relies on in phase 3) or PID reuse after the real parent exited. Check the command line and image path of PID $($p.ProcessId): $($p.ExecutablePath)" `
+            -Target "PID:$($p.ProcessId) $($p.ExecutablePath)" -FixAction "Info" -Group "Ancestry Integrity"
+    }
+    if ($paHits -eq 0) { Out-Typewriter "  -> ANCESTRY CONSISTENT — no impossible parent-child creation order found." "OK" }
+    Stop-PhaseTiming
+
+    # ── PHASE 137: WOW64 REGISTRY-VIEW AUTOSTART CROSS-VIEW ───────────────────
+    Show-PhaseHeader "PHASE 137" "AUTOSTART CROSS-VIEW (32-BIT REGISTRY REDIRECTION)" "PERSISTENCE"
+    Out-Typewriter "ENUMERATING RUN KEYS IN BOTH THE 64-BIT AND 32-BIT REGISTRY VIEWS..." "HUNT"
+    # HKLM\SOFTWARE\...\Run and its Wow6432Node twin are DIFFERENT KEYS and both start
+    # programs. A tool that reads only the view matching its own bitness sees one of
+    # them. Phases 20/115 use the default provider, so on a 64-bit engine the 32-bit
+    # run keys are unexamined; this phase reads both views explicitly and reports what
+    # only one of them contains.
+    $wvHits = 0
+    foreach ($wvSub in @('SOFTWARE\Microsoft\Windows\CurrentVersion\Run','SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce','SOFTWARE\Microsoft\Windows\CurrentVersion\RunServices','SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer\Run')) {
+        foreach ($wvHive in @('LocalMachine','CurrentUser')) {
+            $base = $null; $k32 = $null
+            try {
+                $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey([Microsoft.Win32.RegistryHive]::$wvHive, [Microsoft.Win32.RegistryView]::Registry32)
+                $k32  = $base.OpenSubKey($wvSub)
+                if ($null -eq $k32) { continue }
+                foreach ($vn in @($k32.GetValueNames())) {
+                    if ([string]::IsNullOrWhiteSpace($vn)) { continue }
+                    $v32 = "$($k32.GetValue($vn))"
+                    $v64 = "$(Get-RegVal64 -Hive $wvHive -SubKey $wvSub -Name $vn)"
+                    if ($v64 -eq $v32) { continue }        # same key, not redirected — nothing to say
+                    if ($v32 -match $RUNKEY_BENIGN_RE) { continue }
+                    $wvHits++
+                    Out-Typewriter "  -> 32-BIT-VIEW-ONLY AUTOSTART: $wvHive\$wvSub\$vn = $v32" "WARN"
+                    Add-Finding -ID "XV137_WOW_$([Math]::Abs("$wvHive$wvSub$vn".ToLower().GetHashCode()))" -Phase "PHASE 137" `
+                        -ThreatType "Persistence / Evasion" -Severity $SEV_POSSIBLE `
+                        -Description "The autostart entry '$vn' = '$v32' exists in the 32-BIT registry view of $wvHive\$wvSub (i.e. under Wow6432Node) and differs from what the 64-bit view holds there. Windows starts both. Tools that read only the view matching their own bitness — which includes phases 20 and 115 of this scan — see one and not the other, which is why malware writes here. Genuine 32-bit applications on a 64-bit OS also land here, so confirm the publisher before acting. Manual: reg query `"HK$(if($wvHive -eq 'LocalMachine'){'LM'}else{'CU'})\$wvSub`" /reg:32" `
+                        -Target "$wvHive\$wvSub\$vn" -FixAction "Info" -Group "WOW64 Autostart"
+                }
+            } catch {}
+            finally {
+                if ($k32)  { try { $k32.Close()  } catch {} }
+                if ($base) { try { $base.Close() } catch {} }
+            }
+        }
+    }
+    if ($wvHits -eq 0) { Out-Typewriter "  -> NO VIEW-DIVERGENT AUTOSTART ENTRIES." "OK" }
+    Stop-PhaseTiming
+
+    # ── PHASE 138: DRIVER CROSS-VIEW ──────────────────────────────────────────
+    Show-PhaseHeader "PHASE 138" "KERNEL DRIVER CROSS-VIEW (REGISTRY vs LOADED SET)" "ROOTKIT"
+    Out-Typewriter "RECONCILING REGISTERED DRIVERS AGAINST THE RUNNING DRIVER LIST..." "HUNT"
+    # A driver configured to start at boot but absent from the running list is either
+    # a failed load (common) or a driver that unlinked itself after loading (the whole
+    # point of a kernel rootkit). Either way the operator wants the delta.
+    $drvApi = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+    $drvOk  = $false
+    try {
+        foreach ($d in @(Get-WmiObject Win32_SystemDriver -ErrorAction SilentlyContinue)) { [void]$drvApi.Add("$($d.Name)") }
+        $drvOk = ($drvApi.Count -gt 0)
+    } catch { $drvOk = $false }
+
+    if (-not $drvOk) {
+        Out-Typewriter "  -> WIN32_SYSTEMDRIVER RETURNED NOTHING — cross-view not possible." "WARN"
+    } else {
+        $drvHits = 0
+        foreach ($dn in @(Get-RegSubKeys64 -Hive 'LocalMachine' -SubKey 'SYSTEM\CurrentControlSet\Services')) {
+            $dsub  = "SYSTEM\CurrentControlSet\Services\$dn"
+            $dtype = Get-RegVal64 -Hive 'LocalMachine' -SubKey $dsub -Name 'Type'
+            $dstart= Get-RegVal64 -Hive 'LocalMachine' -SubKey $dsub -Name 'Start'
+            if ($null -eq $dtype -or $null -eq $dstart) { continue }
+            $dti = 0; $dsi = 9
+            try { $dti = [int]$dtype; $dsi = [int]$dstart } catch { continue }
+            # Kernel (1) / file-system (2) drivers only, and only those set to load at
+            # boot (0), system (1) or auto (2). Demand-start drivers legitimately sit
+            # registered-but-not-running for the life of the machine.
+            if ($dti -ne 1 -and $dti -ne 2) { continue }
+            if ($dsi -gt 2) { continue }
+            if ($drvApi.Contains("$dn")) { continue }
+            if ("$dn" -match $HUNT_DRIVER_BENIGN_RE) { continue }
+            $dimg = "$(Get-RegVal64 -Hive 'LocalMachine' -SubKey $dsub -Name 'ImagePath')"
+            $drvHits++
+            Out-Typewriter "  -> BOOT/AUTO DRIVER REGISTERED BUT NOT LOADED: $dn" "WARN"
+            Add-Finding -ID "XV138_DRV_$($dn -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 138" `
+                -ThreatType "Rootkit / Cross-View" -Severity $SEV_POSSIBLE `
+                -Description "Driver '$dn' (type $dti, start $dsi — i.e. configured to load automatically) is registered at $dsub with image '$dimg', but Win32_SystemDriver does not list it as present. A driver that is set to auto-load and is not in the loaded set either failed to load — check the System event log for a 7000/7026 error — or unlinked itself from the kernel's module list after loading, which is the defining behaviour of a kernel rootkit and would also hide it from phases 55 and 55.5. Verify the image file exists and is signed: $dimg" `
+                -Target $dsub -FixAction "Info" -Group "Cross-View Discrepancy"
+        }
+        if ($drvHits -eq 0) { Out-Typewriter "  -> DRIVER VIEWS AGREE — $($drvApi.Count) loaded drivers reconcile with the registry." "OK" }
+    }
+    Stop-PhaseTiming
+    # ── PHASE 139: TIMESTAMP TAMPERING (TIMESTOMPING) ─────────────────────────
+    Show-PhaseHeader "PHASE 139" "TIMESTAMP TAMPERING / TIMESTOMPING DETECTION" "ANTI-FORENSICS"
+    Out-Typewriter "VALIDATING FILE TIMESTAMPS FOR PHYSICALLY IMPOSSIBLE VALUES..." "HUNT"
+    # $STANDARD_INFORMATION timestamps are writable from user mode with a one-liner, and
+    # every scan in this tool that honours -Hours filters on them. Backdating a dropper
+    # therefore removes it from the operator's time window entirely. The tampering is
+    # much easier to spot than the file: timestomping tools copy second-resolution values
+    # and cannot keep the four timestamps mutually consistent.
+    $tsInstall = [datetime]'2000-01-01'
+    try {
+        $tsRaw = Get-RegVal64 -Hive 'LocalMachine' -SubKey 'SOFTWARE\Microsoft\Windows NT\CurrentVersion' -Name 'InstallDate'
+        if ($null -ne $tsRaw) { $tsInstall = ([datetime]'1970-01-01').AddSeconds([double]$tsRaw) }
+    } catch {}
+    $tsFuture = (Get-Date).AddDays(1)
+    $tsRoots  = @("$env:APPDATA","$env:LOCALAPPDATA","$env:ProgramData","$env:USERPROFILE\Downloads","$env:TEMP","$env:WINDIR\Temp")
+    # Assigned first, never piped directly — Get-ScanFiles returns ,$arr (CLAUDE.md).
+    $tsFiles  = Get-ScanFiles -Path $tsRoots -Filter '*'
+    $tsHits   = 0; $tsSeen = 0
+    foreach ($f in $tsFiles) {
+        if ($tsHits -ge 40) { break }
+        $fn = "$($f.Name)"
+        if ($fn -notmatch '\.(exe|dll|sys|scr|com|ps1|vbs|js|bat|cmd|jar|msi)$') { continue }
+        $tsSeen++
+        $full = "$($f.FullName)"
+        if ($full -match $HUNT_TIMESTOMP_BENIGN_RE) { continue }
+        $ct = $f.CreationTimeUtc; $wt = $f.LastWriteTimeUtc; $at = $f.LastAccessTimeUtc
+        $why = ''
+        if ($ct -gt $wt.AddMinutes(5)) {
+            $why = "the file was CREATED ($($ct.ToString('yyyy-MM-dd HH:mm:ss'))) after it was last MODIFIED ($($wt.ToString('yyyy-MM-dd HH:mm:ss'))), which cannot happen naturally"
+        } elseif ($wt -lt $tsInstall.AddDays(-1) -and $ct -lt $tsInstall.AddDays(-1)) {
+            $why = "both timestamps predate this Windows installation ($($tsInstall.ToString('yyyy-MM-dd'))) — the file claims to be older than the filesystem holding it"
+        } elseif ($ct -gt $tsFuture -or $wt -gt $tsFuture) {
+            $why = "the timestamp is in the FUTURE relative to this machine's clock"
+        } elseif ($ct.Millisecond -eq 0 -and $wt.Millisecond -eq 0 -and $at.Millisecond -eq 0 -and
+                  $ct -eq $wt -and $wt -eq $at) {
+            $why = "creation, modification and access times are byte-identical and carry a zeroed sub-second component — the signature of a tool that wrote all three at once from a second-resolution value, not of a file Windows created"
+        }
+        if (-not $why) { continue }
+        $tsHits++
+        Out-Typewriter "  -> TIMESTAMP ANOMALY: $full" "WARN"
+        Add-Finding -ID "AF139_TS_$([Math]::Abs($full.ToLower().GetHashCode()))" -Phase "PHASE 139" `
+            -ThreatType "Anti-Forensics" -Severity $SEV_POSSIBLE `
+            -Description "Timestamp anomaly on '$full': $why. Timestomping (MITRE T1070.006) exists to move a dropped file outside the time window an investigator filters on — including the -Hours window of this scan, which means the OTHER phases may have skipped this file. Installers and archive extraction also rewrite timestamps, so corroborate rather than conclude: the \$FILE_NAME timestamps in the MFT cannot be written through any documented API, so 'fsutil usn readjournal C:' or an MFT parser will show the real creation time. Treat this file as in-scope regardless of the window you chose." `
+            -Target $full -FixAction "Info" -Group "Timestamp Tampering"
+    }
+    if ($tsHits -eq 0) { Out-Typewriter "  -> NO TIMESTAMP ANOMALIES ACROSS $tsSeen EXECUTABLE FILES." "OK" }
+    Stop-PhaseTiming
+
+    # ── PHASE 140: FILENAME & NAMESPACE ANTI-FORENSICS ────────────────────────
+    Show-PhaseHeader "PHASE 140" "FILENAME SPOOFING & FILESYSTEM NAMESPACE ABUSE" "ANTI-FORENSICS"
+    Out-Typewriter "INSPECTING FILENAMES FOR BIDI OVERRIDES, HOMOGLYPHS AND NAMESPACE TRICKS..." "HUNT"
+    # Two distinct problems. (1) The name a human READS is not the name that EXECUTES —
+    # bidi overrides and homoglyphs. (2) The name Win32 RESOLVES is not the name on disk
+    # — trailing dots/spaces and reserved device names, which are creatable only through
+    # the \\?\ namespace and which make a file unreachable by the very APIs the rest of
+    # this scan enumerates with.
+    $nsFiles = Get-ScanFiles -Path $tsRoots -Filter '*'
+    $nsHits  = 0
+    foreach ($f in $nsFiles) {
+        if ($nsHits -ge 40) { break }
+        $fn   = "$($f.Name)"
+        $full = "$($f.FullName)"
+        if ($full -match $HUNT_FILENAME_BENIGN_RE) { continue }
+        $why = Test-ZbNameAnomaly $fn
+        if (-not $why -and $full.Length -ge 250) {
+            $why = "sits at a path length of $($full.Length) characters, at or past the MAX_PATH boundary where many tools — including parts of this scan — silently stop being able to open it"
+        }
+        if (-not $why) {
+            $leaf = if ($fn -match '^([^.]+)') { $Matches[1] } else { $fn }
+            if ($leaf -match '^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$') {
+                $why = "uses the reserved DOS device name '$leaf', which cannot be created through normal Win32 calls and cannot be deleted or inspected by most tools"
+            }
+        }
+        if (-not $why) { continue }
+        $nsHits++
+        Out-Typewriter "  -> FILENAME ANOMALY: $full" "CRIT"
+        Add-Finding -ID "AF140_NS_$([Math]::Abs($full.ToLower().GetHashCode()))" -Phase "PHASE 140" `
+            -ThreatType "Anti-Forensics / Masquerading" -Severity $SEV_HIGH `
+            -Description "The file at '$full' $why. Names of this shape are not produced by ordinary software: they are produced to make a file look like something else to a human (MITRE T1036.002 right-to-left override, T1036.005 match-legitimate-name) or to put it beyond the reach of the file APIs an investigator enumerates with. Inspect it with a tool that shows raw bytes — Get-ChildItem -LiteralPath '<parent>' | ForEach-Object { [int[]][char[]]`$_.Name } — and treat the displayed name as untrustworthy." `
+            -Target $full -FixAction "Info" -Group "Filename Anti-Forensics"
+    }
+    if ($nsHits -eq 0) { Out-Typewriter "  -> NO FILENAME OR NAMESPACE ANOMALIES." "OK" }
+    Stop-PhaseTiming
+
+    # ── PHASE 141: UNBACKED THREAD START ADDRESSES ────────────────────────────
+    Show-PhaseHeader "PHASE 141" "UNBACKED EXECUTABLE MEMORY (THREAD START ADDRESS AUDIT)" "INJECTION"
+    Out-Typewriter "VALIDATING EVERY THREAD START ADDRESS AGAINST ITS PROCESS MODULE MAP..." "HUNT"
+    # THE core memory signal, and it is reachable with no P/Invoke at all:
+    # ProcessThread.StartAddress and ProcessModule.BaseAddress/ModuleMemorySize are
+    # ordinary .NET properties. A thread whose entry point does not lie inside ANY mapped
+    # module is executing code with no file behind it — which is precisely what reflective
+    # DLL injection, manual mapping and plain shellcode produce, and precisely what
+    # phase 93 cannot see because it walks the module LIST and unbacked code is not in it.
+    $tbProcs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Id -ne $PID })
+    $tbHits  = 0; $tbChecked = 0
+    $tbSw    = [System.Diagnostics.Stopwatch]::StartNew()
+    foreach ($p in $tbProcs) {
+        if ($tbHits -ge 30 -or $tbSw.Elapsed.TotalSeconds -ge 45) { break }
+        $pname = "$($p.Name)"
+        $ppath = ''
+        try { $ppath = "$($p.Path)" } catch { $ppath = '' }
+        if ($ppath -and $ppath -match $HUNT_MEMORY_BENIGN_RE) { continue }
+        $ranges = New-Object System.Collections.Generic.List[object]
+        try {
+            foreach ($m in @($p.Modules)) {
+                $b = [int64]$m.BaseAddress
+                $ranges.Add(@{ Lo = $b; Hi = $b + [int64]$m.ModuleMemorySize })
+            }
+        } catch { continue }        # protected process (lsass, PPL AV) — expected, not evidence
+        if ($ranges.Count -eq 0) { continue }
+        $tbChecked++
+        $bad = 0; $badAddr = ''
+        try {
+            foreach ($th in @($p.Threads)) {
+                $sa = 0
+                try { $sa = [int64]$th.StartAddress } catch { continue }
+                if ($sa -le 0) { continue }
+                $inside = $false
+                foreach ($r in $ranges) { if ($sa -ge $r.Lo -and $sa -lt $r.Hi) { $inside = $true; break } }
+                if (-not $inside) { $bad++; if (-not $badAddr) { $badAddr = ('0x{0:X}' -f $sa) } }
+            }
+        } catch { continue }
+        if ($bad -eq 0) { continue }
+        $tbHits++
+        Out-Typewriter "  -> $pname PID:$($p.Id) HAS $bad THREAD(S) STARTING OUTSIDE ANY MODULE (first: $badAddr)" "CRIT"
+        Add-Finding -ID "MEM141_UNBACKED_$($p.Id)_$($pname -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 141" `
+            -ThreatType "Process Injection / Fileless" -Severity $SEV_POSSIBLE `
+            -Description "$pname (PID $($p.Id), image '$ppath') has $bad thread(s) whose start address — the first at $badAddr — falls outside every DLL and EXE mapped into it. Code is executing there with no file backing it, which is what reflective DLL injection, manual mapping and injected shellcode all look like (MITRE T1055.001/T1620), and it is invisible to phase 93 because unbacked code never enters the module list. IMPORTANT CONTEXT BEFORE YOU ACT: .NET JIT-compiled stubs, some JavaScript engines and most EDR products legitimately execute from dynamically allocated memory, so a managed or browser process here is weak evidence. Strong evidence is an unsigned, user-path, non-.NET binary with unbacked threads. Corroborate with phases 3, 93 and 136 for the same PID before treating this as an implant." `
+            -Target "PID:$($p.Id) $ppath" -FixAction "Info" -Group "Unbacked Memory"
+    }
+    if ($tbHits -eq 0) { Out-Typewriter "  -> ALL THREAD START ADDRESSES RESOLVE TO MAPPED MODULES ($tbChecked processes)." "OK" }
+    Stop-PhaseTiming
+
+    # ── PHASE 142: CLR HOSTED IN AN UNEXPECTED PROCESS ────────────────────────
+    Show-PhaseHeader "PHASE 142" "UNEXPECTED .NET RUNTIME HOSTING (IN-MEMORY ASSEMBLY LOAD)" "INJECTION"
+    Out-Typewriter "LOCATING PROCESSES HOSTING THE CLR THAT HAVE NO REASON TO..." "HUNT"
+    # Assembly.Load(byte[]) leaves nothing on disk and nothing in the module list except
+    # the runtime itself. The runtime is the tell: a native Windows utility that suddenly
+    # has clr.dll mapped is hosting managed code someone injected into it. This is the
+    # standard shape of Cobalt Strike execute-assembly, Covenant grunts and donut loaders.
+    $clrHits = 0
+    foreach ($p in $tbProcs) {
+        $pname = "$($p.Name)".ToLower()
+        if ($pname -notmatch $CLR_UNEXPECTED_HOSTS_RE) { continue }
+        $hasClr = $false; $clrName = ''
+        try {
+            foreach ($m in @($p.Modules)) {
+                $mn = "$($m.ModuleName)".ToLower()
+                if ($mn -eq 'clr.dll' -or $mn -eq 'coreclr.dll' -or $mn -eq 'mscorwks.dll') { $hasClr = $true; $clrName = $mn; break }
+            }
+        } catch { continue }
+        if (-not $hasClr) { continue }
+        $clrHits++
+        $cpath = ''; try { $cpath = "$($p.Path)" } catch {}
+        Out-Typewriter "  -> $($p.Name) PID:$($p.Id) IS HOSTING THE .NET RUNTIME ($clrName)" "CRIT"
+        Add-Finding -ID "MEM142_CLR_$($p.Id)_$($p.Name -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 142" `
+            -ThreatType "Process Injection / Fileless" -Severity $SEV_HIGH `
+            -Description "$($p.Name) (PID $($p.Id), image '$cpath') has $clrName loaded. This binary is native and does not host managed code in normal operation, so the .NET runtime is present because something loaded an assembly into it — the standard shape of an in-memory .NET payload (execute-assembly, donut, Covenant), which leaves no file on disk for any other phase to find. Corroborate with phase 141 (unbacked threads in the same PID) and phase 136 (ancestry), then capture the process memory before terminating it: & '`$env:WINDIR\System32\rundll32.exe' comsvcs.dll, MiniDump $($p.Id) C:\evidence\$($p.Id).dmp full — the assembly only exists there." `
+            -Target "PID:$($p.Id) $cpath" -FixAction "Info" -Group "Unexpected CLR Host"
+    }
+    if ($clrHits -eq 0) { Out-Typewriter "  -> NO UNEXPECTED .NET RUNTIME HOSTS." "OK" }
+    Stop-PhaseTiming
+
+    # ── PHASE 143: MODULE-FILE INTEGRITY (STOMPING / DELETED BACKING FILE) ────
+    Show-PhaseHeader "PHASE 143" "LOADED MODULE INTEGRITY (DELETED OR RELOCATED BACKING FILE)" "INJECTION"
+    Out-Typewriter "VERIFYING THAT EVERY LOADED MODULE STILL EXISTS ON DISK..." "HUNT"
+    # A module whose file is gone was loaded and then deleted — the classic "run once,
+    # erase the dropper" pattern, and it also defeats every hash- and signature-based
+    # phase in this engine because there is nothing left to hash. Pure .NET, no P/Invoke,
+    # and almost no false positives: Windows does not delete DLLs that are still mapped.
+    $msHits = 0; $msSw = [System.Diagnostics.Stopwatch]::StartNew()
+    foreach ($p in $tbProcs) {
+        if ($msHits -ge 25 -or $msSw.Elapsed.TotalSeconds -ge 30) { break }
+        try {
+            foreach ($m in @($p.Modules)) {
+                $mf = "$($m.FileName)"
+                if ([string]::IsNullOrWhiteSpace($mf)) { continue }
+                if ($mf -match $HUNT_MEMORY_BENIGN_RE) { continue }
+                if (Test-Path -LiteralPath $mf) { continue }
+                $msHits++
+                Out-Typewriter "  -> $($p.Name) PID:$($p.Id) HAS A MAPPED MODULE WHOSE FILE IS GONE: $mf" "CRIT"
+                Add-Finding -ID "MEM143_GONE_$($p.Id)_$([Math]::Abs($mf.ToLower().GetHashCode()))" -Phase "PHASE 143" `
+                    -ThreatType "Process Injection / Fileless" -Severity $SEV_HIGH `
+                    -Description "$($p.Name) (PID $($p.Id)) has '$mf' mapped into it, but that file no longer exists on disk. A module is loaded from a file and the file is normally locked for the lifetime of the mapping, so this means the backing file was deleted after loading — the run-then-erase pattern used to defeat exactly the hash and signature checks the rest of this scan performs (MITRE T1070.004). The code is still resident in PID $($p.Id) and that is now the only copy. Dump it before killing the process: & '`$env:WINDIR\System32\rundll32.exe' comsvcs.dll, MiniDump $($p.Id) C:\evidence\$($p.Id).dmp full" `
+                    -Target "PID:$($p.Id) $mf" -FixAction "Info" -Group "Deleted Module Backing"
+                break
+            }
+        } catch { continue }
+    }
+    if ($msHits -eq 0) { Out-Typewriter "  -> EVERY LOADED MODULE RESOLVES TO A FILE ON DISK." "OK" }
+    Stop-PhaseTiming
+    # ── PHASE 144: PROCESS IMAGE INTEGRITY & MASQUERADING ─────────────────────
+    Show-PhaseHeader "PHASE 144" "PROCESS IMAGE INTEGRITY (HOLLOWING / MASQUERADING)" "INJECTION"
+    Out-Typewriter "CROSS-CHECKING EACH PROCESS IMAGE PATH AGAINST TWO INDEPENDENT SOURCES..." "HUNT"
+    # Cross-view again, applied to the one field everything else in this engine trusts:
+    # a process's image path. .NET reads it from the PEB (Process.MainModule) and WMI
+    # reads it from the kernel (Win32_Process.ExecutablePath). Process hollowing and PEB
+    # unlinking make those two disagree, and every phase that decides "is this binary
+    # signed / in a user path / on an allowlist" is reading whichever one it happened to
+    # ask. A disagreement means at least one of them is a lie.
+    $piWmi = @{}
+    foreach ($w in $paSnap) { if ($null -ne $w.ProcessId) { $piWmi["$($w.ProcessId)"] = "$($w.ExecutablePath)" } }
+    $piHits = 0
+    foreach ($p in $tbProcs) {
+        $dotnetPath = ''
+        try { $dotnetPath = "$($p.Path)" } catch { $dotnetPath = '' }
+        $wmiPath = "$($piWmi["$($p.Id)"])"
+        if ([string]::IsNullOrWhiteSpace($dotnetPath) -or [string]::IsNullOrWhiteSpace($wmiPath)) { continue }
+        if ($dotnetPath -match $HUNT_MEMORY_BENIGN_RE) { continue }
+        $why = ''
+        if ($dotnetPath -ne $wmiPath) {
+            $why = "the PEB reports its image as '$dotnetPath' while the kernel reports '$wmiPath'"
+        } elseif (-not (Test-Path -LiteralPath $dotnetPath)) {
+            $why = "its image file '$dotnetPath' no longer exists on disk"
+        } else {
+            # Masquerading: a process carrying the NAME of a core Windows binary while
+            # running from somewhere that binary never lives. Anchored to the System32
+            # path COMPONENT, not a bare substring (CLAUDE.md path-anchoring rule).
+            $leaf = ''
+            try { $leaf = [IO.Path]::GetFileName($dotnetPath).ToLower() } catch {}
+            if ($leaf -match $SYSTEM_IMAGE_NAMES_RE -and $dotnetPath -notmatch '(?i)\\Windows\\(System32|SysWOW64|WinSxS)\\') {
+                $why = "it carries the filename of a core Windows binary ('$leaf') but runs from '$dotnetPath', which is not a system directory"
+            }
+        }
+        if (-not $why) { continue }
+        $piHits++
+        Out-Typewriter "  -> IMAGE INTEGRITY: $($p.Name) PID:$($p.Id) — $why" "CRIT"
+        Add-Finding -ID "MEM144_IMG_$($p.Id)_$($p.Name -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 144" `
+            -ThreatType "Process Injection / Masquerading" -Severity $SEV_HIGH `
+            -Description "$($p.Name) (PID $($p.Id)): $why. The two sources for a process image path are the PEB, which a process can rewrite about itself, and the kernel, which it cannot — so a disagreement means the PEB has been edited, which is what process hollowing (MITRE T1055.012) and PEB-unlinking masquerade tools do. A binary running under a system filename from a non-system directory is T1036.005. This matters beyond the process itself: every other phase in this scan that judged this process by its path may have judged the wrong path. Verify with a third source: Get-CimInstance Win32_Process -Filter 'ProcessId=$($p.Id)' | Select-Object ExecutablePath, CommandLine" `
+            -Target "PID:$($p.Id) $dotnetPath" -FixAction "Info" -Group "Image Integrity"
+    }
+    if ($piHits -eq 0) { Out-Typewriter "  -> ALL PROCESS IMAGE PATHS AGREE ACROSS BOTH SOURCES." "OK" }
+    Stop-PhaseTiming
+
+    # ── PHASE 145: FULLY SUSPENDED PROCESSES (HOLLOWING IN FLIGHT) ────────────
+    Show-PhaseHeader "PHASE 145" "SUSPENDED PROCESS DETECTION (HOLLOWING TARGETS)" "INJECTION"
+    Out-Typewriter "LOCATING PROCESSES WHOSE THREADS ARE ALL SUSPENDED..." "HUNT"
+    # Hollowing starts with CreateProcess(CREATE_SUSPENDED): the victim is created, its
+    # image is unmapped and replaced, then it is resumed. A process caught with EVERY
+    # thread suspended is either mid-hollow, or a payload parked deliberately to survive
+    # a scan, or (commonly and benignly) a UWP app that Windows has frozen.
+    # ThreadState/WaitReason are ordinary .NET properties — no P/Invoke needed.
+    $spHits = 0
+    foreach ($p in $tbProcs) {
+        $ppath = ''
+        try { $ppath = "$($p.Path)" } catch { $ppath = '' }
+        if (-not $ppath) { continue }
+        if ($ppath -match $HUNT_MEMORY_BENIGN_RE) { continue }
+        # UWP / Store apps are suspended by design whenever they lose focus. WindowsApps
+        # is a signed store root, not a user path (CLAUDE.md).
+        if ($ppath -match '(?i)\\Program Files\\WindowsApps\\') { continue }
+        $total = 0; $susp = 0
+        try {
+            foreach ($th in @($p.Threads)) {
+                $total++
+                if ("$($th.ThreadState)" -eq 'Wait' -and "$($th.WaitReason)" -eq 'Suspended') { $susp++ }
+            }
+        } catch { continue }
+        if ($total -eq 0 -or $susp -ne $total) { continue }
+        $spHits++
+        $verdict = Get-SignatureVerdict $ppath
+        Out-Typewriter "  -> FULLY SUSPENDED: $($p.Name) PID:$($p.Id) ($total/$total threads)" "WARN"
+        Add-Finding -ID "MEM145_SUSP_$($p.Id)_$($p.Name -replace '[^a-zA-Z0-9]','')" -Phase "PHASE 145" `
+            -ThreatType "Process Injection" -Severity $SEV_POSSIBLE `
+            -Description "$($p.Name) (PID $($p.Id), image '$ppath', signature status: $($verdict.Status)) has all $total of its threads suspended. Process hollowing begins with CreateProcess(CREATE_SUSPENDED) — the victim is created, its image is unmapped and overwritten, then resumed — so a process caught fully suspended may be mid-injection, or may be a payload parked to sit out a scan. BENIGN CAUSES ARE COMMON: Store/UWP apps are suspended whenever they lose focus (those are excluded here), and a process stopped at a debugger breakpoint looks identical. Weigh it with the signature status above and with phases 141 and 144 for the same PID; an unsigned, user-path, fully-suspended process is worth capturing before you resume or kill it." `
+            -Target "PID:$($p.Id) $ppath" -FixAction "Info" -Group "Suspended Process"
+    }
+    if ($spHits -eq 0) { Out-Typewriter "  -> NO FULLY SUSPENDED PROCESSES OUTSIDE THE STORE APP MODEL." "OK" }
+    Stop-PhaseTiming
+}

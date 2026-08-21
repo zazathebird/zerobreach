@@ -1,4 +1,11 @@
-﻿trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT phase in THIS module, not the next dot-sourced module (see CLAUDE.md engine-split rule)
+﻿# NOTE - Detection vocabulary in this file is deliberate.
+# Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
+# named malware families, are detection category labels, operator-facing report text, or
+# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# response tool; these strings are what it reports, not what it does. See CLAUDE.md,
+# "The detection vocabulary is deliberate". Do not sanitise them.
+
+trap { Write-RecoveredError $_; continue }   # module-level resilience: a terminating error resumes at the NEXT phase in THIS module, not the next dot-sourced module (see CLAUDE.md engine-split rule)
 if ($PhasePlan.Advanced) {
     trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
     if (-not $global:STEALTH_MODE) {

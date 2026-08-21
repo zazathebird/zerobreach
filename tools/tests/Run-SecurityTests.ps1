@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Regression suite for the 2026-08-18 security audit fixes (C1, C3, H1-H10).
+    Regression suite for the 2026-08-18 security audit fixes (C1, C3, H1-H10) and the WS6/WS7 bands.
 .DESCRIPTION
     Run from the PROJECT ROOT:  powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1
 
@@ -21,7 +21,7 @@ Push-Location $root
 Write-Host "ZeroBreach security regression suite — root: $root" -ForegroundColor Cyan
 
 $tests = @(
-    @{ Name = 'Parse + BOM (7 shipped files)';        File = 'Test-ParseAndBom.ps1';       Skip = $SkipParse }
+    @{ Name = 'Parse + BOM (11 shipped files)';        File = 'Test-ParseAndBom.ps1';       Skip = $SkipParse }
     @{ Name = 'Embedded runspace here-strings';       File = 'Test-EmbeddedRunspaces.ps1'; Skip = $SkipParse }
     @{ Name = 'C1  token + Origin lockdown';          File = 'Test-C1-Auth.ps1' }
     @{ Name = 'H1  rollback snapshot artifacts';      File = 'Test-H1-Snapshot.ps1' }
@@ -32,6 +32,10 @@ $tests = @(
     @{ Name = 'H8  CSV injection + report JS';        File = 'Test-H8-CsvInjection.ps1' }
     @{ Name = 'M   medium-tier fixes (M2-M8)';        File = 'Test-M-Tier.ps1' }
     @{ Name = '§5  FP anchors + log severity';        File = 'Test-FpAnchors.ps1' }
+    @{ Name = 'WS6 band 116-133 + WS4 sig memo';      File = 'Test-Extended-Band.ps1' }
+    @{ Name = 'WS6 runtime smoke (executes 116-133)'; File = 'Test-Extended-Smoke.ps1' }
+    @{ Name = 'WS7 HUNT band 134-162 + preflight';    File = 'Test-Hunt-Band.ps1' }
+    @{ Name = 'WS7 runtime correlation (executes 160-162)'; File = 'Test-Hunt-Correlation.ps1' }
 )
 
 $failed = 0

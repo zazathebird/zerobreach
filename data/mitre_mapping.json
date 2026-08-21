@@ -11,7 +11,9 @@
       "keyword_map",
       "threat_type_map",
       "phase_map"
-    ]
+    ],
+    "phase_map_entries": 140,
+    "techniques": 147
   },
   "tactics": {
     "TA0001": "Initial Access",
@@ -923,6 +925,226 @@
         "Execution"
       ],
       "url": "https://attack.mitre.org/techniques/T1059/"
+    },
+    "T1547.009": {
+      "name": "Boot or Logon Autostart Execution: Shortcut Modification",
+      "tactics": [
+        "Persistence"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1547/009/"
+    },
+    "T1137.006": {
+      "name": "Office Application Startup: Add-ins",
+      "tactics": [
+        "Persistence"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1137/006/"
+    },
+    "T1137.001": {
+      "name": "Office Application Startup: Office Template Macros",
+      "tactics": [
+        "Persistence"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1137/001/"
+    },
+    "T1547.002": {
+      "name": "Boot or Logon Autostart Execution: Authentication Package",
+      "tactics": [
+        "Persistence"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1547/002/"
+    },
+    "T1547.005": {
+      "name": "Boot or Logon Autostart Execution: Security Support Provider",
+      "tactics": [
+        "Persistence"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1547/005/"
+    },
+    "T1556.002": {
+      "name": "Modify Authentication Process: Password Filter DLL",
+      "tactics": [
+        "Credential Access"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1556/002/"
+    },
+    "T1547.014": {
+      "name": "Boot or Logon Autostart Execution: Active Setup",
+      "tactics": [
+        "Persistence"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1547/014/"
+    },
+    "T1546.002": {
+      "name": "Event Triggered Execution: Screensaver",
+      "tactics": [
+        "Privilege Escalation"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1546/002/"
+    },
+    "T1546.009": {
+      "name": "Event Triggered Execution: AppCert DLLs",
+      "tactics": [
+        "Privilege Escalation"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1546/009/"
+    },
+    "T1546.011": {
+      "name": "Event Triggered Execution: Application Shimming",
+      "tactics": [
+        "Privilege Escalation"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1546/011/"
+    },
+    "T1204.004": {
+      "name": "User Execution: Malicious Copy and Paste",
+      "tactics": [
+        "Execution"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1204/004/"
+    },
+    "T1567.002": {
+      "name": "Exfiltration Over Web Service: Cloud Storage",
+      "tactics": [
+        "Exfiltration"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1567/002/"
+    },
+    "T1102.002": {
+      "name": "Web Service: Bidirectional Communication",
+      "tactics": [
+        "Command and Control"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1102/002/"
+    },
+    "T1560.001": {
+      "name": "Archive Collected Data: Archive via Utility",
+      "tactics": [
+        "Collection"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1560/001/"
+    },
+    "T1059.010": {
+      "name": "Command and Scripting Interpreter: AutoHotKey & AutoIT",
+      "tactics": [
+        "Execution"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1059/010/"
+    },
+    "T1505.003": {
+      "name": "Server Software Component: Web Shell",
+      "tactics": [
+        "Persistence"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1505/003/"
+    },
+    "T1561.002": {
+      "name": "Disk Wipe: Disk Structure Wipe",
+      "tactics": [
+        "Impact"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1561/002/"
+    },
+    "T1569.002": {
+      "name": "System Services: Service Execution",
+      "tactics": [
+        "Execution"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1569/002/"
+    },
+    "T1012": {
+      "name": "Query Registry",
+      "tactics": [
+        "Discovery"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1012/"
+    },
+    "T1518.001": {
+      "name": "Software Discovery: Security Software Discovery",
+      "tactics": [
+        "Discovery"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1518/001/"
+    },
+    "T1553.003": {
+      "name": "Subvert Trust Controls: SIP and Trust Provider Hijacking",
+      "tactics": [
+        "Defense Evasion"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1553/003/"
+    },
+    "T1027.002": {
+      "name": "Obfuscated Files or Information: Software Packing",
+      "tactics": [
+        "Defense Evasion"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1027/002/"
+    },
+    "T1071.001": {
+      "name": "Application Layer Protocol: Web Protocols",
+      "tactics": [
+        "Command and Control"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1071/001/"
+    },
+    "T1539": {
+      "name": "Steal Web Session Cookie",
+      "tactics": [
+        "Credential Access"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1539/"
+    },
+    "T1552.001": {
+      "name": "Unsecured Credentials: Credentials In Files",
+      "tactics": [
+        "Credential Access"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1552/001/"
+    },
+    "T1567": {
+      "name": "Exfiltration Over Web Service",
+      "tactics": [
+        "Exfiltration"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1567/"
+    },
+    "T1070.006": {
+      "name": "Indicator Removal: Timestomp",
+      "tactics": [
+        "Defense Evasion"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1070/006/"
+    },
+    "T1036.002": {
+      "name": "Masquerading: Right-to-Left Override",
+      "tactics": [
+        "Defense Evasion"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1036/002/"
+    },
+    "T1134.004": {
+      "name": "Access Token Manipulation: Parent PID Spoofing",
+      "tactics": [
+        "Defense Evasion",
+        "Privilege Escalation"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1134/004/"
+    },
+    "T1070.004": {
+      "name": "Indicator Removal: File Deletion",
+      "tactics": [
+        "Defense Evasion"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1070/004/"
+    },
+    "T1574.012": {
+      "name": "Hijack Execution Flow: COR_PROFILER",
+      "tactics": [
+        "Persistence",
+        "Privilege Escalation",
+        "Defense Evasion"
+      ],
+      "url": "https://attack.mitre.org/techniques/T1574/012/"
     }
   },
   "threat_type_map": {
@@ -1980,6 +2202,245 @@
         "T1059",
         "T1490"
       ]
+    },
+    "PHASE 116": {
+      "name": "Browser Policy & Preference Tamper",
+      "techniques": [
+        "T1176",
+        "T1112",
+        "T1518.001"
+      ]
+    },
+    "PHASE 117": {
+      "name": "Native Messaging Hosts & Browser Debug-Port Abuse",
+      "techniques": [
+        "T1176",
+        "T1185",
+        "T1539"
+      ]
+    },
+    "PHASE 118": {
+      "name": "Shortcut (.lnk) Hijack & Argument Injection",
+      "techniques": [
+        "T1547.009",
+        "T1204.002",
+        "T1059.001"
+      ]
+    },
+    "PHASE 119": {
+      "name": "DLL Sideloading in Application Directories",
+      "techniques": [
+        "T1574.001",
+        "T1574.002"
+      ]
+    },
+    "PHASE 120": {
+      "name": "Electron App Core Tamper (Chat Clients / Wallets)",
+      "techniques": [
+        "T1554",
+        "T1552.001"
+      ]
+    },
+    "PHASE 121": {
+      "name": "Office Add-in / XLL / Template Tamper",
+      "techniques": [
+        "T1137.006",
+        "T1137.001",
+        "T1137"
+      ]
+    },
+    "PHASE 122": {
+      "name": "Installed-Application Binary Integrity",
+      "techniques": [
+        "T1554",
+        "T1036.005"
+      ]
+    },
+    "PHASE 123": {
+      "name": "Execution Evidence Mining (BAM / UserAssist / MuiCache)",
+      "techniques": [
+        "T1012",
+        "T1204.002"
+      ]
+    },
+    "PHASE 124": {
+      "name": "Run-Dialog & MRU Forensics (ClickFix / Fake CAPTCHA)",
+      "techniques": [
+        "T1204.004",
+        "T1059.001",
+        "T1218.005"
+      ]
+    },
+    "PHASE 125": {
+      "name": "Clipboard Clipper (Crypto Address Swap)",
+      "techniques": [
+        "T1115",
+        "T1056.001"
+      ]
+    },
+    "PHASE 126": {
+      "name": "Extended Autostart Surface (LSA / Netsh / Print / Boot)",
+      "techniques": [
+        "T1547.002",
+        "T1547.005",
+        "T1556.002",
+        "T1547.012",
+        "T1547.014",
+        "T1546.002",
+        "T1546.009"
+      ]
+    },
+    "PHASE 127": {
+      "name": "Shell Extension / Context-Menu / Icon-Overlay Hijack",
+      "techniques": [
+        "T1546.015",
+        "T1112"
+      ]
+    },
+    "PHASE 128": {
+      "name": "Remote-Access & RMM Tool Inventory",
+      "techniques": [
+        "T1219",
+        "T1133"
+      ]
+    },
+    "PHASE 129": {
+      "name": "Exfiltration Staging & Cloud-Sync Tool Abuse",
+      "techniques": [
+        "T1567.002",
+        "T1560.001",
+        "T1074.001"
+      ]
+    },
+    "PHASE 130": {
+      "name": "Chat & Paste-Site C2 / Webhook Exfiltration",
+      "techniques": [
+        "T1102.002",
+        "T1567",
+        "T1071.001"
+      ]
+    },
+    "PHASE 131": {
+      "name": "AutoIt / Packed-Script Dropper Audit",
+      "techniques": [
+        "T1059.010",
+        "T1027.002"
+      ]
+    },
+    "PHASE 132": {
+      "name": "Web Shell & IIS / Exchange Backdoor Scan",
+      "techniques": [
+        "T1505.003",
+        "T1190"
+      ]
+    },
+    "PHASE 133": {
+      "name": "Wiper / Destructive Payload & Lateral-Movement Artifacts",
+      "techniques": [
+        "T1485",
+        "T1561.002",
+        "T1570",
+        "T1569.002"
+      ]
+    },
+    "PREFLIGHT": {
+      "name": "Scanner Self-Integrity & Anti-Blinding Gate",
+      "techniques": [
+        "T1562.001",
+        "T1518.001"
+      ]
+    },
+    "PHASE 134": {
+      "name": "Scheduled Task Cross-View (Hidden / SD-Deleted Tasks)",
+      "techniques": [
+        "T1053.005",
+        "T1014"
+      ]
+    },
+    "PHASE 135": {
+      "name": "Service Control Manager vs Registry Cross-View",
+      "techniques": [
+        "T1543.003",
+        "T1014"
+      ]
+    },
+    "PHASE 136": {
+      "name": "Process Ancestry Integrity (Parent PID Spoofing)",
+      "techniques": [
+        "T1134.004"
+      ]
+    },
+    "PHASE 137": {
+      "name": "Autostart Cross-View (32-bit Registry Redirection)",
+      "techniques": [
+        "T1547.001",
+        "T1112"
+      ]
+    },
+    "PHASE 138": {
+      "name": "Kernel Driver Cross-View (Registry vs Loaded Set)",
+      "techniques": [
+        "T1014"
+      ]
+    },
+    "PHASE 139": {
+      "name": "Timestamp Tampering / Timestomping Detection",
+      "techniques": [
+        "T1070.006"
+      ]
+    },
+    "PHASE 140": {
+      "name": "Filename Spoofing & Filesystem Namespace Abuse",
+      "techniques": [
+        "T1036.002",
+        "T1036.005"
+      ]
+    },
+    "PHASE 141": {
+      "name": "Unbacked Executable Memory (Thread Start Address Audit)",
+      "techniques": [
+        "T1055.001",
+        "T1620"
+      ]
+    },
+    "PHASE 142": {
+      "name": "Unexpected .NET Runtime Hosting (In-Memory Assembly Load)",
+      "techniques": [
+        "T1620",
+        "T1055.001"
+      ]
+    },
+    "PHASE 143": {
+      "name": "Loaded Module Integrity (Deleted Backing File)",
+      "techniques": [
+        "T1070.004",
+        "T1055.001"
+      ]
+    },
+    "PHASE 144": {
+      "name": "Process Image Integrity (Hollowing / Masquerading)",
+      "techniques": [
+        "T1055.012",
+        "T1036.005"
+      ]
+    },
+    "PHASE 145": {
+      "name": "Suspended Process Detection (Hollowing Targets)",
+      "techniques": [
+        "T1055.012"
+      ]
+    },
+    "PHASE 160": {
+      "name": "Attack-Chain Correlation & Scoring",
+      "techniques": []
+    },
+    "PHASE 161": {
+      "name": "Patient Zero — Earliest Artifact on Disk",
+      "techniques": []
+    },
+    "PHASE 162": {
+      "name": "Incident Timeline Export",
+      "techniques": []
     }
   }
 }

@@ -1,0 +1,204 @@
+﻿# NOTE - Detection vocabulary in this file is deliberate.
+# Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
+# named malware families, are detection category labels, operator-facing report text, or
+# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# response tool; these strings are what it reports, not what it does. See CLAUDE.md,
+# "The detection vocabulary is deliberate". Do not sanitise them.
+
+trap { Write-RecoveredError $_; continue }   # module-level resilience (see CLAUDE.md engine-split rule)
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  PREFLIGHT — SELF-INTEGRITY & ANTI-BLINDING GATE     (WS7 · ADVERSARY_ANALYSIS.md)
+#
+#  Runs in EVERY mode, before phase 1, because integrity is not an optional extra: a
+#  scanner that has been blinded still prints [OK ] banners and still emits a clean
+#  bill of health, which is the worst output an IR tool can produce.
+#
+#  This is NOT a numbered plan phase. It deliberately prints no "PHASE <n>" header —
+#  the server's counter regex (PHASE\s+(\d+(?:\.\d+)?)) must not see it, or every
+#  mode's phase_total would be off by one — and it resets $global:CURRENT_PHASE_NUM
+#  to 0 on the way out so the WinForms progress bar still starts at phase 1.
+#  Findings carry -Phase "PREFLIGHT"; Resolve-Mitre finds no numeric phase and falls
+#  back to its keyword/threat-type path, which is correct for these.
+#
+#  Everything here is pure PowerShell + .NET on APIs Windows already ships. There is
+#  deliberately NO P/Invoke and no reflection into AMSI internals: those are the exact
+#  code shapes AV heuristics flag, and an engine that Defender blocks at load detects
+#  nothing at all (the AMSI rule in CLAUDE.md exists because that already happened).
+# ══════════════════════════════════════════════════════════════════════════════
+Show-PhaseHeader "PREFLIGHT" "SELF-INTEGRITY, ANTI-BLINDING & SCAN-ENVIRONMENT VALIDATION" "INTEGRITY"
+Out-Typewriter "VERIFYING THE SCANNER BEFORE TRUSTING THE SCAN..." "HUNT"
+$pfIssues = 0
+
+# ── P0.1 · Signature-set tampering ────────────────────────────────────────────
+# The loader already SANITISED the allowlists (fail-closed) before compiling them.
+# This reports what it refused. An FP allowlist that matches everything is not a
+# false-positive suppression, it is an off switch for the phases that use it.
+if ($global:ZB_SIG_TAMPER -and $global:ZB_SIG_TAMPER.Count -gt 0) {
+    foreach ($tm in $global:ZB_SIG_TAMPER) {
+        $pfIssues++
+        Out-Typewriter "  -> SIGNATURE SET REFUSED AN ENTRY: $tm" "CRIT"
+        Add-Finding -ID "PF_SIGTAMPER_$([Math]::Abs($tm.GetHashCode()))" -Phase "PREFLIGHT" `
+            -ThreatType "Security Tool Tampering" -Severity $SEV_CRITICAL `
+            -Description "The detection signature set contains an entry this engine refused to load: $tm — The FP-allowlist block SUPPRESSES detections, so widening one entry is the cheapest way to blind this tool while it still reports a clean scan. The entry was DROPPED (the affected phases run noisy rather than blind), but treat data\detection_signatures.json as modified: restore it from a known-good release and re-run. If you edited it yourself, the pattern was too broad and needs anchoring." `
+            -Target "data\detection_signatures.json" -FixAction "Info" -Group "Scanner Integrity"
+    }
+} else {
+    Out-Typewriter "  -> FP ALLOWLISTS VALIDATED — no universal, uncompilable or backtracking patterns." "OK"
+}
+
+# ── P0.2 · Data + engine file manifest ────────────────────────────────────────
+# data\integrity_manifest.json pins the SHA256 of every shipped data file and engine
+# module. Generate it at release time with tools\New-IntegrityManifest.ps1. Absent, we
+# say so rather than pretending: an unverifiable scanner is a known-unknown, not a pass.
+$pfManifest = Join-Path $global:ZB_ROOT 'data\integrity_manifest.json'
+if (Test-Path -LiteralPath $pfManifest) {
+    $pfMan = $null
+    try { $pfMan = Get-Content -LiteralPath $pfManifest -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $pfMan = $null }
+    if ($null -eq $pfMan -or $null -eq $pfMan.files) {
+        $pfIssues++
+        Out-Typewriter "  -> INTEGRITY MANIFEST PRESENT BUT UNREADABLE." "CRIT"
+        Add-Finding -ID "PF_MANIFEST_UNREADABLE" -Phase "PREFLIGHT" `
+            -ThreatType "Security Tool Tampering" -Severity $SEV_HIGH `
+            -Description "data\integrity_manifest.json exists but could not be parsed. Either it was corrupted in transit or something rewrote it to defeat the check. Restore the engine tree from a known-good release." `
+            -Target $pfManifest -FixAction "Info" -Group "Scanner Integrity"
+    } else {
+        $pfBad = 0; $pfChecked = 0
+        foreach ($mp in @($pfMan.files.PSObject.Properties)) {
+            $rel  = "$($mp.Name)"
+            $want = "$($mp.Value)".ToUpper().Trim()
+            $abs  = Join-Path $global:ZB_ROOT $rel
+            if (-not (Test-Path -LiteralPath $abs)) {
+                $pfBad++; $pfIssues++
+                Out-Typewriter "  -> MANIFEST FILE MISSING: $rel" "CRIT"
+                Add-Finding -ID "PF_MANIFEST_MISSING_$($rel -replace '[^a-zA-Z0-9]','')" -Phase "PREFLIGHT" `
+                    -ThreatType "Security Tool Tampering" -Severity $SEV_CRITICAL `
+                    -Description "A file this release ships is missing: $rel. Detections that depend on it are disabled. Restore the engine tree from a known-good release before trusting any result from this scan." `
+                    -Target $abs -FixAction "Info" -Group "Scanner Integrity"
+                continue
+            }
+            $pfChecked++
+            $got = Get-FileHashSafe $abs
+            if ($got -and $want -and $got -ne $want) {
+                $pfBad++; $pfIssues++
+                Out-Typewriter "  -> MANIFEST HASH MISMATCH: $rel" "CRIT"
+                Add-Finding -ID "PF_MANIFEST_MISMATCH_$($rel -replace '[^a-zA-Z0-9]','')" -Phase "PREFLIGHT" `
+                    -ThreatType "Security Tool Tampering" -Severity $SEV_CRITICAL `
+                    -Description "$rel does not match the SHA256 recorded for this release (expected $want, found $got). Either this copy of ZeroBreach was modified, or something on this machine modified it — which is what an attacker does to a scanner it cannot stop. Do not trust this scan. Restore from a known-good release, on a different machine if possible, and re-run." `
+                    -Target $abs -FixAction "Info" -Group "Scanner Integrity"
+            }
+        }
+        if ($pfBad -eq 0) {
+            Out-Typewriter "  -> ENGINE + SIGNATURE INTEGRITY VERIFIED ($pfChecked files match the release manifest)." "OK"
+        }
+    }
+} else {
+    Out-Typewriter "  -> NO INTEGRITY MANIFEST — engine authenticity is UNVERIFIED this run." "WARN"
+    Add-Finding -ID "PF_MANIFEST_ABSENT" -Phase "PREFLIGHT" `
+        -ThreatType "Security Tool Tampering" -Severity $SEV_INFO `
+        -Description "data\integrity_manifest.json is absent, so this run could not verify that the engine modules and signature database are the ones that shipped. This is expected on a development tree and NOT expected on a release build. Generate it with: powershell -NoProfile -File tools\New-IntegrityManifest.ps1" `
+        -Target $pfManifest -FixAction "Info" -Group "Scanner Integrity"
+}
+
+# ── P0.3 · Bitness / WOW64 redirection ────────────────────────────────────────
+if ($global:ZB_IS_WOW64) {
+    $pfIssues++
+    Out-Typewriter "  -> 32-BIT ENGINE ON 64-BIT WINDOWS — System32 and HKLM\SOFTWARE are REDIRECTED." "CRIT"
+    Add-Finding -ID "PF_WOW64_REDIRECTED" -Phase "PREFLIGHT" `
+        -ThreatType "Scan Coverage Gap" -Severity $SEV_CRITICAL `
+        -Description "ZeroBreach is running as a 32-BIT process on 64-bit Windows. The OS silently redirects C:\Windows\System32 to SysWOW64 and HKLM\SOFTWARE to Wow6432Node, so the System32 binary audits (phases 15/109/113) and every HKLM\SOFTWARE registry phase are reading the WRONG half of this machine — malware in the real System32 and real HKLM run keys is invisible to them. The WS7 band routes its own access around this, but the legacy phases do not. RE-RUN FROM A 64-BIT POWERSHELL: %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe (note that from a 32-bit shell you must type %SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe to reach it)." `
+        -Target "Process bitness: 32-bit on x64" -FixAction "Info" -Group "Scanner Integrity"
+} else {
+    Out-Typewriter "  -> BITNESS OK — no WOW64 file-system or registry redirection in effect." "OK"
+}
+
+# ── P0.4 · Constrained language / policy degradation ──────────────────────────
+# In ConstrainedLanguage many .NET calls the phases rely on silently return nothing
+# instead of throwing, so the scan quietly loses coverage rather than failing loudly.
+$pfLang = "$($ExecutionContext.SessionState.LanguageMode)"
+if ($pfLang -and $pfLang -ne 'FullLanguage') {
+    $pfIssues++
+    Out-Typewriter "  -> POWERSHELL LANGUAGE MODE IS $pfLang — detections will silently degrade." "CRIT"
+    Add-Finding -ID "PF_LANGMODE_$pfLang" -Phase "PREFLIGHT" `
+        -ThreatType "Scan Coverage Gap" -Severity $SEV_HIGH `
+        -Description "PowerShell is running in $pfLang, not FullLanguage. Most phases call .NET types directly; under a restricted language mode those calls return nothing instead of throwing, so this scan will under-report without any visible error. This is usually AppLocker/WDAC policy or the __PSLockdownPolicy environment variable. Confirm the policy is intentional, then re-run in FullLanguage — an audit under ConstrainedLanguage cannot be used to clear a machine." `
+        -Target "LanguageMode=$pfLang" -FixAction "Info" -Group "Scanner Integrity"
+}
+
+# ── P0.5 · Foreign modules inside the scanner's own process ───────────────────
+# Anything loaded into THIS process from a user-writable path is either an injected
+# DLL or a security product's hook. Both matter to an operator; neither is auto-acted-on.
+try {
+    $pfSelf = Get-Process -Id $PID -ErrorAction SilentlyContinue
+    if ($pfSelf) {
+        foreach ($pm in @($pfSelf.Modules)) {
+            $pmf = "$($pm.FileName)"
+            if (-not $pmf) { continue }
+            # System-owned locations. Anything else inside an elevated scanner is notable.
+            if ($pmf -match '(?i)^[A-Z]:\\Windows\\(System32|SysWOW64|WinSxS|Microsoft\.NET|assembly)\\') { continue }
+            if ($pmf -match '(?i)^[A-Z]:\\Program Files( \(x86\))?\\') { continue }
+            $pfIssues++
+            Out-Typewriter "  -> FOREIGN MODULE IN SCANNER PROCESS: $pmf" "WARN"
+            Add-Finding -ID "PF_SELFMOD_$([Math]::Abs($pmf.ToLower().GetHashCode()))" -Phase "PREFLIGHT" `
+                -ThreatType "Security Tool Tampering" -Severity $SEV_POSSIBLE `
+                -Description "A DLL outside the system and Program Files trees is loaded inside ZeroBreach's own process: $pmf — On an elevated scanner this is either an EDR/AV user-mode hook (common and expected on a managed endpoint; identify the vendor and move on) or a DLL injected to filter what this scan can see. Verify the publisher of that file before trusting phases that enumerate files, processes or registry values." `
+                -Target $pmf -FixAction "Info" -Group "Scanner Integrity"
+        }
+    }
+} catch {}
+
+# ── P0.6 · Environment-level hijacks that would run code inside the scan ──────
+# COR_PROFILER loads an arbitrary DLL into every .NET process that starts — including
+# this one and anything the scan launches. It is both persistence and a scanner attack.
+foreach ($pfEnvName in @('COR_ENABLE_PROFILING','COR_PROFILER','COR_PROFILER_PATH','CORECLR_ENABLE_PROFILING','CORECLR_PROFILER','CORECLR_PROFILER_PATH','__PSLockdownPolicy','PSExecutionPolicyPreference')) {
+    $pfEnvVal = [Environment]::GetEnvironmentVariable($pfEnvName, 'Process')
+    if ([string]::IsNullOrWhiteSpace($pfEnvVal)) { continue }
+    $pfIssues++
+    Out-Typewriter "  -> RUNTIME HIJACK VARIABLE SET: $pfEnvName=$pfEnvVal" "CRIT"
+    Add-Finding -ID "PF_ENVHIJACK_$pfEnvName" -Phase "PREFLIGHT" `
+        -ThreatType "Fileless / Runtime Hijack" -Severity $SEV_HIGH `
+        -Description "The environment variable $pfEnvName is set to '$pfEnvVal' in this process. The COR_/CORECLR_ profiler variables cause the CLR to load an arbitrary DLL into every .NET process that starts, which is a well-used persistence and defence-evasion technique (MITRE T1574.012) and also means code of someone else's choosing is running inside this scan. Identify the DLL and its publisher before trusting these results. Legitimate APM agents (AppDynamics, Dynatrace, New Relic) set these deliberately." `
+        -Target "$pfEnvName=$pfEnvVal" -FixAction "Info" -Group "Scanner Integrity"
+}
+
+# ── P0.7 · Rogue AMSI provider ────────────────────────────────────────────────
+# Registering a provider that does nothing is the quiet way to disable AMSI machine-wide:
+# amsi.dll loads the attacker's CLSID, it returns AMSI_RESULT_CLEAN, and every scanner
+# that trusts AMSI — including Defender's script scanning — goes blind with no error.
+foreach ($pfAmsiRoot in @('HKLM:\SOFTWARE\Microsoft\AMSI\Providers')) {
+    if (-not (Test-Path -LiteralPath $pfAmsiRoot)) { continue }
+    foreach ($pfProv in @(Get-ChildItem -LiteralPath $pfAmsiRoot -ErrorAction SilentlyContinue)) {
+        $pfClsid = Split-Path -Leaf $pfProv.PSPath
+        # Resolve the CLSID to its InprocServer32 through the 64-bit view (a 32-bit read
+        # would land in Wow6432Node and miss the real registration entirely).
+        $pfDll = Get-RegVal64 -Hive 'ClassesRoot' -SubKey "CLSID\$pfClsid\InprocServer32" -Name ''
+        if ([string]::IsNullOrWhiteSpace($pfDll)) {
+            $pfIssues++
+            Out-Typewriter "  -> AMSI PROVIDER WITH NO SERVER DLL: $pfClsid" "CRIT"
+            Add-Finding -ID "PF_AMSI_ORPHAN_$($pfClsid -replace '[^a-zA-Z0-9]','')" -Phase "PREFLIGHT" `
+                -ThreatType "Defense Evasion" -Severity $SEV_HIGH `
+                -Description "An AMSI provider is registered under $pfAmsiRoot as $pfClsid but its CLSID has no resolvable InprocServer32. A provider that cannot load, or one that loads and always returns CLEAN, disables AMSI script scanning machine-wide without generating a single error — Defender's own script inspection included. Verify this CLSID against the AV product that claims it; if nothing claims it, treat the machine as having had its script scanning switched off." `
+                -Target "$pfAmsiRoot\$pfClsid" -FixAction "Info" -Group "Scanner Integrity"
+            continue
+        }
+        $pfDllX = [Environment]::ExpandEnvironmentVariables("$pfDll") -replace '^"|"$',''
+        $pfVerdict = Get-SignatureVerdict $pfDllX
+        if (-not $pfVerdict.Exists -or $pfVerdict.Status -ne 'Valid') {
+            $pfIssues++
+            Out-Typewriter "  -> AMSI PROVIDER DLL UNSIGNED/MISSING: $pfDllX" "CRIT"
+            Add-Finding -ID "PF_AMSI_BADDLL_$($pfClsid -replace '[^a-zA-Z0-9]','')" -Phase "PREFLIGHT" `
+                -ThreatType "Defense Evasion" -Severity $SEV_CRITICAL `
+                -Description "The AMSI provider $pfClsid points at '$pfDllX', which is missing or not validly signed (status: $($pfVerdict.Status)). AMSI providers run inside every process that scans content, so this is both a machine-wide evasion primitive and code execution in a highly privileged position. Every legitimate AMSI provider ships signed by its AV vendor. Manual: reg query `"HKLM\SOFTWARE\Microsoft\AMSI\Providers`" then verify the CLSID against installed security software." `
+                -Target "$pfAmsiRoot\$pfClsid" -FixAction "Info" -Group "Scanner Integrity"
+        }
+    }
+}
+
+if ($pfIssues -eq 0) {
+    Out-Typewriter "  -> PREFLIGHT CLEAN — scanner integrity and scan environment validated." "OK"
+} else {
+    Out-Typewriter "  -> PREFLIGHT RAISED $pfIssues ISSUE(S). Read them BEFORE reading the scan results." "WARN"
+}
+Stop-PhaseTiming
+# Preflight is not a plan phase — hand the counter back at zero so phase 1 is phase 1.
+$global:CURRENT_PHASE_NUM = 0

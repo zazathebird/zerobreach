@@ -1,4 +1,11 @@
-﻿# ZeroBreach-V22.ps1 — Monolithic Omni-Tier Forensic Exorcist
+﻿# NOTE - Detection vocabulary in this file is deliberate.
+# Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
+# named malware families, are detection category labels, operator-facing report text, or
+# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# response tool; these strings are what it reports, not what it does. See CLAUDE.md,
+# "The detection vocabulary is deliberate". Do not sanitise them.
+
+# ZeroBreach-V22.ps1 — Monolithic Omni-Tier Forensic Exorcist
 # CONSOLIDATED: V21 + Debug Pass 2 + Phases 106-107 + Schedule + HTML/CSV export
 
 #Requires -Version 5.1
@@ -44,7 +51,7 @@ param(
     [switch]$Paranoid,
     [string]$IocFile   = "",
     [string]$Baseline  = "",
-    [ValidateSet("","QUICK","FULL","DEEP","PARANOID","STEALTH")]
+    [ValidateSet("","QUICK","FULL","DEEP","PARANOID","STEALTH","HUNT")]
     [string]$Mode      = "",
     [int]   $Hours     = -1,
     [switch]$Auto,
@@ -225,6 +232,24 @@ $STAMP      = Get-Date -Format 'yyyyMMdd_HHmmss'
 # resolves to engine\, so modules must use this instead. Must be set UNCONDITIONALLY
 # (Phase 66's self-file guard depends on it even when -OutDir is passed).
 $global:ZB_ROOT = $PSScriptRoot
+
+# ── Bitness / WOW64 truth (ADVERSARY_ANALYSIS.md E2) ──────────────────────────
+# On x64 Windows a 32-bit process is LIED TO by the OS: C:\Windows\System32 silently
+# redirects to SysWOW64, and HKLM\SOFTWARE redirects to Wow6432Node. A scanner running
+# 32-bit is therefore auditing a different operating system than the one it reports on —
+# the real System32 and the real HKLM run keys are in the half it cannot see. That is a
+# free evasion for an attacker and, more likely, an accident: a technician's 32-bit shell,
+# an RMM agent that spawns x86, or a PS2EXE build compiled for x86 all hand it over.
+#
+# We do NOT auto-relaunch. A relaunch would orphan the redirected stdout the server is
+# reading (the GUI would see the scan die), so the engine instead records the condition,
+# routes its own System32 / HKLM access through the non-redirected views below, and
+# reports CRITICAL from engine\Phases-0.ps1 so the operator knows which legacy phases to
+# distrust.
+$global:ZB_IS_WOW64 = ((-not [Environment]::Is64BitProcess) -and [Environment]::Is64BitOperatingSystem)
+# The REAL System32, reachable from either bitness. Sysnative exists only for 32-bit
+# processes on x64 and is the documented escape hatch from file-system redirection.
+$global:ZB_SYS32 = if ($global:ZB_IS_WOW64) { Join-Path $env:WINDIR 'Sysnative' } else { Join-Path $env:WINDIR 'System32' }
 if ($OutDir -and (Test-Path $OutDir -IsValid)) {
     if (-not (Test-Path $OutDir)) { New-Item -Path $OutDir -ItemType Directory -Force | Out-Null }
     $OUT_ROOT = $OutDir
@@ -964,6 +989,60 @@ if (Test-Path -LiteralPath $SigPath) {
     $SIG = $null
     Write-Host "[ZeroBreach] WARNING: signature file missing: $SigPath - many detections disabled." -ForegroundColor Red
 }
+# ══════════════════════════════════════════════════════════════════════════════
+#  SIGNATURE-SET INTEGRITY GATE  (WS7 · ADVERSARY_ANALYSIS.md E1)
+# ══════════════════════════════════════════════════════════════════════════════
+# data\detection_signatures.json is a plain file sitting next to the engine, read at
+# runtime with no authentication, and on a box the attacker owns it is writable. The
+# fp_allowlists block fails OPEN by design (an allowlist SUPPRESSES detections), so the
+# cheapest possible attack on this tool is not to delete a detection — a missing key
+# fails closed to '(?!)' and is conspicuous — but to WIDEN one entry to '.*'. Every
+# phase downstream of that key then suppresses everything it finds and still prints its
+# normal [OK ] banner. A clean bill of health from a blinded scanner is the single worst
+# output an IR tool can produce.
+#
+# The allowlists are therefore sanitised HERE, before Join-AllowRegex compiles them a
+# few lines below. Two checks, neither of which needs a key, a manifest or a network:
+#   1. the pattern must COMPILE. A broken regex would otherwise throw at match time,
+#      unwind to the resilience trap, and silently kill the rest of its phase.
+#   2. the pattern must not be UNIVERSAL. The canaries below share no common substring,
+#      so a pattern matching all five cannot be a meaningful FP allowlist — it is either
+#      an attack or a typo, and both blind the same phases.
+# A pattern that blows the 150 ms match budget is refused too: an allowlist is evaluated
+# against attacker-authored text, so catastrophic backtracking here is a DoS on the scan
+# (same rule the signature suite enforces for detection patterns).
+#
+# Refusals FAIL CLOSED — the entry is dropped, so the phase goes NOISY rather than
+# BLIND — and are reported as findings by engine\Phases-0.ps1. Nothing is silently
+# repaired: the operator is told the signature set was modified.
+$global:ZB_SIG_TAMPER = [System.Collections.Generic.List[string]]::new()
+
+function Test-AllowPatternSafety {
+    # Returns 'ok' | 'nocompile' | 'universal' | 'timeout'. Never throws.
+    param([string]$Pattern)
+    $rx = $null
+    try { $rx = New-Object System.Text.RegularExpressions.Regex(
+                    $Pattern,
+                    [System.Text.RegularExpressions.RegexOptions]::IgnoreCase,
+                    [TimeSpan]::FromMilliseconds(150)) }
+    catch { return 'nocompile' }
+    # Deliberately unrelated strings: a path, a registry key, a digit, a nonsense word,
+    # a product name. No legitimate FP-suppression pattern matches every one of these.
+    $canaries = @(
+        'C:\Windows\System32\svchost.exe',
+        'HKLM:\SOFTWARE\Vendor\Product',
+        '9',
+        'zqx',
+        'Some Product Name 2026'
+    )
+    foreach ($c in $canaries) {
+        try { if (-not $rx.IsMatch($c)) { return 'ok' } }
+        catch [System.Text.RegularExpressions.RegexMatchTimeoutException] { return 'timeout' }
+        catch { return 'nocompile' }
+    }
+    return 'universal'
+}
+
 function Get-Sig([string]$Name) { if ($SIG -and $null -ne $SIG.$Name) { @($SIG.$Name) } else { @() } }
 $KNOWN_MINER_PROCS      = Get-Sig 'known_miner_procs'
 $KNOWN_RAT_PROCS        = Get-Sig 'known_rat_procs'
@@ -992,7 +1071,35 @@ $PROACTIVE_LURE_EXTS    = @((Get-Sig 'proactive_lure_extensions') | ForEach-Obje
 # FP-suppression allowlists (benign-but-noisy patterns, not malware signatures). Joined into a
 # single case-insensitive alternation regex each; empty -> "(?!)" (matches nothing) so an absent
 # key never suppresses anything. See "fp_allowlists" in data/detection_signatures.json.
-function Join-AllowRegex([string]$Name) { $a = @(Get-Sig $Name); if ($a.Count) { ($a -join '|') } else { '(?!)' } }
+function Join-AllowRegex {
+    # THE choke point for every FP allowlist in the engine, and therefore the place the
+    # integrity gate has to live: an allowlist SUPPRESSES detections, so it fails OPEN.
+    # Widening one entry to '.*' silently switches off every phase that consumes this key
+    # while the scan still prints its [OK ] banner (ADVERSARY_ANALYSIS.md E1). Each
+    # pattern is checked before it is compiled in; refusals FAIL CLOSED (the entry is
+    # dropped, so the phase goes NOISY rather than BLIND) and are reported as CRITICAL
+    # findings by engine\Phases-0.ps1. An absent key still yields '(?!)', which suppresses
+    # nothing — that behaviour is unchanged and load-bearing.
+    param([string]$Name)
+    $a = @(Get-Sig $Name)
+    if (-not $a.Count) { return '(?!)' }
+    $keep = New-Object System.Collections.Generic.List[string]
+    foreach ($pat in $a) {
+        $p = "$pat"
+        if ([string]::IsNullOrWhiteSpace($p)) {
+            $global:ZB_SIG_TAMPER.Add("${Name}: empty pattern dropped (an empty alternation branch matches everything)")
+            continue
+        }
+        switch (Test-AllowPatternSafety $p) {
+            'ok'        { $keep.Add($p) }
+            'nocompile' { $global:ZB_SIG_TAMPER.Add("${Name}: pattern does not compile and was dropped -> $p") }
+            'universal' { $global:ZB_SIG_TAMPER.Add("${Name}: UNIVERSAL pattern dropped — it would have suppressed EVERY detection that uses this allowlist -> $p") }
+            'timeout'   { $global:ZB_SIG_TAMPER.Add("${Name}: pattern exceeded the 150 ms match budget and was dropped (catastrophic backtracking) -> $p") }
+        }
+    }
+    if ($keep.Count -eq 0) { return '(?!)' }
+    return ($keep -join '|')
+}
 $TRUSTED_ROOT_CA_RE     = Join-AllowRegex 'trusted_root_ca_issuers'
 $CLOAKED_BENIGN_RE      = Join-AllowRegex 'cloaked_benign_names'
 $INFOSTEALER_BENIGN_RE  = Join-AllowRegex 'infostealer_benign_paths'
@@ -1007,6 +1114,36 @@ $MINERCFG_BENIGN_RE     = Join-AllowRegex 'miner_config_benign_paths' # Phase 63
 $SPOOLDLL_BENIGN_RE     = Join-AllowRegex 'spooler_benign_dlls'      # Phase 96 (catalog-signed MS printer resources)
 $BITS_SUSP_REMOTE_RE    = if (@(Get-Sig 'bits_suspicious_remote_regex').Count) { @(Get-Sig 'bits_suspicious_remote_regex')[0] } else { '(?!)' }
 $BITS_SUSP_LOCAL_RE     = if (@(Get-Sig 'bits_suspicious_local_regex').Count) { @(Get-Sig 'bits_suspicious_local_regex')[0] } else { '(?!)' }
+# WS6 (phases 116-133) FP allowlists — NOT signatures (CLAUDE.md AMSI rule): an empty
+# key becomes '(?!)', which suppresses nothing, so a missing list can never blind a phase.
+$NATIVE_MSG_BENIGN_RE   = Join-AllowRegex 'native_messaging_benign_hosts'  # Phase 117
+$SIDELOAD_BENIGN_RE     = Join-AllowRegex 'sideload_benign_paths'          # Phase 119
+$OFFICE_ADDIN_BENIGN_RE = Join-AllowRegex 'office_addin_benign_paths'      # Phase 121
+$EXEC_EVID_BENIGN_RE    = Join-AllowRegex 'exec_evidence_benign_paths'     # Phase 123
+$SHELLEXT_BENIGN_RE     = Join-AllowRegex 'shell_extension_benign_dlls'    # Phase 127
+$WEBHOOK_BENIGN_RE      = Join-AllowRegex 'webhook_c2_benign_paths'        # Phase 130
+$PACKEDSCRIPT_BENIGN_RE = Join-AllowRegex 'packed_script_benign_paths'     # Phase 131
+# ── WS7 HUNT band (phases 134-162) ───────────────────────────────────────────
+$HUNT_TASK_BENIGN_RE    = Join-AllowRegex 'hunt_task_benign_paths'         # Phase 134
+$HUNT_SERVICE_BENIGN_RE = Join-AllowRegex 'hunt_service_benign_names'      # Phase 135
+$HUNT_PPID_BENIGN_RE    = Join-AllowRegex 'hunt_ppid_benign_paths'         # Phase 136
+$HUNT_DRIVER_BENIGN_RE  = Join-AllowRegex 'hunt_driver_benign_names'       # Phase 138
+$HUNT_TIMESTOMP_BENIGN_RE = Join-AllowRegex 'hunt_timestomp_benign_paths'  # Phase 139
+$HUNT_FILENAME_BENIGN_RE  = Join-AllowRegex 'hunt_filename_benign_paths'   # Phase 140
+$HUNT_MEMORY_BENIGN_RE  = Join-AllowRegex 'hunt_memory_benign_paths'       # Phases 141/143
+# Native binaries that never host managed code. Anchored to the whole process NAME
+# (System.Diagnostics.Process.Name carries no extension), because an unanchored
+# substring would match e.g. "notepad++" and half of Program Files — the exact class
+# of bug that auto-killed healthy signed apps in Phase 47 (CLAUDE.md path-anchoring rule).
+$KILLCHAIN_STAGES = Get-Sig 'killchain_stages'                             # Phase 160
+# Core Windows image names, anchored to a whole filename. Phase 144 flags a process
+# carrying one of these names while running from outside a system directory.
+$SYSTEM_IMAGE_NAMES_RE = if (@(Get-Sig 'system_image_names').Count) {
+    '^(' + ((@(Get-Sig 'system_image_names') | ForEach-Object { [regex]::Escape("$_") }) -join '|') + ')$'
+} else { '(?!)' }
+$CLR_UNEXPECTED_HOSTS_RE = if (@(Get-Sig 'clr_unexpected_hosts').Count) {
+    '^(' + ((@(Get-Sig 'clr_unexpected_hosts') | ForEach-Object { [regex]::Escape("$_") }) -join '|') + ')$'
+} else { '(?!)' }
 
 # WS2 detection-coverage expansion (2026-07-01) — all externalized data, AMSI-safe.
 # Consumed by: Phase 55.5 (BYOVD), Phase 53 (ransom-note names/content), Phase 62
@@ -1056,6 +1193,50 @@ $INFOSTEALER_TARGET_PATHS  = @((Get-Sig 'infostealer_target_paths_raw') | ForEac
 #    a stale DNS-cache entry is not). Never feed $ALL_C2_DOMAINS into a DNS-cache/auto-fire path.
 $MALWARE_C2_DOMAINS        = @(@(Get-Sig 'loader_c2_domains') + @(Get-Sig 'infostealer_c2_domains'))  # Phase 34 (safe HIGH)
 $ALL_C2_DOMAINS            = @(@($KNOWN_C2_DOMAINS) + @($MALWARE_C2_DOMAINS))                          # Phase 36 (reverse-DNS only)
+
+# ── WS6 expansion (2026-08-19) — phases 116-133, engine/Phases-4.ps1 ──────────
+# "More malware families + the files/apps that actually get modified." Everything
+# below is DATA (AMSI-safe); the new phases are DEEP+ only and, per CLAUDE.md rule
+# #1, every finding they raise is FixAction Info/Quarantine/DeleteReg-on-a-clearly-
+# malicious-value — none is a destructive auto-select on a healthy box.
+$BROWSER_POLICY_KEYS       = Get-Sig 'browser_policy_keys'           # Phase 116
+$BROWSER_POLICY_DISABLE    = Get-Sig 'browser_policy_disable_values' # Phase 116
+$BROWSER_PREF_RULES        = Get-Sig 'browser_pref_rules'            # Phase 116
+$FIREFOX_POLICY_RULES      = Get-Sig 'firefox_policy_rules'          # Phase 116
+$BROWSER_ARG_ABUSE_RULES   = Get-Sig 'browser_arg_abuse_rules'       # Phase 116/117/118
+$NATIVE_MSG_KEYS           = Get-Sig 'native_messaging_keys'         # Phase 117
+$LNK_HIJACK_RULES          = Get-Sig 'lnk_hijack_rules'              # Phase 118
+$SIDELOAD_DLL_NAMES        = @((Get-Sig 'sideload_dll_names') | ForEach-Object { "$_".ToLower() })   # Phase 119
+$SIDELOAD_SCAN_ROOTS       = @((Get-Sig 'sideload_scan_roots_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$ELECTRON_APP_PATHS        = @((Get-Sig 'electron_app_paths_raw') | ForEach-Object { @{ Path = $ExecutionContext.InvokeCommand.ExpandString($_.path); App = $_.app } })  # Phase 120
+$ELECTRON_TAMPER_RULES     = Get-Sig 'electron_tamper_rules'         # Phase 120
+$OFFICE_ADDIN_KEYS         = Get-Sig 'office_addin_keys'             # Phase 121
+$OFFICE_PERF_KEYS          = Get-Sig 'office_perf_keys'              # Phase 121
+$OFFICE_TEMPLATE_PATHS     = @((Get-Sig 'office_template_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$OFFICE_ADDIN_EXTENSIONS   = @((Get-Sig 'office_addin_extensions') | ForEach-Object { "$_".ToLower() })
+$MONITORED_APP_ROOTS       = @((Get-Sig 'monitored_app_roots_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 122
+$EXEC_EVIDENCE_SUSPECT_RE  = if (@(Get-Sig 'exec_evidence_suspect_path_regex').Count) { @(Get-Sig 'exec_evidence_suspect_path_regex')[0] } else { '(?!)' }  # Phase 123
+$CLICKFIX_RUNMRU_RULES     = Get-Sig 'clickfix_runmru_rules'         # Phase 124
+$MRU_FORENSIC_KEYS         = Get-Sig 'mru_forensic_keys'             # Phase 124
+$CLIPPER_WALLET_RULES      = Get-Sig 'clipper_wallet_rules'          # Phase 125
+$CLIPPER_API_RULES         = Get-Sig 'clipper_api_rules'             # Phase 125
+$EXTENDED_AUTOSTART_POINTS = Get-Sig 'extended_autostart_points'     # Phase 126
+$WINSOCK_LSP_BENIGN        = @((Get-Sig 'winsock_lsp_benign') | ForEach-Object { "$_".ToLower() })   # Phase 126
+$SHELL_EXTENSION_KEYS      = Get-Sig 'shell_extension_keys'          # Phase 127
+$REMOTE_ACCESS_PRODUCTS    = Get-Sig 'remote_access_products'        # Phase 128
+$REMOTE_ACCESS_PARTNERS    = @((Get-Sig 'remote_access_partner_vendors') | ForEach-Object { "$_".ToLower() })
+$REMOTE_ACCESS_SUSP_CTX    = Get-Sig 'remote_access_suspicious_context'
+$EXFIL_STAGING_TOOLS       = Get-Sig 'exfil_staging_tools'           # Phase 129
+$EXFIL_CONFIG_RULES        = Get-Sig 'exfil_config_rules'            # Phase 129
+$EXFIL_ARCHIVE_RULES       = Get-Sig 'exfil_archive_rules'           # Phase 129
+$WEBHOOK_C2_RULES          = Get-Sig 'webhook_c2_rules'              # Phase 130
+$PACKED_SCRIPT_INDICATORS  = Get-Sig 'packed_script_indicators'      # Phase 131
+$WEBSHELL_ROOTS            = @((Get-Sig 'webshell_roots_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })  # Phase 132
+$WEBSHELL_EXTENSIONS       = @((Get-Sig 'webshell_extensions') | ForEach-Object { "$_".ToLower() })
+$WEBSHELL_CONTENT_RULES    = Get-Sig 'webshell_content_rules'        # Phase 132
+$WIPER_PROCS               = Get-Sig 'wiper_procs'                   # Phase 133
+$DESTRUCTIVE_BEHAVIOR_RULES= Get-Sig 'destructive_behavior_rules'    # Phase 133
+$LATERAL_MOVEMENT_ARTIFACTS= Get-Sig 'lateral_movement_artifacts'    # Phase 133
 
 # SHA1 of a certificate's TBS (to-be-signed) DER block — matches LOLDrivers TBS hashes,
 # which stay stable across polymorphic driver variants where the file SHA256 changes.
@@ -1130,12 +1311,42 @@ function Get-WeakAces { param($Acl, [string[]]$WeakIds, [string]$RightsRegex = '
 # Authenticode verdict for a file: returns a hashtable {Status, Signer, Trusted, IsMs}.
 # Cached per-path to avoid re-verifying the same binary across phases.
 $global:SIG_CACHE = @{}
+# ── Per-file Authenticode memo (WS4, 2026-08-19) ─────────────────────────────
+# THE most expensive single operation in the engine: Get-AuthenticodeSignature builds the
+# full certificate chain, which by default performs ONLINE revocation checks (CRL/OCSP).
+# On a box whose network is slow, filtered or (very much the point of this tool) actively
+# tampered with, each call blocks for the timeout.
+#
+# 14 call sites across 13 phases verify OVERLAPPING file sets — Temp/Downloads/AppData
+# binaries are re-verified by the Temp sweep, the persistence phases, the infostealer
+# scan, the hollow-process scan and the leaked-cert scan, so the same handful of files is
+# paid for five or six times. Memoise on the full path.
+#
+# Scan-scoped by construction: the engine is audit-only under -Auto and spawns fresh per
+# scan, so a file's signature cannot change underneath a run. Shares the ZB_NOCACHE
+# kill-switch with the other memos. $null (unreadable/locked file) is cached too — that is
+# a real, repeatable answer and re-asking costs the same timeout.
+$global:AUTHSIG_CACHE      = @{}
+$global:AUTHSIG_CACHE_HITS = 0
+$global:AUTHSIG_CACHE_MAX  = 20000   # bound the memo: a signature object holds a cert chain
+
 function Get-AuthSig([string]$Path) {
     # Safe wrapper. Get-AuthenticodeSignature throws a *terminating* error on a
     # locked / in-use file, which -ErrorAction SilentlyContinue does NOT suppress;
     # left unhandled it unwinds to a trap and skips phases. Catch it here so callers
     # just get $null. -LiteralPath also avoids wildcard expansion on bracketed paths.
-    try { Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop } catch { $null }
+    if (-not $Path) { return $null }
+    $ck = "$Path".ToLowerInvariant()
+    if ($global:SCAN_FILE_CACHE_ON -and $global:AUTHSIG_CACHE.ContainsKey($ck)) {
+        $global:AUTHSIG_CACHE_HITS++
+        return $global:AUTHSIG_CACHE[$ck]
+    }
+    $sigResult = $null
+    try { $sigResult = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop } catch { $sigResult = $null }
+    if ($global:SCAN_FILE_CACHE_ON -and $global:AUTHSIG_CACHE.Count -lt $global:AUTHSIG_CACHE_MAX) {
+        $global:AUTHSIG_CACHE[$ck] = $sigResult
+    }
+    return $sigResult
 }
 function Get-RegVal {
     # Safe wrapper. Get-ItemPropertyValue throws a *terminating* error when the named
@@ -1147,12 +1358,65 @@ function Get-RegVal {
     param([string]$Path, [string]$Name)
     try { Get-ItemPropertyValue -Path $Path -Name $Name -ErrorAction Stop } catch { $null }
 }
+function Get-RegVal64 {
+    # Read a value through the explicit 64-bit registry view, bypassing WOW64 redirection.
+    # Get-ItemPropertyValue has no -View parameter, so a 32-bit engine reading
+    # HKLM:\SOFTWARE\...\Run silently gets Wow6432Node's copy and misses the real one
+    # (ADVERSARY_ANALYSIS.md E2). Hive is 'LocalMachine' | 'CurrentUser' | 'Users' |
+    # 'ClassesRoot'; SubKey is the path WITHOUT the hive prefix. Returns $null on any
+    # failure, exactly like Get-RegVal — never throws into the resilience trap.
+    param([string]$Hive, [string]$SubKey, [string]$Name)
+    $base = $null; $key = $null
+    try {
+        $h = [Microsoft.Win32.RegistryHive]::$Hive
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($h, [Microsoft.Win32.RegistryView]::Registry64)
+        $key  = $base.OpenSubKey($SubKey)
+        if ($null -eq $key) { return $null }
+        return $key.GetValue($Name)
+    } catch { return $null }
+    finally {
+        if ($key)  { try { $key.Close()  } catch {} }
+        if ($base) { try { $base.Close() } catch {} }
+    }
+}
+function Get-RegNames64 {
+    # Value names under a key, through the 64-bit view. Returns @() on failure.
+    param([string]$Hive, [string]$SubKey)
+    $base = $null; $key = $null
+    try {
+        $h = [Microsoft.Win32.RegistryHive]::$Hive
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($h, [Microsoft.Win32.RegistryView]::Registry64)
+        $key  = $base.OpenSubKey($SubKey)
+        if ($null -eq $key) { return @() }
+        return @($key.GetValueNames())
+    } catch { return @() }
+    finally {
+        if ($key)  { try { $key.Close()  } catch {} }
+        if ($base) { try { $base.Close() } catch {} }
+    }
+}
+function Get-RegSubKeys64 {
+    # Subkey names under a key, through the 64-bit view. Returns @() on failure.
+    param([string]$Hive, [string]$SubKey)
+    $base = $null; $key = $null
+    try {
+        $h = [Microsoft.Win32.RegistryHive]::$Hive
+        $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($h, [Microsoft.Win32.RegistryView]::Registry64)
+        $key  = $base.OpenSubKey($SubKey)
+        if ($null -eq $key) { return @() }
+        return @($key.GetSubKeyNames())
+    } catch { return @() }
+    finally {
+        if ($key)  { try { $key.Close()  } catch {} }
+        if ($base) { try { $base.Close() } catch {} }
+    }
+}
 function ConvertTo-CsvSafeCell {
     # Neutralise CSV/Excel formula injection (audit H8). Correct CSV quoting does NOT
     # help: Excel strips the quotes and then evaluates a leading = + - @ tab or CR as a
     # formula. The Description column is malware-controlled text (file names, task
     # names, registry values), and exporting findings to CSV and mailing them to a
-    # client is this product's actual workflow — so the payload lands on a DIFFERENT
+    # client is this product's actual workflow — so the formula executes on a DIFFERENT
     # machine than the one being remediated. Mirror of the server's copy in
     # ZeroBreach-Server.ps1; keep both in sync.
     param([string]$Value)
@@ -1346,7 +1610,9 @@ function Get-SignatureVerdict { param([string]$FilePath)
     try {
         if (Test-Path -LiteralPath $FilePath) {
             $result.Exists = $true
-            $sig = Get-AuthenticodeSignature -LiteralPath $FilePath -ErrorAction SilentlyContinue
+            # Through the wrapper on purpose: shares the Authenticode memo, and the
+            # wrapper is what makes a locked file return $null instead of throwing.
+            $sig = Get-AuthSig $FilePath
             if ($sig) {
                 $result.Status = "$($sig.Status)"
                 $subj = if ($sig.SignerCertificate) { "$($sig.SignerCertificate.Subject)" } else { "" }
@@ -1529,9 +1795,11 @@ if (-not ($global:STEALTH_MODE -or $Auto)) {
         Write-Host "  ┌─ DEPLOYMENT MODE ──────────────────────────────────────────────────────┐" -ForegroundColor DarkCyan
         Write-Host "  │   [1]  QUICK     — Core 30 phases  (~2 min, fast triage)              │" -ForegroundColor DarkCyan
         Write-Host "  │   [2]  FULL      — All 80 phases   (default, comprehensive)           │" -ForegroundColor DarkCyan
-        Write-Host "  │   [3]  DEEP      — All 105 phases  (+ APT, YARA, memory analysis)     │" -ForegroundColor DarkCyan
+        Write-Host "  │   [3]  DEEP      — All 133 phases  (+ APT, YARA, extended band)       │" -ForegroundColor DarkCyan
         Write-Host "  │   [4]  PARANOID  — DEEP + lower thresholds (POSSIBLE→HIGH)            │" -ForegroundColor DarkCyan
         Write-Host "  │   [5]  STEALTH   — Silent, JSON-only, no banners                      │" -ForegroundColor DarkCyan
+        Write-Host "  │   [6]  HUNT      — DEEP + 134-162: memory, rootkit cross-view, AD,    │" -ForegroundColor DarkCyan
+        Write-Host "  │                    cloud creds, timeline. Slowest, most thorough.     │" -ForegroundColor DarkCyan
         Write-Host "  │   [B]  Baseline diff   [I]  Import IOC file                           │" -ForegroundColor DarkCyan
         Write-Host "  └─────────────────────────────────────────────────────────────────────────┘" -ForegroundColor DarkCyan
         Write-Host ""
@@ -1543,9 +1811,10 @@ if (-not ($global:STEALTH_MODE -or $Auto)) {
                 "1"  { $global:ScanMode="QUICK";    $THREAT="Quick Triage (30 phases)";         break }
                 "2"  { $global:ScanMode="FULL";     $THREAT="Full 80-Phase Malware Sweep";       break }
                 ""   { $global:ScanMode="FULL";     $THREAT="Full 80-Phase Malware Sweep";       break }
-                "3"  { $global:ScanMode="DEEP";     $THREAT="Deep 105-Phase APT Hunt";           break }
-                "4"  { $global:ScanMode="PARANOID"; $global:PARANOID_MODE=$true; $THREAT="Paranoid 105-Phase"; break }
+                "3"  { $global:ScanMode="DEEP";     $THREAT="Deep 133-Phase APT Hunt";           break }
+                "4"  { $global:ScanMode="PARANOID"; $global:PARANOID_MODE=$true; $THREAT="Paranoid 133-Phase"; break }
                 "5"  { $global:ScanMode="STEALTH";  $global:STEALTH_MODE=$true;  $THREAT="Stealth JSON";       break }
+                "6"  { $global:ScanMode="HUNT";     $THREAT="Threat Hunt (162 phases)";       break }
                 "b"  {
                     Write-Host "  BASELINE PATH> " -NoNewline -ForegroundColor Yellow
                     $bp = (Read-Host).Trim('"')
@@ -1574,13 +1843,22 @@ if (-not $global:TW_LABEL) { $global:TIME_LIMIT=[datetime]::MinValue; $global:TW
 $PhasePlan = switch ($global:ScanMode) {
     "QUICK"    { @{ Min=1; Max=30;  Universal=$false; Advanced=$false; Integrity=$false } }
     "FULL"     { @{ Min=1; Max=80;  Universal=$false; Advanced=$false; Integrity=$false } }
-    "DEEP"     { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
-    "PARANOID" { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
-    "STEALTH"  { @{ Min=1; Max=115; Universal=$true;  Advanced=$true;  Integrity=$true  } }
+    "DEEP"     { @{ Min=1; Max=133; Universal=$true;  Advanced=$true;  Integrity=$true; Extended=$true } }
+    "PARANOID" { @{ Min=1; Max=133; Universal=$true;  Advanced=$true;  Integrity=$true; Extended=$true } }
+    "STEALTH"  { @{ Min=1; Max=133; Universal=$true;  Advanced=$true;  Integrity=$true; Extended=$true } }
+    # HUNT — the threat-hunting / DFIR tier, above PARANOID. Everything DEEP runs, plus the
+    # WS7 band 134-162: cross-view rootkit detection, process-memory inspection, PE structural
+    # analysis, cloud+DevOps credential theft, lateral-movement and AD artifacts, anti-forensic
+    # tampering, the remaining persistence surface, supply-chain/dev tooling, UEFI, and finally
+    # attack-chain correlation + the super-timeline. It is deliberately NOT folded into DEEP:
+    # the band walks process memory and hashes the ESP, so it costs real wall-clock and must
+    # stay an explicit operator choice. PARANOID escalation is independent and still applies.
+    "HUNT"     { @{ Min=1; Max=162; Universal=$true;  Advanced=$true;  Integrity=$true; Extended=$true; Hunt=$true } }
     default    { @{ Min=1; Max=80;  Universal=$false; Advanced=$false; Integrity=$false } }
 }
 # QUICK is now a REAL gate (BLUEPRINT §7.8). Every mode except QUICK runs the full 1-80 span
-# (DEEP+ add the Universal 81-89 + Advanced 90-115). QUICK runs a reduced 30-phase triage set;
+# (DEEP+ add the Universal 81-89, Advanced 90-115 and Extended 116-133). QUICK runs a reduced
+# 30-phase triage set;
 # the other 54 phases in 1-80 are wrapped `if (-not $global:QUICK_MODE) { ... }` in
 # engine/Phases-1/2.ps1. The KEPT QUICK set (MUST stay exactly $PhasePlan.Max = 30 phases —
 # phase_total honesty; the server mirrors QUICK=30):
@@ -1654,8 +1932,13 @@ if (-not $global:GUI_MODE -and -not $global:STEALTH_MODE -and -not $Auto) {
 #     root — use $global:ZB_ROOT (set near the top of this loader) instead.
 #   • every module keeps its UTF-8 BOM.
 # ══════════════════════════════════════════════════════════════════════════════
+. "$PSScriptRoot\engine\Phases-0.ps1"
 . "$PSScriptRoot\engine\Phases-1.ps1"
 . "$PSScriptRoot\engine\Phases-2.ps1"
 . "$PSScriptRoot\engine\Phases-3.ps1"
+. "$PSScriptRoot\engine\Phases-4.ps1"
+. "$PSScriptRoot\engine\Phases-5.ps1"
+. "$PSScriptRoot\engine\Phases-6.ps1"
+. "$PSScriptRoot\engine\Phases-7.ps1"
 . "$PSScriptRoot\engine\Summary.ps1"
 . "$PSScriptRoot\engine\FixMode.ps1"

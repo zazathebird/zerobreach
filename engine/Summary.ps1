@@ -1,4 +1,11 @@
-﻿trap { Write-RecoveredError $_; continue }   # module-level resilience (CLAUDE.md engine-split rule).
+﻿# NOTE - Detection vocabulary in this file is deliberate.
+# Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
+# named malware families, are detection category labels, operator-facing report text, or
+# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# response tool; these strings are what it reports, not what it does. See CLAUDE.md,
+# "The detection vocabulary is deliberate". Do not sanitise them.
+
+trap { Write-RecoveredError $_; continue }   # module-level resilience (CLAUDE.md engine-split rule).
 # Load-bearing: without it, a terminating error here unwinds to the LOADER trap, which resumes at the
 # next dot-sourced module — FixMode.ps1 — whose interactive prompts block forever on a server-spawned
 # child with no stdin. That is the -Auto hang this module's [Environment]::Exit(0) calls exist to avoid.
@@ -321,6 +328,8 @@ if ($Auto) {
             $global:SCAN_FILE_CACHE.Count, $global:SCAN_FILE_CACHE_HITS, $global:SCAN_FILE_CACHE_ON)
         Write-Host ("[CACHE] ProcSnapshot memo: {0} cache hits, TTL {1}s (on={2})" -f `
             $global:PROC_SNAP_HITS, $global:PROC_SNAP_TTL_S, $global:SCAN_FILE_CACHE_ON)
+        Write-Host ("[CACHE] Authenticode memo: {0} files verified, {1} cache hits (on={2})" -f `
+            $global:AUTHSIG_CACHE.Count, $global:AUTHSIG_CACHE_HITS, $global:SCAN_FILE_CACHE_ON)
     }
     Out-Typewriter "AUDIT COMPLETE. $findingCount FINDINGS. REPORTS WRITTEN. (auto mode — fix handled by GUI)" "GOOD"
     [Environment]::Exit(0)   # dot-sourced: plain exit would fall through to FixMode

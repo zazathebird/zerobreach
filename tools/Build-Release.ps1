@@ -33,9 +33,14 @@ $requiredFiles = @(
     'ZeroBreach-Server.ps1'
     'ZeroBreach-V23.ps1'
     'README.md'
+    'engine\Phases-0.ps1'
     'engine\Phases-1.ps1'
     'engine\Phases-2.ps1'
     'engine\Phases-3.ps1'
+    'engine\Phases-4.ps1'
+    'engine\Phases-5.ps1'
+    'engine\Phases-6.ps1'
+    'engine\Phases-7.ps1'
     'engine\Summary.ps1'
     'engine\FixMode.ps1'
     'gui\templates\index.html'
@@ -55,6 +60,7 @@ $requiredFiles = @(
     'data\detection_signatures.json'
     'data\mitre_mapping.json'
     'data\ioc_defaults.json'
+    'data\integrity_manifest.json'
     'data\permission_baseline.json'
 )
 # Optional extras packed if present (not fatal when missing)
@@ -64,6 +70,33 @@ $optionalFiles = @('data\coverage_matrix.json')
 # files — a hand-maintained list would rot the first time a weight changes, so the
 # folder is copied wholesale and its emptiness is what's treated as fatal.
 $requiredDirs = @('gui\static\css\fonts')
+
+# ── Integrity manifest (WS7 · ADVERSARY_ANALYSIS.md E1) ────────────────────────
+# Pin the SHA256 of every engine module and data file BEFORE staging, so the shipped
+# copy can verify itself. engine\Phases-0.ps1 checks this before phase 1 and reports a
+# CRITICAL "signature set tampering" finding on any mismatch.
+#
+# Why this matters for a release specifically: the zip is designed to be carried to
+# client sites on a USB stick. Without the manifest, a tampered copy — one whose FP
+# allowlists have been widened so the phases that use them suppress everything — runs
+# a full scan, prints every [OK ] banner, and hands the technician a clean bill of
+# health. That is the worst output this tool can produce.
+$manifestTool = Join-Path $root 'tools\New-IntegrityManifest.ps1'
+if (Test-Path $manifestTool) {
+    Write-Host "[Build-Release] Generating data\integrity_manifest.json..."
+    & $manifestTool -Root $root | Out-Null
+    if ($LASTEXITCODE -ne 0 -and $null -ne $LASTEXITCODE) {
+        Write-Host "[Build-Release] FATAL — integrity manifest generation failed." -ForegroundColor Red
+        exit 1
+    }
+    if (-not (Test-Path (Join-Path $root 'data\integrity_manifest.json'))) {
+        Write-Host "[Build-Release] FATAL — integrity manifest was not written." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "[Build-Release] Integrity manifest OK"
+} else {
+    Write-Host "[Build-Release] WARNING — tools\New-IntegrityManifest.ps1 missing; release will not self-verify." -ForegroundColor Yellow
+}
 
 $missing = @($requiredFiles | Where-Object { -not (Test-Path (Join-Path $root $_)) })
 foreach ($d in $requiredDirs) {

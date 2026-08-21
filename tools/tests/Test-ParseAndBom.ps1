@@ -1,6 +1,7 @@
 $files = @(
   'ZeroBreach-Server.ps1','ZeroBreach-V23.ps1',
-  'engine/Phases-1.ps1','engine/Phases-2.ps1','engine/Phases-3.ps1',
+  'engine/Phases-0.ps1','engine/Phases-1.ps1','engine/Phases-2.ps1','engine/Phases-3.ps1',
+  'engine/Phases-4.ps1','engine/Phases-5.ps1','engine/Phases-6.ps1','engine/Phases-7.ps1',
   'engine/Summary.ps1','engine/FixMode.ps1'
 )
 $bad = 0
@@ -19,4 +20,4 @@ foreach ($f in $files) {
     if (-not $bom) { $bad++ }
   }
 }
-Write-Host ("`n{0}" -f $(if($bad -eq 0){'ALL 7 CLEAN'}else{"$bad FILE(S) WITH PROBLEMS"})) -ForegroundColor $(if($bad -eq 0){'Green'}else{'Red'})
+Write-Host ("`n{0}" -f $(if($bad -eq 0){'ALL 8 CLEAN'}else{"$bad FILE(S) WITH PROBLEMS"})) -ForegroundColor $(if($bad -eq 0){'Green'}else{'Red'})

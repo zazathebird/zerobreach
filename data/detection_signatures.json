@@ -28,7 +28,47 @@
     "kawpowminer",
     "xmr-stak",
     "monerooceanminer",
-    "minexmr"
+    "minexmr",
+    "xmrig64",
+    "xmrig32",
+    "xmrig-cuda",
+    "xmrigdaemon",
+    "xmrigminer",
+    "xmr-stak-cpu",
+    "xmr-stak-nvidia",
+    "xmr-stak-amd",
+    "jceminer",
+    "jce miner",
+    "nheqminer",
+    "cpuminer-opt",
+    "cpuminer-multi",
+    "rhminer",
+    "cryptodredge",
+    "z-enemy",
+    "zenemy",
+    "ttminer",
+    "tt-miner",
+    "bzminer",
+    "onezerominer",
+    "verusminer",
+    "excavator",
+    "wildrigmulti",
+    "silentcryptominer",
+    "silentxmrig",
+    "moneroocean",
+    "monerominer",
+    "phoenixminer64",
+    "nicehashminer",
+    "sysrvhello",
+    "kdevtmpfsi",
+    "kinsingminer",
+    "photominer",
+    "coinhive",
+    "webchain-miner",
+    "ethermine",
+    "ergominer",
+    "rigelminer",
+    "raveos"
   ],
   "known_rat_procs": [
     "njrat",
@@ -78,7 +118,86 @@
     "tinba",
     "zeus",
     "spyeye",
-    "kronos"
+    "kronos",
+    "venomrat",
+    "venom rat",
+    "xworm",
+    "dcrat",
+    "dc rat",
+    "sectoprat",
+    "arechclient",
+    "bitrat",
+    "warzonerat",
+    "warzone rat",
+    "avemaria",
+    "ave maria",
+    "revengerat",
+    "revenge rat",
+    "netwire",
+    "netwiredrc",
+    "wshrat",
+    "vjw0rm",
+    "njw0rm",
+    "hworm",
+    "jrat",
+    "adwind",
+    "alienspy",
+    "unrecom",
+    "async_rat",
+    "asyncclient",
+    "quasarrat",
+    "quasar rat",
+    "silverrat",
+    "xenorat",
+    "xeno rat",
+    "craxsrat",
+    "crax rat",
+    "darktrack",
+    "imminentmonitor",
+    "plasmarat",
+    "babylonrat",
+    "babylon rat",
+    "arcomrat",
+    "jspyrat",
+    "spyagent",
+    "orcusrat",
+    "pocorat",
+    "poco rat",
+    "asyncratclient",
+    "remcosagent",
+    "parallaxrat",
+    "parallax rat",
+    "agentvx",
+    "nyanxcat",
+    "asyncrat-c#",
+    "plugx",
+    "korplug",
+    "shadowpad",
+    "winnti",
+    "gh0st",
+    "gh0strat",
+    "ghostrat",
+    "taidoor",
+    "sakula",
+    "derusbi",
+    "hikit",
+    "bronzebutler",
+    "cobaltstrikebeacon",
+    "beacon.x64",
+    "ratel c4",
+    "poshc2",
+    "silenttrinity",
+    "dnscat2",
+    "koadic",
+    "merlinagent",
+    "godoh",
+    "villainc2",
+    "supershell",
+    "havocdemon",
+    "sliverimplant",
+    "mythicagent",
+    "athena c2",
+    "hoaxshell"
   ],
   "known_c2_domains": [
     "pastebin.com",
@@ -163,7 +282,36 @@
     "umobix",
     "xnspy",
     "wolfeye",
-    "keymonitor"
+    "keymonitor",
+    "snakekeylogger",
+    "snake keylogger",
+    "404keylogger",
+    "404 keylogger",
+    "masslogger",
+    "phoenixkeylogger",
+    "phoenix keylogger",
+    "predatorlogger",
+    "predator logger",
+    "olympicvision",
+    "olympic vision",
+    "ghostlogger",
+    "blackbullet",
+    "matiexlogger",
+    "nexuslogger",
+    "limitlesslogger",
+    "unknownlogger",
+    "hawkeyekeylogger",
+    "ancalog",
+    "ardamaxkl",
+    "spytector",
+    "netbullkeylogger",
+    "iSpyKeylogger",
+    "ispy keylogger",
+    "knightlogger",
+    "agenttesla",
+    "agent tesla",
+    "originlogger",
+    "origin logger"
   ],
   "ransomware_extensions": [
     ".locked",
@@ -244,7 +392,63 @@
     ".fog",
     ".foggy",
     ".df_win",
-    ".lynx"
+    ".lynx",
+    ".avoslocker",
+    ".babyk",
+    ".bl00dy",
+    ".blackbit",
+    ".deadbolt",
+    ".devos",
+    ".diavol",
+    ".ekans",
+    ".elbie",
+    ".espinoza",
+    ".faust",
+    ".helpermcp",
+    ".jigsaw",
+    ".kuiper",
+    ".lilith",
+    ".lockfile",
+    ".mallox",
+    ".mimic",
+    ".money_message",
+    ".moneymessage",
+    ".nightsky",
+    ".nokoyawa",
+    ".pay2key",
+    ".pysa",
+    ".qilin",
+    ".ragnarok",
+    ".ransomhub",
+    ".rorschach",
+    ".sfile",
+    ".snatch",
+    ".sojusz",
+    ".wormlocker",
+    ".xollam",
+    ".yourdata",
+    ".zeppelin2",
+    ".cl0p",
+    ".c1op",
+    ".lockbit3",
+    ".onyxlock",
+    ".bitlocked",
+    ".darkbit",
+    ".knight",
+    ".hunters",
+    ".interlock",
+    ".safepay",
+    ".embargo",
+    ".brain_cipher",
+    ".braincipher",
+    ".funksec",
+    ".termite",
+    ".apos",
+    ".hellcat",
+    ".arcusrans",
+    ".sarcoma",
+    ".playcrypt",
+    ".weaxor"
   ],
   "stratum_ports": [
     3333,
@@ -1306,7 +1510,25 @@
   "known_malware_mutexes": [
     "{99C10657-633C-4165-9D0A-082238CB9FE0}",
     "{F0B9756B-5D50-4696-A969-4C9AF7B69188}",
-    "c1ec479e5342a25940592acf24703eb2"
+    "c1ec479e5342a25940592acf24703eb2",
+    "AsyncMutex_6SI8OkPnk",
+    "DCPersistence",
+    "Remcos_Mutex_Inj",
+    "Global\\XWorm",
+    "XWorm_Mutex",
+    "Global\\LummaC2",
+    "Vidar_Mutex",
+    "RedLineStealerMutex",
+    "Global\\SmokeLoaderMutex",
+    "Global\\AmadeyMutex",
+    "Global\\RaspberryRobinRun",
+    "Global\\PikabotSingleton",
+    "Global\\LatrodectusRun",
+    "BumbleBeeMutex",
+    "Global\\StealcMutex",
+    "RhadamanthysMutex",
+    "Global\\QakbotMutex",
+    "Global\\IcedIDMutex"
   ],
   "byovd_driver_names": [
     "rtcore64.sys",
@@ -1427,7 +1649,39 @@
     "hijackloader",
     "idatloader",
     "ghostpulse",
-    "matanbuchus"
+    "matanbuchus",
+    "emmenhtal",
+    "clearfake",
+    "d3fackloader",
+    "guloader",
+    "cloudeye",
+    "dbatloader",
+    "modiloader",
+    "purecrypter",
+    "pureloader",
+    "privateloader",
+    "nullmixer",
+    "squirrelwaffle",
+    "raspberryrobin",
+    "raspberry robin",
+    "koiloader",
+    "mintsloader",
+    "sagerunex",
+    "donutloader",
+    "buerloader",
+    "smokeldr",
+    "unicornloader",
+    "castleloader",
+    "hijackldr",
+    "idat loader",
+    "fakebat",
+    "eugenloader",
+    "nitrogenloader",
+    "oysterloader",
+    "broomstick",
+    "wineloader",
+    "peaklight",
+    "emmenthal"
   ],
   "loader_drop_path_rules": [
     {
@@ -1519,7 +1773,40 @@
     "zloader",
     "isfb",
     "qbot",
-    "heodo"
+    "heodo",
+    "grandoreiro",
+    "mekotio",
+    "casbaneiro",
+    "astaroth",
+    "guildma",
+    "javali",
+    "ousaban",
+    "bizarro",
+    "amavaldo",
+    "chaesloader",
+    "metamorfo",
+    "coyotebanker",
+    "coyote banker",
+    "retefe",
+    "vawtrak",
+    "dreambot",
+    "pandabanker",
+    "silentnight",
+    "carberp",
+    "dyreza",
+    "shylock",
+    "qadars",
+    "gozi-isfb",
+    "phorpiex",
+    "glupteba",
+    "andromeda",
+    "gamarue",
+    "necurs",
+    "sality",
+    "virut",
+    "ramnitbot",
+    "pushdo",
+    "cutwail"
   ],
   "banking_behavior_rules": [
     {
@@ -1677,7 +1964,43 @@
     "how_to_decrypt.hta",
     "HOW_TO_RECOVER_FILES.txt",
     "!!!READ_ME_MEDUSA!!!.txt",
-    "*.README.txt"
+    "*.README.txt",
+    "readme_to_recover_files.txt",
+    "RESTORE-MY-FILES.TXT",
+    "How_to_back_files.html",
+    "HOW_TO_DECRYPT.txt",
+    "RECOVERY INSTRUCTIONS.txt",
+    "!!! ALL YOUR FILES ARE ENCRYPTED !!!.txt",
+    "unlock_your_files.txt",
+    "README-QILIN.txt",
+    "RansomHub_README.txt",
+    "readme_ransomhub.txt",
+    "RESTORE_FILES_INFO.txt",
+    "RESTORE_FILES_INFO.hta",
+    "HowToRestoreYourFiles.txt",
+    "How To Restore Your Files.hta",
+    "PLAY_README.txt",
+    "readme.cactus",
+    "MEDUSA_README.txt",
+    "RECOVER-FILES.html",
+    "Rhysida_readme.pdf",
+    "SafePay_readme.txt",
+    "README_LYNX.txt",
+    "FOG_INSTRUCTIONS.txt",
+    "Interlock_readme.txt",
+    "!_HOW_TO_UNLOCK_!.txt",
+    "How to decrypt files.txt",
+    "RESTORE_FILES.txt",
+    "decrypt_instructions.html",
+    "read_it.txt",
+    "HELP_YOUR_FILES.HTML",
+    "Embargo_readme.txt",
+    "BrainCipher_readme.txt",
+    "HELLCAT_README.txt",
+    "HowToRecover.txt",
+    "Termite_README.txt",
+    "FunkSec_Readme.txt",
+    "SARCOMA_README.txt"
   ],
   "ransom_note_content_rules": [
     {
@@ -1756,6 +2079,1486 @@
       "Name": "Inhibit-DeleteShadowsQuiet",
       "Pattern": "(?i)delete\\s+shadows\\s+/(all|quiet)",
       "Severity": "CRITICAL"
+    }
+  ],
+  "_comment_browser_policy_keys": "Phase 116. Enterprise browser policy keys that adware/stealers abuse. A force-installed extension survives a user uninstall, which is exactly why hijackers use it — but MSP-managed fleets set these legitimately, so the finding is Info/POSSIBLE and never auto-acted-on.",
+  "browser_policy_keys": [
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome\\ExtensionInstallForcelist",
+      "browser": "Chrome",
+      "kind": "forcelist",
+      "severity": "HIGH"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge\\ExtensionInstallForcelist",
+      "browser": "Edge",
+      "kind": "forcelist",
+      "severity": "HIGH"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\BraveSoftware\\Brave\\ExtensionInstallForcelist",
+      "browser": "Brave",
+      "kind": "forcelist",
+      "severity": "HIGH"
+    },
+    {
+      "key": "HKCU:\\SOFTWARE\\Policies\\Google\\Chrome\\ExtensionInstallForcelist",
+      "browser": "Chrome (user)",
+      "kind": "forcelist",
+      "severity": "HIGH"
+    },
+    {
+      "key": "HKCU:\\SOFTWARE\\Policies\\Microsoft\\Edge\\ExtensionInstallForcelist",
+      "browser": "Edge (user)",
+      "kind": "forcelist",
+      "severity": "HIGH"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome",
+      "name": "HomepageLocation",
+      "browser": "Chrome",
+      "kind": "value",
+      "severity": "POSSIBLE"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge",
+      "name": "HomepageLocation",
+      "browser": "Edge",
+      "kind": "value",
+      "severity": "POSSIBLE"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome",
+      "name": "DefaultSearchProviderSearchURL",
+      "browser": "Chrome",
+      "kind": "value",
+      "severity": "POSSIBLE"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge",
+      "name": "DefaultSearchProviderSearchURL",
+      "browser": "Edge",
+      "kind": "value",
+      "severity": "POSSIBLE"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome\\RestoreOnStartupURLs",
+      "browser": "Chrome",
+      "kind": "forcelist",
+      "severity": "POSSIBLE"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge\\RestoreOnStartupURLs",
+      "browser": "Edge",
+      "kind": "forcelist",
+      "severity": "POSSIBLE"
+    }
+  ],
+  "_comment_browser_policy_disable_values": "Phase 116. Browser safety controls turned OFF by policy — a hallmark of adware installers and of an operator being set up for a drive-by.",
+  "browser_policy_disable_values": [
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome",
+      "name": "SafeBrowsingEnabled",
+      "bad": 0,
+      "desc": "Chrome Safe Browsing disabled by policy"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge",
+      "name": "SmartScreenEnabled",
+      "bad": 0,
+      "desc": "Edge SmartScreen disabled by policy"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\Edge",
+      "name": "SmartScreenPuaEnabled",
+      "bad": 0,
+      "desc": "Edge PUA blocking disabled by policy"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Policies\\Google\\Chrome",
+      "name": "DownloadRestrictions",
+      "bad": 0,
+      "desc": "Chrome dangerous-download blocking relaxed by policy"
+    }
+  ],
+  "_comment_browser_pref_rules": "Phase 116. Content rules for Chromium 'Preferences' / 'Secure Preferences'. Off-store update_url is how sideloaded adware extensions self-update.",
+  "browser_pref_rules": [
+    {
+      "Name": "Chrome-Pref-ForcedExtension-FromNonStore",
+      "Pattern": "(?i)\"update_url\"\\s*:\\s*\"(?!https://clients2\\.google\\.com/service/update2/crx)[^\"]{0,200}\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "Chrome-Pref-StartupOverride-DataUrl",
+      "Pattern": "(?i)\"startup_urls?\"\\s*:\\s*\\[[^\\]]{0,400}(data:|javascript:|file://)",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Chrome-Pref-SearchProvider-NonStandard",
+      "Pattern": "(?i)\"search_provider_overrides\"",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_firefox_policy_rules": "Phase 116. Firefox policies.json / user.js tamper. Deliberately POSSIBLE — managed fleets ship policies.json on purpose.",
+  "firefox_policy_rules": [
+    {
+      "Name": "Firefox-Policy-ForcedExtension",
+      "Pattern": "(?i)\"ExtensionSettings\"[\\s\\S]{0,800}\"install_url\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "Firefox-Policy-DisableSafeBrowsing",
+      "Pattern": "(?i)\"(DisableSafeBrowsing|BlockAboutConfig)\"\\s*:\\s*true",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "Firefox-UserJS-ProxyOverride",
+      "Pattern": "(?i)user_pref\\s*\\(\\s*\"network\\.proxy\\.(type|autoconfig_url)\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "Firefox-UserJS-InstallDistribution",
+      "Pattern": "(?i)user_pref\\s*\\(\\s*\"extensions\\.(installDistroAddons|autoDisableScopes)\"",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_browser_arg_abuse_rules": "Phase 116/117. Chromium command-line switches abused for session theft. Matched against RUNNING browser command lines and against .lnk shortcut arguments.",
+  "browser_arg_abuse_rules": [
+    {
+      "Name": "Browser-RemoteDebuggingPort",
+      "Pattern": "(?i)--remote-debugging-(port|pipe)\\b",
+      "Severity": "HIGH",
+      "Why": "CDP cookie/session theft — an attacker attaches to the live browser and reads decrypted cookies without touching the DPAPI store"
+    },
+    {
+      "Name": "Browser-LoadUnpackedExtension",
+      "Pattern": "(?i)--load-extension=",
+      "Severity": "HIGH",
+      "Why": "loads an unpacked extension straight off disk, bypassing the web store"
+    },
+    {
+      "Name": "Browser-DisableWebSecurity",
+      "Pattern": "(?i)--disable-web-security\\b",
+      "Severity": "HIGH",
+      "Why": "turns off same-origin policy"
+    },
+    {
+      "Name": "Browser-HeadlessDumpDom",
+      "Pattern": "(?i)--headless\\b[^\\n]{0,200}--dump-dom\\b",
+      "Severity": "POSSIBLE",
+      "Why": "scripted headless scrape of an authenticated session"
+    },
+    {
+      "Name": "Browser-ProxyServerOverride",
+      "Pattern": "(?i)--proxy-server=(?!direct)",
+      "Severity": "POSSIBLE",
+      "Why": "routes all browsing through an attacker proxy"
+    },
+    {
+      "Name": "Browser-AltUserDataDir",
+      "Pattern": "(?i)--user-data-dir=[^\\s\"]{0,200}\\\\(AppData\\\\Local\\\\Temp|Temp|Windows\\\\Temp)\\\\",
+      "Severity": "POSSIBLE",
+      "Why": "throwaway profile in Temp — typical of automated credential harvesting"
+    }
+  ],
+  "_comment_native_messaging_keys": "Phase 117. A native-messaging host lets a browser extension execute a local binary. Malicious extensions register one to get code execution outside the sandbox.",
+  "native_messaging_keys": [
+    "HKCU:\\SOFTWARE\\Google\\Chrome\\NativeMessagingHosts",
+    "HKLM:\\SOFTWARE\\Google\\Chrome\\NativeMessagingHosts",
+    "HKCU:\\SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts",
+    "HKLM:\\SOFTWARE\\Microsoft\\Edge\\NativeMessagingHosts",
+    "HKCU:\\SOFTWARE\\Mozilla\\NativeMessagingHosts",
+    "HKLM:\\SOFTWARE\\Mozilla\\NativeMessagingHosts"
+  ],
+  "_comment_native_messaging_benign_hosts": "FP allowlist (Phase 117) — password managers, PDF/meeting/AV vendors and browser vendors all legitimately register native-messaging hosts.",
+  "native_messaging_benign_hosts": [
+    "com.google.chrome.",
+    "com.microsoft.",
+    "com.1password.",
+    "com.agilebits.",
+    "com.bitwarden.",
+    "com.dashlane.",
+    "com.lastpass.",
+    "com.keeper.",
+    "com.roboform.",
+    "org.jdownloader.",
+    "com.adobe.acrobat.",
+    "com.grammarly.",
+    "com.citrix.",
+    "com.vmware.",
+    "com.zoom.",
+    "com.cisco.",
+    "com.logitech.",
+    "com.f5.",
+    "com.yubico.",
+    "com.mcafee.",
+    "com.symantec.",
+    "com.trendmicro.",
+    "com.sophos.",
+    "com.eset.",
+    "com.malwarebytes.",
+    "com.nordpass.",
+    "ch.protonmail.",
+    "com.enpass.",
+    "com.apple.",
+    "com.docusign."
+  ],
+  "_comment_lnk_hijack_rules": "Phase 118. Malicious .lnk payloads. LNK is the #1 phishing container since Office macros were blocked by default (2022) — the icon says 'document', the target says 'powershell'.",
+  "lnk_hijack_rules": [
+    {
+      "Name": "LNK-ScriptHostTarget",
+      "Pattern": "(?i)\\\\(wscript|cscript|mshta|rundll32|regsvr32|installutil|msbuild|forfiles|conhost)\\.exe(\"|\\s|$)",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "LNK-PowerShellEncoded",
+      "Pattern": "(?i)(powershell|pwsh)(\\.exe)?\\b[^\\n]{0,300}\\s-e(nc|ncoded|ncodedcommand)?\\s+[A-Za-z0-9+/=]{40,}",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "LNK-PowerShellHiddenDownload",
+      "Pattern": "(?i)(powershell|pwsh)(\\.exe)?\\b[^\\n]{0,300}(-w(indowstyle)?\\s+hidden|-nop|-noni)[^\\n]{0,300}(iwr|invoke-webrequest|downloadstring|downloadfile|irm|invoke-restmethod)",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "LNK-CmdChainedToScript",
+      "Pattern": "(?i)cmd(\\.exe)?\\b[^\\n]{0,200}/c\\b[^\\n]{0,300}\\.(vbs|js|jse|hta|bat|cmd|ps1|scr|pif)\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "LNK-UncTarget",
+      "Pattern": "(?i)(^|\\s|\")\\\\\\\\[a-z0-9._-]{2,}\\\\[^\\s\"]{1,120}\\.(exe|dll|scr|lnk|bat|cmd|vbs|js|hta)\\b",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "LNK-SearchMsProtocol",
+      "Pattern": "(?i)\\b(search-ms|ms-msdt|ms-officecmd|ms-appinstaller):",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "LNK-CurlOrBitsDownload",
+      "Pattern": "(?i)\\b(curl|bitsadmin|certutil)\\b[^\\n]{0,200}(-o\\b|/transfer\\b|-urlcache\\b|-f\\b\\s+https?://)",
+      "Severity": "HIGH"
+    }
+  ],
+  "_comment_sideload_dll_names": "Phase 119. Known DLL-sideloading targets: a signed application resolves these by name, so dropping an unsigned copy next to the EXE gets attacker code running under the app's identity and reputation. The phase only flags an UNSIGNED copy of one of these sitting beside a SIGNED executable.",
+  "sideload_dll_names": [
+    "version.dll",
+    "dbghelp.dll",
+    "dbgcore.dll",
+    "winmm.dll",
+    "dwmapi.dll",
+    "wininet.dll",
+    "textinputframework.dll",
+    "msimg32.dll",
+    "profapi.dll",
+    "edputil.dll",
+    "secur32.dll",
+    "cryptsp.dll",
+    "sspicli.dll",
+    "uxtheme.dll",
+    "propsys.dll",
+    "wtsapi32.dll",
+    "userenv.dll",
+    "netutils.dll",
+    "srvcli.dll",
+    "ntmarta.dll",
+    "apphelp.dll",
+    "cryptbase.dll",
+    "dnsapi.dll",
+    "iphlpapi.dll",
+    "mpr.dll",
+    "rstrtmgr.dll",
+    "sfc_os.dll",
+    "urlmon.dll",
+    "winsta.dll",
+    "wldp.dll",
+    "atl.dll",
+    "bcrypt.dll",
+    "duser.dll",
+    "fltlib.dll",
+    "linkinfo.dll",
+    "msi.dll",
+    "oci.dll",
+    "policymanager.dll",
+    "samcli.dll",
+    "shcore.dll",
+    "umpdc.dll",
+    "vcruntime140_1.dll",
+    "wer.dll",
+    "wsc.dll"
+  ],
+  "_comment_sideload_scan_roots_raw": "Phase 119. User-writable roots only. Program Files needs admin to write, so a sideload there is already covered by the System32/binary-integrity phases.",
+  "sideload_scan_roots_raw": [
+    "$env:LOCALAPPDATA",
+    "$env:APPDATA",
+    "$env:PROGRAMDATA",
+    "$env:USERPROFILE\\Downloads",
+    "$env:USERPROFILE\\Desktop",
+    "$env:TEMP"
+  ],
+  "_comment_sideload_benign_paths": "FP allowlist (Phase 119). Per-user app installers legitimately ship private copies of these runtime DLLs; several are catalog-signed only, which Get-AuthSig reports as unsigned.",
+  "sideload_benign_paths": [
+    "\\\\AppData\\\\Local\\\\Microsoft\\\\(OneDrive|Teams|EdgeUpdate|EdgeWebView|PowerToys)\\\\",
+    "\\\\AppData\\\\Local\\\\(Programs\\\\)?(Microsoft VS Code|Python|nodejs|JetBrains|Docker|GitHubDesktop|Postman|Slack|Discord|Zoom|Notion|Obsidian|Figma|1Password|Signal|WhatsApp)\\\\",
+    "\\\\AppData\\\\Local\\\\Google\\\\(Chrome|Update|DriveFS)\\\\",
+    "\\\\AppData\\\\Local\\\\Mozilla\\\\",
+    "\\\\AppData\\\\Local\\\\Packages\\\\",
+    "\\\\AppData\\\\Local\\\\Temp\\\\(pip|npm|nuget|go-build|_MEI\\d+)",
+    "\\\\ProgramData\\\\(Microsoft|Package Cache|chocolatey|Anaconda3|NVIDIA|Intel|Dell|Lenovo|HP)\\\\",
+    "\\\\AppData\\\\Roaming\\\\(Microsoft|npm|Python|Code|JetBrains)\\\\"
+  ],
+  "_comment_electron_app_paths_raw": "Phase 120. Electron apps keep their program code in USER-WRITABLE AppData, so malware can patch the app itself with no admin rights and no new autostart entry. Token/seed stealers do exactly this to Discord and to desktop crypto wallets.",
+  "electron_app_paths_raw": [
+    {
+      "path": "$env:APPDATA\\discord",
+      "app": "Discord"
+    },
+    {
+      "path": "$env:APPDATA\\discordcanary",
+      "app": "Discord Canary"
+    },
+    {
+      "path": "$env:APPDATA\\discordptb",
+      "app": "Discord PTB"
+    },
+    {
+      "path": "$env:LOCALAPPDATA\\Discord",
+      "app": "Discord (core)"
+    },
+    {
+      "path": "$env:APPDATA\\Slack",
+      "app": "Slack"
+    },
+    {
+      "path": "$env:LOCALAPPDATA\\Microsoft\\Teams",
+      "app": "Microsoft Teams (classic)"
+    },
+    {
+      "path": "$env:LOCALAPPDATA\\Programs\\Microsoft VS Code",
+      "app": "VS Code"
+    },
+    {
+      "path": "$env:APPDATA\\Exodus",
+      "app": "Exodus Wallet"
+    },
+    {
+      "path": "$env:APPDATA\\atomic",
+      "app": "Atomic Wallet"
+    },
+    {
+      "path": "$env:APPDATA\\Signal",
+      "app": "Signal"
+    },
+    {
+      "path": "$env:APPDATA\\Telegram Desktop",
+      "app": "Telegram Desktop"
+    }
+  ],
+  "_comment_electron_tamper_rules": "Phase 120. Content rules for injected Electron loaders (index.js / preload / *.asar sidecars). BetterDiscord-class client mods are POSSIBLE only — many users install them deliberately.",
+  "electron_tamper_rules": [
+    {
+      "Name": "Electron-InjectedRemoteLoader",
+      "Pattern": "(?i)(require\\s*\\(\\s*['\"](https?|child_process|node:child_process)|eval\\s*\\(\\s*(atob|Buffer\\.from)\\s*\\()",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Electron-WebhookExfil",
+      "Pattern": "(?i)(discord(app)?\\.com/api/webhooks/|api\\.telegram\\.org/bot[0-9]{6,}:)",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "Electron-TokenGrab",
+      "Pattern": "(?i)(localStorage|leveldb)[^\\n]{0,120}(token|mfa\\.|discord)[^\\n]{0,120}(fetch|XMLHttpRequest|https?://)",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Electron-BetterDiscordStyleInject",
+      "Pattern": "(?i)(BetterDiscord|Vencord|powercord|__injected|asar\\s*patch)",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "Electron-SeedPhraseHarvest",
+      "Pattern": "(?i)(mnemonic|seed\\s*phrase|privateKey)[^\\n]{0,120}(fetch|axios|https?://|webhook)",
+      "Severity": "CRITICAL"
+    }
+  ],
+  "_comment_office_addin_keys": "Phase 121. COM/VSTO add-ins load into Office at every start. LoadBehavior 3 = load-at-startup.",
+  "office_addin_keys": [
+    "HKCU:\\SOFTWARE\\Microsoft\\Office\\Excel\\Addins",
+    "HKLM:\\SOFTWARE\\Microsoft\\Office\\Excel\\Addins",
+    "HKCU:\\SOFTWARE\\Microsoft\\Office\\Word\\Addins",
+    "HKLM:\\SOFTWARE\\Microsoft\\Office\\Word\\Addins",
+    "HKCU:\\SOFTWARE\\Microsoft\\Office\\Outlook\\Addins",
+    "HKLM:\\SOFTWARE\\Microsoft\\Office\\Outlook\\Addins",
+    "HKCU:\\SOFTWARE\\Microsoft\\Office\\PowerPoint\\Addins",
+    "HKCU:\\SOFTWARE\\Microsoft\\Office\\Access\\Addins",
+    "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Office\\Excel\\Addins",
+    "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Office\\Outlook\\Addins"
+  ],
+  "_comment_office_perf_keys": "Phase 121. The 'Office test' key is a pure-backdoor persistence primitive — no product ever creates it.",
+  "office_perf_keys": [
+    {
+      "key": "HKCU:\\SOFTWARE\\Microsoft\\Office test\\Special\\Perf",
+      "desc": "Office 'test\\Special\\Perf' key — loads an arbitrary DLL into EVERY Office application at launch. It has no legitimate use outside Microsoft debugging."
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Office test\\Special\\Perf",
+      "desc": "Office 'test\\Special\\Perf' key (machine-wide) — loads an arbitrary DLL into EVERY Office application at launch."
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Office test\\Special\\Perf",
+      "desc": "Office 'test\\Special\\Perf' key (WOW64) — loads an arbitrary DLL into EVERY Office application at launch."
+    }
+  ],
+  "_comment_office_template_paths_raw": "Phase 121. Global template / startup folders: anything dropped here runs on every document open. Normal.dotm carrying macros is the classic Office persistence.",
+  "office_template_paths_raw": [
+    "$env:APPDATA\\Microsoft\\Templates\\Normal.dotm",
+    "$env:APPDATA\\Microsoft\\Word\\STARTUP",
+    "$env:APPDATA\\Microsoft\\Excel\\XLSTART",
+    "$env:APPDATA\\Microsoft\\AddIns",
+    "$env:APPDATA\\Microsoft\\Outlook\\VbaProject.OTM"
+  ],
+  "_comment_office_addin_extensions": "Phase 121. XLL/WLL are native DLLs Excel/Word load by extension — they bypass the macro trust prompt entirely and became the dominant Office malware format after macro blocking.",
+  "office_addin_extensions": [
+    ".xll",
+    ".wll",
+    ".xlam",
+    ".xla",
+    ".ppam",
+    ".dotm",
+    ".xlsm",
+    ".xlam"
+  ],
+  "_comment_office_addin_benign_paths": "FP allowlist (Phase 121). Finance/compliance/e-signature suites all ship real Office add-ins; so does the RMM tooling this product treats as partner software.",
+  "office_addin_benign_paths": [
+    "\\\\Program Files( \\(x86\\))?\\\\(Microsoft Office|Common Files\\\\Microsoft Shared)\\\\",
+    "\\\\Program Files( \\(x86\\))?\\\\(Adobe|Bloomberg|Refinitiv|FactSet|Tableau|Zoom|Cisco|Citrix|DocuSign|Grammarly|Mimecast|Proofpoint|Egress|Barracuda|KnowBe4|Datto|CentraStage|Kaseya)\\\\",
+    "\\\\AppData\\\\Local\\\\Microsoft\\\\(Office|Teams|OneDrive)\\\\",
+    "\\\\ProgramData\\\\(Microsoft|Adobe|Bloomberg)\\\\"
+  ],
+  "_comment_monitored_app_roots_raw": "Phase 122. Per-user application installs live in writable directories, so 'the app itself was swapped' is a real and quiet persistence route. Flags an executable whose Authenticode signature is invalid/HashMismatch, i.e. patched after signing.",
+  "monitored_app_roots_raw": [
+    "$env:LOCALAPPDATA\\Programs",
+    "$env:APPDATA\\Zoom",
+    "$env:LOCALAPPDATA\\Zoom",
+    "$env:APPDATA\\Slack",
+    "$env:LOCALAPPDATA\\Microsoft\\Teams",
+    "$env:LOCALAPPDATA\\Google\\Chrome\\Application",
+    "$env:LOCALAPPDATA\\Microsoft\\Edge\\Application",
+    "$env:APPDATA\\Notepad++",
+    "$env:PROGRAMDATA\\Anydesk"
+  ],
+  "_comment_exec_evidence_suspect_path_regex": "Phase 123. BAM/DAM and UserAssist record what actually EXECUTED, with timestamps — the single best 'did something run?' artifact on Windows, and it survives the payload deleting itself. This pattern is the user-writable-path shape that legitimate installed software does not have.",
+  "exec_evidence_suspect_path_regex": "(?i)\\\\(AppData\\\\Local\\\\Temp|AppData\\\\Roaming|AppData\\\\LocalLow|Windows\\\\Temp|Users\\\\Public|ProgramData|\\$Recycle\\.Bin|PerfLogs|Downloads)\\\\[^\\\\]{0,120}\\.(exe|scr|com|pif|bat|cmd|js|jse|vbs|vbe|wsf|hta|ps1)$",
+  "_comment_exec_evidence_benign_paths": "FP allowlist (Phase 123). Installers, updaters, packaged Python/Electron apps and the RMM agents all legitimately execute out of these paths.",
+  "exec_evidence_benign_paths": [
+    "\\\\AppData\\\\Local\\\\Temp\\\\(_MEI\\d+|pip-|npm-|nsis|is-[a-z0-9]{5,8}\\.tmp|chocolatey|GoogleUpdate|MicrosoftEdgeUpdate|WinSAT)",
+    "\\\\AppData\\\\Local\\\\(Microsoft|Google|Mozilla|Programs|Package Cache|SquirrelTemp|slack|Discord|GitHubDesktop|JetBrains|Docker)\\\\",
+    "\\\\AppData\\\\Roaming\\\\(Microsoft|npm|Python|Code|Zoom|Spotify|Dropbox|JetBrains)\\\\",
+    "\\\\ProgramData\\\\(Microsoft|Package Cache|chocolatey|NVIDIA|Intel|Dell|Lenovo|HP|Datto|CentraStage|Kaseya|AEMAgent)\\\\",
+    "\\\\Downloads\\\\[^\\\\]{0,120}(setup|install|update|driver|-x64|-win64)[^\\\\]{0,40}\\.exe$"
+  ],
+  "_comment_clickfix_runmru_rules": "Phase 124. 'ClickFix' / fake-CAPTCHA / fake-update social engineering: the page tells the victim to press Win+R and paste a command, so the payload is typed by the USER and lands in HKCU RunMRU. That key is often the only surviving evidence of initial access. The paste is padded with a fake 'verification' comment so the real command scrolls out of the Run box — hence the marker rule.",
+  "clickfix_runmru_rules": [
+    {
+      "Name": "ClickFix-MshtaRemote",
+      "Pattern": "(?i)\\bmshta(\\.exe)?\\s+(https?://|\\\\\\\\)",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "ClickFix-PowerShellHiddenRemote",
+      "Pattern": "(?i)\\b(powershell|pwsh)(\\.exe)?\\b[^\\n]{0,200}(-w(indowstyle)?\\s+h|hidden|-enc|-e\\s+[A-Za-z0-9+/=]{30,}|iwr |irm |downloadstring|webclient)",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "ClickFix-CurlOrCertutilFetch",
+      "Pattern": "(?i)\\b(curl|certutil|bitsadmin)\\b[^\\n]{0,200}(https?://|-urlcache|/transfer)",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "ClickFix-ClipboardPasteMarker",
+      "Pattern": "(?i)(#\\s*(verify|captcha|human|robot|ray\\s*id)|\\bI am not a robot\\b|✅|✔)",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "ClickFix-ConhostOrForfilesProxy",
+      "Pattern": "(?i)\\b(conhost(\\.exe)?\\s+--headless|forfiles(\\.exe)?\\s+/c)",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "ClickFix-MsiexecRemote",
+      "Pattern": "(?i)\\bmsiexec(\\.exe)?\\b[^\\n]{0,120}/(i|package)\\s+\"?https?://",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "ClickFix-SearchMsLure",
+      "Pattern": "(?i)\\bsearch-ms:.{0,200}(displayname|crumb)",
+      "Severity": "HIGH"
+    }
+  ],
+  "_comment_mru_forensic_keys": "Phase 124. User-driven execution artifacts.",
+  "mru_forensic_keys": [
+    {
+      "key": "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU",
+      "kind": "runmru",
+      "desc": "Win+R run-dialog history"
+    },
+    {
+      "key": "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\TypedPaths",
+      "kind": "typedpaths",
+      "desc": "Explorer address-bar history"
+    },
+    {
+      "key": "HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FeatureUsage\\AppSwitched",
+      "kind": "appswitched",
+      "desc": "taskbar app-switch usage"
+    }
+  ],
+  "_comment_clipper_wallet_rules": "Phase 125. A clipboard clipper carries a TABLE of attacker wallet addresses and swaps whatever the victim copies. One address in a file is noise; several distinct chains inside one small user-path binary/script is the clipper shape — the phase requires that multi-chain/multi-address density before reporting.",
+  "clipper_wallet_rules": [
+    {
+      "Name": "Clipper-BitcoinAddressTable",
+      "Pattern": "(?<![A-Za-z0-9])(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})(?![A-Za-z0-9])",
+      "Severity": "POSSIBLE",
+      "Kind": "BTC"
+    },
+    {
+      "Name": "Clipper-EthereumAddressTable",
+      "Pattern": "(?<![A-Za-z0-9])0x[a-fA-F0-9]{40}(?![A-Za-z0-9])",
+      "Severity": "POSSIBLE",
+      "Kind": "ETH"
+    },
+    {
+      "Name": "Clipper-MoneroAddressTable",
+      "Pattern": "(?<![A-Za-z0-9])4[0-9AB][1-9A-HJ-NP-Za-km-z]{93}(?![A-Za-z0-9])",
+      "Severity": "POSSIBLE",
+      "Kind": "XMR"
+    },
+    {
+      "Name": "Clipper-TronAddress",
+      "Pattern": "(?<![A-Za-z0-9])T[1-9A-HJ-NP-Za-km-z]{33}(?![A-Za-z0-9])",
+      "Severity": "POSSIBLE",
+      "Kind": "TRX"
+    }
+  ],
+  "_comment_clipper_api_rules": "Phase 125. Clipboard API usage alone is benign (every password manager does it) — only reported when it co-occurs with a wallet-address table in the same user-path file.",
+  "clipper_api_rules": [
+    {
+      "Name": "Clipper-ClipboardApiPair",
+      "Pattern": "(?i)(GetClipboardData|SetClipboardData|OpenClipboard|EmptyClipboard|Get-Clipboard|Set-Clipboard|System\\.Windows\\.Forms\\.Clipboard)",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "Clipper-AddEventListenerCopy",
+      "Pattern": "(?i)addEventListener\\s*\\(\\s*['\"](copy|cut|paste)['\"]",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_extended_autostart_points": "Phase 126. The autostart locations beyond Run/Services/Tasks. Each entry carries the STOCK Windows value where one exists, so the phase reports a delta rather than the presence of a normal OS feature.",
+  "extended_autostart_points": [
+    {
+      "key": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\AppCertDlls",
+      "kind": "values",
+      "severity": "CRITICAL",
+      "desc": "AppCertDlls — every DLL listed here is loaded into EVERY process that calls CreateProcess. Windows ships this key EMPTY.",
+      "expect_empty": true
+    },
+    {
+      "key": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager",
+      "name": "BootExecute",
+      "kind": "multistring",
+      "severity": "HIGH",
+      "desc": "BootExecute runs native images before Win32 starts. Stock value is exactly 'autocheck autochk *'.",
+      "default": "autocheck autochk *"
+    },
+    {
+      "key": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa",
+      "name": "Authentication Packages",
+      "kind": "multistring",
+      "severity": "CRITICAL",
+      "desc": "LSA authentication packages load into lsass.exe with SYSTEM rights — a classic credential-theft persistence.",
+      "default": "msv1_0"
+    },
+    {
+      "key": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa",
+      "name": "Notification Packages",
+      "kind": "multistring",
+      "severity": "CRITICAL",
+      "desc": "Password-filter DLLs see every password change in CLEARTEXT.",
+      "default": "scecli|rassfm"
+    },
+    {
+      "key": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Lsa",
+      "name": "Security Packages",
+      "kind": "multistring",
+      "severity": "CRITICAL",
+      "desc": "SSP DLLs load into lsass.exe (mimikatz 'memssp' abuses exactly this).",
+      "default": "kerberos|msv1_0|schannel|wdigest|tspkg|pku2u|negoexts|cloudap"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Netsh",
+      "kind": "values",
+      "severity": "HIGH",
+      "desc": "Netsh helper DLLs load whenever netsh.exe runs — including from scripts and RMM tooling.",
+      "expect_empty": false,
+      "default": "authfwcfg|dhcpcmonitor|dot3cfg|fwcfg|hnetmon|ifmon|napmontr|netiohlp|nettrace|nshhttp|nshipsec|nshwfp|p2pnetsh|peerdistsh|rasmontr|rpcnsh|whhelper|wlancfg|wcnnetsh|wshelper|nshhttp"
+    },
+    {
+      "key": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Print\\Monitors",
+      "kind": "subkeys_driver",
+      "severity": "HIGH",
+      "desc": "Print-monitor DLLs load into spoolsv.exe as SYSTEM at boot.",
+      "default": "Local Port|Standard TCP/IP Port|USB Monitor|WSD Port|BJ Language Monitor|PJL Language Monitor|Microsoft Shared Fax Monitor|AppMon|LPR Port"
+    },
+    {
+      "key": "HKLM:\\SYSTEM\\CurrentControlSet\\Services\\W32Time\\TimeProviders",
+      "kind": "subkeys_dll",
+      "severity": "HIGH",
+      "desc": "Time-provider DLLs load into the SYSTEM w32time service.",
+      "default": "NtpClient|NtpServer|VMICTimeProvider"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Active Setup\\Installed Components",
+      "kind": "activesetup",
+      "severity": "POSSIBLE",
+      "desc": "Active Setup StubPath runs once per user at first logon — a quiet way to seed every profile on a shared box."
+    },
+    {
+      "key": "HKCU:\\Control Panel\\Desktop",
+      "name": "SCRNSAVE.EXE",
+      "kind": "value_path",
+      "severity": "HIGH",
+      "desc": "Screensaver hijack — any .scr here runs after the idle timeout."
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Windows",
+      "name": "AppInit_DLLs",
+      "kind": "value_path",
+      "severity": "CRITICAL",
+      "desc": "AppInit_DLLs loads into every user-mode process linking user32.dll."
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+      "name": "Taskman",
+      "kind": "value_path",
+      "severity": "HIGH",
+      "desc": "Winlogon Taskman replaces the shell task manager launched at logon."
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+      "name": "GinaDLL",
+      "kind": "value_path",
+      "severity": "CRITICAL",
+      "desc": "GinaDLL is a legacy credential-interception hook; modern Windows never sets it."
+    },
+    {
+      "key": "HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\Wds\\rdpwd",
+      "name": "StartupPrograms",
+      "kind": "value_path",
+      "severity": "HIGH",
+      "desc": "Terminal Services StartupPrograms runs on every RDP logon.",
+      "default": "rdpclip"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Image File Execution Options\\Explorer.exe",
+      "name": "Debugger",
+      "kind": "value_path",
+      "severity": "CRITICAL",
+      "desc": "A Debugger value on explorer.exe hijacks the shell itself."
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting\\Hangs",
+      "name": "ReflectDebugger",
+      "kind": "value_path",
+      "severity": "HIGH",
+      "desc": "WER ReflectDebugger is executed by the error-reporting service; used as a stealth launcher."
+    },
+    {
+      "key": "HKCU:\\Environment",
+      "name": "UserInitMprLogonScript",
+      "kind": "value_path",
+      "severity": "HIGH",
+      "desc": "UserInitMprLogonScript runs a script at every logon and is set per-user with no admin rights."
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Command Processor",
+      "name": "AutoRun",
+      "kind": "value_path",
+      "severity": "HIGH",
+      "desc": "Command Processor AutoRun executes on EVERY cmd.exe launch."
+    },
+    {
+      "key": "HKCU:\\SOFTWARE\\Microsoft\\Command Processor",
+      "name": "AutoRun",
+      "kind": "value_path",
+      "severity": "HIGH",
+      "desc": "Command Processor AutoRun (per-user) executes on EVERY cmd.exe launch."
+    }
+  ],
+  "_comment_winsock_lsp_benign": "FP allowlist (Phase 126) — the Winsock catalog entries Windows ships. A third-party LSP is legacy AV/VPN behaviour, so it is reported POSSIBLE, not removed.",
+  "winsock_lsp_benign": [
+    "mswsock.dll",
+    "winrnr.dll",
+    "nlaapi.dll",
+    "napinsp.dll",
+    "pnrpnsp.dll",
+    "wshbth.dll",
+    "rasadhlp.dll",
+    "winhttp.dll",
+    "NLAapi.dll",
+    "%SystemRoot%\\system32\\mswsock.dll"
+  ],
+  "_comment_shell_extension_keys": "Phase 127. A shell extension is a DLL Explorer loads into ITSELF. Malware registers one for persistence that survives every autorun cleanup, because nobody looks here.",
+  "shell_extension_keys": [
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ShellIconOverlayIdentifiers",
+      "kind": "clsid_subkeys",
+      "desc": "icon-overlay handlers (load into explorer.exe)"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Shell Extensions\\Approved",
+      "kind": "clsid_values",
+      "desc": "approved shell extensions"
+    },
+    {
+      "key": "HKCU:\\SOFTWARE\\Classes\\*\\shellex\\ContextMenuHandlers",
+      "kind": "clsid_subkeys",
+      "desc": "per-user context-menu handlers for ALL file types"
+    },
+    {
+      "key": "HKCU:\\SOFTWARE\\Classes\\Directory\\shellex\\ContextMenuHandlers",
+      "kind": "clsid_subkeys",
+      "desc": "per-user folder context-menu handlers"
+    },
+    {
+      "key": "HKCU:\\SOFTWARE\\Classes\\Folder\\shellex\\ColumnHandlers",
+      "kind": "clsid_subkeys",
+      "desc": "per-user column handlers"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\ShellServiceObjectDelayLoad",
+      "kind": "clsid_values",
+      "desc": "shell service objects loaded by explorer at logon"
+    },
+    {
+      "key": "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Browser Helper Objects",
+      "kind": "clsid_subkeys",
+      "desc": "browser helper objects"
+    }
+  ],
+  "_comment_shell_extension_benign_dlls": "FP allowlist (Phase 127). Cloud-sync clients (OneDrive/Dropbox/Box), archivers and version-control shells all legitimately install overlay/context-menu handlers.",
+  "shell_extension_benign_dlls": [
+    "\\\\Windows\\\\(System32|SysWOW64|WinSxS)\\\\",
+    "\\\\Program Files( \\(x86\\))?\\\\(Microsoft|Windows |Common Files|Google|Mozilla|7-Zip|WinRAR|Notepad\\+\\+|TortoiseGit|TortoiseSVN|Dropbox|Box|Adobe|NVIDIA|Intel|Realtek|Dell|Lenovo|HP|Citrix|VMware|Sophos|ESET|Bitdefender|Malwarebytes|Datto|CentraStage|Kaseya)",
+    "\\\\AppData\\\\Local\\\\Microsoft\\\\OneDrive\\\\",
+    "\\\\AppData\\\\Local\\\\(Dropbox|Box|Egnyte|Programs\\\\Microsoft VS Code)\\\\",
+    "\\\\ProgramData\\\\Microsoft\\\\"
+  ],
+  "_comment_remote_access_products": "Phase 128. Attackers install legitimate remote-access software rather than a RAT because it is signed, allowlisted and looks like IT. NetSupport Manager in particular is redistributed as 'NetSupport RAT'. This phase INVENTORIES what is installed and reports it for operator judgement — it never auto-acts, because on an MSP fleet several of these ARE the management tooling.",
+  "remote_access_products": [
+    {
+      "name": "AnyDesk",
+      "proc": "anydesk",
+      "paths": [
+        "$env:APPDATA\\AnyDesk",
+        "$env:PROGRAMDATA\\AnyDesk"
+      ],
+      "config": "service.conf",
+      "unattended_rule": "(?im)^ad\\.anynet\\.pwd_hash=|^ad\\.features\\.interactive_access="
+    },
+    {
+      "name": "ScreenConnect / ConnectWise Control",
+      "proc": "screenconnect",
+      "paths": [
+        "$env:PROGRAMDATA\\ScreenConnect Client"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "Atera",
+      "proc": "ateraagent",
+      "paths": [
+        "$env:PROGRAMFILES\\ATERA Networks"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "Splashtop",
+      "proc": "splashtop",
+      "paths": [
+        "$env:PROGRAMFILES(X86)\\Splashtop"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "RustDesk",
+      "proc": "rustdesk",
+      "paths": [
+        "$env:APPDATA\\RustDesk",
+        "$env:PROGRAMDATA\\RustDesk"
+      ],
+      "config": "RustDesk2.toml",
+      "unattended_rule": "(?im)^\\s*(password|rendezvous_server|relay_server)\\s*="
+    },
+    {
+      "name": "UltraViewer",
+      "proc": "ultraviewer",
+      "paths": [
+        "$env:PROGRAMFILES(X86)\\UltraViewer"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "TeamViewer",
+      "proc": "teamviewer",
+      "paths": [
+        "$env:APPDATA\\TeamViewer",
+        "$env:PROGRAMFILES(X86)\\TeamViewer"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "Supremo",
+      "proc": "supremo",
+      "paths": [
+        "$env:PROGRAMDATA\\SupremoRemoteDesktop"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "LogMeIn",
+      "proc": "lmiguardiansvc",
+      "paths": [
+        "$env:PROGRAMFILES(X86)\\LogMeIn"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "GoTo / GoToAssist",
+      "proc": "g2a",
+      "paths": [
+        "$env:PROGRAMFILES(X86)\\GoToAssist Remote Support Applet"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "Action1",
+      "proc": "action1",
+      "paths": [
+        "$env:PROGRAMFILES\\Action1"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "NetSupport Manager",
+      "proc": "client32",
+      "paths": [
+        "$env:PROGRAMDATA\\NetSupport",
+        "$env:APPDATA\\NetSupport"
+      ],
+      "config": "client32.ini",
+      "unattended_rule": "(?im)^\\s*(GatewayAddress|SecurityKey)\\s*="
+    },
+    {
+      "name": "Remote Utilities",
+      "proc": "rutserv",
+      "paths": [
+        "$env:PROGRAMFILES(X86)\\Remote Utilities - Host"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "MeshAgent",
+      "proc": "meshagent",
+      "paths": [
+        "$env:PROGRAMFILES\\Mesh Agent",
+        "$env:PROGRAMDATA\\MeshAgent"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "Level.io",
+      "proc": "level-windows",
+      "paths": [
+        "$env:PROGRAMDATA\\Level"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "Syncro",
+      "proc": "syncro.service",
+      "paths": [
+        "$env:PROGRAMFILES\\RepairTech\\Syncro"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "Pulseway",
+      "proc": "pcmontask",
+      "paths": [
+        "$env:PROGRAMFILES\\Pulseway"
+      ],
+      "config": null,
+      "unattended_rule": null
+    },
+    {
+      "name": "Tactical RMM",
+      "proc": "tacticalrmm",
+      "paths": [
+        "$env:PROGRAMFILES\\TacticalAgent"
+      ],
+      "config": null,
+      "unattended_rule": null
+    }
+  ],
+  "_comment_remote_access_partner_vendors": "Rule #2 (CLAUDE.md): Datto / CentraStage / Kaseya and peer RMM platforms are legitimate partner tooling. A product on this list is reported as INVENTORY (INFO), not as a threat, unless an independent malicious signal is present.",
+  "remote_access_partner_vendors": [
+    "centrastage",
+    "datto",
+    "kaseya",
+    "aemagent",
+    "vsa",
+    "syncro",
+    "repairtech",
+    "itsupport247",
+    "continuum",
+    "connectwise automate",
+    "labtech",
+    "ninjarmm",
+    "ninjaone",
+    "n-able",
+    "solarwinds n-central",
+    "take control"
+  ],
+  "_comment_remote_access_suspicious_context": "Phase 128. A remote-access tool running out of Temp/Public/Recycle-Bin, or under a one-to-three-character name, is not an IT deployment.",
+  "remote_access_suspicious_context": [
+    {
+      "Name": "RemoteTool-InUserWritablePath",
+      "Pattern": "(?i)\\\\(AppData\\\\Local\\\\Temp|Windows\\\\Temp|Users\\\\Public|\\$Recycle\\.Bin|Downloads|PerfLogs)\\\\",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "RemoteTool-RenamedBinary",
+      "Pattern": "(?i)\\\\[a-z0-9]{1,3}\\.(exe|com|scr)$",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_exfil_staging_tools": "Phase 129. rclone is the single most common ransomware exfiltration tool — double-extortion crews copy the file shares to cloud storage before encrypting. All of these are legitimate admin utilities, so presence alone is POSSIBLE/Info; the signal is a config pointing at an unknown remote plus staged archives.",
+  "exfil_staging_tools": [
+    {
+      "proc": "rclone",
+      "name": "rclone",
+      "config_raw": [
+        "$env:APPDATA\\rclone\\rclone.conf",
+        "$env:USERPROFILE\\.config\\rclone\\rclone.conf"
+      ]
+    },
+    {
+      "proc": "megacmd",
+      "name": "MEGAcmd",
+      "config_raw": [
+        "$env:LOCALAPPDATA\\MEGAcmd"
+      ]
+    },
+    {
+      "proc": "megaclient",
+      "name": "MEGAclient",
+      "config_raw": []
+    },
+    {
+      "proc": "megasync",
+      "name": "MEGAsync",
+      "config_raw": [
+        "$env:LOCALAPPDATA\\Mega Limited"
+      ]
+    },
+    {
+      "proc": "winscp",
+      "name": "WinSCP",
+      "config_raw": [
+        "$env:APPDATA\\winscp.ini"
+      ]
+    },
+    {
+      "proc": "filezilla",
+      "name": "FileZilla",
+      "config_raw": [
+        "$env:APPDATA\\FileZilla\\sitemanager.xml"
+      ]
+    },
+    {
+      "proc": "restic",
+      "name": "restic",
+      "config_raw": []
+    },
+    {
+      "proc": "rsync",
+      "name": "rsync",
+      "config_raw": []
+    },
+    {
+      "proc": "s3browser",
+      "name": "S3 Browser",
+      "config_raw": []
+    },
+    {
+      "proc": "aws",
+      "name": "AWS CLI",
+      "config_raw": []
+    },
+    {
+      "proc": "azcopy",
+      "name": "AzCopy",
+      "config_raw": []
+    },
+    {
+      "proc": "gsutil",
+      "name": "gsutil",
+      "config_raw": []
+    },
+    {
+      "proc": "putty",
+      "name": "PuTTY",
+      "config_raw": []
+    },
+    {
+      "proc": "freefilesync",
+      "name": "FreeFileSync",
+      "config_raw": []
+    },
+    {
+      "proc": "goodsync",
+      "name": "GoodSync",
+      "config_raw": []
+    }
+  ],
+  "_comment_exfil_config_rules": "Phase 129. An rclone.conf with a configured cloud remote on an endpoint that is not a backup server is the exfil-staging tell.",
+  "exfil_config_rules": [
+    {
+      "Name": "Rclone-RemoteConfigured",
+      "Pattern": "(?im)^\\s*\\[[^\\]]{1,64}\\]\\s*$[\\s\\S]{0,300}?^\\s*type\\s*=\\s*(mega|drive|dropbox|onedrive|s3|b2|sftp|ftp|webdav|pcloud|box|yandex|koofr|opendrive|premiumizeme|putio|seafile|storj|sugarsync|swift|union|uptobox|zoho)",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Rclone-ObscuredPassword",
+      "Pattern": "(?im)^\\s*(pass|token|client_secret)\\s*=\\s*\\S{20,}",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_exfil_archive_rules": "Phase 129. Split multi-volume archives in a user-writable path are how a large data set is moved through a size-limited channel.",
+  "exfil_archive_rules": [
+    {
+      "Name": "StagedArchive-SplitVolume",
+      "Pattern": "(?i)\\.(7z|zip|rar)\\.(00[1-9]|0[1-9][0-9]|part[0-9]{1,3}\\.rar)$",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "StagedArchive-DatePatternName",
+      "Pattern": "(?i)^(backup|data|share|dump|exfil|files|docs|archive|db)[-_ ]?20[0-9]{2}[-_]?[01][0-9][-_]?[0-3][0-9]\\.(7z|zip|rar)$",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_webhook_c2_rules": "Phase 130. Living-off-trusted-sites C2. A stealer does not need infrastructure: it POSTs the loot to a Discord webhook or a Telegram bot, both of which are TLS to a domain no proxy blocks. A hard-coded webhook URL inside a user-path script or binary is close to a zero-FP signal.",
+  "webhook_c2_rules": [
+    {
+      "Name": "C2-DiscordWebhook",
+      "Pattern": "(?i)https?://(canary\\.|ptb\\.)?discord(app)?\\.com/api/(v\\d+/)?webhooks/[0-9]{15,25}/[A-Za-z0-9_\\-]{50,}",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "C2-TelegramBotApi",
+      "Pattern": "(?i)https?://api\\.telegram\\.org/bot[0-9]{6,12}:[A-Za-z0-9_\\-]{30,}/",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "C2-SlackWebhook",
+      "Pattern": "(?i)https?://hooks\\.slack\\.com/services/T[A-Z0-9]{6,}/B[A-Z0-9]{6,}/[A-Za-z0-9]{20,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "C2-TeamsWebhook",
+      "Pattern": "(?i)https?://[a-z0-9-]{1,63}\\.webhook\\.office\\.com/webhookb2/",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "C2-PastebinRawFetch",
+      "Pattern": "(?i)https?://(pastebin\\.com/raw/|paste\\.ee/r/|hastebin\\.com/raw/|rentry\\.co/[a-z0-9]{4,}/raw|textbin\\.net/raw/|dpaste\\.(com|org)/[A-Za-z0-9]+/raw)",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "C2-GithubGistRaw",
+      "Pattern": "(?i)https?://gist\\.githubusercontent\\.com/[^\\s\"']{4,}/raw/",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "C2-MailtoExfilSmtpCreds",
+      "Pattern": "(?i)(smtp\\.(gmail|yandex|mail|zoho|office365|outlook)\\.[a-z.]{2,10})[\\s\\S]{0,200}(password|passwd|pwd)\\s*[=:]",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "C2-NgrokTunnelUrl",
+      "Pattern": "(?i)https?://[a-z0-9-]{4,}\\.(ngrok(-free)?\\.(io|app|dev)|trycloudflare\\.com|loca\\.lt|serveo\\.net|localtonet\\.com|pinggy\\.link)",
+      "Severity": "HIGH"
+    }
+  ],
+  "_comment_webhook_c2_benign_paths": "FP allowlist (Phase 130). API tooling and package trees legitimately carry webhook URL patterns in samples and tests. The chat clients themselves are deliberately NOT listed: allowlisting AppData\\\\Roaming\\\\discord\\\\ suppressed the one case the phase's client-core Quarantine branch exists for (a token stealer patched into the client), and no legitimate client build embeds a concrete webhook URL with a 50+ char token.",
+  "webhook_c2_benign_paths": [
+    "\\\\AppData\\\\Local\\\\(Programs\\\\)?(Microsoft VS Code|JetBrains|GitHubDesktop|Postman|Insomnia)\\\\",
+    "\\\\node_modules\\\\",
+    "\\\\site-packages\\\\",
+    "\\\\\\.git\\\\",
+    "\\\\vendor\\\\",
+    "\\\\AppData\\\\Local\\\\Temp\\\\(pip|npm|go-build)"
+  ],
+  "_comment_packed_script_indicators": "Phase 131. Compiled-script droppers. The interpreter is signed and clean; the malice is in the script blob beside it, so AV verdicts on the EXE are useless. Everything here is POSSIBLE/Info unless it is co-located with a matching script blob in a user-writable path.",
+  "packed_script_indicators": [
+    {
+      "Name": "AutoIt-CompiledScript",
+      "Ext": ".a3x",
+      "Severity": "HIGH",
+      "Why": "compiled AutoIt script — DarkGate and a long tail of loaders ship as AutoIt3.exe + .a3x"
+    },
+    {
+      "Name": "AutoIt-Interpreter",
+      "Ext": ".exe",
+      "NameRx": "(?i)^autoit3(_x64)?\\.exe$",
+      "Severity": "POSSIBLE",
+      "Why": "the AutoIt interpreter itself dropped into a user path"
+    },
+    {
+      "Name": "AutoHotkey-Interpreter",
+      "Ext": ".exe",
+      "NameRx": "(?i)^autohotkey(u?[36]4|u?32|_h)?\\.exe$",
+      "Severity": "POSSIBLE",
+      "Why": "AutoHotkey interpreter in a user path — used the same way as AutoIt"
+    },
+    {
+      "Name": "AutoHotkey-Script",
+      "Ext": ".ahk",
+      "Severity": "POSSIBLE",
+      "Why": "AutoHotkey script alongside a dropped interpreter"
+    },
+    {
+      "Name": "Nim-Nuitka-PyInstaller-Marker",
+      "Ext": ".exe",
+      "ContentRx": "(?i)(pyi-runtime-tmpdir|_MEIPASS|PyInstaller|Nuitka|nim_program_result|py2exe)",
+      "Severity": "POSSIBLE",
+      "Why": "script packed into an EXE — legitimate for tooling, but the standard way to ship a Python/Nim stealer"
+    }
+  ],
+  "_comment_packed_script_benign_paths": "FP allowlist (Phase 131). Real AutoIt/AutoHotkey/Python installs and packaged-app extraction dirs.",
+  "packed_script_benign_paths": [
+    "\\\\Program Files( \\(x86\\))?\\\\(AutoIt3|AutoHotkey|Python|Anaconda|Nim)\\\\",
+    "\\\\AppData\\\\Local\\\\Programs\\\\(Python|AutoHotkey|Nim)\\\\",
+    "\\\\AppData\\\\Local\\\\Temp\\\\_MEI[0-9]+\\\\",
+    "\\\\ProgramData\\\\chocolatey\\\\",
+    "\\\\scoop\\\\apps\\\\",
+    "\\\\node_modules\\\\",
+    "\\\\site-packages\\\\"
+  ],
+  "_comment_webshell_roots_raw": "Phase 132. Web-root and Exchange auth directories. ProxyShell/ProxyLogon dropped .aspx shells into owa\\auth, and that shape has been copied by everything since. Skipped silently on a box with no web server.",
+  "webshell_roots_raw": [
+    "$env:SystemDrive\\inetpub\\wwwroot",
+    "$env:SystemDrive\\inetpub\\ftproot",
+    "$env:ProgramFiles\\Microsoft\\Exchange Server\\V15\\FrontEnd\\HttpProxy\\owa\\auth",
+    "$env:ProgramFiles\\Microsoft\\Exchange Server\\V15\\FrontEnd\\HttpProxy\\ecp\\auth",
+    "$env:ProgramFiles\\Microsoft\\Exchange Server\\V15\\ClientAccess\\OAB",
+    "$env:SystemDrive\\Windows\\System32\\inetsrv",
+    "$env:SystemDrive\\xampp\\htdocs",
+    "$env:SystemDrive\\wamp64\\www"
+  ],
+  "_comment_webshell_extensions": "Phase 132. Server-side script extensions worth content-scanning inside a web root.",
+  "webshell_extensions": [
+    ".aspx",
+    ".asp",
+    ".ashx",
+    ".asmx",
+    ".ascx",
+    ".php",
+    ".jsp",
+    ".jspx",
+    ".cfm",
+    ".cshtml"
+  ],
+  "_comment_webshell_content_rules": "Phase 132. Web-shell constructs, not AV signature names: every one of these is 'take a value straight from the HTTP request and execute it', which no legitimate page does.",
+  "webshell_content_rules": [
+    {
+      "Name": "WebShell-AspxEvalRequest",
+      "Pattern": "(?i)(eval|execute)\\s*\\(\\s*Request(\\.(Item|Form|QueryString))?\\s*\\[",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "WebShell-ChinaChopperOneLiner",
+      "Pattern": "(?i)<%@\\s*Page[^\\n]{0,200}%>\\s*<%[^\\n]{0,200}\\beval\\b[^\\n]{0,200}Request",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "WebShell-ProcessStartFromRequest",
+      "Pattern": "(?i)(Process\\.Start|ProcessStartInfo|Diagnostics\\.Process)[\\s\\S]{0,300}Request(\\.(Item|Form|QueryString))?\\s*\\[",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "WebShell-AssemblyLoadBase64",
+      "Pattern": "(?i)(Assembly\\.Load|Reflection\\.Assembly)\\s*\\([\\s\\S]{0,120}(FromBase64String|Convert\\.FromBase64)",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "WebShell-PhpSystemPassthru",
+      "Pattern": "(?i)\\b(system|shell_exec|passthru|popen|proc_open|assert)\\s*\\(\\s*\\$_(GET|POST|REQUEST|COOKIE|SERVER)\\b",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "WebShell-PhpPreg_replace_e",
+      "Pattern": "(?i)preg_replace\\s*\\([^,]{0,80}/e['\"]",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "WebShell-JspRuntimeExec",
+      "Pattern": "(?i)Runtime\\.getRuntime\\s*\\(\\s*\\)\\s*\\.exec\\s*\\([\\s\\S]{0,120}request\\.getParameter",
+      "Severity": "CRITICAL"
+    },
+    {
+      "Name": "WebShell-CmdAspxUploader",
+      "Pattern": "(?i)(cmd\\.exe|/c\\s+whoami|net\\s+user\\s+/add)[\\s\\S]{0,200}Request",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "WebShell-ObfuscatedCharCodeBlock",
+      "Pattern": "(?i)(Chr\\s*\\(\\s*\\d{2,3}\\s*\\)\\s*[&+]\\s*){12,}",
+      "Severity": "HIGH"
+    }
+  ],
+  "_comment_wiper_procs": "Phase 133. Wipers masquerade as ransomware but have no recovery path, so telling them apart changes the entire incident response. sdelete64 is Sysinternals — legitimate, but its presence during an active incident is worth stating.",
+  "wiper_procs": [
+    "hermeticwiper",
+    "hermeticwizard",
+    "caddywiper",
+    "whispergate",
+    "isaacwiper",
+    "acidrain",
+    "doublezero",
+    "industroyer2",
+    "killdisk",
+    "shamoon",
+    "distrack",
+    "zerocleare",
+    "dustman",
+    "meteorexpress",
+    "apostle",
+    "fantasywiper",
+    "swiftslicer",
+    "sdelete64",
+    "azovwiper",
+    "cryptowiper",
+    "nomoreransom_wiper",
+    "petyawiper"
+  ],
+  "_comment_destructive_behavior_rules": "Phase 133. Destructive-intent command shapes. Reported against process command lines and dropped scripts.",
+  "destructive_behavior_rules": [
+    {
+      "Name": "Destructive-RawPhysicalDriveWrite",
+      "Pattern": "(?i)\\\\\\\\\\.\\\\PhysicalDrive[0-9]",
+      "Severity": "HIGH",
+      "Why": "raw disk-sector access — MBR/GPT overwrite"
+    },
+    {
+      "Name": "Destructive-FormatOrCleanAll",
+      "Pattern": "(?i)\\b(format\\s+[a-z]:\\s*/(y|q|fs)|diskpart[^\\n]{0,80}clean\\s+all)",
+      "Severity": "HIGH",
+      "Why": "drive wipe"
+    },
+    {
+      "Name": "Destructive-BootRecordRewrite",
+      "Pattern": "(?i)\\bbootrec\\s*/(fixmbr|fixboot)\\b|\\bbcdedit[^\\n]{0,60}/delete\\b",
+      "Severity": "POSSIBLE",
+      "Why": "boot record manipulation (also a legitimate repair step)"
+    },
+    {
+      "Name": "Destructive-CipherWipeFreeSpace",
+      "Pattern": "(?i)\\bcipher(\\.exe)?\\s+/w:",
+      "Severity": "POSSIBLE",
+      "Why": "anti-forensic free-space wipe"
+    },
+    {
+      "Name": "Destructive-RecursiveUserProfileDelete",
+      "Pattern": "(?i)(rd|rmdir)\\s+/s\\s+/q\\s+[\"']?[a-z]:\\\\(users|documents and settings)\\\\|Remove-Item[^\\n]{0,80}-Recurse[^\\n]{0,80}\\$env:USERPROFILE",
+      "Severity": "HIGH",
+      "Why": "mass user-data deletion"
+    }
+  ],
+  "_comment_lateral_movement_artifacts": "Phase 133. Lateral-movement residue. On a single endpoint this is the evidence that the box was reached FROM somewhere else — which changes the scope of the incident from one machine to the network.",
+  "lateral_movement_artifacts": [
+    {
+      "Name": "PsExec service binary",
+      "Rx": "(?i)^(psexesvc|paexec|remcomsvc|csexecsvc)(\\.exe)?$",
+      "Severity": "HIGH",
+      "Why": "a PsExec-class service binary in System32 means someone executed code on this box remotely"
+    },
+    {
+      "Name": "Impacket random service",
+      "Rx": "(?i)^[a-z]{8}\\.exe$",
+      "Severity": "POSSIBLE",
+      "Why": "impacket's smbexec/atexec create an 8-random-character service binary"
+    },
+    {
+      "Name": "WMI process-call payload",
+      "Rx": "(?i)\\bwmic\\b[^\\n]{0,120}\\b/node:[^\\n]{0,120}\\bprocess\\b[^\\n]{0,60}\\bcall\\b[^\\n]{0,20}\\bcreate\\b",
+      "Severity": "HIGH",
+      "Why": "remote WMI process creation"
+    },
+    {
+      "Name": "Admin share write",
+      "Rx": "(?i)\\\\\\\\[a-z0-9._-]{2,}\\\\(ADMIN\\$|C\\$|IPC\\$)\\\\",
+      "Severity": "POSSIBLE",
+      "Why": "administrative-share access, the transport under PsExec/impacket"
+    },
+    {
+      "Name": "Scheduled task on remote host",
+      "Rx": "(?i)\\bschtasks\\b[^\\n]{0,120}/s\\s+[^\\s]{2,}[^\\n]{0,120}/create",
+      "Severity": "HIGH",
+      "Why": "remote scheduled-task creation (atexec)"
+    }
+  ],
+  "clr_unexpected_hosts": [
+    "notepad",
+    "calc",
+    "mspaint",
+    "write",
+    "wordpad",
+    "charmap",
+    "cmd",
+    "ping",
+    "ipconfig",
+    "whoami",
+    "hostname",
+    "tasklist",
+    "findstr",
+    "more",
+    "attrib",
+    "xcopy",
+    "robocopy",
+    "certutil",
+    "regsvr32",
+    "rundll32",
+    "werfault",
+    "conhost",
+    "tracert",
+    "nslookup",
+    "netstat"
+  ],
+  "_comment_hunt_task_benign_paths": "Phase 134 allowlist. Task tree paths Windows itself churns or ships without a readable SD. Anchored with ^\\\\ to a full task path, never a bare name.",
+  "hunt_task_benign_paths": [
+    "^\\\\Microsoft\\\\Windows\\\\UpdateOrchestrator\\\\",
+    "^\\\\Microsoft\\\\Windows\\\\WindowsUpdate\\\\",
+    "^\\\\Microsoft\\\\XblGameSave\\\\",
+    "^\\\\Microsoft\\\\Windows\\\\Flighting\\\\",
+    "^\\\\Microsoft\\\\Windows\\\\DeviceDirectoryClient\\\\",
+    "^\\\\MicrosoftEdgeUpdateTask"
+  ],
+  "_comment_hunt_service_benign_names": "Phase 135 allowlist. Per-user service TEMPLATE instances carry a transient _<luid> suffix and never appear in Win32_Service under the template name.",
+  "hunt_service_benign_names": [
+    "_[0-9a-f]{4,8}$",
+    "^(BITS|TrustedInstaller|WaaSMedicSvc|DoSvc|MapsBroker)$"
+  ],
+  "_comment_hunt_ppid_benign_paths": "Phase 136 allowlist. Session and job managers whose children are legitimately re-parented, which makes creation-order comparison meaningless for them.",
+  "hunt_ppid_benign_paths": [
+    "\\\\System32\\\\(svchost|services|wininit|winlogon|smss|csrss)\\.exe$",
+    "\\\\System32\\\\conhost\\.exe$"
+  ],
+  "_comment_hunt_driver_benign_names": "Phase 138 allowlist. Boot-start storage and filter drivers that legitimately unload once the boot phase completes, so registered-but-not-loaded is their normal steady state.",
+  "hunt_driver_benign_names": [
+    "^(spaceport|storqosflt|wcifs|bindflt|cldflt|volsnap|fvevol|iorate|filecrypt|Wof)$",
+    "^(dam|hwpolicy|msisadrv|pdc|WindowsTrustedRT)$"
+  ],
+  "_comment_hunt_timestomp_benign_paths": "Phase 139 allowlist. Package extraction and build trees copy second-resolution timestamps wholesale, which is the same artifact a timestomping tool leaves.",
+  "hunt_timestomp_benign_paths": [
+    "\\\\(node_modules|\\.git|__pycache__|site-packages|dist-info|_MEI\\d+)\\\\",
+    "\\\\Microsoft\\\\Windows\\\\INetCache\\\\",
+    "\\\\Package Cache\\\\",
+    "\\\\WinSxS\\\\"
+  ],
+  "_comment_hunt_filename_benign_paths": "Phase 140 allowlist. Localization resource trees legitimately carry non-ASCII filenames; nothing here allows a bidi override, which is checked on the leaf name and has no benign use in an executable.",
+  "hunt_filename_benign_paths": [
+    "\\\\(Resources|locales|Localization|lang|i18n)\\\\",
+    "\\\\WindowsApps\\\\"
+  ],
+  "_comment_hunt_memory_benign_paths": "Phases 141/143 allowlist. An EDR is, by every signal these phases look for, a legitimate rootkit: it injects unbacked code into everything it protects. Flagging the customer's own security product as an implant is the fastest way to teach an operator to ignore this band. Datto/CentraStage/Kaseya are partner RMM tooling per CLAUDE.md rule #2.",
+  "hunt_memory_benign_paths": [
+    "\\\\Program Files( \\(x86\\))?\\\\(Windows Defender|Microsoft\\\\Defender)\\\\",
+    "\\\\Program Files( \\(x86\\))?\\\\(SentinelOne|CrowdStrike|Sophos|Cylance|Carbon Black|CarbonBlack|ESET|Bitdefender|Trend Micro|Webroot|Malwarebytes|Huntress|Arctic Wolf)\\\\",
+    "\\\\Program Files( \\(x86\\))?\\\\(CentraStage|Datto|Kaseya|AEMAgent|N-able|ConnectWise|ScreenConnect)\\\\",
+    "\\\\System32\\\\(clr|coreclr|mscor\\w*|amsi|wldp)\\.dll$"
+  ],
+  "_comment_system_image_names": "Phase 144. Core Windows binary filenames (WITH extension, lowercase). A process carrying one of these names from outside \\\\Windows\\\\System32|SysWOW64|WinSxS\\\\ is masquerading (T1036.005). Anchored whole-name at load, never substring.",
+  "system_image_names": [
+    "svchost.exe",
+    "lsass.exe",
+    "services.exe",
+    "csrss.exe",
+    "wininit.exe",
+    "winlogon.exe",
+    "smss.exe",
+    "spoolsv.exe",
+    "explorer.exe",
+    "taskhostw.exe",
+    "dwm.exe",
+    "conhost.exe",
+    "rundll32.exe",
+    "dllhost.exe",
+    "sihost.exe",
+    "fontdrvhost.exe",
+    "searchindexer.exe",
+    "lsm.exe",
+    "wuauclt.exe",
+    "ctfmon.exe"
+  ],
+  "_comment_killchain_stages": "Phase 160. Maps a finding's ThreatType/Group/Phase text to a kill-chain stage. A correlated chain spanning several DISTINCT stages is an intrusion; several findings in one stage are usually one artifact described several ways. Patterns are matched case-insensitively against the concatenation of ThreatType, Group and Phase.",
+  "killchain_stages": [
+    {
+      "stage": "Delivery",
+      "pattern": "(?i)(phish|email|attachment|download|macro|office|lure|dropper|archive)"
+    },
+    {
+      "stage": "Execution",
+      "pattern": "(?i)(lolbin|lolbas|script|powershell|wscript|execution evidence|command.?line|hollow|injection|unbacked|suspended|clr)"
+    },
+    {
+      "stage": "Persistence",
+      "pattern": "(?i)(persist|run.?key|scheduled task|service|autostart|wmi|ifeo|winlogon|startup|shell ?ext|com hijack)"
+    },
+    {
+      "stage": "Defense Evasion",
+      "pattern": "(?i)(evasion|amsi|etw|tamper|anti.?forensic|timestamp|masquerad|rootkit|cross.?view|defender|obfusc|unsigned)"
+    },
+    {
+      "stage": "Credential Access",
+      "pattern": "(?i)(credential|keylog|lsass|stealer|browser cred|password|token|dpapi|kerberos|ntlm)"
+    },
+    {
+      "stage": "Command and Control",
+      "pattern": "(?i)(c2|beacon|rat|command.?and.?control|dns tunnel|named pipe|webhook|exfil|botnet|proxy)"
+    },
+    {
+      "stage": "Impact",
+      "pattern": "(?i)(ransom|wiper|destructive|encrypt|shadow cop|backup|miner|crypto)"
+    },
+    {
+      "stage": "Lateral Movement",
+      "pattern": "(?i)(lateral|worm|share|rdp|winrm|psexec|smb|remote access|rmm)"
     }
   ]
 }

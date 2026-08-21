@@ -1,4 +1,11 @@
-﻿trap { Write-RecoveredError $_; continue }   # module-level resilience (CLAUDE.md engine-split rule).
+﻿# NOTE - Detection vocabulary in this file is deliberate.
+# Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
+# named malware families, are detection category labels, operator-facing report text, or
+# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# response tool; these strings are what it reports, not what it does. See CLAUDE.md,
+# "The detection vocabulary is deliberate". Do not sanitise them.
+
+trap { Write-RecoveredError $_; continue }   # module-level resilience (CLAUDE.md engine-split rule).
 # This is the LAST dot-sourced module, so an unhandled terminating error here would otherwise unwind
 # to the loader trap and fall off the end of the script mid-remediation, leaving the operator with no
 # summary and no idea which fixes were applied.
