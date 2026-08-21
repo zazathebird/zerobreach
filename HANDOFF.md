@@ -49,10 +49,43 @@ Both are Fable-safe sanitized packages. Their framing must not be disturbed.
   and breaks interop. Rationale recorded in `CLAUDE.md`. The real AV-FP levers, in order:
   code signing, vendor FP portals, string hygiene a distant third.
 
-### Uncommitted
+### Committed 2026-08-21 (session 17)
 
-Branch `security/audit-2026-08-18`. **The entire C# migration and every doc rewrite is
-working-tree only.** Commit before anything else.
+Branch `security/audit-2026-08-18`, **still nothing pushed; `main` untouched.** The working
+tree that had accumulated sessions 14, 15 and 16 is now five commits:
+
+| | |
+|---|---|
+| `0c2c2d0` | `.gitignore` — `bin/`, `obj/`, `data/integrity_manifest.json` |
+| `620cd6e` | engine bands 116-133 + 134-162 + preflight integrity gate |
+| `41e24d7` | native C# engine (102 files) |
+| `e8eea6c` | G-series tooling, offline viewer, shared test library, `fable-work/` |
+| `e544dee` | docs restructure + the deliberate-vocabulary rule |
+
+`bin/`/`obj/` were unignored — 356 files of compiler output would have been staged alongside
+93 real sources. Fixed before the first commit; re-check `git status` after any `dotnet build`.
+
+**Validated on Linux before and after:** PS suite 14/14 files green (611+ assertions,
+`pwsh` 7.4.6), C# 279 passed / 14 skipped / 0 failed. **Still no Windows run** — the laptop
+checklists in sessions 14 and 15 below are unchanged and are still the gate.
+
+One fix was needed to get there: `Test-Hunt-Band.ps1` and `Test-Extended-Band.ps1` asserted
+the module trap was **literally line 1**, and the deliberate-vocabulary comment header
+displaced it in `Phases-0/4/5/6/7`. Nothing executable had moved ahead of the trap, so this
+was test precision, not a safety regression. Both now assert the real invariant — *nothing
+executable precedes the trap* — and were proven to fail when a statement is injected there.
+
+### `fable-work-2/` is built — and it is NOT in this repo
+
+It lives at `~/Downloads/claude/fable-work-2/`, deliberately outside the tree: Claude Code
+walks parent directories for `CLAUDE.md`, so a folder inside this repo would still pull in
+the 52 KB project one and trip Fable's cyber safeguard. There is no `CLAUDE.md` above
+`claude/`. 15 files, 88 KB: `CLAUDE.md`, a self-contained `BLUEPRINT.md`, `README.md`, and
+12 briefs in `tasks/` (A1-A5, B1-B2, C1-C2, D1-D2, `00_INTEGRATION`). Trigger-word density
+measured at ~19 hits, all benign — the task ID "C2", "VirusTotal", "laptop", and
+"attacker-authored content", which is unavoidable and correct.
+
+Open it as its own project. Order: A1→A2→A3→A4 strictly sequential, then anything.
 
 ### Next: build the engine
 
