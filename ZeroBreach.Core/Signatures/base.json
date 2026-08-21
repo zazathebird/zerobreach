@@ -1,0 +1,44 @@
+{
+  // Vendor-trusted soft-list (spec §6.3): legitimate remote-support/RMM products commonly
+  // found on MSP-managed machines. Matching findings get a trust badge but remain fully
+  // visible and actionable — attackers routinely install exactly these tools.
+  "vendorTrusted": [
+    "TeamViewer",
+    "AnyDesk",
+    "ScreenConnect",
+    "ConnectWise",
+    "Splashtop",
+    "Atera",
+    "NinjaRMM",
+    "NinjaOne",
+    "Datto",
+    "CentraStage",
+    "Kaseya",
+    "LogMeIn",
+    "GoToAssist",
+    "GoTo Resolve",
+    "RemotePC",
+    "RustDesk",
+    "Chrome Remote Desktop",
+    "UltraVNC",
+    "TightVNC",
+    "RealVNC",
+    "DWService",
+    "Syncro",
+    "Pulseway",
+    "N-able",
+    "Take Control",
+    "BeAnywhere",
+    "Zoho Assist",
+    "SimpleHelp",
+    "MeshAgent",
+    "MeshCentral",
+    "Action1",
+    "Tactical RMM",
+    "Level.io",
+    "DameWare",
+    "Bomgar",
+    "BeyondTrust"
+  ],
+  "sets": {}
+}

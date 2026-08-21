@@ -1,0 +1,325 @@
+{
+  // Phase 3 — C2 / Remote Access signature data.
+  // All indicator content for C2Scanner lives here, never inline in C# (spec §3/§8).
+  // Dual-use discipline: RMM and tunneling tools are legitimate software that is also
+  // routinely abused — their entries are POSSIBLE (or INFO when vendor-trusted) and the
+  // scanner never raises a destructive auto-fix from them.
+  "vendorTrusted": [
+    "TeamViewer",
+    "AnyDesk",
+    "ConnectWise",
+    "ScreenConnect",
+    "Splashtop",
+    "Atera",
+    "Datto",
+    "Kaseya",
+    "LogMeIn",
+    "GoToAssist",
+    "GoTo Resolve",
+    "BeyondTrust",
+    "Bomgar",
+    "N-able",
+    "Zoho Assist",
+    "RealVNC",
+    "NetSupport",
+    "Remote Utilities",
+    "Supremo",
+    "RemotePC",
+    "Radmin",
+    "Cloudflare",
+    "CentraStage"
+  ],
+  "sets": {
+
+    // C2-001 — publicly documented default named-pipe shapes of C2 frameworks and
+    // remote-exec tooling. Anchored regexes: the legitimate Windows pipes these imitate
+    // (ntsvcs, scerpc, spoolss...) have NO hex suffix, so the suffix requirement is the signal.
+    "c2.named_pipes": [
+      { "pattern": "^msagent_[0-9a-f]{2,4}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "Cobalt Strike SMB beacon default pipe (msagent_##)" },
+      { "pattern": "^MSSE-[0-9]{1,4}-server$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "Cobalt Strike Artifact Kit default pipe (MSSE-####-server)" },
+      { "pattern": "^postex_[0-9a-f]{4}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "Cobalt Strike post-exploitation job default pipe (postex_####)" },
+      { "pattern": "^postex_ssh_[0-9a-f]{4}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "Cobalt Strike SSH agent default pipe" },
+      { "pattern": "^status_[0-9a-f]{2}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "Cobalt Strike SMB beacon peer-link default pipe (status_##)" },
+      { "pattern": "^mypipe-[fh][0-9a-f]{2}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "Cobalt Strike malleable-profile documented example pipe" },
+      { "pattern": "^windows\\.update\\.manager[0-9a-f]{2,3}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "Cobalt Strike malleable-profile documented lookalike pipe" },
+      { "pattern": "^ntsvcs[0-9a-f]{2}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "lookalike of legitimate ntsvcs pipe with hex suffix (CS malleable default)" },
+      { "pattern": "^scerpc[0-9a-f]{2}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "lookalike of legitimate scerpc pipe with hex suffix (CS malleable default)" },
+      { "pattern": "^spoolss_[0-9a-f]{2}$", "kind": "regex", "severity": "high",
+        "technique": "T1090.001", "techniqueName": "Proxy: Internal Proxy", "tactic": "Command and Control",
+        "note": "lookalike of legitimate spoolss pipe with hex suffix (CS malleable default)" },
+      { "pattern": "^gruntsvc$", "kind": "regex", "severity": "high",
+        "technique": "T1071", "techniqueName": "Application Layer Protocol", "tactic": "Command and Control",
+        "note": "Covenant Grunt default SMB pipe" },
+      { "pattern": "^remcom_communicaton$", "kind": "regex", "severity": "high",
+        "technique": "T1569.002", "techniqueName": "System Services: Service Execution", "tactic": "Execution",
+        "note": "RemCom remote shell pipe (also used by Impacket psexec) — note the documented misspelling" },
+      { "pattern": "^remcom_(stdin|stdout|stderr).*$", "kind": "regex", "severity": "high",
+        "technique": "T1569.002", "techniqueName": "System Services: Service Execution", "tactic": "Execution",
+        "note": "RemCom remote shell I/O pipes" },
+      { "pattern": "^paexec.*$", "kind": "regex", "severity": "possible",
+        "technique": "T1569.002", "techniqueName": "System Services: Service Execution", "tactic": "Execution",
+        "note": "PAExec remote-exec pipes — dual-use admin tool, flag but do not auto-act" },
+      { "pattern": "^psexesvc.*$", "kind": "regex", "severity": "possible",
+        "technique": "T1569.002", "techniqueName": "System Services: Service Execution", "tactic": "Execution",
+        "note": "Sysinternals PsExec service pipes — dual-use admin tool, flag but do not auto-act" },
+      { "pattern": "^csexecsvc.*$", "kind": "regex", "severity": "possible",
+        "technique": "T1569.002", "techniqueName": "System Services: Service Execution", "tactic": "Execution",
+        "note": "CSExec (PsExec clone) service pipes" }
+    ],
+
+    // C2-002 — known C2 endpoint IPs. Deliberately shipped EMPTY: this build has no
+    // curated feed, and fabricated addresses would be worse than none. Operators extend it
+    // via an external rules file or --ioc-file (custom.ips). A hit here reads CRITICAL.
+    "c2.c2_ips": [],
+
+    // C2-002 — ports classically used by tunnelers/handlers. POSSIBLE only, and only
+    // corroborated by an unsigned owning binary — every one of these has legitimate uses.
+    "c2.tunnel_ports": [
+      { "pattern": "4444", "severity": "possible", "technique": "T1571", "techniqueName": "Non-Standard Port", "tactic": "Command and Control", "note": "Metasploit default handler port" },
+      { "pattern": "1080", "severity": "possible", "technique": "T1090", "techniqueName": "Proxy", "tactic": "Command and Control", "note": "SOCKS proxy" },
+      { "pattern": "6667", "severity": "possible", "technique": "T1071", "techniqueName": "Application Layer Protocol", "tactic": "Command and Control", "note": "IRC — classic botnet C2 channel" },
+      { "pattern": "7000", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "frp (fast reverse proxy) default server port" },
+      { "pattern": "8388", "severity": "possible", "technique": "T1090", "techniqueName": "Proxy", "tactic": "Command and Control", "note": "shadowsocks default port" },
+      { "pattern": "9001", "severity": "possible", "technique": "T1090.003", "techniqueName": "Proxy: Multi-hop Proxy", "tactic": "Command and Control", "note": "Tor ORPort default" },
+      { "pattern": "9050", "severity": "possible", "technique": "T1090.003", "techniqueName": "Proxy: Multi-hop Proxy", "tactic": "Command and Control", "note": "Tor SOCKS default" }
+    ],
+
+    // C2-002 — wildcard-listener allowlist: well-known Windows service ports that are
+    // expected to be bound on 0.0.0.0. Anything else below the ephemeral range with an
+    // unsigned owner gets flagged.
+    "c2.standard_listen_ports": [
+      { "pattern": "80", "severity": "info", "note": "HTTP" },
+      { "pattern": "135", "severity": "info", "note": "RPC endpoint mapper" },
+      { "pattern": "139", "severity": "info", "note": "NetBIOS session" },
+      { "pattern": "443", "severity": "info", "note": "HTTPS" },
+      { "pattern": "445", "severity": "info", "note": "SMB" },
+      { "pattern": "3389", "severity": "info", "note": "RDP" },
+      { "pattern": "5040", "severity": "info", "note": "Windows connected devices platform" },
+      { "pattern": "5985", "severity": "info", "note": "WinRM HTTP" },
+      { "pattern": "5986", "severity": "info", "note": "WinRM HTTPS" },
+      { "pattern": "7680", "severity": "info", "note": "Windows Update delivery optimization" }
+    ],
+
+    // C2-004 — remote-access / RMM tooling (spec §3: dual-use — flag but don't auto-act).
+    // Substring-matched against product display names, publishers, service names, image
+    // paths and process names. Vendor trust comes from the vendorTrusted list above:
+    // trusted match => INFO + badge, unknown/untrusted => POSSIBLE. Never above POSSIBLE,
+    // never a destructive fix — auto-killing an MSP's own RMM agent is the outage §6 exists
+    // to prevent.
+    "c2.rmm_tools": [
+      { "pattern": "teamviewer", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "TeamViewer" },
+      { "pattern": "anydesk", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "AnyDesk" },
+      { "pattern": "screenconnect", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "ConnectWise Control / ScreenConnect" },
+      { "pattern": "connectwise", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "ConnectWise" },
+      { "pattern": "ateraagent", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Atera RMM agent" },
+      { "pattern": "splashtop", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Splashtop" },
+      { "pattern": "rustdesk", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "RustDesk — open-source, self-hostable; frequently abused" },
+      { "pattern": "meshagent", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "MeshCentral agent — open-source, self-hostable; frequently abused" },
+      { "pattern": "meshcentral", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "MeshCentral" },
+      { "pattern": "netsupport", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "NetSupport Manager — legitimate, also distributed as NetSupport RAT" },
+      { "pattern": "remote utilities", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Remote Utilities (RuRAT abuse documented)" },
+      { "pattern": "rutserv", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Remote Utilities host service binary" },
+      { "pattern": "gotoassist", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "GoToAssist" },
+      { "pattern": "logmein", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "LogMeIn" },
+      { "pattern": "supremo", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Supremo remote desktop" },
+      { "pattern": "aeroadmin", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "AeroAdmin" },
+      { "pattern": "ammyy", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Ammyy Admin — heavily abused in support scams" },
+      { "pattern": "ultravnc", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "UltraVNC" },
+      { "pattern": "tightvnc", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "TightVNC" },
+      { "pattern": "realvnc", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "RealVNC" },
+      { "pattern": "winvnc", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "VNC server binary" },
+      { "pattern": "dwagent", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "DWService agent" },
+      { "pattern": "dwservice", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "DWService" },
+      { "pattern": "zoho assist", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Zoho Assist" },
+      { "pattern": "zohomeeting", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Zoho Assist agent binary" },
+      { "pattern": "kaseya", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Kaseya VSA agent" },
+      { "pattern": "pulseway", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Pulseway RMM" },
+      { "pattern": "bomgar", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "BeyondTrust / Bomgar remote support" },
+      { "pattern": "beyondtrust", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "BeyondTrust remote support" },
+      { "pattern": "action1", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Action1 RMM — documented ransomware-actor abuse" },
+      { "pattern": "syncro", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Syncro RMM" },
+      { "pattern": "tacticalrmm", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Tactical RMM agent — open-source, self-hostable" },
+      { "pattern": "fleetdeck", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "FleetDeck — documented abuse" },
+      { "pattern": "remotepc", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "RemotePC" },
+      { "pattern": "radmin", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Radmin" },
+      { "pattern": "centrastage", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Datto RMM (CentraStage) agent" },
+      { "pattern": "aemagent", "substring": true, "severity": "possible", "technique": "T1219", "techniqueName": "Remote Access Software", "tactic": "Command and Control", "note": "Datto RMM AEM agent" }
+    ],
+
+    // C2-005 — tunneling / reverse-proxy tool file names (glob vs file/process name).
+    // Name match alone is never more than POSSIBLE (dual-use); content corroboration
+    // (c2.tunnel_content) upgrades confidence wording and permits a quarantine suggestion,
+    // never the severity cap.
+    "c2.tunnel_tools": [
+      { "pattern": "ngrok*.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "ngrok tunnel agent" },
+      { "pattern": "frpc*.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "frp client" },
+      { "pattern": "frps*.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "frp server" },
+      { "pattern": "chisel*.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "chisel TCP/UDP-over-HTTP tunnel" },
+      { "pattern": "plink.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "PuTTY Link — legitimate SSH client, classic reverse-tunnel LOLbin" },
+      { "pattern": "gost*.exe", "kind": "glob", "severity": "possible", "technique": "T1090", "techniqueName": "Proxy", "tactic": "Command and Control", "note": "gost proxy/tunnel" },
+      { "pattern": "cloudflared*.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "Cloudflare Tunnel agent — documented attacker abuse" },
+      { "pattern": "iodine*.exe", "kind": "glob", "severity": "possible", "technique": "T1071.004", "techniqueName": "Application Layer Protocol: DNS", "tactic": "Command and Control", "note": "iodine DNS tunnel" },
+      { "pattern": "dnscat*.exe", "kind": "glob", "severity": "possible", "technique": "T1071.004", "techniqueName": "Application Layer Protocol: DNS", "tactic": "Command and Control", "note": "dnscat2 DNS tunnel" },
+      { "pattern": "ligolo*.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "ligolo/ligolo-ng pivoting agent" },
+      { "pattern": "revsocks*.exe", "kind": "glob", "severity": "possible", "technique": "T1090", "techniqueName": "Proxy", "tactic": "Command and Control", "note": "revsocks reverse SOCKS proxy" },
+      { "pattern": "stunnel.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "stunnel TLS wrapper" },
+      { "pattern": "socat.exe", "kind": "glob", "severity": "possible", "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "socat relay" },
+      { "pattern": "3proxy.exe", "kind": "glob", "severity": "possible", "technique": "T1090", "techniqueName": "Proxy", "tactic": "Command and Control", "note": "3proxy tiny proxy server" },
+      { "pattern": "htran*.exe", "kind": "glob", "severity": "possible", "technique": "T1090", "techniqueName": "Proxy", "tactic": "Command and Control", "note": "HTran connection bouncer" },
+      { "pattern": "lcx.exe", "kind": "glob", "severity": "possible", "needsCorroboration": true, "technique": "T1090", "techniqueName": "Proxy", "tactic": "Command and Control", "note": "lcx port relay (generic short name — needs content corroboration)" },
+      { "pattern": "npc.exe", "kind": "glob", "severity": "possible", "needsCorroboration": true, "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "nps/npc tunnel client (generic short name — needs content corroboration)" },
+      { "pattern": "nps.exe", "kind": "glob", "severity": "possible", "needsCorroboration": true, "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control", "note": "nps tunnel server (generic short name — needs content corroboration)" }
+    ],
+
+    // C2-005 — content markers used ONLY to corroborate a tunnel_tools name match
+    // (bounded read; these strings are benign on their own, hence needsCorroboration).
+    "c2.tunnel_content": [
+      { "pattern": "ngrok.com", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "ngrok binary marker" },
+      { "pattern": "ngrok-agent", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "ngrok binary marker" },
+      { "pattern": "github.com/fatedier/frp", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "frp binary marker" },
+      { "pattern": "github.com/jpillora/chisel", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "chisel binary marker" },
+      { "pattern": "github.com/ginuerzh/gost", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "gost binary marker" },
+      { "pattern": "github.com/cloudflare/cloudflared", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "cloudflared binary marker" },
+      { "pattern": "dnscat2", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "dnscat2 marker" },
+      { "pattern": "ligolo", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "ligolo marker" },
+      { "pattern": "revsocks", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "revsocks marker" },
+      { "pattern": "PuTTY-Link", "substring": true, "needsCorroboration": true, "severity": "possible", "note": "plink marker" }
+    ],
+
+    // C2-005 — hash-confirmed known-bad tunneler builds. Shipped EMPTY (no curated feed in
+    // this build; hashes are never fabricated). Extendable via external rules / --ioc-file.
+    "c2.known_bad_hashes": [],
+
+    // C2-005 — OpenSSH client-config directives that establish reverse/remote tunnels.
+    "c2.ssh_tunnel_directives": [
+      { "pattern": "RemoteForward", "substring": true, "severity": "possible",
+        "technique": "T1572", "techniqueName": "Protocol Tunneling", "tactic": "Command and Control",
+        "note": "ssh_config RemoteForward — reverse tunnel from a remote host into this machine/network" }
+    ],
+
+    // C2-003 — beacon-analysis tuning (kept in data so field tuning needs no rebuild).
+    "c2.beacon_thresholds": [
+      { "pattern": "min_queries=8;max_cv=0.20;min_span_seconds=600", "severity": "info",
+        "note": "min repeated queries per domain; max coefficient of variation of inter-arrival deltas; min observation span" }
+    ],
+
+    // C2-003 — domains excluded from beacon periodicity analysis: OS update/telemetry and
+    // AV vendor infrastructure legitimately polls on fixed intervals.
+    "c2.beacon_exclusions": [
+      { "pattern": "*.microsoft.com", "kind": "glob", "severity": "info", "note": "Microsoft services/telemetry" },
+      { "pattern": "*.windowsupdate.com", "kind": "glob", "severity": "info", "note": "Windows Update" },
+      { "pattern": "*.windows.com", "kind": "glob", "severity": "info", "note": "Windows services" },
+      { "pattern": "*.msftconnecttest.com", "kind": "glob", "severity": "info", "note": "connectivity probe" },
+      { "pattern": "*.msftncsi.com", "kind": "glob", "severity": "info", "note": "connectivity probe" },
+      { "pattern": "*.msedge.net", "kind": "glob", "severity": "info", "note": "Microsoft CDN" },
+      { "pattern": "*.azureedge.net", "kind": "glob", "severity": "info", "note": "Microsoft CDN" },
+      { "pattern": "*.office.com", "kind": "glob", "severity": "info", "note": "Office services" },
+      { "pattern": "*.office365.com", "kind": "glob", "severity": "info", "note": "Office services" },
+      { "pattern": "*.live.com", "kind": "glob", "severity": "info", "note": "Microsoft account services" },
+      { "pattern": "*.digicert.com", "kind": "glob", "severity": "info", "note": "certificate revocation checks" },
+      { "pattern": "*.verisign.com", "kind": "glob", "severity": "info", "note": "certificate revocation checks" },
+      { "pattern": "*.symantec.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.mcafee.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.eset.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.kaspersky.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.avast.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.avg.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.bitdefender.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.bitdefender.net", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.sophos.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.sophosxl.net", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.trendmicro.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.malwarebytes.com", "kind": "glob", "severity": "info", "note": "AV vendor" },
+      { "pattern": "*.sentinelone.net", "kind": "glob", "severity": "info", "note": "EDR vendor" },
+      { "pattern": "*.crowdstrike.com", "kind": "glob", "severity": "info", "note": "EDR vendor" },
+      { "pattern": "*.cloudsink.net", "kind": "glob", "severity": "info", "note": "CrowdStrike telemetry" },
+      { "pattern": "*.arpa", "kind": "glob", "severity": "info", "note": "reverse lookups" },
+      { "pattern": "*.local", "kind": "glob", "severity": "info", "note": "mDNS/local names" },
+      { "pattern": "localhost", "kind": "glob", "severity": "info", "note": "loopback" },
+      { "pattern": "wpad*", "kind": "glob", "severity": "info", "note": "proxy auto-discovery probes" },
+      { "pattern": "*.pool.ntp.org", "kind": "glob", "severity": "info", "note": "NTP pool lookups are periodic by design" }
+    ],
+
+    // C2-007 — security-vendor / OS-update domains whose presence in the hosts file is a
+    // classic AV/update-blinding move (HIGH).
+    "c2.hosts_protected_domains": [
+      { "pattern": "*windowsupdate.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "Windows Update" },
+      { "pattern": "update.microsoft.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "Windows Update" },
+      { "pattern": "*.wdcp.microsoft.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "Defender cloud protection" },
+      { "pattern": "wdcpalt.microsoft.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "Defender cloud protection" },
+      { "pattern": "definitionupdates.microsoft.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "Defender definition updates" },
+      { "pattern": "*.smartscreen.microsoft.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "SmartScreen" },
+      { "pattern": "virustotal.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "VirusTotal" },
+      { "pattern": "*.virustotal.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "VirusTotal" },
+      { "pattern": "*.symantec.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.mcafee.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.eset.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.kaspersky.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.avast.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.avg.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.bitdefender.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.sophos.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.trendmicro.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.malwarebytes.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "AV vendor" },
+      { "pattern": "*.sentinelone.net", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "EDR vendor" },
+      { "pattern": "*.crowdstrike.com", "kind": "glob", "severity": "high", "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion", "note": "EDR vendor" }
+    ],
+
+    // C2-007 — well-known public resolvers that are unremarkable as adapter DNS servers.
+    "c2.wellknown_dns": [
+      { "pattern": "8.8.8.8", "severity": "info", "note": "Google DNS" },
+      { "pattern": "8.8.4.4", "severity": "info", "note": "Google DNS" },
+      { "pattern": "1.1.1.1", "severity": "info", "note": "Cloudflare DNS" },
+      { "pattern": "1.0.0.1", "severity": "info", "note": "Cloudflare DNS" },
+      { "pattern": "9.9.9.9", "severity": "info", "note": "Quad9" },
+      { "pattern": "149.112.112.112", "severity": "info", "note": "Quad9" },
+      { "pattern": "208.67.222.222", "severity": "info", "note": "OpenDNS" },
+      { "pattern": "208.67.220.220", "severity": "info", "note": "OpenDNS" },
+      { "pattern": "94.140.14.14", "severity": "info", "note": "AdGuard DNS" },
+      { "pattern": "94.140.15.15", "severity": "info", "note": "AdGuard DNS" }
+    ],
+
+    // C2-006 — implant-config-residue heuristics (FULL): candidate extensions for the
+    // high-entropy opaque-blob signal, script/shortcut carriers for the oversized-base64
+    // signal, and tuning thresholds. All heuristic; single signal caps at POSSIBLE.
+    "c2.config_shape_ext": [
+      { "pattern": "*.dat", "kind": "glob", "needsCorroboration": true, "severity": "possible", "note": "opaque data blob candidate" },
+      { "pattern": "*.bin", "kind": "glob", "needsCorroboration": true, "severity": "possible", "note": "opaque data blob candidate" },
+      { "pattern": "*.tmp", "kind": "glob", "needsCorroboration": true, "severity": "possible", "note": "opaque data blob candidate" },
+      { "pattern": "*.db", "kind": "glob", "needsCorroboration": true, "severity": "possible", "note": "opaque data blob candidate" },
+      { "pattern": "*.cache", "kind": "glob", "needsCorroboration": true, "severity": "possible", "note": "opaque data blob candidate" }
+    ],
+    "c2.b64_carrier_ext": [
+      { "pattern": "*.lnk", "kind": "glob", "severity": "possible", "note": "shortcut carrier" },
+      { "pattern": "*.hta", "kind": "glob", "severity": "possible", "note": "HTML application carrier" },
+      { "pattern": "*.js", "kind": "glob", "severity": "possible", "note": "script carrier" },
+      { "pattern": "*.jse", "kind": "glob", "severity": "possible", "note": "encoded script carrier" },
+      { "pattern": "*.vbs", "kind": "glob", "severity": "possible", "note": "script carrier" },
+      { "pattern": "*.vbe", "kind": "glob", "severity": "possible", "note": "encoded script carrier" },
+      { "pattern": "*.wsf", "kind": "glob", "severity": "possible", "note": "script carrier" },
+      { "pattern": "*.ps1", "kind": "glob", "severity": "possible", "note": "script carrier" }
+    ],
+    "c2.config_shape_thresholds": [
+      { "pattern": "min_size=4096;max_size=2097152;min_entropy=7.4;min_b64_len=512", "severity": "info",
+        "note": "size band + entropy floor for opaque blobs; minimum base64 run length for carrier files" }
+    ]
+  }
+}

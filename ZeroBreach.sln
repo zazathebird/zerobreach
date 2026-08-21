@@ -1,0 +1,46 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZeroBreach.Core", "ZeroBreach.Core\ZeroBreach.Core.csproj", "{3AFD5AF6-51EE-4ED4-948D-8194EFCC30D3}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZeroBreach.Scanners", "ZeroBreach.Scanners\ZeroBreach.Scanners.csproj", "{1993E126-0929-4051-BB65-36769F3A7527}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZeroBreach.Remediation", "ZeroBreach.Remediation\ZeroBreach.Remediation.csproj", "{4B55E895-3554-49F4-A8DB-883C80147BFB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZeroBreach.Cli", "ZeroBreach.Cli\ZeroBreach.Cli.csproj", "{696A5FEF-670F-4BDF-AF7B-B08B3F5BA984}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ZeroBreach.Tests", "ZeroBreach.Tests\ZeroBreach.Tests.csproj", "{C9847588-5138-44A2-A1CD-45064C691342}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3AFD5AF6-51EE-4ED4-948D-8194EFCC30D3}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3AFD5AF6-51EE-4ED4-948D-8194EFCC30D3}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3AFD5AF6-51EE-4ED4-948D-8194EFCC30D3}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3AFD5AF6-51EE-4ED4-948D-8194EFCC30D3}.Release|Any CPU.Build.0 = Release|Any CPU
+		{1993E126-0929-4051-BB65-36769F3A7527}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1993E126-0929-4051-BB65-36769F3A7527}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1993E126-0929-4051-BB65-36769F3A7527}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1993E126-0929-4051-BB65-36769F3A7527}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4B55E895-3554-49F4-A8DB-883C80147BFB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4B55E895-3554-49F4-A8DB-883C80147BFB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4B55E895-3554-49F4-A8DB-883C80147BFB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4B55E895-3554-49F4-A8DB-883C80147BFB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{696A5FEF-670F-4BDF-AF7B-B08B3F5BA984}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{696A5FEF-670F-4BDF-AF7B-B08B3F5BA984}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{696A5FEF-670F-4BDF-AF7B-B08B3F5BA984}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{696A5FEF-670F-4BDF-AF7B-B08B3F5BA984}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C9847588-5138-44A2-A1CD-45064C691342}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C9847588-5138-44A2-A1CD-45064C691342}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C9847588-5138-44A2-A1CD-45064C691342}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C9847588-5138-44A2-A1CD-45064C691342}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal

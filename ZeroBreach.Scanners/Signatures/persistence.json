@@ -1,0 +1,127 @@
+{
+  // Persistence category signature data (Phase 1). Loaded as embedded resource by
+  // SignatureDb.LoadEmbedded. No inline indicators live in PersistenceScanner.cs —
+  // structural registry locations only (spec: signatures external to engine logic).
+  "sets": {
+
+    // Path fragments identifying user-writable / staging locations. Matched (substring,
+    // case-insensitive) against expanded command lines and resolved paths. Entries with
+    // needsCorroboration are common homes for legitimate per-user software and must not
+    // arm a finding on their own.
+    "persistence.user_writable_paths": [
+      { "pattern": "\\appdata\\local\\temp\\", "kind": "literal", "substring": true, "severity": "possible", "note": "user TEMP directory" },
+      { "pattern": "\\windows\\temp\\", "kind": "literal", "substring": true, "severity": "possible", "note": "Windows TEMP directory" },
+      { "pattern": "\\appdata\\roaming\\", "kind": "literal", "substring": true, "severity": "possible", "note": "roaming AppData" },
+      { "pattern": "\\appdata\\local\\", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "note": "local AppData (many legitimate per-user installs)" },
+      { "pattern": "\\downloads\\", "kind": "literal", "substring": true, "severity": "possible", "note": "Downloads folder" },
+      { "pattern": "\\users\\public\\", "kind": "literal", "substring": true, "severity": "possible", "note": "Public user profile" },
+      { "pattern": ":\\programdata\\", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "note": "ProgramData (legitimate for vendors; suspect otherwise)" },
+      { "pattern": "$recycle.bin", "kind": "literal", "substring": true, "severity": "high", "note": "Recycle Bin used as execution path" },
+      { "pattern": ":\\perflogs\\", "kind": "literal", "substring": true, "severity": "possible", "note": "PerfLogs (known staging directory)" }
+    ],
+
+    // Suspicious command-line content, matched against autorun value data, scheduled-task
+    // actions, shortcut arguments and WMI consumer command/script text.
+    "persistence.autorun_suspect_patterns": [
+      { "pattern": "(^|[\\s\"'])-(e|en|enc|encodedcommand)\\s+[a-z0-9+/=]{8,}", "kind": "regex", "severity": "high",
+        "technique": "T1059.001", "techniqueName": "PowerShell", "tactic": "Execution", "note": "encoded PowerShell command" },
+      { "pattern": "frombase64string", "kind": "literal", "substring": true, "severity": "high",
+        "technique": "T1059.001", "techniqueName": "PowerShell", "tactic": "Execution", "note": "inline Base64 decode" },
+      { "pattern": "mshta(\\.exe)?[\"']?\\s+.*(https?:|javascript:|vbscript:)", "kind": "regex", "severity": "high",
+        "technique": "T1218.005", "techniqueName": "System Binary Proxy Execution: Mshta", "tactic": "Defense Evasion", "note": "mshta with URL/script protocol argument" },
+      { "pattern": "rundll32(\\.exe)?[\"']?\\s+.*(https?:|javascript:|\\\\appdata\\\\|\\\\temp\\\\|\\\\users\\\\public\\\\)", "kind": "regex", "severity": "high",
+        "technique": "T1218.011", "techniqueName": "System Binary Proxy Execution: Rundll32", "tactic": "Defense Evasion", "note": "rundll32 loading from URL or user-writable path" },
+      { "pattern": "regsvr32(\\.exe)?[\"']?\\s+.*(/i:|scrobj\\.dll|https?:)", "kind": "regex", "severity": "high",
+        "technique": "T1218.010", "techniqueName": "System Binary Proxy Execution: Regsvr32", "tactic": "Defense Evasion", "note": "regsvr32 scriptlet/remote install" },
+      { "pattern": "downloadstring", "kind": "literal", "substring": true, "severity": "high",
+        "technique": "T1059.001", "techniqueName": "PowerShell", "tactic": "Execution", "note": "in-memory download cradle" },
+      { "pattern": "downloadfile", "kind": "literal", "substring": true, "severity": "possible",
+        "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "file download in autorun command" },
+      { "pattern": "certutil(\\.exe)?.*(urlcache|-decode)", "kind": "regex", "severity": "high",
+        "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "certutil download/decode abuse" },
+      { "pattern": "bitsadmin(\\.exe)?.*/transfer", "kind": "regex", "severity": "possible",
+        "technique": "T1197", "techniqueName": "BITS Jobs", "tactic": "Persistence", "note": "bitsadmin transfer in autorun command" },
+      { "pattern": "\\b(iex|invoke-expression)\\b", "kind": "regex", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1059.001", "techniqueName": "PowerShell", "tactic": "Execution", "note": "Invoke-Expression" },
+      { "pattern": "invoke-webrequest", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true,
+        "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "web request in autorun command" },
+      { "pattern": "-w(indowstyle)?\\s+hidden", "kind": "regex", "severity": "possible",
+        "technique": "T1564.003", "techniqueName": "Hide Artifacts: Hidden Window", "tactic": "Defense Evasion", "note": "hidden window flag" },
+      { "pattern": "powershell(\\.exe)?.*\\s-nop\\b", "kind": "regex", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1059.001", "techniqueName": "PowerShell", "tactic": "Execution", "note": "-NoProfile PowerShell launch" },
+      { "pattern": "(wscript|cscript)(\\.exe)?.*\\.(vbs|vbe|js|jse|wsf)\\b", "kind": "regex", "severity": "possible",
+        "technique": "T1059.005", "techniqueName": "Command and Scripting Interpreter: Visual Basic", "tactic": "Execution", "note": "script host launching script file" },
+      { "pattern": "schtasks(\\.exe)?.*/create", "kind": "regex", "severity": "possible",
+        "technique": "T1053.005", "techniqueName": "Scheduled Task", "tactic": "Persistence", "note": "task re-creation from autorun (persistence chaining)" }
+    ],
+
+    // File extensions / name shapes suspicious in a Startup folder (matched on file name).
+    "persistence.startup_suspect_ext": [
+      { "pattern": "*.vbs", "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "VBScript in startup location" },
+      { "pattern": "*.vbe", "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "encoded VBScript in startup location" },
+      { "pattern": "*.js",  "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "JScript in startup location" },
+      { "pattern": "*.jse", "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "encoded JScript in startup location" },
+      { "pattern": "*.wsf", "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "Windows Script File in startup location" },
+      { "pattern": "*.hta", "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "HTML Application in startup location" },
+      { "pattern": "*.ps1", "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "PowerShell script in startup location" },
+      { "pattern": "*.scr", "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "screensaver executable in startup location" },
+      { "pattern": "*.pif", "kind": "glob", "severity": "high", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "PIF shortcut in startup location" },
+      { "pattern": "*.bat", "kind": "glob", "severity": "possible", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "batch file in startup location" },
+      { "pattern": "*.cmd", "kind": "glob", "severity": "possible", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "batch file in startup location" },
+      { "pattern": "*.com", "kind": "glob", "severity": "possible", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "COM executable in startup location" },
+      { "pattern": "*.jar", "kind": "glob", "severity": "possible", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "Java archive in startup location" },
+      { "pattern": "*.dll", "kind": "glob", "severity": "possible", "technique": "T1547.001", "techniqueName": "Registry Run Keys / Startup Folder", "tactic": "Persistence", "note": "DLL staged in startup location" },
+      { "pattern": "\\.(docx?|xlsx?|pptx?|pdf|jpe?g|png|gif|txt|rtf)\\.(exe|scr|com|pif|bat|cmd|vbs|vbe|js|jse|hta)$", "kind": "regex", "severity": "high",
+        "technique": "T1036.007", "techniqueName": "Masquerading: Double File Extension", "tactic": "Defense Evasion", "note": "double extension masquerade" }
+    ],
+
+    // Root-level scheduled-task names imitating vendor/system tasks. Booster only —
+    // needsCorroboration keeps a bare name match from arming a finding by itself.
+    "persistence.task_lookalike_names": [
+      { "pattern": "^(microsoft|windows|google|adobe|intel|nvidia|realtek|onedrive|chrome|edge|office)[ _-]?(update|updater|maintenance|telemetry|sync|helper|service|task)[a-z0-9 _-]*$",
+        "kind": "regex", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1036.004", "techniqueName": "Masquerading: Masquerade Task or Service", "tactic": "Defense Evasion",
+        "note": "root-level task named like a vendor/system task" }
+    ],
+
+    // IFEO Debugger values that are commonly legitimate — capped to POSSIBLE, never skipped.
+    "persistence.ifeo_expected_debuggers": [
+      { "pattern": "vsjitdebugger.exe", "kind": "literal", "substring": true, "severity": "info", "note": "Visual Studio JIT debugger (commonly legitimate)" }
+    ],
+
+    // Content patterns for WMI event-consumer command lines / script text (checked in
+    // addition to persistence.autorun_suspect_patterns).
+    "persistence.wmi_suspect_content": [
+      { "pattern": "wscript.shell", "kind": "literal", "substring": true, "severity": "high",
+        "technique": "T1546.003", "techniqueName": "Event Triggered Execution: WMI Event Subscription", "tactic": "Persistence", "note": "script consumer instantiates a shell object" },
+      { "pattern": "shellexecute", "kind": "literal", "substring": true, "severity": "high",
+        "technique": "T1546.003", "techniqueName": "Event Triggered Execution: WMI Event Subscription", "tactic": "Persistence", "note": "script consumer executes an external program" },
+      { "pattern": "activexobject", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true,
+        "technique": "T1546.003", "techniqueName": "Event Triggered Execution: WMI Event Subscription", "tactic": "Persistence", "note": "ActiveX object instantiation in consumer script" }
+    ],
+
+    // Browser extension permissions worth flagging when combined with all-URLs host access.
+    "persistence.browser_permission_flags": [
+      { "pattern": "<all_urls>", "kind": "literal", "severity": "possible", "note": "reads/modifies every site" },
+      { "pattern": "*://*/*", "kind": "literal", "severity": "possible", "note": "reads/modifies every site (host pattern)" },
+      { "pattern": "webRequest", "kind": "literal", "severity": "info", "note": "observes web traffic" },
+      { "pattern": "webRequestBlocking", "kind": "literal", "severity": "possible", "note": "can intercept/modify web traffic" },
+      { "pattern": "proxy", "kind": "literal", "severity": "possible", "note": "can redirect all traffic through a proxy" },
+      { "pattern": "debugger", "kind": "literal", "severity": "possible", "note": "can attach the debugger API to any tab" },
+      { "pattern": "nativeMessaging", "kind": "literal", "severity": "possible", "note": "can talk to native host processes" },
+      { "pattern": "management", "kind": "literal", "severity": "possible", "note": "can manage/disable other extensions" },
+      { "pattern": "cookies", "kind": "literal", "severity": "info", "note": "reads cookies" },
+      { "pattern": "history", "kind": "literal", "severity": "info", "note": "reads browsing history" }
+    ],
+
+    // Known-bad browser extension IDs. Intentionally EMPTY: no verified IDs available in
+    // this environment and fabricating them is prohibited. Operators/rule updates can
+    // populate this set via an external rules file without a rebuild.
+    "persistence.browser_extension_bad_ids": [],
+
+    // Known-bad SHA-256 set for autorun/startup/task payloads. Intentionally EMPTY (no
+    // fabricated hashes). A hash match here is the ONLY thing that sets HashConfirmed and
+    // permits a DeleteFile suggestion.
+    "persistence.known_bad_hashes": []
+  }
+}

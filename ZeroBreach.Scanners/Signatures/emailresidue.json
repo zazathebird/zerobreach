@@ -1,0 +1,138 @@
+{
+  // Phase 6 — Email / Phishing Residue signature data.
+  // Scope (spec §3): the mail ATTACHMENT CACHE only — these sets drive matching over
+  // Outlook SecureTemp / Content.Outlook cache files and Downloads provenance, never
+  // over an OST/PST mail store.
+  // NOTE: no known-bad SHA-256 set ships by default (nothing fabricated); an operator
+  // rules file may add "emailresidue.known_bad_sha256" entries and the scanner will
+  // honor them (hash-confirmed => delete allowed per spec §6.4).
+  "sets": {
+
+    "emailresidue.cache_suspect_ext": [
+      { "pattern": "*.exe", "kind": "glob", "severity": "high", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "raw executable opened from an email" },
+      { "pattern": "*.scr", "kind": "glob", "severity": "high", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "screensaver executable delivered by mail" },
+      { "pattern": "*.pif", "kind": "glob", "severity": "high", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "PIF executable delivered by mail" },
+      { "pattern": "*.com", "kind": "glob", "severity": "high", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "COM executable delivered by mail" },
+      { "pattern": "*.js",  "kind": "glob", "severity": "high", "technique": "T1059.007", "techniqueName": "Command and Scripting Interpreter: JavaScript", "tactic": "Execution", "note": "JScript file opened from an email" },
+      { "pattern": "*.jse", "kind": "glob", "severity": "high", "technique": "T1059.007", "techniqueName": "Command and Scripting Interpreter: JavaScript", "tactic": "Execution", "note": "encoded JScript file opened from an email" },
+      { "pattern": "*.vbs", "kind": "glob", "severity": "high", "technique": "T1059.005", "techniqueName": "Command and Scripting Interpreter: Visual Basic", "tactic": "Execution", "note": "VBScript file opened from an email" },
+      { "pattern": "*.vbe", "kind": "glob", "severity": "high", "technique": "T1059.005", "techniqueName": "Command and Scripting Interpreter: Visual Basic", "tactic": "Execution", "note": "encoded VBScript file opened from an email" },
+      { "pattern": "*.wsf", "kind": "glob", "severity": "high", "technique": "T1059.005", "techniqueName": "Command and Scripting Interpreter: Visual Basic", "tactic": "Execution", "note": "Windows Script File opened from an email" },
+      { "pattern": "*.wsh", "kind": "glob", "severity": "high", "technique": "T1059.005", "techniqueName": "Command and Scripting Interpreter: Visual Basic", "tactic": "Execution", "note": "Windows Script Host settings/script file opened from an email" },
+      { "pattern": "*.hta", "kind": "glob", "severity": "high", "technique": "T1218.005", "techniqueName": "System Binary Proxy Execution: Mshta", "tactic": "Defense Evasion", "note": "HTML application opened from an email" },
+      { "pattern": "*.bat", "kind": "glob", "severity": "high", "technique": "T1059.003", "techniqueName": "Command and Scripting Interpreter: Windows Command Shell", "tactic": "Execution", "note": "batch file opened from an email" },
+      { "pattern": "*.cmd", "kind": "glob", "severity": "high", "technique": "T1059.003", "techniqueName": "Command and Scripting Interpreter: Windows Command Shell", "tactic": "Execution", "note": "batch file opened from an email" },
+      { "pattern": "*.ps1", "kind": "glob", "severity": "high", "technique": "T1059.001", "techniqueName": "Command and Scripting Interpreter: PowerShell", "tactic": "Execution", "note": "PowerShell script opened from an email" },
+      { "pattern": "*.lnk", "kind": "glob", "severity": "high", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "shortcut delivered by mail — a common first-stage loader with no legitimate reason to be emailed" },
+      { "pattern": "*.xll", "kind": "glob", "severity": "high", "technique": "T1137.006", "techniqueName": "Office Application Startup: Add-ins", "tactic": "Persistence", "note": "Excel add-in delivered by mail" },
+      { "pattern": "*.chm", "kind": "glob", "severity": "high", "technique": "T1218.001", "techniqueName": "System Binary Proxy Execution: Compiled HTML File", "tactic": "Defense Evasion", "note": "compiled HTML help file delivered by mail" },
+      { "pattern": "*.iso",  "kind": "glob", "severity": "possible", "technique": "T1553.005", "techniqueName": "Subvert Trust Controls: Mark-of-the-Web Bypass", "tactic": "Defense Evasion", "note": "disk-image container — MOTW does not propagate to its contents; a standard phishing delivery wrapper" },
+      { "pattern": "*.img",  "kind": "glob", "severity": "possible", "technique": "T1553.005", "techniqueName": "Subvert Trust Controls: Mark-of-the-Web Bypass", "tactic": "Defense Evasion", "note": "disk-image container — MOTW does not propagate to its contents" },
+      { "pattern": "*.vhd",  "kind": "glob", "severity": "possible", "technique": "T1553.005", "techniqueName": "Subvert Trust Controls: Mark-of-the-Web Bypass", "tactic": "Defense Evasion", "note": "virtual disk container — MOTW does not propagate to its contents" },
+      { "pattern": "*.vhdx", "kind": "glob", "severity": "possible", "technique": "T1553.005", "techniqueName": "Subvert Trust Controls: Mark-of-the-Web Bypass", "tactic": "Defense Evasion", "note": "virtual disk container — MOTW does not propagate to its contents" },
+      { "pattern": "*.udf",  "kind": "glob", "severity": "possible", "technique": "T1553.005", "techniqueName": "Subvert Trust Controls: Mark-of-the-Web Bypass", "tactic": "Defense Evasion", "note": "UDF disk-image container" },
+      { "pattern": "*.one",  "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "OneNote file — abused as an embedded-payload carrier" },
+      { "pattern": "*.svg",  "kind": "glob", "severity": "possible", "needsCorroboration": true, "technique": "T1027.006", "techniqueName": "Obfuscated Files or Information: HTML Smuggling", "tactic": "Defense Evasion", "note": "SVG attachment — can carry embedded script (smuggling); also very often legitimate" }
+    ],
+
+    "emailresidue.macro_ext": [
+      { "pattern": "*.docm", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable Word document" },
+      { "pattern": "*.dotm", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable Word template" },
+      { "pattern": "*.xlsm", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable Excel workbook" },
+      { "pattern": "*.xlam", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable Excel add-in" },
+      { "pattern": "*.pptm", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable PowerPoint presentation" },
+      { "pattern": "*.ppsm", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable PowerPoint slideshow" },
+      { "pattern": "*.potm", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable PowerPoint template" },
+      { "pattern": "*.sldm", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable PowerPoint slide" },
+      { "pattern": "*.ppam", "kind": "glob", "severity": "possible", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "macro-capable PowerPoint add-in" }
+    ],
+
+    "emailresidue.macro_zip_member": [
+      { "pattern": "vbaProject.bin", "kind": "literal", "substring": true, "severity": "high", "technique": "T1204.002", "techniqueName": "User Execution: Malicious File", "tactic": "Execution", "note": "embedded VBA project inside the OOXML container" }
+    ],
+
+    "emailresidue.archive_ext": [
+      { "pattern": "*.zip", "kind": "glob", "severity": "info", "note": "archive inspected via zip central directory only — members are never extracted" }
+    ],
+
+    "emailresidue.archive_member_suspect": [
+      { "pattern": "*.exe", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "executable inside a mailed archive" },
+      { "pattern": "*.scr", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "executable inside a mailed archive" },
+      { "pattern": "*.pif", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "executable inside a mailed archive" },
+      { "pattern": "*.com", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "executable inside a mailed archive" },
+      { "pattern": "*.dll", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "DLL inside a mailed archive" },
+      { "pattern": "*.msi", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "installer inside a mailed archive" },
+      { "pattern": "*.js",  "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "script inside a mailed archive" },
+      { "pattern": "*.jse", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "script inside a mailed archive" },
+      { "pattern": "*.vbs", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "script inside a mailed archive" },
+      { "pattern": "*.vbe", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "script inside a mailed archive" },
+      { "pattern": "*.wsf", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "script inside a mailed archive" },
+      { "pattern": "*.hta", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "HTML application inside a mailed archive" },
+      { "pattern": "*.lnk", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "shortcut inside a mailed archive" },
+      { "pattern": "*.bat", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "batch file inside a mailed archive" },
+      { "pattern": "*.cmd", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "batch file inside a mailed archive" },
+      { "pattern": "*.ps1", "kind": "glob", "severity": "high", "technique": "T1566.001", "techniqueName": "Phishing: Spearphishing Attachment", "tactic": "Initial Access", "note": "PowerShell script inside a mailed archive" }
+    ],
+
+    "emailresidue.double_ext": [
+      { "pattern": "\\.(pdf|docx?|xlsx?|pptx?|rtf|txt|csv|jpe?g|png|gif|html?|mp[34])\\s{0,4}\\.(exe|scr|pif|com|js|jse|vbs|vbe|wsf|hta|bat|cmd|ps1|lnk|msi)$", "kind": "regex", "severity": "high", "technique": "T1036.007", "techniqueName": "Masquerading: Double File Extension", "tactic": "Defense Evasion", "note": "document-typed name in front of an executable extension — essentially no legitimate use" }
+    ],
+
+    "emailresidue.script_ext": [
+      { "pattern": "*.js",   "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.jse",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.vbs",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.vbe",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.wsf",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.wsh",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.hta",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.ps1",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.psm1", "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.bat",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" },
+      { "pattern": "*.cmd",  "kind": "glob", "severity": "info", "note": "content-scan candidate selection only" }
+    ],
+
+    "emailresidue.motw_required_ext": [
+      { "pattern": "*.exe", "kind": "glob", "severity": "info", "note": "MOTW-expected executable class — selection only" },
+      { "pattern": "*.scr", "kind": "glob", "severity": "info", "note": "MOTW-expected executable class — selection only" },
+      { "pattern": "*.pif", "kind": "glob", "severity": "info", "note": "MOTW-expected executable class — selection only" },
+      { "pattern": "*.com", "kind": "glob", "severity": "info", "note": "MOTW-expected executable class — selection only" },
+      { "pattern": "*.msi", "kind": "glob", "severity": "info", "note": "MOTW-expected executable class — selection only" },
+      { "pattern": "*.dll", "kind": "glob", "severity": "info", "note": "MOTW-expected executable class — selection only" },
+      { "pattern": "*.js",  "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" },
+      { "pattern": "*.jse", "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" },
+      { "pattern": "*.vbs", "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" },
+      { "pattern": "*.vbe", "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" },
+      { "pattern": "*.wsf", "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" },
+      { "pattern": "*.hta", "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" },
+      { "pattern": "*.bat", "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" },
+      { "pattern": "*.cmd", "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" },
+      { "pattern": "*.ps1", "kind": "glob", "severity": "info", "note": "MOTW-expected script class — selection only" }
+    ],
+
+    "emailresidue.motw_url": [
+      { "pattern": "^https?://\\d{1,3}(\\.\\d{1,3}){3}(:\\d+)?(/|$)", "kind": "regex", "severity": "possible", "needsCorroboration": true, "technique": "T1566.002", "techniqueName": "Phishing: Spearphishing Link", "tactic": "Initial Access", "note": "download originated from a raw IP URL — legitimate mail/CDN providers do not serve from bare IPs" }
+    ],
+
+    "emailresidue.dropper_content": [
+      { "pattern": "wscript.shell",      "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1059.005", "techniqueName": "Command and Scripting Interpreter: Visual Basic", "tactic": "Execution", "note": "shell-object instantiation in a script" },
+      { "pattern": "shell.application",  "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1059.005", "techniqueName": "Command and Scripting Interpreter: Visual Basic", "tactic": "Execution", "note": "shell-object instantiation in a script" },
+      { "pattern": "-encodedcommand",    "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1059.001", "techniqueName": "Command and Scripting Interpreter: PowerShell", "tactic": "Execution", "note": "encoded PowerShell invocation" },
+      { "pattern": " -enc ",             "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1059.001", "techniqueName": "Command and Scripting Interpreter: PowerShell", "tactic": "Execution", "note": "encoded PowerShell invocation (short form)" },
+      { "pattern": "frombase64string",   "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1027", "techniqueName": "Obfuscated Files or Information", "tactic": "Defense Evasion", "note": "base64 payload decoding" },
+      { "pattern": "downloadfile(",      "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "file download call" },
+      { "pattern": "downloadstring(",    "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "in-memory payload download call" },
+      { "pattern": "net.webclient",      "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "WebClient download object" },
+      { "pattern": "invoke-webrequest",  "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "PowerShell HTTP download" },
+      { "pattern": "invoke-expression",  "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1059.001", "techniqueName": "Command and Scripting Interpreter: PowerShell", "tactic": "Execution", "note": "dynamic code evaluation" },
+      { "pattern": "msxml2.xmlhttp",     "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "script HTTP download object" },
+      { "pattern": "adodb.stream",       "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "script binary file-write — classic dropper pattern" },
+      { "pattern": ".savetofile",        "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "downloaded payload written to disk" },
+      { "pattern": "certutil -urlcache", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1105", "techniqueName": "Ingress Tool Transfer", "tactic": "Command and Control", "note": "certutil LOLBin download" },
+      { "pattern": "bitsadmin /transfer","kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1197", "techniqueName": "BITS Jobs", "tactic": "Defense Evasion", "note": "BITS LOLBin download" },
+      { "pattern": "mshta http",         "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1218.005", "techniqueName": "System Binary Proxy Execution: Mshta", "tactic": "Defense Evasion", "note": "remote HTA execution" },
+      { "pattern": "-windowstyle hidden","kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1564.003", "techniqueName": "Hide Artifacts: Hidden Window", "tactic": "Defense Evasion", "note": "hidden-window execution" },
+      { "pattern": "chrw(",              "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true, "technique": "T1027", "techniqueName": "Obfuscated Files or Information", "tactic": "Defense Evasion", "note": "character-code string obfuscation in VBS/VBA" }
+    ]
+  }
+}

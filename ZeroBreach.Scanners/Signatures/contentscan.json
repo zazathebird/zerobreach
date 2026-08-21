@@ -1,0 +1,203 @@
+{
+  // Phase 9 — Content Scan (YARA-lite) signature data.
+  //
+  // Every content-string indicator here carries needsCorroboration:true (spec §3): a single
+  // hit can NEVER justify above Possible — a document that merely *mentions* a malware
+  // family (research, vendor advisories, IR notes, this project's own spec) must not be
+  // escalated. The scanner escalates only when 2+ independent indicators corroborate.
+  //
+  // Severities are the value used WHEN corroborated; uncorroborated hits are capped at
+  // possible by the scanner regardless of what is written here.
+  "sets": {
+
+    "contentscan.malware_strings": [
+      // --- Credential dumping (Mimikatz and friends) ---
+      { "pattern": "sekurlsa::logonpasswords", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1003.001", "techniqueName": "OS Credential Dumping: LSASS Memory", "tactic": "Credential Access",
+        "note": "Mimikatz sekurlsa module command string" },
+      { "pattern": "lsadump::sam", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1003.002", "techniqueName": "OS Credential Dumping: Security Account Manager", "tactic": "Credential Access",
+        "note": "Mimikatz lsadump module command string" },
+      { "pattern": "privilege::debug", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1003.001", "techniqueName": "OS Credential Dumping: LSASS Memory", "tactic": "Credential Access",
+        "note": "Mimikatz privilege-escalation command string" },
+      { "pattern": "gentilkiwi", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1003.001", "techniqueName": "OS Credential Dumping: LSASS Memory", "tactic": "Credential Access",
+        "note": "Mimikatz author handle embedded in binaries" },
+      { "pattern": "kuhl_m_", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1003.001", "techniqueName": "OS Credential Dumping: LSASS Memory", "tactic": "Credential Access",
+        "note": "Mimikatz internal module symbol prefix" },
+      { "pattern": "lazagne", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1555", "techniqueName": "Credentials from Password Stores", "tactic": "Credential Access",
+        "note": "LaZagne credential-recovery tool string" },
+      { "pattern": "SharpDPAPI", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1555.003", "techniqueName": "Credentials from Web Browsers", "tactic": "Credential Access",
+        "note": "SharpDPAPI DPAPI-abuse tool string" },
+      { "pattern": "Rubeus", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1558", "techniqueName": "Steal or Forge Kerberos Tickets", "tactic": "Credential Access",
+        "note": "Rubeus Kerberos-abuse tool string" },
+
+      // --- Offensive PowerShell frameworks ---
+      { "pattern": "Invoke-Mimikatz", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1003.001", "techniqueName": "OS Credential Dumping: LSASS Memory", "tactic": "Credential Access",
+        "note": "PowerSploit Invoke-Mimikatz function name" },
+      { "pattern": "Invoke-ReflectivePEInjection", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1620", "techniqueName": "Reflective Code Loading", "tactic": "Defense Evasion",
+        "note": "PowerSploit reflective PE injection function name" },
+      { "pattern": "Invoke-Shellcode", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1059.001", "techniqueName": "Command and Scripting Interpreter: PowerShell", "tactic": "Execution",
+        "note": "PowerSploit shellcode-injection function name" },
+      { "pattern": "Invoke-TokenManipulation", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1134.001", "techniqueName": "Access Token Manipulation: Token Impersonation/Theft", "tactic": "Privilege Escalation",
+        "note": "PowerSploit token-manipulation function name" },
+      { "pattern": "Invoke-Kerberoast", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1558.003", "techniqueName": "Steal or Forge Kerberos Tickets: Kerberoasting", "tactic": "Credential Access",
+        "note": "Kerberoasting function name" },
+      { "pattern": "Invoke-DCSync", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1003.006", "techniqueName": "OS Credential Dumping: DCSync", "tactic": "Credential Access",
+        "note": "DCSync attack function name" },
+      { "pattern": "PowerSploit", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true,
+        "technique": "T1059.001", "techniqueName": "Command and Scripting Interpreter: PowerShell", "tactic": "Execution",
+        "note": "PowerSploit framework name (framework name only — widely cited in documentation)" },
+      { "pattern": "Invoke-BloodHound", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true,
+        "technique": "T1087", "techniqueName": "Account Discovery", "tactic": "Discovery",
+        "note": "BloodHound AD-mapping collector (dual-use audit tooling — flag, don't auto-act)" },
+      { "pattern": "SharpHound", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true,
+        "technique": "T1087", "techniqueName": "Account Discovery", "tactic": "Discovery",
+        "note": "SharpHound AD-mapping collector (dual-use audit tooling — flag, don't auto-act)" },
+
+      // --- Download cradles / obfuscated execution ---
+      { "pattern": "Net.WebClient).DownloadString(", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1059.001", "techniqueName": "Command and Scripting Interpreter: PowerShell", "tactic": "Execution",
+        "note": "classic PowerShell in-memory download cradle" },
+      { "pattern": "iex\\s*\\(\\s*new-object", "kind": "regex", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1059.001", "techniqueName": "Command and Scripting Interpreter: PowerShell", "tactic": "Execution",
+        "note": "IEX(New-Object ...) invocation pattern" },
+      { "pattern": "-EncodedCommand", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true,
+        "technique": "T1027.010", "techniqueName": "Obfuscated Files or Information: Command Obfuscation", "tactic": "Defense Evasion",
+        "note": "PowerShell encoded-command switch (also used legitimately)" },
+
+      // --- AMSI / defense evasion ---
+      { "pattern": "amsiInitFailed", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion",
+        "note": "AMSI bypass field name (amsiInitFailed patch technique)" },
+      { "pattern": "Management.Automation.AmsiUtils", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion",
+        "note": "AMSI internals reflection target used by bypasses" },
+      { "pattern": "AmsiScanBuffer", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true,
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools", "tactic": "Defense Evasion",
+        "note": "AMSI API name patched by bypasses (also appears in legitimate security tooling)" },
+
+      // --- Metasploit / Meterpreter ---
+      { "pattern": "metsrv.dll", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1620", "techniqueName": "Reflective Code Loading", "tactic": "Defense Evasion",
+        "note": "Meterpreter server DLL name" },
+      { "pattern": "metsrv.x64.dll", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1620", "techniqueName": "Reflective Code Loading", "tactic": "Defense Evasion",
+        "note": "Meterpreter 64-bit server DLL name" },
+      { "pattern": "meterpreter", "kind": "literal", "substring": true, "severity": "possible", "needsCorroboration": true,
+        "technique": "T1071.001", "techniqueName": "Application Layer Protocol: Web Protocols", "tactic": "Command and Control",
+        "note": "Metasploit Meterpreter family string (family name only)" },
+      { "pattern": "ReflectiveLoader", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1620", "techniqueName": "Reflective Code Loading", "tactic": "Defense Evasion",
+        "note": "reflective-DLL export name used by Meterpreter/Cobalt Strike-style payloads" },
+
+      // --- Cobalt Strike ---
+      { "pattern": "beacon.dll", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1071.001", "techniqueName": "Application Layer Protocol: Web Protocols", "tactic": "Command and Control",
+        "note": "Cobalt Strike Beacon module name" },
+      { "pattern": "beacon.x64.dll", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1071.001", "techniqueName": "Application Layer Protocol: Web Protocols", "tactic": "Command and Control",
+        "note": "Cobalt Strike 64-bit Beacon module name" },
+      { "pattern": "%c%c%c%c%c%c%c%c%cMSSE-%d-server", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1071.001", "techniqueName": "Application Layer Protocol: Web Protocols", "tactic": "Command and Control",
+        "note": "Cobalt Strike default SMB pipe format string" },
+      { "pattern": "\\\\.\\pipe\\msagent_", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1071.001", "techniqueName": "Application Layer Protocol: Web Protocols", "tactic": "Command and Control",
+        "note": "Cobalt Strike default named-pipe prefix" },
+
+      // --- Ransomware note phrases and recovery-inhibition commands ---
+      { "pattern": "your files have been encrypted", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1486", "techniqueName": "Data Encrypted for Impact", "tactic": "Impact",
+        "note": "ransom-note phrase" },
+      { "pattern": "to decrypt your files", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1486", "techniqueName": "Data Encrypted for Impact", "tactic": "Impact",
+        "note": "ransom-note phrase" },
+      { "pattern": "\\b[a-z2-7]{16,56}\\.onion\\b", "kind": "regex", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1090.003", "techniqueName": "Proxy: Multi-hop Proxy", "tactic": "Command and Control",
+        "note": "Tor onion-service address" },
+      { "pattern": "vssadmin delete shadows", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1490", "techniqueName": "Inhibit System Recovery", "tactic": "Impact",
+        "note": "shadow-copy deletion command (classic ransomware prep)" },
+      { "pattern": "Delete Shadows /All", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1490", "techniqueName": "Inhibit System Recovery", "tactic": "Impact",
+        "note": "shadow-copy deletion command variant" },
+      { "pattern": "wbadmin delete catalog", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1490", "techniqueName": "Inhibit System Recovery", "tactic": "Impact",
+        "note": "backup-catalog deletion command" },
+      { "pattern": "wmic shadowcopy delete", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1490", "techniqueName": "Inhibit System Recovery", "tactic": "Impact",
+        "note": "shadow-copy deletion command (WMIC variant)" },
+      { "pattern": "recoveryenabled no", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1490", "techniqueName": "Inhibit System Recovery", "tactic": "Impact",
+        "note": "bcdedit recovery-disable argument (ransomware prep)" },
+
+      // --- Webshell residue ---
+      { "pattern": "eval(base64_decode(", "kind": "literal", "substring": true, "severity": "high", "needsCorroboration": true,
+        "technique": "T1505.003", "techniqueName": "Server Software Component: Web Shell", "tactic": "Persistence",
+        "note": "obfuscated PHP webshell construct" }
+    ],
+
+    // Non-executable extensions the matcher magic-sniffs: a file with one of these names
+    // whose first bytes are the PE 'MZ' header is an executable masquerading as a
+    // document/media file (CONT-002). Scope list, severity applies to the mismatch finding.
+    "contentscan.doc_masquerade_ext": [
+      { "pattern": "*.txt",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.log",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.csv",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.rtf",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.pdf",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.doc",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.docx", "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.xls",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.xlsx", "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.ppt",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.pptx", "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.odt",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.jpg",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.jpeg", "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.png",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.gif",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.bmp",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.tif",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.tiff", "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.mp3",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.mp4",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.avi",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.mov",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" },
+      { "pattern": "*.wav",  "kind": "glob", "severity": "possible", "technique": "T1036.008", "techniqueName": "Masquerading: Masquerade File Type", "tactic": "Defense Evasion" }
+    ],
+
+    // Filename manipulation tricks (CONT-003) — matched against the file NAME. These have
+    // essentially no legitimate use, so they fire without content corroboration.
+    "contentscan.filename_tricks": [
+      { "pattern": "[\\u200e\\u200f\\u202a-\\u202e\\u2066-\\u2069]", "kind": "regex", "severity": "high",
+        "technique": "T1036.002", "techniqueName": "Masquerading: Right-to-Left Override", "tactic": "Defense Evasion",
+        "note": "Unicode bidirectional-override control character in filename" },
+      { "pattern": "\\.(docx?|xlsx?|pptx?|pdf|txt|rtf|csv|jpe?g|png|gif|bmp|mp3|mp4|avi|zip|7z|rar)\\s?\\.(exe|scr|com|pif|bat|cmd|vbs|vbe|js|jse|wsf|hta|lnk)$", "kind": "regex", "severity": "high",
+        "technique": "T1036.007", "techniqueName": "Masquerading: Double File Extension", "tactic": "Defense Evasion",
+        "note": "document/media extension immediately followed by an executable extension" },
+      { "pattern": "\\S[ ]{4,}[^ ]*\\.(exe|scr|com|pif|bat|cmd|vbs|js|hta|lnk)$", "kind": "regex", "severity": "high",
+        "technique": "T1036.006", "techniqueName": "Masquerading: Space after Filename", "tactic": "Defense Evasion",
+        "note": "whitespace padding hiding an executable extension" },
+      { "pattern": "[Ѐ-ӿ].*\\.(exe|scr|com|bat|cmd|lnk)$", "kind": "regex", "severity": "high",
+        "technique": "T1036", "techniqueName": "Masquerading", "tactic": "Defense Evasion",
+        "note": "Cyrillic homoglyph characters in an executable filename" }
+    ],
+
+    // Hash-confirmed known-bad set (CONT-004). Shipped EMPTY on purpose: no hashes are
+    // fabricated. Operators extend this via an external rules file (--rules) or supply
+    // hashes through --ioc-file (those land in custom.hashes and are matched as Possible).
+    "contentscan.known_bad_hashes": []
+  }
+}

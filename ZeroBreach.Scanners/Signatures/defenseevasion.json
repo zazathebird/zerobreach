@@ -1,0 +1,154 @@
+{
+  // Defense Evasion (Phase 2) indicator sets. Structural registry locations live in the
+  // scanner; everything that is a *pattern of badness* lives here so it can be updated
+  // without touching engine logic (spec §3 / SCANNER_GUIDE rule 10).
+  "sets": {
+
+    // Defender exclusions that are suspicious in themselves (matched against the value
+    // names under ...\Windows Defender\Exclusions\Paths / TemporaryPaths).
+    "defenseevasion.exclusion_suspect_paths": [
+      { "pattern": "^[a-z]:\\\\?$", "kind": "regex", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "entire drive excluded from Defender" },
+      { "pattern": "^c:\\\\users\\\\?$", "kind": "regex", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "all user profiles excluded" },
+      { "pattern": "^c:\\\\programdata\\\\?$", "kind": "regex", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "all of ProgramData excluded" },
+      { "pattern": "*", "kind": "literal", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "wildcard exclusion" },
+      { "pattern": "*\\appdata\\local\\temp*", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "user temp dir excluded — classic staging-dir exclusion" },
+      { "pattern": "c:\\windows\\temp*", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "machine temp dir excluded — classic staging-dir exclusion" },
+      { "pattern": "*\\downloads*", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "Downloads folder excluded" },
+      { "pattern": "*\\users\\public*", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "Public profile excluded — common malware drop dir" }
+    ],
+
+    // Suspicious process exclusions (matched against value names under Exclusions\Processes).
+    "defenseevasion.exclusion_suspect_processes": [
+      { "pattern": "*powershell.exe", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "script host excluded from AV scanning" },
+      { "pattern": "*pwsh.exe", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "script host excluded from AV scanning" },
+      { "pattern": "*mshta.exe", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "LOLBin excluded from AV scanning" },
+      { "pattern": "*wscript.exe", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "script host excluded from AV scanning" },
+      { "pattern": "*cscript.exe", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "script host excluded from AV scanning" },
+      { "pattern": "*regsvr32.exe", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "LOLBin excluded from AV scanning" },
+      { "pattern": "*rundll32.exe", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "LOLBin excluded from AV scanning" },
+      { "pattern": "*cmd.exe", "kind": "glob", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "shell excluded from AV scanning" }
+    ],
+
+    // Suspicious extension exclusions (value names under Exclusions\Extensions, stored
+    // with or without a leading dot).
+    "defenseevasion.exclusion_suspect_extensions": [
+      { "pattern": "^\\.?exe$", "kind": "regex", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "all executables excluded" },
+      { "pattern": "^\\.?dll$", "kind": "regex", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "all DLLs excluded" },
+      { "pattern": "^\\.?ps1$", "kind": "regex", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "all PowerShell scripts excluded" },
+      { "pattern": "^\\.?(bat|cmd)$", "kind": "regex", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "all batch scripts excluded" },
+      { "pattern": "^\\.?(js|jse|vbs|vbe|wsf)$", "kind": "regex", "severity": "possible",
+        "technique": "T1562.001", "techniqueName": "Impair Defenses: Disable or Modify Tools",
+        "tactic": "Defense Evasion", "note": "all scripting-host files excluded" }
+    ],
+
+    // KNOWN-GOOD allowlist, not indicators of badness: AMSI provider CLSIDs that ship with
+    // Windows. A registered provider NOT in this list is examined (not automatically bad —
+    // third-party AV legitimately registers providers).
+    "defenseevasion.amsi_known_provider_clsids": [
+      { "pattern": "{2781761E-28E0-4109-99FE-B9D127C57AFE}", "kind": "literal", "severity": "info",
+        "note": "Microsoft Defender AMSI provider (MpOam.dll)" }
+    ],
+
+    // DLL names that, found outside System32 in a script-host or user-writable directory,
+    // indicate a search-order hijack of a security-relevant DLL.
+    "defenseevasion.hijack_dll_names": [
+      { "pattern": "amsi.dll", "kind": "literal", "severity": "high",
+        "technique": "T1574.001", "techniqueName": "Hijack Execution Flow: DLL Search Order Hijacking",
+        "tactic": "Defense Evasion", "note": "rogue amsi.dll shadows the real System32 copy — AMSI bypass" }
+    ],
+
+    // LOLBin abuse patterns, matched (regex, case-insensitive) against the CommandLine
+    // field of Security 4688 process-creation events. These match observed executed
+    // command lines (not documents), so needsCorroboration is not set.
+    "defenseevasion.lolbin_cmdline": [
+      { "pattern": "certutil[^&|]*-urlcache", "kind": "regex", "severity": "high",
+        "technique": "T1105", "techniqueName": "Ingress Tool Transfer",
+        "tactic": "Command and Control", "note": "certutil used as a downloader" },
+      { "pattern": "certutil[^&|]*-decode", "kind": "regex", "severity": "high",
+        "technique": "T1140", "techniqueName": "Deobfuscate/Decode Files or Information",
+        "tactic": "Defense Evasion", "note": "certutil used to decode a payload" },
+      { "pattern": "mshta[^&|]*\\s(https?:|javascript:|vbscript:)", "kind": "regex", "severity": "high",
+        "technique": "T1218.005", "techniqueName": "System Binary Proxy Execution: Mshta",
+        "tactic": "Defense Evasion", "note": "mshta executing remote or inline script" },
+      { "pattern": "regsvr32[^&|]*[/-]i:\\s*https?:", "kind": "regex", "severity": "high",
+        "technique": "T1218.010", "techniqueName": "System Binary Proxy Execution: Regsvr32",
+        "tactic": "Defense Evasion", "note": "regsvr32 loading a remote scriptlet (Squiblydoo)" },
+      { "pattern": "regsvr32[^&|]*scrobj\\.dll", "kind": "regex", "severity": "high",
+        "technique": "T1218.010", "techniqueName": "System Binary Proxy Execution: Regsvr32",
+        "tactic": "Defense Evasion", "note": "regsvr32 with scrobj.dll scriptlet host" },
+      { "pattern": "rundll32[^&|]*javascript:", "kind": "regex", "severity": "high",
+        "technique": "T1218.011", "techniqueName": "System Binary Proxy Execution: Rundll32",
+        "tactic": "Defense Evasion", "note": "rundll32 executing inline JavaScript" },
+      { "pattern": "bitsadmin[^&|]*[/-]transfer", "kind": "regex", "severity": "possible",
+        "technique": "T1197", "techniqueName": "BITS Jobs",
+        "tactic": "Defense Evasion", "note": "bitsadmin transfer — also used by legitimate admin scripts" },
+      { "pattern": "[wc]script[^&|]*\\\\(temp|appdata)\\\\[^&|]*\\.(vbs|vbe|js|jse|wsf|hta)", "kind": "regex", "severity": "high",
+        "technique": "T1059", "techniqueName": "Command and Scripting Interpreter",
+        "tactic": "Execution", "note": "script host running a script out of a temp/user-writable path" },
+      { "pattern": "(powershell|pwsh)[^&|]*\\s[-/]e(n\\w*)?\\s+[a-z0-9+/=]{40,}", "kind": "regex", "severity": "high",
+        "technique": "T1027", "techniqueName": "Obfuscated Files or Information",
+        "tactic": "Defense Evasion", "note": "PowerShell with a long Base64 -EncodedCommand" },
+      { "pattern": "wevtutil\\s+cl\\b", "kind": "regex", "severity": "high",
+        "technique": "T1070.001", "techniqueName": "Indicator Removal: Clear Windows Event Logs",
+        "tactic": "Defense Evasion", "note": "event log cleared from the command line" },
+      { "pattern": "fsutil\\s+usn\\s+deletejournal", "kind": "regex", "severity": "high",
+        "technique": "T1070", "techniqueName": "Indicator Removal",
+        "tactic": "Defense Evasion", "note": "USN change journal deletion — destroys forensic timeline" }
+    ],
+
+    // Prefetch fallback for DEFE-005 when 4688 command-line auditing is unavailable.
+    // Prefetch proves execution but carries no arguments, so every hit needs
+    // corroboration and is capped at POSSIBLE by the scanner.
+    "defenseevasion.lolbin_prefetch": [
+      { "pattern": "mshta.exe-*.pf", "kind": "glob", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1218.005", "techniqueName": "System Binary Proxy Execution: Mshta",
+        "tactic": "Defense Evasion", "note": "mshta executed recently (no arguments available from Prefetch)" },
+      { "pattern": "bitsadmin.exe-*.pf", "kind": "glob", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1197", "techniqueName": "BITS Jobs",
+        "tactic": "Defense Evasion", "note": "bitsadmin executed recently (no arguments available from Prefetch)" },
+      { "pattern": "certutil.exe-*.pf", "kind": "glob", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1105", "techniqueName": "Ingress Tool Transfer",
+        "tactic": "Command and Control", "note": "certutil executed recently (no arguments available from Prefetch)" }
+    ]
+  }
+}

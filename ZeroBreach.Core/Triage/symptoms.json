@@ -1,0 +1,361 @@
+{
+  "symptoms": [
+    {
+      "name": "ransomware-note",
+      "phrases": ["ransom", "files are encrypted", "files have been encrypted", "encrypted my files", "everything is encrypted", "decrypt", "readme.txt appeared", "readme file appeared", "how to recover files", "recover your files", "pay bitcoin", "demanding payment", "asking for money to unlock"],
+      "categories": ["Ransomware", "Persistence", "EventLog", "DefenseEvasion"],
+      "depth": "DEEP",
+      "rationale": "ransom-note symptoms: ransomware indicators plus how it got in (persistence) and what it disabled (defense evasion); event log shows the timeline"
+    },
+    {
+      "name": "ransomware-renamed-files",
+      "phrases": ["files renamed", "files were renamed", "strange extension", "weird extension", "weird file extension", "unknown extension", ".locked", ".encrypted", ".crypt", "cannot open my files", "can't open my files", "can't open any files", "documents won't open", "files turned into gibberish", "files are gibberish", "pictures won't open"],
+      "categories": ["Ransomware", "ContentScan", "EventLog", "Persistence"],
+      "depth": "DEEP",
+      "rationale": "mass-renamed or unopenable files are the classic encryption footprint; content scan finds notes and renamed artifacts, event log the encryption window"
+    },
+    {
+      "name": "ransomware-wallpaper",
+      "phrases": ["wallpaper changed", "wallpaper was changed", "desktop background changed", "background changed by itself", "message on my desktop", "warning on the desktop"],
+      "categories": ["Ransomware", "Persistence", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "many ransomware families replace the wallpaper with the ransom demand; treat as ransomware until proven otherwise"
+    },
+    {
+      "name": "shadow-copies-gone",
+      "phrases": ["shadow copies", "shadow copy", "vssadmin", "restore points gone", "restore points are gone", "restore point missing", "previous versions missing", "previous versions gone", "backups deleted", "backups are gone", "system restore gone", "system restore is empty"],
+      "categories": ["Ransomware", "EventLog", "DefenseEvasion"],
+      "depth": "DEEP",
+      "rationale": "deleted shadow copies / restore points are a deliberate anti-recovery step, almost always ransomware preparation"
+    },
+    {
+      "name": "browser-homepage-hijack",
+      "phrases": ["homepage changed", "home page changed", "homepage was changed", "start page changed", "default search changed", "search engine changed", "browser settings changed", "new tab page changed", "new tab looks weird", "new tab is weird"],
+      "categories": ["Persistence", "C2", "ContentScan"],
+      "depth": "FULL",
+      "rationale": "browser hijack: persistence keeps re-applying the setting, C2 covers the traffic it feeds, content scan finds the dropped component"
+    },
+    {
+      "name": "browser-redirects",
+      "phrases": ["browser redirect", "browser keeps redirecting", "redirecting", "redirects to", "redirects me", "keeps opening websites", "websites open by themselves", "takes me to a different site", "goes to the wrong site", "search results go somewhere else", "search results are wrong"],
+      "categories": ["Persistence", "C2", "ContentScan"],
+      "depth": "FULL",
+      "rationale": "search/click redirection means an injected component or proxy setting; look for the persistence mechanism and where the traffic goes"
+    },
+    {
+      "name": "browser-popups-adware",
+      "phrases": ["popups", "pop-ups", "pop ups", "popup ads", "ads everywhere", "ads keep appearing", "fake ads", "advertisements keep", "full of ads", "new tab opens by itself", "tabs opening by themselves", "casino ads", "adult ads"],
+      "categories": ["Persistence", "C2", "ContentScan"],
+      "depth": "FULL",
+      "rationale": "persistent ad injection is adware with a persistence foothold and an ad-network C2 channel"
+    },
+    {
+      "name": "unwanted-toolbar-extension",
+      "phrases": ["toolbar", "browser extension i didn't install", "extension i did not install", "unknown extension", "extension appeared", "add-on appeared", "addon appeared", "plugin i didn't install", "search bar appeared"],
+      "categories": ["Persistence", "ContentScan"],
+      "depth": "FULL",
+      "rationale": "unwanted toolbars/extensions arrive bundled with a dropper; find the extension and whatever installed it"
+    },
+    {
+      "name": "miner-slow-machine",
+      "phrases": ["computer is slow", "computer is really slow", "computer got slow", "pc is slow", "laptop is slow", "machine is slow", "everything is sluggish", "running slower than usual", "suddenly very slow", "takes forever to do anything", "freezes constantly", "keeps freezing"],
+      "categories": ["C2", "Persistence", "EventLog"],
+      "depth": "FULL",
+      "rationale": "sudden slowness with no hardware cause is commonly a cryptominer or other resident payload; check what persists and what it talks to"
+    },
+    {
+      "name": "miner-fans-heat",
+      "phrases": ["fans are maxed", "fans maxed out", "fans are loud", "fan is loud", "fans running loud", "fans spinning", "fans at full speed", "fan noise", "running hot", "getting hot", "overheating", "burning up"],
+      "categories": ["C2", "Persistence", "EventLog"],
+      "depth": "FULL",
+      "rationale": "sustained fan/heat load on an idle machine points at a cryptominer burning cycles; find the mining process's persistence and pool traffic"
+    },
+    {
+      "name": "miner-cpu-gpu",
+      "phrases": ["high cpu", "cpu at 100", "100% cpu", "cpu usage", "cpu is pegged", "cpu spikes", "high gpu", "gpu at 100", "gpu usage", "gpu is maxed", "electricity bill", "power usage went up"],
+      "categories": ["C2", "Persistence", "EventLog"],
+      "depth": "FULL",
+      "rationale": "unexplained CPU/GPU load is the direct miner signature; miners persist aggressively and phone a mining pool"
+    },
+    {
+      "name": "fake-av-scareware",
+      "phrases": ["fake virus warning", "fake virus alert", "virus alert popup", "virus warning won't go away", "your computer is infected", "your pc is infected", "computer has been infected message", "mcafee popup", "norton popup", "security alert popup", "warning sound from the browser", "siren sound", "scan your computer now popup"],
+      "categories": ["Persistence", "ContentScan", "C2"],
+      "depth": "FULL",
+      "rationale": "scareware: fake AV warnings come from a dropped program or hijacked notifications; find the component and its persistence"
+    },
+    {
+      "name": "tech-support-scam",
+      "phrases": ["call this number", "phone number on screen", "tech support called", "microsoft called", "call from microsoft", "support scam", "gave them remote access", "let them connect", "they connected to my computer", "they remoted in", "paid them with gift cards"],
+      "categories": ["Persistence", "C2", "CredentialAccess", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "a scammer with remote access may have installed persistence, remote-control tooling, and grabbed credentials — treat the whole machine as operator-touched"
+    },
+    {
+      "name": "rat-remote-control",
+      "phrases": ["mouse moving by itself", "mouse moved on its own", "mouse moves on its own", "cursor moving by itself", "cursor moved on its own", "someone controlling my computer", "someone is controlling", "being controlled remotely", "typing by itself", "keyboard typing on its own"],
+      "categories": ["C2", "Persistence", "CredentialAccess", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "live remote control means an active RAT: its C2 channel, its persistence, and everything the operator could have taken (credentials)"
+    },
+    {
+      "name": "rat-webcam-microphone",
+      "phrases": ["webcam light", "camera light on", "camera light turned on", "camera turned on by itself", "webcam turned on", "microphone active", "microphone turned on", "mic light"],
+      "categories": ["C2", "Persistence", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "unexplained camera/microphone activation is RAT-grade surveillance; assume an implant with C2"
+    },
+    {
+      "name": "rat-ghost-activity",
+      "phrases": ["screen flicker", "screen flickers", "screen flashes", "windows opening by themselves", "windows open on their own", "programs opening on their own", "programs open by themselves", "command prompt flashes", "black window flashes", "cmd window pops up"],
+      "categories": ["C2", "Persistence", "EventLog", "DefenseEvasion"],
+      "depth": "DEEP",
+      "rationale": "flashing consoles and self-opening windows are scripted payload activity; deep-check persistence, C2, and the event timeline"
+    },
+    {
+      "name": "unexpected-remote-tools",
+      "phrases": ["teamviewer i didn't install", "anydesk", "screenconnect", "connectwise", "remote access software", "remote software i didn't install", "remote desktop app appeared", "remote tool appeared", "quick assist was used"],
+      "categories": ["C2", "Persistence", "EventLog", "CredentialAccess"],
+      "depth": "DEEP",
+      "rationale": "legitimate remote-admin tools the owner didn't install are a favorite attacker foothold — check when they arrived and what account used them"
+    },
+    {
+      "name": "stolen-passwords-accounts",
+      "phrases": ["passwords stolen", "password was stolen", "password stolen", "accounts hacked", "account was hacked", "account got hacked", "accounts compromised", "logged out everywhere", "logged out of everything", "signed out of all", "sessions signed out", "someone logged into my", "login from another country", "sign-in from a new location"],
+      "categories": ["CredentialAccess", "C2", "Persistence", "EventLog", "EmailResidue"],
+      "depth": "DEEP",
+      "rationale": "account takeovers usually trace back to an infostealer on the machine: find the stealer, its persistence, its exfil channel, and the phish that delivered it"
+    },
+    {
+      "name": "keylogger-suspected",
+      "phrases": ["keylogger", "key logger", "everything i type", "recording my keystrokes", "keystrokes", "knows what i typed"],
+      "categories": ["CredentialAccess", "Persistence", "C2"],
+      "depth": "DEEP",
+      "rationale": "keylogger suspicion: credential-access tooling with persistence and an exfil channel"
+    },
+    {
+      "name": "banking-fraud",
+      "phrases": ["bank account", "banking", "fraudulent transaction", "fraudulent charges", "unauthorized charges", "unauthorized transaction", "money missing", "money was taken", "credit card charges i didn't make", "wire transfer i didn't", "paypal charges"],
+      "categories": ["CredentialAccess", "C2", "Persistence", "EventLog", "ContentScan"],
+      "depth": "DEEP",
+      "rationale": "financial fraud from this machine suggests a banking trojan or infostealer: web-inject components, credential theft, and C2"
+    },
+    {
+      "name": "clicked-phishing-link",
+      "phrases": ["clicked a link", "clicked on a link", "clicked the link", "clicked a suspicious link", "suspicious link", "phishing", "phishing email", "clicked something in an email", "link in a text message"],
+      "categories": ["EmailResidue", "Persistence", "C2", "EventLog"],
+      "depth": "FULL",
+      "rationale": "phishing-click aftermath: check the mail residue for the lure, then whether anything landed (persistence) or calls out (C2)"
+    },
+    {
+      "name": "opened-malicious-attachment",
+      "phrases": ["opened an attachment", "opened the attachment", "opened a suspicious attachment", "invoice email", "invoice attachment", "opened a pdf from", "opened a doc from", "opened a zip from", "attachment from unknown sender", "resume email", "shipping notification email"],
+      "categories": ["EmailResidue", "Persistence", "ContentScan", "EventLog"],
+      "depth": "FULL",
+      "rationale": "opened-attachment aftermath: the lure lives in mail residue, the dropped payload in content scan, its foothold in persistence"
+    },
+    {
+      "name": "entered-credentials-on-fake-page",
+      "phrases": ["entered my password", "typed my password", "gave my password", "gave them my password", "put in my credentials", "entered my credentials", "signed in on a weird site", "fake login page", "fake sign-in page", "logged in and nothing happened"],
+      "categories": ["CredentialAccess", "EmailResidue", "EventLog", "C2"],
+      "depth": "DEEP",
+      "rationale": "credentials handed to a fake page: assume account compromise, hunt for follow-on access and the phish that started it"
+    },
+    {
+      "name": "macro-enabled-document",
+      "phrases": ["enable macros", "enabled macros", "macro", "enable content", "clicked enable editing", "enable editing", "word asked to enable"],
+      "categories": ["EmailResidue", "Persistence", "ContentScan", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "an enabled macro is direct code execution from a document: find the doc, the dropped payload, and its persistence"
+    },
+    {
+      "name": "outbound-spam-from-account",
+      "phrases": ["contacts got spam", "contacts received spam", "sent emails i didn't write", "emails i never sent", "emails i didn't send", "everyone got an email from me", "spam from my account", "my account is sending", "friends got weird messages from me"],
+      "categories": ["EmailResidue", "CredentialAccess", "C2", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "outbound spam in the user's name means account or machine compromise: mailbox abuse, stolen credentials, or a local spam bot"
+    },
+    {
+      "name": "malicious-inbox-rules",
+      "phrases": ["inbox rule", "mail rule", "mailbox rule", "forwarding rule", "email forwarding i didn't set", "emails disappearing", "emails being deleted automatically", "missing emails", "emails vanish", "replies going to junk"],
+      "categories": ["EmailResidue", "CredentialAccess", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "hidden inbox/forwarding rules are the signature of business email compromise — attacker-held credentials quietly diverting mail"
+    },
+    {
+      "name": "account-lockouts",
+      "phrases": ["account lockout", "account lockouts", "account keeps locking", "locked out of my account", "keeps getting locked out", "keeps locking out"],
+      "categories": ["CredentialAccess", "EventLog"],
+      "depth": "FULL",
+      "rationale": "repeated lockouts usually mean password-guessing against the account — the event log holds the source"
+    },
+    {
+      "name": "password-changed-itself",
+      "phrases": ["password changed itself", "password was changed", "password no longer works", "password stopped working", "can't log in anymore", "cannot log in anymore", "pin stopped working"],
+      "categories": ["CredentialAccess", "EventLog", "Persistence"],
+      "depth": "DEEP",
+      "rationale": "a password changed without the owner is post-compromise account control; check who changed it and what else that session did"
+    },
+    {
+      "name": "failed-logon-noise",
+      "phrases": ["failed logon", "failed logons", "failed login", "failed logins", "login attempts", "logon attempts", "sign-in attempts", "brute force", "someone trying to log in"],
+      "categories": ["CredentialAccess", "EventLog"],
+      "depth": "FULL",
+      "rationale": "failed-logon noise is credential attack traffic; the event log identifies the source, target accounts, and whether anything succeeded"
+    },
+    {
+      "name": "unknown-startup-program",
+      "phrases": ["startup program", "starts with windows", "runs at startup", "startup item i don't recognize", "unknown program at boot", "program starts by itself", "launches on its own at boot", "msconfig", "something in startup"],
+      "categories": ["Persistence", "EventLog", "ContentScan"],
+      "depth": "FULL",
+      "rationale": "an unrecognized startup entry IS a persistence finding — enumerate every autostart location, not just the one the user saw"
+    },
+    {
+      "name": "strange-scheduled-task",
+      "phrases": ["scheduled task", "task scheduler", "task i didn't create", "task that runs every", "job that runs at night"],
+      "categories": ["Persistence", "EventLog"],
+      "depth": "FULL",
+      "rationale": "scheduled tasks are a top persistence mechanism; check task actions and creation times against the event log"
+    },
+    {
+      "name": "unknown-service",
+      "phrases": ["new service", "unknown service", "service i didn't install", "service i don't recognize", "strange service", "weird service running"],
+      "categories": ["Persistence", "EventLog"],
+      "depth": "FULL",
+      "rationale": "unrecognized services are persistence with SYSTEM privileges; service-install events pin the arrival time"
+    },
+    {
+      "name": "keeps-coming-back",
+      "phrases": ["keeps coming back", "comes back after removal", "comes back after i delete", "reinstalls itself", "reappears after delete", "deleted it but it returned", "removed it but it came back", "keeps reinstalling"],
+      "categories": ["Persistence", "DefenseEvasion", "RootkitBoot", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "self-resurrecting malware has a persistence mechanism the removal missed — possibly WMI, a watchdog pair, or boot-level; go deep"
+    },
+    {
+      "name": "antivirus-disabled",
+      "phrases": ["antivirus turned off", "antivirus is turned off", "antivirus won't turn on", "antivirus disabled", "defender disabled", "defender turned off", "defender is off", "defender keeps turning off", "defender won't start", "real-time protection off", "real-time protection keeps turning off", "windows security is off", "tamper protection"],
+      "categories": ["DefenseEvasion", "Persistence", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "security tooling doesn't turn itself off — deliberate defense evasion implies an active payload it was protecting"
+    },
+    {
+      "name": "admin-tools-blocked",
+      "phrases": ["can't open task manager", "task manager disabled", "task manager won't open", "task manager closes", "can't run regedit", "regedit disabled", "regedit won't open", "cmd disabled", "command prompt disabled", "powershell blocked", "powershell is blocked", "disabled by your administrator"],
+      "categories": ["DefenseEvasion", "Persistence", "RootkitBoot", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "blocked admin tools are classic self-protection: policy keys set by malware to survive inspection; check boot-level hiding too"
+    },
+    {
+      "name": "security-tool-sabotage",
+      "phrases": ["security tool crashes", "antivirus crashes", "antivirus keeps crashing", "scanner closes by itself", "scan never finishes", "av crashes", "security software won't install", "can't install antivirus", "can't update antivirus", "updates are blocked", "windows update broken"],
+      "categories": ["DefenseEvasion", "Persistence", "RootkitBoot", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "malware killing or starving security tools is active interference — expect a resident component with watchdog behavior"
+    },
+    {
+      "name": "suspicious-network-traffic",
+      "phrases": ["weird network traffic", "strange network traffic", "unusual traffic", "unknown connections", "strange connections", "connections i don't recognize", "network activity when idle", "constantly talking to the internet", "network light always blinking"],
+      "categories": ["C2", "Persistence", "EventLog"],
+      "depth": "FULL",
+      "rationale": "unexplained traffic is potential C2 — map live connections to processes and find what persists them"
+    },
+    {
+      "name": "firewall-alerts",
+      "phrases": ["firewall alert", "firewall warning", "firewall keeps asking", "blocked connection", "outbound connection blocked", "firewall rule appeared", "firewall rule i didn't add", "firewall was turned off"],
+      "categories": ["C2", "DefenseEvasion", "EventLog", "Persistence"],
+      "depth": "FULL",
+      "rationale": "firewall alerts or self-added rules show something trying to reach out or opening a listening door"
+    },
+    {
+      "name": "data-exfiltration",
+      "phrases": ["uploading data", "data leaving", "large upload", "huge upload", "upload spike", "bandwidth spike", "data usage spike", "exfil", "gigabytes uploaded", "sending data somewhere"],
+      "categories": ["C2", "ContentScan", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "sustained outbound volume looks like data theft: identify the channel, and content-scan for staging archives left behind"
+    },
+    {
+      "name": "dns-hosts-tampering",
+      "phrases": ["dns changed", "dns settings changed", "dns is weird", "hosts file", "websites resolve to the wrong", "wrong website loads", "certificate warnings on every site", "certificate errors everywhere", "proxy settings changed", "proxy i didn't set"],
+      "categories": ["C2", "Persistence", "DefenseEvasion"],
+      "depth": "FULL",
+      "rationale": "DNS/hosts/proxy tampering redirects the whole machine through attacker infrastructure — a persistence-backed man-in-the-middle"
+    },
+    {
+      "name": "internet-degraded",
+      "phrases": ["internet is slow", "internet got slow", "network is slow", "connection is slow", "wifi is slow on this machine"],
+      "categories": ["C2", "Persistence"],
+      "depth": "FULL",
+      "rationale": "single-machine network slowness can be traffic-hungry malware (proxy, bot, miner) — worth a C2 and persistence pass"
+    },
+    {
+      "name": "crashes-bluescreens",
+      "phrases": ["blue screen", "bluescreen", "bsod", "crashes at boot", "crashes on startup", "won't boot", "will not boot", "boot loop", "crashes randomly", "keeps crashing", "restarts by itself", "reboots on its own"],
+      "categories": ["RootkitBoot", "Persistence", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "boot-time crashes can be a badly-written rootkit or bootkit fighting the OS — inspect boot configuration, drivers, and crash events"
+    },
+    {
+      "name": "hidden-or-missing-files",
+      "phrases": ["hidden files", "files are hidden", "files disappeared", "files are missing", "files vanished", "folders are empty", "folder is empty", "can't see my files", "desktop is empty", "documents folder is empty"],
+      "categories": ["RootkitBoot", "Ransomware", "AclIntegrity", "ContentScan"],
+      "depth": "DEEP",
+      "rationale": "vanished files are either hidden (rootkit / USB shortcut worms set +h), encrypted-and-moved (ransomware), or permission-blocked (ACL tampering)"
+    },
+    {
+      "name": "system-acting-possessed",
+      "phrases": ["acting possessed", "acting weird", "acting strange", "behaving strangely", "doing things on its own", "has a mind of its own", "safe mode doesn't work", "won't start in safe mode", "settings change by themselves", "settings keep changing back"],
+      "categories": ["RootkitBoot", "Persistence", "DefenseEvasion", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "vague 'possessed' behavior with settings that fight back suggests a resident component with self-defense — check deep, including boot"
+    },
+    {
+      "name": "rdp-enabled-unexpectedly",
+      "phrases": ["remote desktop enabled", "remote desktop was turned on", "remote desktop is on", "rdp enabled", "rdp was turned on", "rdp is open", "remote connections allowed", "remote assistance turned on"],
+      "categories": ["C2", "CredentialAccess", "EventLog", "Persistence"],
+      "depth": "DEEP",
+      "rationale": "RDP enabled without the owner is attacker access being set up (or already used) — the event log shows who connected and when"
+    },
+    {
+      "name": "unknown-admin-account",
+      "phrases": ["new admin account", "new administrator account", "unknown user account", "account i didn't create", "user i don't recognize", "new user appeared", "extra account on the login screen", "someone added an account"],
+      "categories": ["CredentialAccess", "EventLog", "Persistence", "AclIntegrity"],
+      "depth": "DEEP",
+      "rationale": "an attacker-created account is both persistence and privilege — account-management events and permission changes tell the story"
+    },
+    {
+      "name": "usb-removable-media",
+      "phrases": ["usb drive", "usb stick", "flash drive", "thumb drive", "pen drive", "memory stick", "external drive", "shortcut virus", "files turned into shortcuts", "everything became shortcuts", "autorun"],
+      "categories": ["Persistence", "ContentScan", "RootkitBoot", "EventLog"],
+      "depth": "FULL",
+      "rationale": "USB worms hide the real files and plant shortcuts/autoruns; scan for the dropped payload and its persistence"
+    },
+    {
+      "name": "webshell-server",
+      "phrases": ["iis", "web server", "webserver", "aspx", "webshell", "web shell", "strange file in wwwroot", "wwwroot", "website is serving spam", "website was defaced", "site redirects visitors"],
+      "categories": ["ContentScan", "Persistence", "C2", "EventLog", "AclIntegrity"],
+      "depth": "DEEP",
+      "rationale": "server-side compromise: content-scan web roots for shells, check persistence and the accounts/permissions the shell touched"
+    },
+    {
+      "name": "file-permission-tampering",
+      "phrases": ["permission denied on my own files", "access denied to my documents", "access denied on my own", "ownership changed", "file permissions changed", "permissions changed by themselves", "can't modify my own files", "not authorized to open"],
+      "categories": ["AclIntegrity", "Ransomware", "EventLog"],
+      "depth": "FULL",
+      "rationale": "self-changing permissions are ACL tampering — used to lock the owner out or to protect malware files from deletion"
+    },
+    {
+      "name": "spam-popup-notifications",
+      "phrases": ["notifications keep popping", "notification spam", "windows notifications with ads", "notifications from websites", "calendar invites spam", "calendar spam"],
+      "categories": ["Persistence", "ContentScan", "C2"],
+      "depth": "FULL",
+      "rationale": "notification/calendar spam is usually a granted browser permission or a resident adware component pushing it"
+    },
+    {
+      "name": "process-impersonation",
+      "phrases": ["two copies of svchost", "svchost using", "weird process name", "process i don't recognize", "misspelled process", "chrome.exe using all", "process with a strange name", "lots of powershell processes"],
+      "categories": ["Persistence", "C2", "DefenseEvasion", "EventLog"],
+      "depth": "DEEP",
+      "rationale": "look-alike or unexpected processes are payloads hiding in plain sight — trace their image paths, persistence, and network use"
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  // Phase 7 — Rootkit / Boot Integrity signature data (group RootkitBoot).
+  "sets": {
+
+    // BYOVD: SHA-256 hashes of known-vulnerable, legitimately-signed drivers
+    // (loldrivers-class list). Shipped EMPTY BY DESIGN: hashes must come from a feed the
+    // operator trusts (e.g. the loldrivers.io project's exported hash list), loaded either
+    // by editing this file or via an external rules file (--rules-file) that adds entries
+    // to this same set name. Entry shape:
+    //   { "pattern": "<64-hex sha256>", "kind": "sha256", "severity": "high",
+    //     "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation",
+    //     "tactic": "Privilege Escalation", "note": "<driver name / advisory>" }
+    // Use "critical" only for drivers whose presence is unambiguous attacker tooling.
+    "rootkitboot.vulnerable_drivers": [],
+
+    // Well-documented BYOVD driver FILENAMES. A name match is weak evidence — every one of
+    // these ships with a legitimate product — so all entries are Possible with
+    // needsCorroboration: the scanner may never escalate a name-only hit on its own.
+    "rootkitboot.vulnerable_driver_names": [
+      { "pattern": "RTCore64.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "MSI Afterburner RTCore driver; arbitrary kernel memory R/W, widely abused (also legit with MSI Afterburner installed)" },
+      { "pattern": "RTCore32.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "32-bit MSI Afterburner RTCore driver; same primitive as RTCore64" },
+      { "pattern": "DBUtil_2_3.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Dell dbutil driver (CVE-2021-21551); kernel memory R/W, abused by multiple actors (also legit on Dell systems with old firmware-update tools)" },
+      { "pattern": "gdrv.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Gigabyte gdrv driver; classic BYOVD primitive (RobbinHood ransomware) — also legit with Gigabyte tools" },
+      { "pattern": "Capcom.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Capcom anti-cheat driver executing arbitrary ring-0 code; near-universally abusive when present on a workstation" },
+      { "pattern": "mhyprot2.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Genshin Impact anti-cheat driver; abused to kill AV/EDR processes — also legit on machines with the game installed" },
+      { "pattern": "WinRing0.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "WinRing0 hardware-access driver; MSR/physical-memory primitives, common in cryptominer kits — also used by legit hardware monitors" },
+      { "pattern": "WinRing0x64.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "64-bit WinRing0; see WinRing0.sys" },
+      { "pattern": "iqvw64e.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Intel Network Adapter diagnostic driver; kernel R/W primitive used by multiple intrusion sets" },
+      { "pattern": "zam64.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Zemana anti-malware driver; arbitrary process-kill primitive abused by EDR-killer tools" },
+      { "pattern": "zamguard64.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Zemana guard driver; same primitive family as zam64.sys" },
+      { "pattern": "aswArPot.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Avast anti-rootkit driver; abused (AvosLocker et al.) to disable security tooling — also legit on machines with Avast installed" },
+      { "pattern": "kprocesshacker.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Process Hacker kernel driver; process-kill/handle primitives abused to terminate AV/EDR — also legit where Process Hacker is used" },
+      { "pattern": "procexp152.sys", "kind": "literal", "severity": "possible", "needsCorroboration": true,
+        "technique": "T1068", "techniqueName": "Exploitation for Privilege Escalation", "tactic": "Privilege Escalation",
+        "note": "Sysinternals Process Explorer driver; abused by EDR-killer tooling (Backstab) — also present after any legit procexp run as admin" }
+    ],
+
+    // Known-good MBR bootstrap hashes: SHA-256 of the FIRST 440 BYTES of sector 0.
+    // Shipped EMPTY BY DESIGN — these vary by OS build/OEM and must NOT be guessed.
+    // Populate from a known-clean reference machine of the same OS build (ROOT-005 emits
+    // the machine's bootstrap hash as an Info finding for exactly this purpose), kind "sha256".
+    "rootkitboot.mbr_known_good": [],
+
+    // Filenames a BCD ApplicationPath (element 12000002) is expected to reference on a
+    // standard Windows install. Anything else is reported as Possible (OEM recovery and
+    // multi-boot tools are legitimate causes; the finding says so).
+    "rootkitboot.expected_boot_apps": [
+      { "pattern": "winload.exe", "kind": "literal", "severity": "info", "note": "standard OS loader (BIOS)" },
+      { "pattern": "winload.efi", "kind": "literal", "severity": "info", "note": "standard OS loader (UEFI)" },
+      { "pattern": "winresume.exe", "kind": "literal", "severity": "info", "note": "standard resume loader (BIOS)" },
+      { "pattern": "winresume.efi", "kind": "literal", "severity": "info", "note": "standard resume loader (UEFI)" },
+      { "pattern": "bootmgr", "kind": "literal", "severity": "info", "note": "boot manager (BIOS)" },
+      { "pattern": "bootmgr.efi", "kind": "literal", "severity": "info", "note": "boot manager (UEFI)" },
+      { "pattern": "bootmgfw.efi", "kind": "literal", "severity": "info", "note": "firmware boot manager (UEFI)" },
+      { "pattern": "memtest.exe", "kind": "literal", "severity": "info", "note": "Windows memory diagnostic (BIOS)" },
+      { "pattern": "memtest.efi", "kind": "literal", "severity": "info", "note": "Windows memory diagnostic (UEFI)" }
+    ]
+  }
+}
