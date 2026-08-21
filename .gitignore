@@ -30,8 +30,23 @@ zerobreach/
 zerobreach-main/
 _archive/zerobreach-main-dump/native-app/src-tauri/target/
 
+# .NET build output for the native engine (ZeroBreach.*). Note the leading slash is
+# deliberately ABSENT — every one of the five projects has its own bin/ and obj/, and
+# `dotnet publish` writes the single-file exe under bin/. All of it is reproducible from
+# source with `dotnet build`; none of it belongs in the repo.
+bin/
+obj/
+*.user
+
 # OS noise
 Thumbs.db
 desktop.ini
 
 dist/
+
+# Generated at release time by tools/New-IntegrityManifest.ps1 and staged into the zip.
+# NOT committed: on a development tree every edit invalidates it, and engine/Phases-0.ps1
+# would then report CRITICAL "signature set tampering" on every scan. Its absence is
+# reported as INFO ("engine authenticity is UNVERIFIED this run"), which is the honest
+# state for a dev tree.
+data/integrity_manifest.json
