@@ -1,31 +1,111 @@
-# ZeroBreach V23 "Kraken Console" — Product Blueprint
+# ZeroBreach "Kraken Console" — Product Blueprint
 
 > **The definitive top-level map of what this tool is, how it fits together, and where it goes
 > next.** Rules live in `CLAUDE.md`; history lives in `CHANGELOG.md`; session state lives in
 > `HANDOFF.md`. This file changes only when the product itself changes shape.
-> Last structural update: 2026-07-02.
+> Last structural update: 2026-08-20 — dual-engine restructure.
 
 ## 1. Mission
 
-A **single-operator, USB-portable, zero-install Windows incident-response console** for MSP
-techs. One double-click (`Launch-GUI.bat`) on any Windows 10/11 box gives you:
+A **single-operator Windows incident-response tool** for MSP techs. A technician arrives at a
+machine that is misbehaving, runs ZeroBreach, and gets:
 
-1. **Detect** — ~115 scan phases covering the full malware taxonomy (RAT/C2, ransomware,
+1. **Detect** — indicators of compromise across the full malware taxonomy (RAT/C2, ransomware,
    rootkits, keyloggers, worms, miners, trojans, spyware, fileless/LOLBins, persistence,
    credential theft, exfil, email/phishing, BYOVD, permission integrity).
 2. **Decide** — findings triaged with severity, MITRE ATT&CK technique, threat type, a
-   3-layer *protected-target* hard block, and a trusted-vendor soft signal, so an operator
-   can trust the checklist.
-3. **Act** — reversible, operator-confirmed remediation (Quarantine-first; type `PURGE` to
-   execute), with a hard rule that **nothing auto-selected can ever damage a healthy system**.
-4. **Report** — engine JSON/TXT/HTML + server-rendered HTML/CSV export + durable server logs.
-5. **Look epic** — a cyberpunk cinematic frontend (12 themes + secret KRAKEN, synthesized
-   sound, canvas VFX, command palette) that makes the scan *feel* like the event it is.
+   protected-target hard block and a trusted-vendor soft signal, so the checklist can be trusted.
+3. **Act** — reversible, operator-confirmed remediation (quarantine-first), with a hard rule that
+   **nothing auto-selected can ever damage a healthy system**.
+4. **Report** — structured JSON plus rendered HTML/CSV the provider hands to the client.
 
-Non-goals: offensive tooling, host-AV evasion, darkweb/Tor intel, non-Windows targets.
-The Python/Flask server is **parked** — PowerShell-only direction (see `_python/README_CLAUDE_CODE.md`).
+**Non-goals:** offensive tooling, host-AV evasion, darkweb/Tor intel, non-Windows targets,
+anything that touches a remote machine. Resolve ambiguity toward the more conservative, more
+clearly defensive interpretation.
 
-## 2. Architecture
+## 2. Two engines, one product
+
+ZeroBreach ships **two independent implementations of the same tool**. This is deliberate and
+permanent, not a migration artifact.
+
+| | Native engine — **primary** | PowerShell engine — **fallback** |
+|---|---|---|
+| Artifact | `zbscan`, one self-contained `win-x64` exe | `Launch-GUI.bat` + a folder of `.ps1` |
+| Language | C# / .NET 8 | PowerShell 5.1 |
+| Runtime dependency | None (runtime bundled) | `powershell.exe`, present on every Windows |
+| Detection surface | 10 scanners / 63 checks | 162 phases |
+| Operator UX | CLI, one downloadable file | Browser GUI, cinematic console |
+| EDR posture | Unsigned new PE — **poor until signed** | Signed Microsoft host running readable script |
+
+### Why the fallback exists
+
+The native exe is the goal: one file a technician downloads and runs, nothing to install.
+
+But the delivery problem is real and it is not about capability. From an EDR's point of view, a
+ZeroBreach run is: an elevated process enumerates running processes and loaded modules, reads
+autorun and service configuration across the registry, walks scheduled tasks and WMI
+subscriptions, reads event logs, hashes files in user-writable paths, and — in remediation —
+kills processes and deletes files. That is the canonical *security tool or malware, flip a coin*
+profile.
+
+The only things that push the coin toward "tool" are a known signer, accumulated reputation for
+that signer and that binary, human-readable content, and prior allowlisting at the site.
+
+- A **brand-new unsigned PE** has none of them, and hides its content besides. It should be
+  *expected* to be quarantined on arrival or blocked at first run at some client sites.
+- The **PowerShell engine** arrives inside `powershell.exe` — Microsoft-signed, universally
+  allowlisted — running script text any EDR can inspect and any support tech can read over the
+  phone.
+
+So the native exe is what we ship, and the PowerShell engine is what still works when the exe
+gets ripped away by Defender. **Both are maintained.** Full costed analysis in
+`docs/_history/PACKAGING_STUDY.md` (finding 1 survives the move to C#; findings 2 and 3 do not —
+see the superseding header on that file).
+
+### Capability parity
+
+**Goal: everything either engine can do, the other should be able to do**, with a documented
+delta where a runtime genuinely cannot.
+
+Today the parity gap runs the *opposite* way from what "native rebuild" suggests — the
+PowerShell engine is far ahead on coverage and the native engine is ahead on architecture:
+
+| Area | Native | PowerShell | Gap owner |
+|---|---|---|---|
+| Detection breadth | 10 scanners / 63 checks | 162 phases | **Native must catch up** |
+| Safety model | Architectural read-only/destructive split, enforced by a source-grepping test | Three mirrored guard copies kept in sync by a test | Native is cleaner |
+| Coverage honesty | Every check ends `Completed` / `Inconclusive` / `Skipped`; exit `3` on gaps | Phase-level recovery traps; no per-check status | **PS should adopt** |
+| Finding identity | Deterministic `ComputeId(group, target, discriminator)` | Engine-assigned ids | **PS should adopt** |
+| WOW64 correctness | N/A — always 64-bit by construction | Explicit `Get-RegVal64` / `ZB_SYS32` handling required | Native wins by design |
+| Operator GUI | None (CLI only) | Full browser console | **Native gap, low priority** |
+| Signature storage | Embedded resources + on-disk merge | On-disk `data/*.json` only | See §8 |
+
+Closing the detection gap is the main body of work; the per-scanner roadmap is
+`fable-work/tasks/_deferred/` (§9).
+
+## 3. Architecture
+
+### Native engine
+
+```
+zbscan  (single self-contained win-x64 executable)
+   ├─ ZeroBreach.Cli          entry point, console output, interactive remediation/IOC/triage
+   ├─ ZeroBreach.Core         finding model, check ledger, budgets, profiles, signature DB,
+   │                          reporting, triage/escalation. No destructive operation exists here.
+   ├─ ZeroBreach.Scanners     the 10 detection scanners, one file each, + signature JSON.
+   │                          READ-ONLY by architecture.
+   ├─ ZeroBreach.Remediation  the ONLY module that mutates the machine. Small and auditable.
+   └─ ZeroBreach.Tests        xUnit, incl. ScannerReadOnlyAuditTests which greps Scanners/Core
+                              sources and fails the build if a destructive API appears.
+```
+
+The read-only / destructive split is **architectural, not stylistic** — it is what keeps the
+safety audit surface tiny. Never add a mutating call to Core, Scanners, or a scanner helper.
+
+The ten scanners: `Persistence`, `C2`, `CredentialAccess`, `DefenseEvasion`, `RootkitBoot`,
+`Ransomware`, `ContentScan`, `EmailResidue`, `EventLog`, `AclIntegrity`.
+
+### PowerShell engine
 
 ```
 Launch-GUI.bat  (self-elevates → admin)
@@ -38,217 +118,219 @@ Launch-GUI.bat  (self-elevates → admin)
 
 ZeroBreach-V23.ps1  = THIN LOADER  (params/elevation/globals/ALL helpers/banner/menus)
    └─ dot-sources, in order, into ONE scope:
-        engine/Phases-1.ps1   phases 1-58   (incl. 55.5 BYOVD)      ┐ each module has its
-        engine/Phases-2.ps1   phases 59-89  (incl. 69, 74.5/.6/.7)  │ OWN top-level trap
-        engine/Phases-3.ps1   phases 90-115 (incl. 99.5)            ┘ (see CLAUDE.md)
+        engine/Phases-0.ps1   PREFLIGHT — integrity + anti-blinding gate (every mode, no header)
+        engine/Phases-1.ps1   phases 1-58    (incl. 55.5 BYOVD)          ┐ each module has its
+        engine/Phases-2.ps1   phases 59-89   (incl. 69, 74.5/.6/.7)      │ OWN top-level trap
+        engine/Phases-3.ps1   phases 90-115  (incl. 99.5) + integrity    │ (see CLAUDE.md)
+        engine/Phases-4.ps1   phases 116-133 Extended malware + tamper   │
+        engine/Phases-5.ps1   phases 134-145 HUNT cross-view + memory    │
+        engine/Phases-6.ps1   phases 146-159 STUB — see §9               │
+        engine/Phases-7.ps1   phases 160-162 synthesis / correlation     ┘
         engine/Summary.ps1    risk score + exits ([Environment]::Exit)
         engine/FixMode.ps1    interactive fix mode (console runs only)
-
-data/    detection_signatures.json (signatures + fp_allowlists — AMSI rule: NEVER inline)
-         mitre_mapping.json · ioc_defaults.json · coverage_matrix.json · permission_baseline.json
 ```
 
 **Why this shape holds:** phases run in numeric order and share variables across phases, so
-modules split **by range, not category**, and dot-source into one scope. All signature
-literals live in `data/*.json` because AMSI blocks a `.ps1` containing them. Both `.ps1`
-entry files + all engine modules are UTF-8 **with BOM**; JSON outputs are UTF-8 **no BOM**.
+modules split **by range, not category**, and dot-source into one scope. All signature literals
+live in `data/*.json` because AMSI blocks a `.ps1` containing them. Entry files and engine
+modules are UTF-8 **with BOM**; JSON outputs are UTF-8 **no BOM**.
 
-## 3. Data contracts
+## 4. Data contracts
 
-### Engine → server (stdout of the child process, UTF-8)
+### PS engine → server (child stdout, UTF-8)
+
 | Line shape | Meaning |
 |---|---|
-| `[FINDING] {compact JSON}` | **Authoritative live finding** — emitted by `Add-Finding` in non-interactive runs. Keys: `id, sev, phase, tt, desc, target, fix, group`. The server converts CRITICAL/HIGH/POSSIBLE into SSE `finding` events (exact severity, canonical threat bucket, MITRE-resolved) and never shows the raw line. |
-| `PHASE N — …` banner / `PHASE N — … took X.Xs` | Phase tracking (`PHASE\s+(\d+(?:\.\d+)?)[^\d]` — fractional phases keep their decimal and advance the counter) + per-phase profiling. |
-| everything else | `log_line` (severity regex-classified for coloring only — **never** into findings). |
-| STEALTH mode | one compressed-JSON audit blob on stdout; server buffers + parses post-exit. |
+| `[FINDING] {compact JSON}` | **Authoritative live finding** — emitted by `Add-Finding` in non-interactive runs. Keys: `id, sev, phase, tt, desc, target, fix, group`. The server converts CRITICAL/HIGH/POSSIBLE into SSE `finding` events and never shows the raw line. |
+| `PHASE N — …` / `PHASE N — … took X.Xs` | Phase tracking (`PHASE\s+(\d+(?:\.\d+)?)[^\d]` — fractional phases keep their decimal and advance the counter) + per-phase profiling. |
+| everything else | `log_line` — severity regex-classified **for colouring only**, never into findings. |
+| STEALTH mode | one compressed-JSON audit blob on stdout; server buffers and parses post-exit. |
 
 ### Server → browser (SSE `/api/events`)
+
 | Event | Key fields |
 |---|---|
 | `log_line` | `text, severity, phase, elapsed` |
 | `finding` | `id, line, severity, threat_type, phase, mitre{id,name,tactic,url}, mitre_id, fix_action, target, timestamp` |
-| `scan_state` | `phase, phase_total, phase_name, section, elapsed, threat_counts, running` — emitted on **every phase change** + every 12 lines |
+| `scan_state` | `phase, phase_total, phase_name, section, elapsed, threat_counts, running` — on every phase change + every 12 lines |
 | `scan_complete` | `findings_count, threat_counts, elapsed, results_path, engine_report` |
+| `scan_failed` | emitted **instead of** `scan_complete` when the engine fails |
 | `remediation_complete` | `applied, failed, skipped, blocked` |
 | `sync` | full state snapshot on (re)connect |
 
-At `scan_complete` the frontend **replaces** its live findings list with the engine report
-(`GET /api/report?name=KrakenBaseline_….json` — rich findings incl. `FixAction`/`FixParam`),
-so the live stream drives the in-scan experience and the report drives triage/remediation.
+At `scan_complete` the frontend **replaces** its live findings list with the engine report, so
+the live stream drives the in-scan experience and the report drives triage/remediation.
+
+### Native engine exit codes
+
+`0` clean · `2` findings · `3` coverage gaps (inconclusive/skipped/unchecked) · `1` usage or
+operational error. **A narrowed or timed-out scan must never exit `0`.**
 
 ### Other formats
-- **IOC file** (`reports/custom_iocs.ioc`, fed via `-IocFile`): prefixed text — `hash:`/`ip:`/
-  `domain:`/`regex:`/`file:` (mirrors `data/ioc_defaults.json`).
-- **Quarantine manifest**: file moved to `reports/quarantine/*.quar` + `.quar.json` with
-  original path, SHA256, restore command.
-- **HTTP routes**: `/api/scan/start|abort`, `/api/state`, `/api/events`, `/api/report?name=`,
-  `/api/remediate {report, ids[]}`, `/api/export/html|csv`, `/api/ioc` GET/POST, `/api/sysinfo`.
 
-## 4. Safety model (the product's spine)
+- **IOC file** (`reports/custom_iocs.ioc`, via `-IocFile`): prefixed text — `hash:` / `ip:` /
+  `domain:` / `regex:` / `file:`.
+- **Quarantine manifest**: file moved to `reports/quarantine/*.quar` + a `.quar.json` carrying
+  original path, SHA256 and restore command.
+- **HTTP routes** (PS server): `/api/scan/start|abort`, `/api/state`, `/api/events`,
+  `/api/report?name=`, `/api/remediate {report, ids[]}`, `/api/export/html|csv`, `/api/ioc`
+  GET/POST, `/api/profiles` GET/POST, `/api/sysinfo`.
 
-1. **Auto-select rule**: only CRITICAL/HIGH **+** a destructive FixAction is ever pre-ticked.
-   POSSIBLE is shown, never auto-acted. Every FP-tuning round works by downgrading to
-   POSSIBLE/Info, not deleting detections.
-2. **Rule #1**: never ship a destructive `FixParam` an auto-select can fire on a **healthy
-   box** (no `icacls /reset /T`, `vssadmin delete shadows /all`, drive-root or recursive
-   deletes). Dangerous commands go in the *description* with `FixAction Info`.
-3. **`Test-ProtectedTarget` = HARD block across 3 layers** (server tag → frontend disable →
-   remediation-runspace refusal reporting `blocked`): cert store, Windows/System32/SysWOW64/
-   WinSxS, shell-system files, user dotfiles, SafeBoot/core-OS registry, critical processes.
-4. **`Test-VendorTrusted` = SOFT signal** (Datto/CentraStage/Kaseya/…): green badge, not
-   auto-selected, operator can still act; suspicious path or independent malicious signal
-   overrides the trust.
-5. **Quarantine over DeleteFile** for anything not hash-confirmed. Fully reversible.
-6. Engine in `-Auto` is **audit-only** — remediation happens only through the GUI's typed
-   `PURGE` confirmation.
+## 5. Safety model (the product's spine)
+
+These bind **both engines**. Enforcement mechanics differ; the rules do not.
+
+1. **Auto-select rule** — only CRITICAL/HIGH **plus** an executable destructive fix action is
+   ever pre-ticked. POSSIBLE/INFO are shown, never auto-acted, including by bulk "select all",
+   which shares the same gate by construction. Every FP-tuning round works by downgrading to
+   POSSIBLE/Info, never by deleting a detection.
+2. **Rule #1** — never ship a destructive fix parameter that an auto-select can fire on a
+   **healthy box**. No `icacls /reset /T`, no `vssadmin delete shadows /all`, no recursive or
+   drive-root deletes. Dangerous commands go in the *description* with an Info-only action.
+3. **Protected targets = hard block, no override** — core OS directories, cert trust store,
+   LSA/boot/code-integrity keys, OS-critical and security processes, the tool's own files.
+   Checked immediately before every destructive action, not only at planning time.
+4. **Trusted vendors = soft signal** (Datto / CentraStage / Kaseya / AEM and friends) — green
+   badge, not auto-selected, operator may still act. A vendor name in a suspicious path, or any
+   independent malicious signal, overrides the trust.
+5. **Reversible beats destructive** — a non-hash-confirmed delete is downgraded to quarantine by
+   the executor itself, not merely by the caller.
+6. **Never report clean for a check that could not run** — disabled log source, unloaded hive,
+   exhausted budget, access denied, crash: emit inconclusive/skipped with the scope. A false
+   all-clear is the worst bug an IR tool can ship.
+7. **Typed confirmation before any remediation batch** — `PURGE` in the GUI, `CONFIRM` in the
+   CLI — validated in the executor, not only in the UI. Every attempt and outcome is logged.
+8. **Untrusted indicators never reach a destructive matching path** without individual operator
+   confirmation. There is deliberately no "yes to all".
 
 Regression metric: **auto-destructive count from a full `-Hours 0` DEEP baseline** — currently
-**52**, all by-design (tripwires + posture items + known 1-off FPs awaiting user sign-off).
-Re-grade after any severity/FixAction change.
+**52** on the PS engine, all by design. Re-grade after any severity or fix-action change.
 
-## 5. Quality gates (all must pass before a change ships)
+## 6. Platform support
 
-1. Parse-clean on **live PS 5.1** and PS 7 — all 6 engine files + server (+ the server's
-   here-strings extracted and `ParseInput`-checked separately); UTF-8 BOM intact.
-2. `node --check` on touched JS; FX audit `node tools/check-visuals.mjs` (PASS 13/13).
-3. AMSI: engine spawns and streams (no `ScriptContainedMaliciousContent`).
-4. Headless `-Auto` scan: contiguous `PHASE N — … took` sequence (no module-trap gaps),
-   clean self-exit, reports written.
-5. Auto-destructive re-grade vs. baseline (target: 52, and 0 system-damage FixParams).
-6. Live GUI acceptance for UX-facing changes (`Launch-GUI.bat` as admin; tripwires in
-   `CLAUDE.md` → "Remediation test tripwires").
+**Windows 10 and 11, plus Server 2016 / 2019 / 2022.**
 
-## 6. Status snapshot — 2026-07-02
+Win10 support is deliberate, not legacy courtesy: **Server 2016/2019/2022 are Win10-lineage
+builds** (`10.0.14393` / `10.0.17763` / `10.0.20348`; only Server 2025 moved to the Win11 base).
+Dropping Win10 would drop server support with it — and a DC or file server is the highest-value
+box on any network this tool gets deployed to.
 
-**Proven live:** the engine-split architecture end-to-end in the browser (2026-07-01 DEEP run:
-115 phases contiguous, 0 recovered errors, ~9.5 min, clean exit); phase-counter fix `c0477ae`
-**validated** from the SSE log (all 116 phase values 0→115, no jumps); FP tuning through
-round 5 (52 auto-destructive, 0 damage ops); 3-layer safety guard incl. a real blocked
-remediation POST; all server routes headless-validated.
+Neither engine contains OS-version gating today, and neither should acquire any without a
+recorded reason. .NET 8 supports Win10 1607+ and Server 2012 R2+, which covers the fleet.
 
-**Fixed 2026-07-02 (this session, from the SSE-log analysis):** the live finding stream was
-dead — engine finding lines carry no severity tags, so a full DEEP run produced **0** SSE
-`finding` events / all-zero threat counts / an empty server `audit_*.json` while the engine
-recorded 288 findings. Now: `Add-Finding` emits structured `[FINDING]` JSON lines and the
-server converts them into exact-severity `finding` events (contract in §3). Also fixed:
-child-process stdout mojibake (engine now sets UTF-8 console encoding when redirected); the
-`[OK ]`-padding classifier miss; and the `$sev`/`$SEV` case-insensitive variable shadow that
-had silently disabled ALL log-line severity classification since the server was written
-(dict renamed `$SEV_RX`). Server text-severity finding path retired (double-count guard).
-End-to-end server-driven validation scans confirmed finding events stream live with exact
-severities, resolved MITRE, populated threat counts, and a non-empty `audit_*.json`.
+The stragglers still on Win10 are also disproportionately the *infected* ones — EOL, unpatched,
+no ESU. An IR tool gets run on the sick machine.
 
-**Open acceptance item (the one):** browser click-through of destructive remediation
-(PURGE + protected HARD block), HTML/CSV export downloads, IOC save→re-scan, STEALTH run —
-now also eyeballing the live finding ticker/chips + clean banner glyphs. Runbook in
-`HANDOFF.md`.
+## 7. Quality gates
 
-## 7. Roadmap
+**Native engine**
+1. `dotnet build` clean; `dotnet test` green (Windows-only tests use `Skip.IfNot`, never
+   weakened assertions).
+2. `ScannerReadOnlyAuditTests` passes — no destructive API in Core or Scanners.
+3. Exit-code discipline: a narrowed or timed-out scan never exits `0`.
 
-### Now (current/next session)
-- **Live GUI click-through** (user-driven; runbook in `HANDOFF.md`) — closes the last
-  acceptance gap and visually confirms the new live-finding stream + UTF-8 banners.
-- Push the unpushed local commits on `main`.
+**PowerShell engine**
+1. Parse-clean on **live PS 5.1** and PS 7 — all engine modules + server (+ the server's
+   here-strings extracted and checked separately); UTF-8 BOM intact.
+2. `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` — 611 assertions.
+3. `tools\tests\Verify-OnWindows.ps1` from an elevated 5.1 prompt before any release.
+4. AMSI: engine spawns and streams, no `ScriptContainedMaliciousContent`.
+5. Headless `-Auto` scan: contiguous `PHASE N — … took` sequence (no module-trap gaps), clean
+   self-exit, reports written.
+6. Auto-destructive re-grade vs baseline (target 52, and zero system-damage fix params).
 
-### Done 2026-07-02 — portable distribution
-`tools/Build-Release.ps1` builds the transferable artifact: validates every script
-(parse + BOM) and data file (JSON), stages runtime files only, writes
-`dist/ZeroBreach-V23_<stamp>.zip` + SHA256 sidecar (`-OutDir` targets a USB directly;
-`-IncludePython` optional). The server self-unblocks its runtime tree at startup
-(Mark-of-the-Web). **Proven:** extracted release to a spaced path → server boots, GUI
-serves HTTP 200, `/api/state` answers. Remaining field test: a real *foreign* box (not
-the dev machine) per the item below.
+**Both**
+7. Live acceptance on a real Windows box for anything user-facing.
 
-### Next (high value, ordered)
-1. ~~**WS3 — FP-tune the WS2 detections**~~ **DONE 2026-07-02** — fresh live DEEP baseline
-   (`_143221`: 734 findings, 39 auto-destructive vs the 52 reference) shows the WS2 detections
-   clean (only P53's Info-only name matches). FP round 6 cleared the remaining healthy-box
-   auto-destructive tail with user sign-off (P20 OneDrive RunOnce, P31 .lnk target resolution,
-   P42 account→Info, P47 WindowsApps substring, P48/P94 package trees, P86→POSSIBLE,
-   P90 renderer DLLs) — see `CHANGELOG.md`.
-2. ~~**Round-4/5 leftover FPs** needing user sign-off~~ **RESOLVED 2026-07-02** — all cleared
-   in round 6: P48/P94 Python LocalCache + P90 scratchpad via package-tree allowlists; P53
-   already content-confirm/Info; P63 LGHUB + P96 printer-resource DLLs (catalog-signed,
-   invisible to Get-AuthSig) reappeared live in the `_192913` dev-profile re-run and were
-   allowlisted the same day (`miner_config_benign_paths`, `spooler_benign_dlls`).
-3. ~~**Per-phase progress truth**~~ **DONE 2026-07-02** — the server's phase regex now
-   captures fractional phases (55.5, 74.5/.6/.7, 99.5); they advance the counter/progress
-   as real plan steps, findings carry the true fractional phase, and MITRE resolves their
-   dedicated `phase_map` keys (previously unreachable). `phase_total` stays the plan
-   ceiling per mode (30/80/115, mirroring the loader's `$PhasePlan`).
-4. ~~**Scan profiles**~~ **DONE 2026-07-02** — `GET|POST /api/profiles` (4 read-only
-   built-ins + user profiles in `reports/scan_profiles.json`, fail-closed validation,
-   upsert-by-name, 50 cap) + SCAN PROFILES picker in the config view. Shipped with a
-   server-wide fix: malformed JSON in any POST body used to hang the client forever
-   (PS 5.1 terminating `ConvertFrom-Json` error) — now `Read-JsonBody` + accept-loop
-   500 net; `/api/scan/start` fails closed on a garbled config. See `CHANGELOG.md`.
-5. ~~**Coverage matrix re-audit (WS0)**~~ **DONE 2026-07-02** — regenerated against main's
-   split engine (121 phases, +55.5/+99.5, schema extended with module/mode_gate/severities/
-   fix_actions; MITRE cross-checked). Gap list in the commit message (`fea1960`). Two
-   discoveries became items 7–8 below.
-6. **USB portability field test** — extract a `Build-Release.ps1` zip on a **non-dev** box
-   (spaced path already proven locally); confirm SmartScreen/Unblock flow, URL-ACL fallback,
-   and reports landing beside the extracted copy.
-7. ~~**Wire the 15 orphaned signature keys**~~ **DONE 2026-07-02** — all 15 now consumed:
-   P67 adware regs / P82 tunneling / P89 stego / P98 leaked certs / P106 cred-dump tools
-   externalized 1:1 (inline AMSI-liability literals removed); P6 gains loader/botnet +
-   banking-trojan process IOCs; P34/36 gain the extra C2 domain families; P55.5 gains a
-   cert-TBS-SHA1 confirm (durable across polymorphic BYOVD variants); P62 a framework-NAME
-   pipe pass; P68 the 14 new infostealer families + loader-drop/C2-config file rules; P100
-   the full 31-path infostealer target list. A Fable review agent caught **2 rule-#1 auto-fire
-   FPs before commit**: broad `known_c2_domains` (github/ngrok/tailscale) must NOT feed the
-   Phase-34 DNS-cache HIGH+RunCmd path (split into `$MALWARE_C2_DOMAINS` for P34 vs
-   `$ALL_C2_DOMAINS` for P36 reverse-DNS only); and generic stealer family words
-   (atomic/aurora/mystic) auto-killing legit procs — P68 now auto-kills only unsigned + in a
-   user-writable path (validated live: `Mystic_Light_Service` correctly downgraded to POSSIBLE,
-   not killed). Parse-clean 5.1+7, BOM intact, full DEEP + FULL headless runs 0 recovered errors.
-8. ~~**Make QUICK a real gate**~~ **DONE 2026-07-03** — QUICK now runs exactly 30 phases
-   (`1,3,4,5,6,10,20,21,23,27,28,29,30,31,33,35,41,42,45,51,53,54,56,62,64,69,70,72,74.6,75` —
-   cheap high-signal triage: process/IOC/run-key/task/service/pipe/net/Defender, deferring the
-   expensive file-walks, sig-audits, and event-log mining). Mechanism: loader sets
-   `$global:QUICK_MODE`; the other 54 phases in 1–80 are wrapped
-   `if (-not $global:QUICK_MODE) { trap {…}; <body> }` (contiguous-run blocks, each with its own
-   inner trap per the module-trap rule). `$PhasePlan.Max=30` flows to `TOTAL_PHASES`/Summary;
-   server keeps `QUICK=30` and now reports a 1..30 `PhaseIdx` (count of distinct headers seen)
-   as the `scan_state`/`sync`/`/api/state` `phase` in QUICK only — findings keep the true phase.
-   Two Fable agents assisted: a cross-phase variable-leak audit (**0 leaks** — every kept phase
-   self-contained or on loader globals; 51→53 `$ransomScanFiles` verified outside the wraps) and
-   the server progress-index implementation. Validated live: headless QUICK runs exactly those 30
-   phases, 0 recovered errors; FULL still runs the full 1–80 span. **Also fixed a latent
-   pre-existing bug surfaced by the QUICK run:** Phase 56's rootkit loop used `foreach ($pid …)`
-   — `$PID` is a read-only automatic, so the loop threw whenever a WMI/PS process discrepancy
-   existed (exactly when it matters), silently killing hidden-process detection in every mode.
-   Renamed to `$rkpid`.
+## 8. Signature storage — an open decision
+
+The two engines store rule content differently, and this needs resolving:
+
+- **PS engine:** `data/*.json` on disk, loaded at runtime. Non-negotiable there — signature
+  literals inline in a `.ps1` get the engine AMSI-blocked at load, and the failure is *silent*
+  (the tool "runs" and finds nothing).
+- **Native engine:** `<EmbeddedResource Include="Signatures\*.json" />` — ~179KB of family
+  names, C2 indicators and ransom-note text compiled into the assembly, with an on-disk
+  `MergeJson` override path.
+
+The AMSI argument does not apply to a compiled assembly, so embedding is not *unsafe* the way it
+was in PowerShell. Two concerns remain and both are real:
+
+1. **Static PE scanning.** A signature database welded into a single-file PE is a known way for
+   security tools to be flagged as the malware they detect. Unproven for us — **this is a lab
+   test, not a debate** (§10).
+2. **Update/reputation coupling.** Every signature change means a new binary, a re-sign, and a
+   reset of per-file SmartScreen reputation. The on-disk merge path already exists; making it
+   the *primary* content channel decouples rule cadence from binary cadence.
+
+**Working decision:** keep the embedded set as a baseline, promote the on-disk merge path to the
+primary update channel, and let the lab test decide whether the embedded baseline shrinks.
+
+## 9. Migration status
+
+This repo is the build target. Source material is copied **in**; the origin repos are never
+modified.
+
+| Source | What | Status |
+|---|---|---|
+| `~/Downloads/engine1` | The five `ZeroBreach.*` C# projects, `docs/`, `INSTRUCTIONS_AI.md`, `_ENGINE_SPEC_FOR_REBUILD.md` | **Pending copy-in** |
+| `~/Downloads/claude/fable-work` | G-series deliverables: `New-ScanReport.ps1`, `Compare-ScanRuns.ps1`, `Get-PhaseTimingReport.ps1`, `New-CoverageMatrix.ps1`, `gui/viewer.html`, test harness; plus `HANDOFF_FABLE.md` and `PACKAGING_STUDY.md` | **Pending copy-in** |
+| `zerobreach/fable-work` | F-series briefs (deferred): cloud/DevOps creds, lateral+AD+cred-dumping, rule engine, persistence surface, supply chain, LAN band, UEFI, packaging | **Already here — the only surviving copy.** Becomes the native scanner roadmap. |
+
+Both origin repos are **read-only to this project**. They are also the packages a
+safeguard-restricted assistant will work in, so their sanitized framing must not be disturbed.
+
+The F-series briefs map onto native scanners roughly as: F1 → a new cloud-credential scanner ·
+F2 → extends `CredentialAccessScanner` · F3 → extends `SignatureDb` · F4 → extends
+`PersistenceScanner` · F5 → a supply-chain scanner · F6 → a LAN scanner · F7 → extends
+`RootkitBootScanner` · F8 → superseded by the native csproj, fold into packaging docs. Exact
+mapping is a follow-on audit.
+
+## 10. Roadmap
+
+### Now
+1. **Copy in the two source trees** (§9) and get `dotnet build` + `dotnet test` green in this
+   repo.
+2. **Test lab, native engine survival test.** Before any malware: publish the real single-file
+   exe, deliver it to a clean Win11 box the way a technician would (downloaded, mark-of-the-web
+   intact), and find out whether Defender lets it land and lets it finish. Twenty minutes, zero
+   risk, and it is a go/no-go on the entire delivery model. See `TEST_LAB_GUIDE.md`.
+3. **Start the code-signing identity.** Longest lead time of anything on this list, and it gates
+   every packaging option. Azure Trusted Signing is the cheapest credible route; validation
+   takes days to weeks and needs a verifiable business history.
+4. **Windows validation of the HUNT band** — phases 134-162 have never met the PS 5.1 parser, a
+   live registry provider or a real process table. Expect the counter to reach 162 and an FP
+   round on 136/139/141.
+5. **Windows validation of the Extended band** (116-133) — exercised only on Linux/pwsh so far.
+
+### Next
+6. **Close the detection parity gap** — port PS coverage into native scanners, F-series first.
+7. **Per-check status in the PS engine** — adopt the native `Completed`/`Inconclusive`/`Skipped`
+   discipline and a non-zero exit on coverage gaps. This is the single highest-value idea to
+   flow *back* from the rebuild.
+8. **Deterministic finding ids in the PS engine** — baseline diffing depends on identity
+   stability.
+9. **FP rounds on both new PS bands** — Extended and HUNT ship `Info` throughout precisely
+   because they have never met a real fleet.
+10. **Sign the PS scripts** once a certificate exists — improves AMSI/EDR posture and unlocks
+    per-site `AllSigned` policies, with zero repackaging risk.
 
 ### Later
-- **WS4 performance** (in progress): **`Get-ScanFiles` per-scan enumeration memo DONE
-  2026-07-04** — the 18 call sites re-walked the filesystem with no caching; a full-param-tuple
-  memo (`$global:SCAN_FILE_CACHE`, `ZB_NOCACHE` kill-switch) collapsed 18/41 walks and cut DEEP
-  wall-clock ~21% with the CRITICAL/HIGH set byte-identical (see CHANGELOG). **True phase
-  parallelism is ruled out** — phases share variables across a single dot-sourced scope, so
-  concurrent execution would race that state; not safe here. **`Win32_Process` snapshot memo DONE
-  2026-07-21** — `Get-ProcSnapshot` (loader helper, 90s TTL because the process table is NOT
-  static, shared `ZB_NOCACHE` kill-switch) collapsed 6 of the 7 full per-phase WMI process
-  enumerations (Phases 3/4/44/99/99.5/102); Phase 56's WMI-vs-Get-Process rootkit delta stays on
-  raw same-instant enumerations by design. Service lookups audited: only one full `Win32_Service`
-  enum per scan (Phase 111 unquoted-path privesc) + cheap name-filtered `Get-Service` calls —
-  nothing left to cache there. Remaining WS4: per-file signature lookups; target a sub-2-minute QUICK.
-- **WS5 reporting**: richer executive summary, per-tactic MITRE rollup, trend/diff view
-  across baselines (`-Baseline` is already wired).
-- **Scheduled scans productized**: `-Schedule` + SMTP delivery hardening, plus a GUI panel.
-- **Build**: zip-with-BAT distribution is DONE (`tools/Build-Release.ps1`). PyInstaller for
-  the parked Python server stays deprioritized; optional polish: `assets/icon.ico`, a signed
-  launcher, or PS2EXE if SmartScreen friction ever matters.
-- **Fleet ideas** (multi-box): central drop-folder for baselines + a compare view.
+- Richer executive summary, per-tactic MITRE rollup, trend/diff view across baselines.
+- Scheduled scans productized (`-Schedule` + SMTP hardening + a GUI panel).
+- Fleet ideas: central drop-folder for baselines and a compare view.
+- A native-engine operator UI, if the CLI ever proves insufficient.
 
-## 8. Doc map
+## 11. Doc map
 
 | File | Role |
 |---|---|
 | `BLUEPRINT.md` | This file — product shape + roadmap. Start here. |
 | `CLAUDE.md` | Hard rules + subsystem reference for anyone editing code. |
-| `HANDOFF.md` | Current session state + the live-GUI runbook. |
-| `CHANGELOG.md` | Dated narrative of every fix/tuning round. |
-| `NEXT_STEPS.md` / `UPGRADE_PLAN.md` | Historical work plans (superseded by §7; kept for context). |
+| `HANDOFF.md` | Current session state + validation runbooks. |
+| `CHANGELOG.md` | Dated narrative of every fix and tuning round. |
+| `TEST_LAB_GUIDE.md` | Building and running the malware test lab. |
+| `README.md` | Operator-facing quick start and deployment. |
+| `docs/_history/` | Audits, packaging study, superseded plans. **Dated records — append, never rewrite.** |
+| `fable-work/` | Deferred F-series scanner briefs (§9). |
 | `_python/README_CLAUDE_CODE.md` | Parked Python server spec. |

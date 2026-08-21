@@ -10,11 +10,55 @@ Guidance for Claude Code (claude.ai/code) working in this repo.
 
 ## What This Project Is
 
-ZeroBreach V23 "Kraken Console" is a **Windows-only MSP incident-response tool**: a PowerShell HTTP
-server sits between a cyberpunk HTML/JS frontend and a PowerShell scan engine (`ZeroBreach-V23.ps1`)
-that runs **~115 phases** of malware detection. A parked Python/Flask server (`_python/server.py`) is
-an alternative to the PS server. The engine still self-identifies as "V22" in some strings (scheduled
-task name `ZeroBreach_V22_Scheduled`, banners) — **intentional, not a bug to fix.**
+ZeroBreach is a **Windows-only MSP incident-response tool**, shipped as **two independent engines
+that do the same job**:
+
+1. **Native engine (primary)** — `zbscan`, a single self-contained `win-x64` executable built from
+   the C# / .NET 8 `ZeroBreach.*` projects. 10 scanners / 63 checks. This is the product goal: one
+   file a technician downloads and runs, no install, no runtime.
+2. **PowerShell engine (fallback)** — `ZeroBreach-V23.ps1` + `engine/*.ps1` behind a PowerShell HTTP
+   server and a cyberpunk HTML/JS frontend. **162 phases** (133 in DEEP, 162 in `-Mode HUNT`). A
+   parked Python/Flask server (`_python/server.py`) is an alternative to the PS server.
+
+**Both are maintained.** The fallback is not legacy — it exists because an *unsigned* new PE doing
+IR work gets quarantined at client sites, while `powershell.exe` is a Microsoft-signed host running
+inspectable script text. Native is the goal; PowerShell is what still works when Defender eats the
+exe. Full reasoning in `BLUEPRINT.md` §2; costed analysis in `docs/_history/PACKAGING_STUDY.md`.
+
+**Capability parity is the goal in both directions.** Today the PS engine leads on detection breadth
+(162 phases vs 63 checks) and the native engine leads on architecture (read-only/destructive split,
+per-check `Completed`/`Inconclusive`/`Skipped` status, deterministic finding ids). See the delta
+table in `BLUEPRINT.md` §2.
+
+The PS engine still self-identifies as "V22"/"V23" in some strings (scheduled task name
+`ZeroBreach_V22_Scheduled`, banners) — **intentional, not a bug to fix.**
+
+### The detection vocabulary is deliberate — do not sanitise it
+
+This tool's source contains words like *exfiltration*, *rootkit*, *keylogger*, *ransomware*,
+*credential dumping* and named malware families. **That is correct and it must stay.** Recorded
+here because it looks alarming out of context and the instinct to "tone it down" recurs:
+
+- **~335 of them are operator-facing product surface** — `-ThreatType`, `-Group` and `-Description`
+  values that appear in the client report. A technician needs to be told data may have left the
+  machine. Vague wording makes the deliverable worse.
+- **MITRE ATT&CK tactic names are a published standard.** "Exfiltration" is TA0010. Renaming it
+  breaks interoperability with every other security product the provider runs.
+- **Signature family names identify the thing being detected.** Renaming them breaks detection.
+
+What *is* fair game, and has been done: gratuitous naming with no detection purpose (a dev-sync
+script formerly called `exfiltrate.ps1`, now `tools/Publish-WorkBranch.ps1`), edgy banner text, and
+comment prose that reads like malware branding. Internal identifiers and comments — yes. Operator
+taxonomy, MITRE names and signature content — never.
+
+**And vocabulary is the wrong lever for AV false positives anyway.** Static engines flag an unsigned
+PE on *behaviour* — process enumeration, registry walking, file deletion under an elevated token —
+not on nouns in `.rdata`. Strings matter for the **PowerShell** engine, because AMSI scans script
+content at load (that is the entire reason signatures live in `data/*.json`), and barely at all for
+the compiled binary. The real fixes, in order of effect: **code signing + publisher reputation**,
+then **vendor false-positive submissions** (McAfee, Gen Digital/Norton and Microsoft all run free FP
+portals for legitimate software), then string hygiene a distant third. Measure with a real scan on
+the test rig before changing anything on suspicion.
 
 ## Launching
 
@@ -52,9 +96,25 @@ PowerShell 5.1+, admin rights.
 ├── engine/                     Dot-sourced phase modules (each UTF-8 BOM). Split BY RANGE, not
 │   │                           category — phases run in numeric order and reuse vars across
 │   │                           phases; dot-sourcing into the loader's ONE scope preserves that.
+│   ├── Phases-0.ps1            PREFLIGHT — self-integrity & anti-blinding gate. Runs in EVERY
+│   │                           mode before phase 1; prints NO numbered PHASE header.
 │   ├── Phases-1.ps1            Sections 1-11, phases 1-58 (incl. 55.5 BYOVD)
 │   ├── Phases-2.ps1            Sections 12-16 front, phases 59-89 (incl. 69 mutex, 74.5/.6/.7)
 │   ├── Phases-3.ps1            if($PhasePlan.Advanced) 90-105+ (incl. 99.5) + Integrity 108-115
+│   ├── Phases-4.ps1            if($PhasePlan.Extended) 116-133 — WS6 extended malware + tamper
+│   │                           band (browser/app/Office/shell tamper, execution evidence,
+│   │                           clipper, RMM, exfil, webhook C2, droppers, web shells, wipers)
+│   ├── Phases-5.ps1            if($PhasePlan.Hunt) 134-145 — cross-view rootkit detection
+│   │                           (task/service/process/autostart/driver), anti-forensics
+│   │                           (timestomp, filename/namespace), process memory (unbacked
+│   │                           threads, unexpected CLR host, deleted module backing, image
+│   │                           integrity, suspended processes)
+│   ├── Phases-6.ps1            if($PhasePlan.Hunt) 146-159 — STUB, parallel work package
+│   │                           (see fable-work/): PE structure, cloud+DevOps creds, lateral
+│   │                           /AD/cred-dumping, LAN band, persistence surface, supply
+│   │                           chain, UEFI
+│   ├── Phases-7.ps1            if($PhasePlan.Hunt) 160-162 — SYNTHESIS. No new detection:
+│   │                           attack-chain correlation, patient zero, timeline export
 │   ├── Summary.ps1             risk score + audit summary + stealth/auto exits
 │   └── FixMode.ps1             fix-mode entry, rollback snapshot, Invoke-FixMode
 ├── gui/
@@ -89,7 +149,7 @@ Self-elevates (`Start-Process -Verb RunAs`, re-passing args). Params:
 
 | Param | Values | Notes |
 |---|---|---|
-| `-Mode` | `QUICK \| FULL \| DEEP \| PARANOID \| STEALTH` | Empty = interactive menu |
+| `-Mode` | `QUICK \| FULL \| DEEP \| PARANOID \| STEALTH \| HUNT` | Empty = interactive menu. HUNT = DEEP + the 134-162 threat-hunting band (ceiling 162). |
 | `-Hours` | int | `0` = all time, `N` = last N hours, `-1` (default) = interactive menu |
 | `-Auto` | switch | Skip all menus (servers always pass this) |
 | `-Html` | switch | Also emit an HTML report |
@@ -131,7 +191,7 @@ Phase headers: `PHASE\s+(\d+(?:\.\d+)?)[^\d]` — **fractional phases (55.5, 74.
 their decimal** (since 2026-07-02): they advance the GUI counter/progress as real plan steps,
 findings carry the true fractional phase, and both `Resolve-Mitre` copies look up the fractional
 `phase_map` key first (integer-floor fallback). `phase_total` stays the plan ceiling per mode
-(QUICK 30 / FULL 80 / DEEP+ 115, mirroring the loader's `$PhasePlan`).
+(QUICK 30 / FULL 80 / DEEP+ 133 / HUNT 162, mirroring the loader's `$PhasePlan`).
 **Only CRITICAL/HIGH + a destructive FixAction is auto-selected
 for remediation** — POSSIBLE is shown but never auto-acted-on (the lever behind every FP downgrade).
 **Child stdout is UTF-8 end-to-end:** the loader sets `[Console]::OutputEncoding` to UTF-8 when
@@ -369,10 +429,145 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   when the engine finishes writing it; `/api/remediate` refuses with 409 if the file changed. A
   report from an earlier launch is allowed but called out in the console.
 
+### The engine must not trust its own inputs (WS7, added 2026-08-19)
+- **`Join-AllowRegex` is the integrity choke point and must stay one.** Every FP allowlist in
+  the engine passes through it, and an allowlist **fails open** — it SUPPRESSES detections. So
+  the cheapest attack on this tool is not deleting a detection (a missing key fails closed to
+  `(?!)` and is conspicuous) but **widening one entry to `.*`**: every phase downstream then
+  suppresses everything it finds and still prints its `[OK ]` banner. `Join-AllowRegex` now
+  refuses any pattern that does not compile, blows a 150 ms match budget, or is **universal**
+  (matches five deliberately unrelated canary strings). Refusals **fail closed** — the entry is
+  dropped so the phase goes NOISY, never BLIND — and land in `$global:ZB_SIG_TAMPER`, which
+  `engine/Phases-0.ps1` reports as CRITICAL. **Never move an allowlist off `Join-AllowRegex`**,
+  and never "fix" a noisy phase by adding a broad pattern — the engine will now accuse itself of
+  being compromised, correctly.
+- **Never assume the engine is 64-bit.** There was exactly one WOW64-aware line in the whole
+  tree before WS7. A 32-bit process on x64 Windows is lied to by the OS: `C:\Windows\System32`
+  redirects to `SysWOW64` and `HKLM\SOFTWARE` to `Wow6432Node`, so the System32 audits (15/109/113)
+  and every `HKLM\SOFTWARE` phase read the wrong half of the machine. This fires by ACCIDENT far
+  more often than by attack (a technician's 32-bit shell, an x86 RMM agent, an x86 PS2EXE build).
+  Use **`Get-RegVal64` / `Get-RegNames64` / `Get-RegSubKeys64`** for `HKLM\SOFTWARE` and
+  `$global:ZB_SYS32` for System32. `$global:ZB_IS_WOW64` records the condition and Phase 0 reports
+  it CRITICAL. **Do not add an auto-relaunch** — it would orphan the redirected stdout the server
+  reads, and the GUI would see the scan die.
+- **`engine/Phases-0.ps1` is PREFLIGHT, not a numbered phase.** It must never print a
+  `PHASE <n>` header (the server's counter regex would see it and every mode's `phase_total`
+  would be off by one) and it resets `$global:CURRENT_PHASE_NUM = 0` on the way out. Findings
+  carry `-Phase "PREFLIGHT"`; `Resolve-Mitre` finds no numeric phase and falls back, which is
+  correct for them.
+- **The integrity manifest is a RELEASE artifact, not a committed file.** `tools/Build-Release.ps1`
+  generates `data/integrity_manifest.json` before staging; it is `.gitignore`d because on a dev
+  tree every edit invalidates it and Phase 0 would report CRITICAL tampering on every scan. Its
+  absence is reported as INFO ("engine authenticity is UNVERIFIED this run"), which is the honest
+  state for a working tree.
+
+### HUNT band 134-162 (`engine/Phases-5/6/7.ps1`, added 2026-08-19)
+- **`-Mode HUNT` sits above PARANOID with a ceiling of 162, and that ceiling is mirrored in FOUR
+  places** — the loader's `$PhasePlan`, `$MODE_PHASES` in `ZeroBreach-Server.ps1`, `MODE_PHASES`
+  in `_python/server.py`, and the mode whitelist in both servers. `Test-Hunt-Band.ps1` checks them
+  together. HUNT is deliberately NOT folded into DEEP: the band walks process memory and hashes
+  the ESP, so it costs real wall-clock and must stay an explicit operator choice.
+- **Every finding in 134-162 is `FixAction "Info"`. There are no exceptions and there must not
+  be**, for a reason specific to this band: its best phases fire on healthy managed endpoints by
+  construction. **An EDR is, by every signal phases 134-138 and 141-145 look for, a legitimate
+  rootkit** — it hooks, it hides, it injects unbacked code into everything it protects. A
+  CRITICAL + `KillProcess` on an EDR hook would be auto-selected in the GUI and would disarm the
+  customer's actual security product. Info + `hunt_memory_benign_paths` + a live FP round first.
+- **NO P/INVOKE IN THE ENGINE.** Every memory signal in 141-145 is reached through pure .NET
+  (`ProcessThread.StartAddress`, `ProcessModule.BaseAddress`/`ModuleMemorySize`). Declaring
+  `OpenProcess`/`ReadProcessMemory`/`VirtualQueryEx` is the exact code shape AV heuristics flag,
+  and an engine Defender blocks at load detects **nothing at all** — the same failure mode the
+  AMSI rule above exists for. `Test-Hunt-Band.ps1` asserts no `DllImport` and no
+  `Add-Type -TypeDefinition` in the new modules. If a future phase genuinely needs a region walk,
+  put the C# in a **data file** (data files are not AMSI-scanned) and document why.
+- **Cross-view phases must consult two INDEPENDENT sources, and the disagreement IS the
+  detection.** That is what lets them catch an implant nobody has a signature for. Phase 134
+  (registry TaskCache vs `Get-ScheduledTask`) exists because **deleting a task's `SD` value hides
+  it from `Get-ScheduledTask`, `schtasks` and the Task Scheduler UI while it keeps running** — no
+  exploit, no driver, works fully patched, and it blinds phases 29 and 104. Do not "simplify" a
+  cross-view phase down to one source.
+- **Correlation (phase 160) links on shared ENTITIES, never on time.** `Add-Finding` stamps a
+  finding with the time the SCAN ran, not when the artifact was created, so every finding in a run
+  shares one timestamp and time-clustering would fuse the whole scan into one meaningless chain.
+  It links on file paths (drive-letter **and UNC** — lateral findings name `\\server\share\x.exe`),
+  PIDs, registry keys and network peers. **An entity shared by more than 12 findings is treated as
+  a common noun, not a link** (`C:\Windows\System32\cmd.exe` appears in dozens of unrelated
+  descriptions); without that cap one shared path fuses everything. Both properties are
+  revert-proofed in `Test-Hunt-Correlation.ps1`.
+- **A backtick immediately before a closing double-quote escapes it** and the string never
+  terminates. Do not wrap inline commands in markdown backticks inside a `-Description` — use
+  single quotes. This broke the build twice while writing this band.
+
+### Extended band 116-133 (`engine/Phases-4.ps1`, added 2026-08-19)
+- **The band ships `FixAction "Info"` by default and that is deliberate.** It is new
+  detection surface that has never been through a live FP round, so nothing in it may be
+  auto-selected for a destructive fix. Exactly **three** exceptions exist, each an artifact
+  that cannot occur benignly and whose removal restores stock behaviour: the
+  `Office test\Special\Perf` key (`DeleteRegKey`), a `.lnk` carrying encoded PowerShell or a
+  hidden downloader (`Quarantine`), and a chat webhook URL embedded in a chat client's own
+  module tree (`Quarantine`). Each is verified against the real guard by
+  `tools/tests/Test-Extended-Band.ps1` — **add a fourth only with the same proof.**
+- **AppCertDlls is reported `Info` on purpose.** It lives under
+  `SYSTEM\CurrentControlSet\Control`, which the guard refuses; shipping it as CRITICAL +
+  `DeleteReg` would be auto-selected and then reported `blocked` on every box — the exact
+  audit-M1 anti-pattern. Same reasoning for the LSA package values: a wrong edit there
+  stops the machine logging in at all, so the finding carries the stock value and a warning
+  instead of a fix.
+- **`$PhasePlan.Extended` gates the band; the ceiling is mirrored in FOUR places** —
+  the loader's `$PhasePlan`, `$MODE_PHASES` in `ZeroBreach-Server.ps1`, `MODE_PHASES` in
+  `_python/server.py`, and the `$ScanState.PhaseTotal` default. Change one, change all four
+  (the test checks them together).
+
+### Writing detection rules in `data/detection_signatures.json`
+- **An FP allowlist must never swallow the case its own detection branch exists for.**
+  Phase 130's allowlist covered `\AppData\Roaming\discord\`, which made its client-core
+  `Quarantine` branch unreachable dead code — the branch existed precisely for a stealer
+  patched into the client. Caught by the runtime smoke test, 2026-08-19. When you add an
+  allowlist entry, re-read every branch downstream of it and ask which one you just
+  disabled.
+- **Audit escaping when you add a pattern.** These are JSON strings holding .NET regexes
+  holding Windows paths, so `\` is escaped twice and it is very easy to write `\\d`
+  (literal backslash + `d`) where you meant `\d`. `_MEI\\d+` silently disabled the whole
+  PyInstaller allowlist. `Test-Extended-Band.ps1` asserts allowlists against realistic
+  Windows paths — **add a case there for every new allowlist**, because a path-shaped rule
+  cannot be exercised by the Linux fixture tree.
+- **Do not anchor a rule with `$` if the phase matches it against a COMPOSED string.**
+  `LNK-ScriptHostTarget` ended `\.exe$` but Phase 118 matches
+  `"<TargetPath> <Arguments>"`, so the rule could never fire. Match a boundary
+  (`("|\s|$)`) instead.
+- **Every regex is matched against attacker-authored content** (web shells, dropped
+  scripts, registry values), so a catastrophic-backtracking pattern is a denial of service
+  on the scan itself. The suite runs each one against backtracking bait under a 150 ms
+  timeout, with a `(a+)+$` canary so that section cannot silently become a no-op.
+- **The five Phase-6 lists auto-kill on a bare substring match.** `known_rat_procs`,
+  `known_miner_procs`, `known_keylogger_procs`, `loader_procs` and `banking_trojan_procs`
+  become CRITICAL + `KillProcess`, which the GUI auto-selects. No entry may be a word that
+  can occur inside a legitimate process name — `houdini` (SideFX Houdini) was caught and
+  removed during the 2026-08-19 expansion. The suite asserts no entry collides with a list
+  of real software names and that none is shorter than 4 characters.
+
+### Authenticode memo (WS4, added 2026-08-19)
+- **`Get-AuthSig` is memoised per path** (`$global:AUTHSIG_CACHE`, case-insensitive key,
+  bounded by `AUTHSIG_CACHE_MAX`, sharing the `ZB_NOCACHE` kill-switch). It is the engine's
+  most expensive repeated operation — the cert chain build does online CRL/OCSP — and 14
+  call sites across 13 phases verify overlapping file sets. A `$null` (locked file) result
+  is cached too: that is a real answer and re-asking costs the same timeout.
+- **`Get-SignatureVerdict` now calls `Get-AuthSig`, not `Get-AuthenticodeSignature`.**
+  There must be exactly ONE raw `Get-AuthenticodeSignature` call in the tree — inside the
+  wrapper. The suite asserts that count.
+
 ### Security regression suite
-- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 289
-  assertions covering C1/H1/H2/H5/H7/H7b/H8, M1-M11 and the §5 FP anchors, the parse+BOM gate, and
-  the embedded runspace here-strings. Every test pulls the real functions out of the shipped source
+- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 611
+  assertions covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
+  (incl. a RUNTIME test of correlation and of the signature-set integrity gate) + WS4 signature
+  memo, the parse+BOM gate, and the embedded runspace here-strings.
+- **`Test-Extended-Smoke.ps1` is the only test that EXECUTES engine code.** It runs
+  `engine/Phases-4.ps1` against a generated fixture filesystem plus an in-memory registry
+  (`ExtendedSmoke.Harness.ps1`), and it is what catches runtime faults the AST tests cannot see —
+  it found five real bugs on the day the band was written. It runs on Linux, but fixture paths use
+  `/`, so **path-shaped rules must additionally be asserted against realistic Windows paths in
+  `Test-Extended-Band.ps1`.** The harness stubs ~20 loader helpers and verifies that stub contract
+  against the loader via the AST, so a renamed helper fails the test instead of drifting. Every test pulls the real functions out of the shipped source
   **via the AST**, so a test cannot drift from the code it guards. **`ParseFile` on
   `ZeroBreach-Server.ps1` does NOT validate the runspace here-strings** (`$script:SCAN_SCRIPT`,
   `SSE_SCRIPT`, `REMEDIATE_SCRIPT`) — `Test-EmbeddedRunspaces.ps1` is what catches a syntax error

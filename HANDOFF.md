@@ -1,4 +1,242 @@
-# RESUME HANDOFF — updated 2026-08-19 (session 13: audit §5 FP anchors + the Windows verifier)
+# HANDOFF
+
+## Session 2026-08-20 — dual-engine restructure + Fable library package
+
+**Read this first. Everything below the next `---` is prior-session history.**
+
+### What this repo is now
+
+`~/Downloads/claude/zerobreach` is **the** build repo. Two engines, both maintained:
+
+- **Native (primary)** — `ZeroBreach.*` C# projects, `net8.0-windows`, self-contained
+  single-file `win-x64` exe. 10 scanners / 63 checks. **Builds green here: 279 passed,
+  14 skipped, 0 failed.**
+- **PowerShell (fallback)** — `ZeroBreach-V23.ps1` + `engine/*.ps1` + server + GUI. 162 phases.
+  Exists because an unsigned PE gets quarantined at client sites while `powershell.exe` is a
+  signed Microsoft host running inspectable script. See `BLUEPRINT.md` §2.
+
+Parity goal runs **both** directions. Today PS leads on detection breadth (162 phases vs 63
+checks); native leads on architecture (read-only/destructive split, per-check
+Completed/Inconclusive/Skipped, deterministic finding ids). Delta table in `BLUEPRINT.md` §2.
+
+### Read-only source repos — NEVER write to these
+
+- `~/Downloads/engine1` — origin of the C# projects. Verified 0 changes.
+- `~/Downloads/claude/fable-work` — G-series work package. Verified 0 changes.
+
+Both are Fable-safe sanitized packages. Their framing must not be disturbed.
+
+### Done this session
+
+- Copied in: five `ZeroBreach.*` projects, `.sln`, `Directory.Build.props`,
+  `INSTRUCTIONS_AI.md`, `_ENGINE_SPEC_FOR_REBUILD.md`, `docs/*`; fable-work G-series
+  deliverables into `tools/`, `gui/viewer.html`, `data/*.json`.
+- `README.md` + `BLUEPRINT.md` rewritten for dual-engine. `CLAUDE.md` updated: dual-engine
+  framing + a new rule, "The detection vocabulary is deliberate".
+- `docs/_history/` created — audits, `PACKAGING_STUDY.md`, `HANDOFF_FABLE.md`, old `_archive/`.
+- `exfiltrate.ps1` → `tools/Publish-WorkBranch.ps1`, strings reworded.
+- Deliberate-vocabulary notices stamped into 12 PS files + 10 scanners. All PS files parse,
+  BOMs intact, C# still green.
+- **`fable-work-2/` built** — 12 task briefs, the full Fable work programme (below).
+
+### Deliberately NOT done
+
+- **`zerobreach/fable-work` not deleted.** The F-series briefs there are the ONLY surviving
+  copy — the extracted project the owner thought existed does not exist anywhere on this
+  machine.
+- **Operator-facing detection taxonomy not renamed.** ~335 instances of `-ThreatType`/`-Group`/
+  `-Description` are product surface plus MITRE standard names. Renaming degrades the product
+  and breaks interop. Rationale recorded in `CLAUDE.md`. The real AV-FP levers, in order:
+  code signing, vendor FP portals, string hygiene a distant third.
+
+### Uncommitted
+
+Branch `security/audit-2026-08-18`. **The entire C# migration and every doc rewrite is
+working-tree only.** Commit before anything else.
+
+### Next: build the engine
+
+The main gap is detection breadth in the native engine — 63 checks vs 162 PS phases. That work
+is mine; Fable cannot touch it.
+
+Also open, in `BLUEPRINT.md` §10: `--log` flag to tee the console transcript to a text file
+(the owner asked for it — the only output artifact currently missing); `HANDOFF`/`TEST_LAB_GUIDE`
+still need dual-engine updates; superseding headers still needed on `docs/_history/*`.
+
+### Test lab
+
+M93p Tiny, Haswell i5, 16GB, 256GB SSD. **Bare metal, not VMs.** Win11 via Rufus primary
+(bypass TPM 2.0 only — keep firmware UEFI, Secure Boot ON, TPM 1.2 enabled). Known gaps to
+annotate: no HVCI (no MBEC on Haswell), no Credential Guard, TPM 1.2 not 2.0 — affects the
+credential-access and boot-integrity scanners only, ~8 of 10 representative. Win10 22H2 second
+pass. Buy 2–3 spare SSDs, swap-as-snapshot. Defender ON, tamper protection off, exclusion for
+the sample folder only — **never exclude the ZeroBreach exe, that is the thing under test.**
+Unmanaged switch, no uplink.
+
+**Lab test #1, before any malware:** publish the real single-file exe, deliver it to the clean
+Win11 box the way a technician would (downloaded, mark-of-the-web intact), and find out whether
+Defender lets it land and lets it finish. Twenty minutes, zero risk, go/no-go on the whole
+delivery model.
+
+**Longest-lead item on the project: code signing.** Azure Trusted Signing, ~$10/mo,
+days-to-weeks validation, needs verifiable business history. It gates every packaging option.
+
+### Fable work programme — `fable-work-2/`
+
+Fable refuses to work in this repo (cyber safeguard); it works in sanitized self-contained
+packages. `fable-work-2/` is the full programme — the **library layer beneath the engine**,
+which is the most valuable thing Fable can build. All `net8.0` (not `-windows`), Linux-testable,
+no third-party packages.
+
+| Track | Tasks | Why |
+|---|---|---|
+| A — rule engines | A1-A4 YARA (parser, matcher, conditions, API), A5 Sigma | Biggest multiplier. Stops hand-writing patterns; unlocks the public YARA and Sigma corpora. |
+| B — format parsers | B1 PE structure, B2 ZIP/OLE/OOXML | The tool can look at files but not inside them. |
+| C — safety-critical logic | C1 Windows path normaliser, C2 rule linter | Both address documented real bugs. C1 guards the destructive-operation guard. |
+| D — data | D1 IOC feed normaliser, D2 baseline diff | Recurring-visit value; feeds the owner's external report tool. |
+
+Order: A1→A2→A3→A4 strictly sequential, then anything. Owner moves the folder up a level and
+opens it as its own project.
+
+---
+
+# RESUME HANDOFF — updated 2026-08-19 (session 15: WS7 HUNT band + self-integrity gate)
+
+> ## ▶ START HERE after /clear — SESSION 15 (2026-08-19, latest)
+> **Still on branch `security/audit-2026-08-18` (from `main` @ `22e582a`). Nothing is pushed;
+> `main` is untouched.** Session 15 added `-Mode HUNT` (ceiling 133 → **162**), the preflight
+> self-integrity gate, and attack-chain correlation. Built on Linux; **none of it has run on
+> Windows.**
+>
+> ### Start by reading `ADVERSARY_ANALYSIS.md`
+> It is the assessment this session was built from — the tool red-teamed against itself from
+> five perspectives. It explains *why* every phase below exists, and its Part 3 is the priority
+> order for everything still outstanding.
+>
+> ### What changed
+> - **`engine/Phases-0.ps1` — NEW, PREFLIGHT**, runs in EVERY mode before phase 1. Prints no
+>   numbered PHASE header and resets the phase counter to 0, so no mode's `phase_total` shifts.
+> - **`Join-AllowRegex` is now the signature-set integrity gate.** An FP allowlist **fails open**,
+>   so widening one entry to `.*` used to blind every phase downstream while the scan still
+>   printed `[OK ]`. Universal / uncompilable / backtracking patterns are now dropped
+>   (fail-closed) and reported CRITICAL by Phase 0.
+> - **WOW64 truth**: `$global:ZB_IS_WOW64`, `$global:ZB_SYS32`, `Get-RegVal64` /
+>   `Get-RegNames64` / `Get-RegSubKeys64`. There was **one** WOW64-aware line in the entire tree
+>   before this.
+> - **`engine/Phases-5.ps1` — NEW, phases 134-145**: cross-view rootkit detection, anti-forensics,
+>   process memory. **`engine/Phases-7.ps1` — NEW, 160-162**: correlation, patient zero, timeline.
+>   **`engine/Phases-6.ps1` — STUB, 146-159**, owned by `fable-work/`.
+> - **`tools/New-IntegrityManifest.ps1`** (+ `-Verify`), wired into `Build-Release.ps1`.
+>   `.gitignore`d — release artifact, not a committed file.
+> - **Tests 472 → 611.** Two new files, both with revert-proofs recorded in `CHANGELOG.md`.
+>
+> ### ▶ THE ONE THING TO DO ON THE LAPTOP
+> From an **elevated Windows PowerShell 5.1** prompt at the project root:
+> ```
+> powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1
+> powershell -NoProfile -File tools\tests\Verify-OnWindows.ps1 -Live
+> ```
+> Then a real **`-Mode HUNT`** run, watching for:
+> 1. the counter reaching **162** (if it stops at 133 the server's `$MODE_PHASES` did not take);
+> 2. **PREFLIGHT output before phase 1** — and specifically that it says bitness OK. If it
+>    reports 32-bit-on-x64, every earlier scan on that box under-reported and you have found
+>    something more important than any finding in the run;
+> 3. **zero `RECOVERED ERROR` lines in the 134-145 span.** That band has never met the PS 5.1
+>    parser, `Get-ScheduledTask`, a live registry provider, or a real process table;
+> 4. **how noisy 136 / 139 / 141 are.** Expect FPs: 136 on PID reuse, 139 in package-extraction
+>    trees, 141 on .NET and browser processes (JIT stubs execute from unbacked memory, and so
+>    does every EDR). All `Info`, so nothing can be auto-acted-on while you tune;
+> 5. whether **phase 134 flags anything** — a scheduled task with no `SD` value on a clean box
+>    would be a genuine surprise and worth investigating before dismissing;
+> 6. wall-clock for the band, and whether phases 141/143/145 hit their internal 30-45 s budgets.
+>
+> ### Parallel work package — `fable-work/`
+> Self-contained brief for a second session: 8 task briefs (F1-F8), reference copies, and an
+> integration protocol. **Phase ownership is split so the two sessions cannot collide**: 134-145
+> and 160-162 here, **146-159 there**, and the only shared file is
+> `data/detection_signatures.json`, which comes back as an additive fragment. Priority order is
+> F1 (cloud/DevOps credentials — currently *zero* coverage), F2 (lateral/AD — matches the lab
+> being built), F3 (a real YARA-compatible rule engine).
+>
+> ### Honest verification status
+> Linux, **pwsh 7.6.5**. That covers parse+BOM on all 11 shipped files, the full 611-assertion
+> suite, a runtime execution of phases 160-162, and a runtime proof that the allowlist-blinding
+> attack is closed. It does **not** cover the PS 5.1 parser, live registry/WMI/COM, real process
+> memory, or wall-clock. **Phases 134-145 have never executed anywhere.**
+>
+> ### Posture of the new band (read before "improving" it)
+> Every finding in 134-162 is `FixAction "Info"` and must stay that way. An EDR is, by every
+> signal phases 134-138 and 141-145 look for, a legitimate rootkit — it hooks, hides, and injects
+> unbacked code into everything. A CRITICAL + `KillProcess` on an EDR hook would be auto-selected
+> in the GUI and would disarm the customer's security product. There is also **no P/Invoke** in
+> the engine, deliberately: `OpenProcess`/`ReadProcessMemory` declarations are what AV heuristics
+> flag, and a Defender-blocked engine detects nothing at all. A test asserts both.
+
+
+> ## ▶ START HERE after /clear — SESSION 14 (2026-08-19, latest)
+> **Still on branch `security/audit-2026-08-18` (from `main` @ `22e582a`). Nothing is
+> pushed; `main` is untouched.** Session 14 added the biggest detection expansion since the
+> engine split, from the Linux box, so **none of it has run on Windows yet.**
+>
+> ### What changed
+> - **`engine/Phases-4.ps1` — NEW, 18 phases (116-133)**, gated on the new
+>   `$PhasePlan.Extended`. DEEP/PARANOID/STEALTH ceiling **115 → 133**; FULL stays 80,
+>   QUICK stays 30. Two themes: more malware forms (clipboard clippers, web shells, wipers,
+>   packed-script droppers, chat/paste-site webhook C2, exfil staging, unauthorised remote
+>   access) and "what actually got modified" (browser policy/prefs, native-messaging hosts,
+>   shortcuts, sideloaded DLLs, Electron app cores, Office add-ins/templates, installed-app
+>   binary integrity, shell extensions, extended autostart) + the execution evidence that
+>   proves something ran (BAM/DAM, UserAssist, MuiCache, RunMRU i.e. ClickFix). Full phase
+>   table in `CHANGELOG.md`.
+> - **`data/detection_signatures.json` — 62 → 171 keys**, +283 family IOCs, 0 orphans.
+>   20 entries were REMOVED in a rule-#1 review before commit (e.g. `houdini` would have
+>   auto-killed SideFX Houdini; `.cylance` collides with Cylance EDR artifacts).
+> - **`ZeroBreach-V23.ps1`** — signature wiring, `$PhasePlan.Extended`, dot-source of
+>   Phases-4, and the **WS4 Authenticode memo** (`$global:AUTHSIG_CACHE`);
+>   `Get-SignatureVerdict` no longer calls `Get-AuthenticodeSignature` raw.
+> - **`ZeroBreach-Server.ps1` + `_python/server.py`** — phase totals → 133 (the Python
+>   mirror was stale at 107). **`tools/Build-Release.ps1`** — stages Phases-4 (it keeps a
+>   FIXED file list; a missing module ships a release that dies on startup).
+> - **`data/mitre_mapping.json`** — +26 techniques, +18 phase entries, 0 dangling refs.
+> - **Tests: 289 → 472 assertions.** `tools/tests/Test-Extended-Band.ps1` (157) and
+>   `tools/tests/Test-Extended-Smoke.ps1` + `ExtendedSmoke.Harness.ps1` (33) are new.
+>   Every revert scenario was proven to fail the test that guards it.
+>
+> ### ▶ THE ONE THING TO DO ON THE LAPTOP
+> From an **elevated Windows PowerShell 5.1** prompt at the project root:
+> ```
+> powershell -NoProfile -File tools\tests\Verify-OnWindows.ps1 -Live
+> powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1
+> ```
+> (The session-13 instructions below still apply — this is the same command, now also
+> covering the new band.) Then do a **real DEEP run** and watch for:
+> 1. the phase counter reaching **133**, not 115 — if it stops at 115 the server's
+>    `$MODE_PHASES` did not take;
+> 2. **zero `RECOVERED ERROR` lines in the 116-133 span.** The band has never met the PS
+>    5.1 parser, a live registry provider, or COM. **Phase 118 creates a `WScript.Shell`
+>    COM object** — wrapped in try/catch with a graceful notice, but unproven;
+> 3. a contiguous `PHASE N — … took` sequence 116→133 (a hard gap = a missing trap);
+> 4. how noisy **Phase 126 (extended autostart)** and **Phase 128 (RMM inventory)** are on
+>    a real managed box — the two most likely to need an FP round. Everything in the band
+>    is `FixAction Info`, so nothing can be auto-acted-on while you tune;
+> 5. wall-clock. The band adds file walks and signature checks; the WS4 memo should offset
+>    some of that but its benefit is **unmeasured on real hardware**. Run with
+>    `ZB_CACHE_DEBUG=1` to see the three `[CACHE]` lines at the end.
+>
+> ### Honest verification status
+> Everything ran on **Linux under pwsh 7.4.6** (binary in a scratchpad, not the repo).
+> That covers parse+BOM on all 8 shipped files, the full 472-assertion suite, and a
+> **runtime** execution of all 18 new phases against a synthetic infected fixture
+> (41 findings, 0 recovered errors). It does **not** cover the PS 5.1 parser, real
+> registry/COM, or wall-clock cost.
+>
+> ### Safety posture of the new band (read before "improving" it)
+> All 44 `Add-Finding` calls are `FixAction "Info"` except three, each proven ACCEPTED by
+> the real guard: the `Office test\Special\Perf` key (`DeleteRegKey`) and two conditional
+> `Quarantine`s (a `.lnk` with encoded PowerShell; a chat webhook inside a chat client's own
+> module tree). **AppCertDlls is `Info` on purpose** — it sits under a hive the guard
+> refuses, and a CRITICAL finding that always reports `blocked` is the audit-M1
+> anti-pattern. Do not "fix" that by loosening the guard.
 
 > ## ▶ START HERE after /clear — SESSION 13 (2026-08-19, later)
 > **Still on branch `security/audit-2026-08-18` (from `main` @ `22e582a`). Nothing is pushed;

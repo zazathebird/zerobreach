@@ -1,5 +1,220 @@
 # CHANGELOG — ZeroBreach V23
 
+## 2026-08-19 — WS7: `-Mode HUNT`, the self-integrity gate, and attack-chain correlation
+
+**Ask:** act as blackhat / whitehat / pentester / offsec admin, find what the tool misses,
+and increase its power. The answer began with an adversarial assessment of ZeroBreach itself
+(`ADVERSARY_ANALYSIS.md`), because three of the findings were about the scanner, not the malware.
+
+### The three structural problems found
+
+1. **The engine trusted its own inputs.** `data/detection_signatures.json` was read at runtime
+   with no verification, and the FP-allowlist block **fails open**. The cheapest possible attack
+   was never to delete a detection (a missing key fails closed to `(?!)` and is conspicuous) but
+   to widen one entry to `.*`: every phase downstream then suppressed everything it found and
+   still printed its `[OK ]` banner. A clean bill of health from a blinded scanner is the worst
+   output an IR tool can produce, and the release zip is *designed* to be carried between client
+   sites on a USB stick.
+2. **No WOW64 awareness.** There was exactly one `Wow6432Node` reference in the whole tree. A
+   32-bit engine on x64 Windows reads `SysWOW64` when it thinks it is reading `System32`, and
+   `Wow6432Node` when it thinks it is reading `HKLM\SOFTWARE` — phases 15/109/113 and every
+   `HKLM\SOFTWARE` phase were auditing the wrong half of the machine. This fires by accident
+   (a 32-bit shell, an x86 RMM agent, an x86 PS2EXE build) far more often than by attack.
+3. **No memory inspection at all.** Phase 93, the "deep DLL/module injection scan", walks
+   `$p.Modules` — the loader's module list. Reflective DLLs, manually-mapped images, module
+   stomping and in-memory .NET assemblies never enter that list, so the entire category was
+   invisible by construction.
+
+### Added
+
+- **`engine/Phases-0.ps1` — PREFLIGHT**, runs in every mode before phase 1. Reports refused
+  signature entries, verifies `data/integrity_manifest.json`, reports WOW64 redirection and
+  ConstrainedLanguage degradation, flags foreign modules inside the scanner's own process,
+  `COR_PROFILER`-class runtime hijacks, and rogue/orphaned AMSI providers. Prints **no numbered
+  PHASE header** and hands `$global:CURRENT_PHASE_NUM` back at 0, so no mode's `phase_total`
+  shifts.
+- **`Join-AllowRegex` is now the signature-set integrity choke point.** Every allowlist passes
+  through it; a pattern that fails to compile, blows a 150 ms match budget, or is **universal**
+  (matches five deliberately unrelated canaries) is **dropped** — fail-closed, so the phase goes
+  noisy rather than blind — and recorded in `$global:ZB_SIG_TAMPER` for Phase 0 to report CRITICAL.
+- **`Get-RegVal64` / `Get-RegNames64` / `Get-RegSubKeys64`**, `$global:ZB_IS_WOW64`,
+  `$global:ZB_SYS32`. Deliberately **no auto-relaunch**: it would orphan the redirected stdout
+  the server reads and the GUI would see the scan die.
+- **`-Mode HUNT`**, above PARANOID, ceiling **162**. Mirrored in the loader `$PhasePlan`, both
+  servers' `MODE_PHASES`, both mode whitelists, the interactive menu and a new GUI tile.
+- **`engine/Phases-5.ps1` — phases 134-145.** Cross-view rootkit detection (134 scheduled tasks,
+  135 services, 136 PPID-spoof/ancestry, 137 WOW64 autostart, 138 drivers), anti-forensics
+  (139 timestomping, 140 filename/namespace), and process memory (141 unbacked thread start
+  addresses, 142 unexpected CLR host, 143 deleted module backing, 144 image integrity,
+  145 fully-suspended processes).
+- **`engine/Phases-7.ps1` — phases 160-162.** Attack-chain correlation, patient zero, timeline
+  export. No new detection: it re-reads what the previous 159 phases already found. A live DEEP
+  baseline on this project produced 734 findings — a list, not an answer.
+- **`engine/Phases-6.ps1`** — stub for phases 146-159, owned by the parallel work package in
+  **`fable-work/`** (8 task briefs, reference material, integration protocol).
+- **`tools/New-IntegrityManifest.ps1`** (`-Verify` gates CI), wired into `Build-Release.ps1`
+  before staging. `.gitignore`d — it is a release artifact; on a dev tree every edit would
+  invalidate it and Phase 0 would cry tampering on every scan.
+
+### Notable implementation decisions
+
+- **No P/Invoke, deliberately.** Every memory signal in 141-145 is reached through pure .NET
+  (`ProcessThread.StartAddress`, `ProcessModule.BaseAddress`/`ModuleMemorySize`). Declaring
+  `OpenProcess`/`ReadProcessMemory`/`VirtualQueryEx` is the code shape AV heuristics flag, and an
+  engine Defender blocks at load detects nothing at all — the same failure the AMSI rule exists
+  for. Asserted by test.
+- **Phase 134 exists for one technique**: deleting a scheduled task's `SD` registry value hides
+  it from `Get-ScheduledTask`, `schtasks` and the Task Scheduler UI while it keeps running. No
+  exploit, no driver, works fully patched — and it blinds phases 29 and 104.
+- **Correlation links on entities, never on time.** `Add-Finding` stamps findings with the time
+  the *scan* ran, so time-clustering would fuse every run into one meaningless chain. An entity
+  shared by >12 findings is treated as a common noun (`cmd.exe` appears in dozens of unrelated
+  descriptions), which is what stops one shared path fusing the whole scan.
+- **The whole band ships `FixAction "Info"`, no exceptions.** An EDR is, by every signal phases
+  134-138 and 141-145 look for, a legitimate rootkit. A CRITICAL + `KillProcess` on an EDR hook
+  would be auto-selected in the GUI and would disarm the customer's security product.
+
+### Fixed in passing
+
+- `_python/server.py` `PHASE_RE` was integer-only (`PHASE\s+(\d+)`), so the Python mirror never
+  advanced its counter for the fractional phases 55.5 / 74.5 / 74.6 / 74.7 / 99.5. Now matches
+  the PS server.
+- The GUI mode tiles still advertised **115 phases** for DEEP/PARANOID/STEALTH; WS6 took them
+  to 133 and nobody updated the tiles.
+- Phase 160's entity extractor matched drive-letter paths only, so **UNC paths never correlated**
+  — silently refusing to link the entire lateral-movement half of a chain. Found by a test.
+
+### Tests: 472 → 611 assertions
+
+- `tools/tests/Test-Hunt-Band.ps1` (112) — static posture checks plus a **runtime** proof that
+  the E1 blinding attack is closed: the real `Join-AllowRegex` and `Test-AllowPatternSafety` are
+  pulled out of the shipped loader via the AST and executed against a poisoned signature set.
+  Six spellings of "universal" (`.*`, `.+`, `^.*$`, `(?s).*`, `[\s\S]*`, `.*|foo`, empty) are all
+  refused, the legitimate sibling entry survives, and an emptied allowlist suppresses nothing.
+  Reverting the fix breaks **15** assertions.
+- `tools/tests/Test-Hunt-Correlation.ps1` (21) — the repo's second **runtime** test. Executes
+  phases 160-162 against a synthetic intrusion plus noise.
+
+**Two assertions in this suite were caught agreeing for the wrong reason and fixed:**
+the common-noun cap and the kill-chain stage bonus both survived being reverted, because the
+synthetic fixture never exercised them. Added a 15-finding common-entity case and a
+below-threshold multi-stage chain; both now fail on revert. A third assertion (`module-level trap
+is the first statement`) was **wrong about the AST** — traps live in `EndBlock.Traps`, not
+`Statements`, so the known-correct `Phases-4.ps1` failed it too. Fixed the test, not the code,
+and added the pre-existing modules as a control.
+
+### Not verified
+
+Everything ran on **Linux under pwsh 7.6.5**. Not covered: the PS 5.1 parser, live registry and
+WMI providers, `Get-ScheduledTask`, real process memory, and wall-clock cost of the new band on
+real hardware. **Phases 134-145 have never executed against a live Windows machine.** Expect an
+FP round on 136 (ancestry), 139 (timestomping in package caches) and 141 (unbacked threads in
+.NET and browser processes) — all three are `Info`, so nothing can be auto-acted-on while tuning.
+
+
+## 2026-08-19 — WS6: extended malware + tamper band (phases 116-133) & WS4 signature memo
+
+**Ask:** "add as many more forms of malware as you possibly can, check for any signs of
+infection caused by these, also files accessed that are typically modified, apps that are
+modified" — plus the next roadmap item.
+
+### New: `engine/Phases-4.ps1`, 18 phases, DEEP/PARANOID/STEALTH only
+
+Gated on the new `$PhasePlan.Extended`; DEEP+ ceiling 115 → **133**. FULL stays 1-80 and
+QUICK stays 30 — the band is deliberately not in FULL, because `phase_total` honesty
+depends on the plan being a contiguous ceiling and FULL's contract is "phases 1-80".
+
+| Phase | What it finds |
+|---|---|
+| 116 | Browser policy/preference tamper — force-installed extensions, search/startup hijack, Safe Browsing & SmartScreen disabled by policy, Firefox `policies.json`/`user.js` |
+| 117 | Native-messaging hosts (extension → local binary bridge) + live browser `--remote-debugging-port` / `--load-extension` (CDP session theft) |
+| 118 | `.lnk` hijack & argument injection across Desktop/Start Menu/Startup/Quick Launch |
+| 119 | DLL sideloading — unsigned proxy DLL beside a signed EXE in a user-writable app dir |
+| 120 | Electron app-core tamper (Discord/Slack/Teams/VS Code, Exodus/Atomic wallets) |
+| 121 | Office add-in / XLL / template tamper + the `Office test\Special\Perf` backdoor key |
+| 122 | Installed-application binary integrity — `HashMismatch` = patched after signing |
+| 123 | Execution evidence: BAM/DAM, UserAssist (ROT13), MuiCache, Compatibility Assistant |
+| 124 | Run-dialog & MRU forensics — **ClickFix / fake-CAPTCHA** paste-execution |
+| 125 | Clipboard clipper — attacker wallet-address table + clipboard API in one file |
+| 126 | Extended autostart: AppCert/LSA packages/Notification packages/Netsh helpers/print monitors/time providers/Active Setup/screensaver/BootExecute/WER/Command Processor AutoRun/Winsock LSP |
+| 127 | Shell extension / context-menu / icon-overlay hijack (DLLs Explorer loads into itself) |
+| 128 | Remote-access & RMM inventory — legitimate-tool abuse, rule #2 aware |
+| 129 | Exfiltration staging — rclone/MEGA/WinSCP configs, split & dated archives |
+| 130 | Chat & paste-site C2 — Discord/Telegram/Slack webhooks, paste-site raw URLs |
+| 131 | AutoIt / packed-script droppers — interpreter + script blob pairing |
+| 132 | Web shells & IIS/Exchange backdoors (ProxyShell-style `owa\auth` drops) |
+| 133 | Wipers, destructive command shapes, and lateral-movement residue (PsExec/impacket/WMI) |
+
+### Signature database
+
+`data/detection_signatures.json`: **62 → 171 top-level keys**, all consumed (0 orphans).
+- **+283 family IOCs** across the existing lists: RATs (+79: XWorm, VenomRAT, DCRat, SectopRAT,
+  BitRat, AveMaria, NetWire, PlugX, ShadowPad, Gh0st, PoshC2, SilentTrinity…), miners (+40),
+  keyloggers (+29: Snake, MassLogger, 404, AgentTesla…), loaders (+32: Emmenhtal, ClearFake,
+  GuLoader, DBatLoader, PureCrypter, PrivateLoader, RaspberryRobin, FakeBat, Oyster, PeakLight…),
+  banking/botnets (+33: Grandoreiro, Mekotio, Coyote, Astaroth, Bizarro, Phorpiex, Glupteba…),
+  ransomware extensions (+56: Qilin, RansomHub, Akira, Interlock, SafePay, Lynx, Fog, Embargo,
+  BrainCipher, HellCat, Termite, FunkSec, Sarcoma…), ransom-note filenames (+36), mutexes (+17).
+- **+45 new keys** driving the new phases.
+
+**Rule #1 review removed 20 entries before commit.** The five Phase-6 lists auto-kill on a
+bare substring match of a process name, so `houdini` would have auto-killed SideFX Houdini
+on a VFX workstation; `.cylance` would have collided with Cylance EDR artifacts. Also
+dropped speculative mutex GUIDs — an unpublished IOC never matches and is just noise.
+
+### WS4: per-file Authenticode memo (the named remaining WS4 item)
+
+`Get-AuthSig` had **no cache** while 14 call sites across 13 phases (4 of them in QUICK)
+verify overlapping file sets, and each miss can block on an online CRL/OCSP check.
+Memoised per path (`$global:AUTHSIG_CACHE`, case-insensitive, bounded, shares `ZB_NOCACHE`);
+`$null` for a locked file is cached too. `Get-SignatureVerdict` was calling
+`Get-AuthenticodeSignature` **raw**, bypassing both the wrapper and the memo — now routed
+through `Get-AuthSig`, so exactly one raw call exists in the tree.
+
+### Bugs found and fixed during development
+
+The runtime smoke harness (below) earned its keep immediately:
+1. **`@(Get-ScanFiles …)` array-unwrap** — 12 call sites. `@(cmd)` around a `return ,$arr`
+   function yields a ONE-element array holding the array, so every downstream filter matched
+   the wrong thing. This is the exact trap `CLAUDE.md` warns about; fixed to `@((…))`.
+2. **`_MEI\d+`** — over-escaped digit class disabled the entire PyInstaller allowlist, so
+   every packaged Python app looked like a dropper in Phase 123.
+3. **`LNK-ScriptHostTarget` anchored on `$`** — Phase 118 matches it against
+   `"<TargetPath> <Arguments>"`, so a shortcut pointing straight at `mshta`/`wscript` was
+   undetectable. The rule now matches a boundary.
+4. **Phase 130's allowlist swallowed its own Quarantine branch** — `\AppData\Roaming\discord\`
+   was allowlisted, which is exactly where a token stealer patches itself, making the
+   client-core branch dead code. Chat clients removed from that allowlist.
+5. **A registry value literally named `1`** (forcelist entries) threw in the harness stub —
+   harness bug, but it masked phase 116's two real findings until fixed.
+
+### Tests
+
+Suite **289 → 472 assertions**, all green under pwsh 7.4.6.
+- `tools/tests/Test-Extended-Band.ps1` (**new**, 150): module shape + engine-split rules,
+  116-133 present exactly once, plan ceiling agreement across all four mirrors, FixAction
+  posture (41 Info / 1 DeleteRegKey / 2 conditional Quarantine) with each destructive fix
+  proven ACCEPTED by the real guard, signature-key wiring (110 asked / 0 orphaned), every
+  regex compiles **and** survives backtracking bait under 150 ms (with a `(a+)+$` canary),
+  detection rules asserted hit/no-hit against realistic **Windows** payloads and paths,
+  Phase-6 auto-kill collision check, MITRE coverage, and the WS4 memo semantics.
+- `tools/tests/Test-Extended-Smoke.ps1` + `ExtendedSmoke.Harness.ps1` (**new**, 33): the
+  suite's **first runtime test** — executes all 18 phases against a generated fixture
+  filesystem and an in-memory registry (41 findings, 0 recovered errors). Verified to fail
+  on an injected runtime fault and on a phase that stops firing.
+- Every revert scenario was proven to fail the test that guards it.
+
+### Also updated
+
+`ZeroBreach-Server.ps1` + `_python/server.py` phase totals (the Python mirror was stale at
+107), `data/mitre_mapping.json` (+26 techniques, +18 phase entries, 0 dangling refs),
+`Test-ParseAndBom.ps1` (8 shipped files), `CLAUDE.md` (new rule sections), `BLUEPRINT.md`.
+
+**Not validated on Windows.** Everything above ran on Linux under pwsh 7.4.6. The PS 5.1
+parser, the live registry providers and COM (`WScript.Shell` in Phase 118) still need
+`tools\tests\Verify-OnWindows.ps1` and a real DEEP run.
+
+
 Historical bug-fix and tuning record, moved out of `CLAUDE.md` (which now carries the
 consolidated **rules** only). Newest first. Every durable "never do X" lesson from these
 entries lives in `CLAUDE.md` → **Critical Rules**; this file is the narrative backing.

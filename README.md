@@ -1,115 +1,157 @@
-# ZeroBreach V23 - "Kraken Console"
+# ZeroBreach — "Kraken Console"
 
-Windows-only MSP incident-response / malware-detection tool. A PowerShell scan engine
-(~115 phases) behind a local web GUI, with MITRE ATT&CK tagging, a hard safety guard on
-remediation, and reversible quarantine. Runs from any folder (USB-portable). Admin required.
+Windows-only MSP incident-response / malware-detection tool. Scans a local machine for
+indicators of compromise, triages findings with severity + MITRE ATT&CK tagging, and offers
+reversible, operator-confirmed remediation behind a hard safety guard.
+
+**ZeroBreach ships as two engines that do the same job.**
+
+| | Native engine (primary) | PowerShell engine (fallback) |
+|---|---|---|
+| What it is | `zbscan` — a single self-contained `win-x64` executable | `ZeroBreach-V23.ps1` + `engine\*.ps1`, run by `powershell.exe` |
+| Built from | C# / .NET 8 (`ZeroBreach.*` projects) | PowerShell 5.1 |
+| Delivery | Download one file, run it. No install, no .NET runtime. | Copy a folder, double-click `Launch-GUI.bat` |
+| Detection surface | 10 scanners / 63 checks | 162 phases (`-Mode HUNT`) |
+| Why it exists | The goal. One file a technician downloads and runs. | The escape hatch — see below. |
+
+## Why two engines
+
+The native exe is the product goal: one downloadable file, nothing to install.
+
+The PowerShell engine exists because of a delivery problem, not a capability problem. An
+**unsigned** single-file PE that enumerates processes, walks autoruns, reads event logs and
+deletes files under an elevated token is — to any EDR — indistinguishable from malware by
+behaviour alone. Until a code-signing identity exists and has accumulated reputation, that exe
+should be *expected* to get quarantined on arrival at some client sites.
+
+The PowerShell engine has the opposite profile: it runs inside `powershell.exe`, a Microsoft-signed
+host binary, executing script text any EDR and any support tech can read. Worse first-run
+experience, far better survivability on a hostile endpoint.
+
+So: **native exe is the goal, PowerShell is the version that still works when the exe gets ripped
+away by Defender.** Both are maintained. See `BLUEPRINT.md` §2 for the full reasoning and
+`docs/_history/PACKAGING_STUDY.md` for the costed analysis behind it.
 
 ---
 
-## Quick start (the normal way)
+## Quick start
 
-1. Double-click **`Launch-GUI.bat`** (or run it from a terminal).
-2. Approve the UAC prompt - it self-elevates to admin.
-3. Your browser opens the Kraken Console. Click **Run / Start Scan**.
-4. Watch findings stream live; a JSON report lands in **`reports\`** when done.
-
-That is it. No install, no Python, no internet needed.
-
----
-
-## Deploy to another machine (copy / download / USB)
-
-The tool is a self-contained folder - PowerShell 5.1 (built into every Windows 10/11) is the
-only dependency. Two ways to move it:
-
-**A. Build a release zip (recommended - clean runtime files only):**
+### Native engine
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\Build-Release.ps1
+zbscan --mode full
 ```
-This validates every script (parse + BOM) and data file (JSON), then writes
-`dist\ZeroBreach-V23_<stamp>.zip` + a `.sha256` sidecar. Add `-OutDir D:\` to write straight
-to a USB stick, `-IncludePython` to bundle the parked Flask server.
+Single executable, self-elevates, writes a report next to itself. Exit codes: `0` clean,
+`2` findings, `3` coverage gaps, `1` usage/operational error.
 
-**B. Just copy the whole folder** (works fine; brings dev files and old reports along).
+### PowerShell engine
+1. Double-click **`Launch-GUI.bat`**.
+2. Approve the UAC prompt — it self-elevates.
+3. Your browser opens the Kraken Console. Click **Run / Start Scan**.
+4. Findings stream live; a JSON report lands in **`reports\`**.
 
-**On the target box:**
-1. Copy the zip over (verify the `.sha256` if it traveled through email/cloud).
-2. Right-click the zip → **Properties → Unblock** → OK. (Clears the Mark-of-the-Web that
-   downloads/transfers stamp on files; skipping this can trigger SmartScreen warnings on
-   first launch. The server also self-unblocks its runtime tree at startup as a fallback.)
-3. **Extract All** → open the `ZeroBreach\` folder → double-click **`Launch-GUI.bat`** →
-   approve UAC. Done - reports land in the extracted folder's `reports\`.
-
-Needs: Windows 10/11, admin rights, a writable location (not a read-only/ejected drive).
-No internet, no installs, no Defender exclusions (signatures live in `data\*.json`
-specifically so AMSI doesn't flag the engine).
-
-### Alternative server (optional, parked)
-`Launch-GUI.bat python` uses the Flask/SocketIO server in `_python\` instead. This build is
-**not maintained** right now - use the default PowerShell server.
+No install, no Python, no internet needed.
 
 ---
 
 ## Requirements
-- Windows 10/11, PowerShell 5.1+
-- Administrator rights (auto-elevates)
-- Nothing else for the default mode
+
+- Windows 10/11, or Server 2016/2019/2022
+- Administrator rights (both engines self-elevate)
+- **Native engine:** nothing else — the runtime is bundled (`SelfContained`, `win-x64`)
+- **PowerShell engine:** PowerShell 5.1, built into every supported Windows
+
+Windows 10 is supported deliberately, not as a legacy courtesy: Server 2016/2019/2022 are
+Win10-lineage builds, so Win10 support *is* server support. See `BLUEPRINT.md` §6.
+
+---
+
+## Deploying the PowerShell engine to another machine
+
+**A. Build a release zip (recommended):**
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Build-Release.ps1
+```
+Validates every script (parse + BOM) and data file (JSON), then writes
+`dist\ZeroBreach-V23_<stamp>.zip` + a `.sha256` sidecar. `-OutDir D:\` writes straight to USB.
+
+**B. Copy the whole folder** — works, but brings dev files and old reports along.
+
+**On the target box:** copy the zip over → right-click → **Properties → Unblock** → **Extract All**
+→ double-click **`Launch-GUI.bat`** → approve UAC. Reports land in the extracted folder's
+`reports\`. The server also self-unblocks its runtime tree at startup as a fallback.
 
 ---
 
 ## Scan modes
-Pick in the GUI, or pass `-Mode` on the CLI.
 
-| Mode | Roughly |
-|---|---|
-| `QUICK` | Fast pass, phases 1-30 |
-| `FULL` | Standard full audit |
-| `DEEP` | Full + deeper/slower checks |
-| `PARANOID` | Most aggressive heuristics, more findings (and more noise) |
-| `STEALTH` | Silent; engine emits one JSON blob, parsed into findings at completion |
+Pick in the GUI, or pass `-Mode` / `--mode` on the CLI.
+
+| Mode | Roughly | PS phase ceiling |
+|---|---|---|
+| `QUICK` | Fast high-signal triage | 30 |
+| `FULL` | Standard full audit | 80 |
+| `DEEP` | Full + deeper/slower checks | 133 |
+| `PARANOID` | Most aggressive heuristics, more findings and more noise | 133 |
+| `STEALTH` | Silent; engine emits one JSON blob, parsed at completion | 133 |
+| `HUNT` | DEEP + the threat-hunting band (cross-view rootkit, anti-forensics, process memory) | 162 |
 
 **Time window:** how far back to look. `0` = all time, `N` = last N hours.
 
----
-
-## Magic keywords (type into the GUI before scanning)
-- `msp`, `gannon`, `staples`  ->  MSP mode: orange theme, MSP badge.
-- `kraken`  ->  ...type it and see. (Skippable with ESC. Unlocks things.)
-- `fast`  ->  kills typewriter/decrypt animations and dramatic pauses for a console run.
+HUNT is deliberately not folded into DEEP — it walks process memory and hashes the ESP, so it
+costs real wall-clock and stays an explicit operator choice.
 
 ---
 
-## The console itself (GUI features)
+## Safety model
 
-- **12 switchable themes** (Settings -> THEME): Kraken Blue, Gannon Orange, Threat Red,
-  Ghost Green, Construct, WOPR, Grid, Outrun, Overwatch, Nebula, Cheyenne, Blacksite -
-  plus one secret theme you have to earn.
-- **Cinematic VFX layer**: matrix rain, particles, radar sweeps, scanlines/CRT per theme.
-  Intensity in Settings: **OFF / LITE / FULL / MAXIMUM** (LITE for old laptops).
-- **Synthesized sound** (no audio files): UI blips, threat alerts, scan-complete chime.
-  Toggle + volume in Settings.
-- **Ctrl+K command palette**: jump views, start/abort scans, switch themes from the keyboard.
-- **Destructive-action gate**: EXECUTE REMEDIATION requires typing `PURGE` to confirm.
+The same rules bind both engines. Full detail in `CLAUDE.md`; the short version:
 
-> The PowerShell engine streams clean structured data; all effects render client-side in the
-> browser so they never slow the scan.
+1. **Only CRITICAL/HIGH + a destructive fix action is ever auto-selected.** POSSIBLE and INFO
+   are shown and never pre-ticked — including by "select all".
+2. **Nothing auto-selected may damage a healthy machine.** No `icacls /reset /T`, no
+   `vssadmin delete shadows /all`, no recursive or drive-root deletes. Dangerous commands go in
+   the finding *description* with an Info-only action.
+3. **Protected targets are a hard block with no override** — core OS directories, cert store,
+   LSA/boot/code-integrity keys, OS-critical and security processes, and the tool's own files.
+4. **Quarantine beats delete.** Anything not hash-confirmed is moved to a reversible vault with
+   a restore manifest, not deleted.
+5. **Never report clean for a check that could not run.** A disabled log source, an unloaded
+   hive, an exhausted budget or an access denial reports *inconclusive*, never *clean*.
+6. Remediation requires typed confirmation (`PURGE` in the GUI, `CONFIRM` in the CLI).
+
+Trusted RMM vendors (Datto / CentraStage / Kaseya and friends) get a soft trust signal, not a
+pass — a vendor name in a suspicious path, or any independent malicious signal, still flags.
 
 ---
 
-## Running the engine directly (CLI)
-You can call the scan engine without the GUI:
+## Magic keywords (GUI, type before scanning)
+
+- `msp`, `gannon`, `staples` → MSP mode: orange theme, MSP badge.
+- `kraken` → type it and see. Skippable with ESC.
+- `fast` → kills typewriter/decrypt animations and dramatic pauses.
+
+## The console (PowerShell engine GUI)
+
+12 switchable themes plus one secret; a cinematic VFX layer with OFF/LITE/FULL/MAXIMUM
+intensity; synthesized sound with no audio files; a Ctrl+K command palette; and a
+destructive-action gate that requires typing `PURGE`.
+
+The engine streams clean structured data — all effects render client-side, so they never slow
+the scan.
+
+---
+
+## Running the PowerShell engine directly
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Mode FULL -Hours 0 -Auto
 ```
 
-Useful parameters (the `param()` block at the top of `ZeroBreach-V23.ps1`):
-
 | Param | Values | Notes |
 |---|---|---|
-| `-Mode` | QUICK / FULL / DEEP / PARANOID / STEALTH | Empty = interactive menu |
+| `-Mode` | QUICK / FULL / DEEP / PARANOID / STEALTH / HUNT | Empty = interactive menu |
 | `-Hours` | int | `0` = all time, `N` = last N hours |
-| `-Auto` | switch | Skip all menus (the GUI always uses this) |
+| `-Auto` | switch | Skip all menus (the GUI always passes this) |
 | `-Html` | switch | Also write an HTML report |
 | `-Paranoid` / `-Stealth` | switch | Same as choosing that mode |
 | `-OutDir` | path | Where reports go (defaults to `.\reports`) |
@@ -118,51 +160,54 @@ Useful parameters (the `param()` block at the top of `ZeroBreach-V23.ps1`):
 | `-Schedule` | DAILY / WEEKLY | Registers a 02:00 SYSTEM scheduled task, then exits |
 | `-SmtpTo` / `-SmtpFrom` / `-SmtpServer` | string | Email delivery for scheduled runs |
 
-The engine self-elevates if not already admin.
-
-### Schedule an automated daily/weekly scan
-```powershell
-powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Schedule DAILY -Html -OutDir .\reports
-```
-
-### Server options
-`ZeroBreach-Server.ps1` accepts `-Port <n>` (default = auto-pick free port) and `-NoBrowser`.
+`ZeroBreach-Server.ps1` accepts `-Port <n>` (default: auto-pick a free port) and `-NoBrowser`.
 
 ---
 
 ## Where things live
+
 ```
-Launch-GUI.bat              Entry point (double-click)
-ZeroBreach-Server.ps1       Local web server (default)
-ZeroBreach-V23.ps1          Scan-engine loader (dot-sources engine\)
-engine\                     The ~115 scan phases + summary + fix mode
+ZeroBreach.Cli/             Native engine entry point (zbscan)
+ZeroBreach.Core/            Finding model, ledger, budgets, profiles, signatures, reporting
+ZeroBreach.Scanners/        The 10 detection scanners + their signature JSON. Read-only.
+ZeroBreach.Remediation/     The only module that mutates the machine
+ZeroBreach.Tests/           xUnit suite
+
+Launch-GUI.bat              PowerShell engine entry point (double-click)
+ZeroBreach-Server.ps1       Local web server for the PS engine
+ZeroBreach-V23.ps1          PS scan-engine loader (dot-sources engine\)
+engine\                     The 162 PS scan phases + summary + fix mode
 gui\                        Web UI (HTML/CSS/JS)
-data\
-  detection_signatures.json Built-in malware signatures (loaded at runtime)
-  ioc_defaults.json         Default IOC list for -IocFile
-  mitre_mapping.json        MITRE ATT&CK map (wired into findings + exports)
-  permission_baseline.json  ACL baseline for the permission-integrity phases
-tools\Build-Release.ps1     Portable release-zip builder (see Deploy above)
+
+data\                       Signatures, MITRE map, IOC defaults, ACL baseline
+tools\                      Release builder, report renderer, run compare, test suite
 reports\                    Scan results, quarantine vault, server logs (auto-created)
+docs\_history\              Audits, packaging study, superseded plans — dated records
 _python\                    Alternate Flask server (parked)
 ```
 
 ---
 
-## Notes / troubleshooting
-- **"It scanned nothing / instantly said complete"** - was a Windows Defender/AMSI block;
-  fixed by keeping signatures in `data\detection_signatures.json` (data files are not AMSI-
-  scanned). No Defender exclusion needed.
-- **Reports not appearing** - check the `reports\` folder is writable (not a read-only/ejected
-  drive). The server prints a clear error and exits if it cannot write there.
-- **On failure to launch** - `Launch-GUI.bat` stays open and writes `zerobreach_launch_error.log`.
-- **Re-runs** - you can run multiple scans in a row; each clears state and streams fresh.
+## Troubleshooting
+
+- **"It scanned nothing / instantly said complete"** — a Defender/AMSI block. The PS engine
+  keeps every signature literal in `data\detection_signatures.json` precisely so AMSI does not
+  flag it at load. No Defender exclusion should be needed; if one is, that is a bug worth
+  reporting.
+- **The native exe was quarantined on arrival** — expected until code signing is in place. Use
+  the PowerShell engine at that site and see `BLUEPRINT.md` §2.
+- **Reports not appearing** — check `reports\` is writable (not read-only or an ejected drive).
+- **Launch failure** — `Launch-GUI.bat` stays open and writes `zerobreach_launch_error.log`.
 
 ---
 
-## Project docs (for development)
-- `BLUEPRINT.md` - the product map: architecture, data contracts, safety model, roadmap. Start here.
-- `CLAUDE.md` - hard rules, gotchas, parsing details for anyone editing code.
-- `HANDOFF.md` - current session state + the live-GUI validation runbook.
-- `CHANGELOG.md` - dated history of fixes and false-positive tuning rounds.
-- `NEXT_STEPS.md` / `UPGRADE_PLAN.md` - historical plans (superseded by BLUEPRINT.md).
+## Project docs
+
+| File | Role |
+|---|---|
+| `BLUEPRINT.md` | Product map: architecture, both engines, data contracts, safety model, roadmap. **Start here.** |
+| `CLAUDE.md` | Hard rules and subsystem reference for anyone editing code. |
+| `HANDOFF.md` | Current session state and validation runbooks. |
+| `CHANGELOG.md` | Dated history of every fix and false-positive tuning round. |
+| `TEST_LAB_GUIDE.md` | Building and running the malware test lab. |
+| `docs/_history/` | Audits, the packaging study, superseded plans. Dated records — read, don't rewrite. |
