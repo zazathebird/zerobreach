@@ -21,7 +21,7 @@ Push-Location $root
 Write-Host "ZeroBreach security regression suite — root: $root" -ForegroundColor Cyan
 
 $tests = @(
-    @{ Name = 'Parse + BOM (11 shipped files)';        File = 'Test-ParseAndBom.ps1';       Skip = $SkipParse }
+    @{ Name = 'Parse + BOM (12 shipped files)';        File = 'Test-ParseAndBom.ps1';       Skip = $SkipParse }
     @{ Name = 'Embedded runspace here-strings';       File = 'Test-EmbeddedRunspaces.ps1'; Skip = $SkipParse }
     @{ Name = 'C1  token + Origin lockdown';          File = 'Test-C1-Auth.ps1' }
     @{ Name = 'H1  rollback snapshot artifacts';      File = 'Test-H1-Snapshot.ps1' }
@@ -36,6 +36,20 @@ $tests = @(
     @{ Name = 'WS6 runtime smoke (executes 116-133)'; File = 'Test-Extended-Smoke.ps1' }
     @{ Name = 'WS7 HUNT band 134-162 + preflight';    File = 'Test-Hunt-Band.ps1' }
     @{ Name = 'WS7 runtime correlation (executes 160-162)'; File = 'Test-Hunt-Correlation.ps1' }
+
+    # G-series operator tooling + the shared assertion library. These use tools/tests/lib/ZbAssert.ps1,
+    # exit non-zero on failure and print an "N passed, M failed" summary, so they are judged on that
+    # contract (Strict) rather than on the prose regex below -- their own assertion DESCRIPTIONS
+    # contain the word "fail" (e.g. "ZbTrue: false fails"), which the loose regex reads as a failure.
+    @{ Name = 'G   ZbAssert library self-test';       File = 'Test-ZbAssert.ps1';          Strict = $true }
+    @{ Name = 'G1  New-ScanReport renderer';          File = 'Test-ScanReport.ps1';        Strict = $true }
+    @{ Name = 'G2  Compare-ScanRuns diff';            File = 'Test-CompareScanRuns.ps1';   Strict = $true }
+    @{ Name = 'G3  phase timing vs budgets';          File = 'Test-PhaseTimingReport.ps1'; Strict = $true }
+    @{ Name = 'G4  offline viewer assets + policy';   File = 'Test-ViewerAssets.ps1';      Strict = $true }
+    @{ Name = 'G5  server parity (PS vs Python)';     File = 'Test-ServerParity.ps1';      Strict = $true }
+    @{ Name = 'G5  SSE event contract';               File = 'Test-EventContract.ps1';     Strict = $true }
+    @{ Name = 'G6  coverage matrix generator';        File = 'Test-CoverageMatrix.ps1';    Strict = $true }
+    @{ Name = 'PKG single-file packaging contract';   File = 'Test-PackagingContract.ps1'; Strict = $true }
 )
 
 $failed = 0
@@ -49,7 +63,12 @@ foreach ($t in $tests) {
     # identically under Windows PowerShell 5.1 and pwsh 7.
     $hostExe = (Get-Process -Id $PID).Path
     $out = & $hostExe -NoProfile -File $path 2>&1
-    if ($LASTEXITCODE -ne 0 -or ($out -join "`n") -match '\bFAIL\b|\bdiverge\b.*[1-9]') {
+    $text = ($out -join "`n")
+    $isFail = $false
+    if ($LASTEXITCODE -ne 0) { $isFail = $true }
+    elseif ($t.Strict) { if ($text -match '(?m)\b[1-9]\d*\s+failed\b') { $isFail = $true } }
+    elseif ($text -match '\bFAIL\b|\bdiverge\b.*[1-9]') { $isFail = $true }
+    if ($isFail) {
         Write-Host ("  FAIL  {0}" -f $t.Name) -ForegroundColor Red
         $out | Select-Object -Last 20 | ForEach-Object { Write-Host "        $_" }
         $failed++

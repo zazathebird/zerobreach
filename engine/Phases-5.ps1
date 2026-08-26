@@ -28,8 +28,9 @@ trap { Write-RecoveredError $_; continue }   # module-level resilience (see CLAU
 #    147      IDENTITY        Cloud + DevOps credential theft — the 2026 crown jewels.
 #    148-152  LATERAL / AD    What was done TO this host from the network, and what
 #                             this host can be used to do to the rest of it.
-#    153-156  LAN             The only code in ZeroBreach that touches another machine.
-#                             Requires -Mode HUNT *and* -ScanLan. Read-only, rate-limited.
+#    153-156  NET EXPOSURE    BUILT 2026-08-22, and HOST-SIDE: registry/CIM reads of this
+#                             machine's own posture. Sends no packets, enumerates no LAN,
+#                             and there is NO -ScanLan switch (see CLAUDE.md).
 #    157-159  SURFACE         Remaining persistence, supply chain / dev tooling, UEFI.
 #    160-162  SYNTHESIS       Correlate findings into scored attack chains, then emit
 #                             the super-timeline. No new detection — this is where 700

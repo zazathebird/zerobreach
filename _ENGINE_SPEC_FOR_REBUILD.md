@@ -1,12 +1,24 @@
 # ZeroBreach Scan Engine — Build Spec
 
-> **Status: this is the contract, and it has been implemented.** The engine described below
-> exists as a C# / .NET 8 solution in this repository — all 10 phases, the §6 safety model,
-> remediation, reporting, and operator tooling. §8 permitted a compiled language provided the
-> destructive remediation logic stays in a separate auditable module; it does
+> **Status: this is the contract for the NATIVE engine, and it has been implemented.** The engine
+> described below exists as the C# / .NET 8 `zbscan` in this repository — all 10 phases, the §6
+> safety model, remediation, reporting, and operator tooling. §8 permitted a compiled language
+> provided the destructive remediation logic stays in a separate auditable module; it does
 > (`ZeroBreach.Remediation`). This document is kept **unchanged as the normative requirements
 > source** — read it for *why* a rule exists. For the architecture as built and the catalog of
 > what each check inspects, see `INSTRUCTIONS_AI.md`.
+>
+> **Scope note (2026-08-22):** the repo ships **two maintained engines** — this native one, and
+> the PowerShell fallback (`ZeroBreach-V23.ps1` + `engine/*.ps1`, 162 phases). This spec governs
+> the native engine only; its mode table below (QUICK/FULL/DEEP/STEALTH) does not describe the PS
+> engine, which additionally has `-Mode HUNT` (phases 134-162). **`BLUEPRINT.md` §2 is the
+> top-level map of both** — start there, not here. The V23 engine referenced as an ancestor in
+> the Context section is not merely an ancestor any more; it is the maintained fallback, in this
+> same repo.
+>
+> §1's rule that this is "explicitly not a network scanner, or something that touches any machine
+> other than the one it's run on" is **still in force and applies to both engines** — it is what
+> justified building PS phases 153-156 host-side and dropping the briefed `-ScanLan` switch.
 
 ## Context (read this first)
 

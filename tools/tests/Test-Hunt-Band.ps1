@@ -170,7 +170,7 @@ foreach ($n in @($sig.clr_unexpected_hosts)) { if ("$n".Length -lt 3) { $short++
 Assert-That 'sig — no clr_unexpected_hosts entry shorter than 3 chars' ([int]$short) 0
 
 # ── 9. Safe-wrapper discipline in the new modules ────────────────────────────
-foreach ($rel in @('engine/Phases-0.ps1','engine/Phases-5.ps1','engine/Phases-7.ps1')) {
+foreach ($rel in @('engine/Phases-0.ps1','engine/Phases-5.ps1','engine/Phases-6.ps1','engine/Phases-7.ps1')) {
     $src = Get-Content (Join-Path $root $rel) -Raw
     Assert-True "$rel — no raw Get-AuthenticodeSignature" (-not ($src -match '(?m)^\s*[^#]*Get-AuthenticodeSignature'))
     Assert-True "$rel — no raw Get-ItemPropertyValue"     (-not ($src -match '(?m)^\s*[^#]*Get-ItemPropertyValue'))

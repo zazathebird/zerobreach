@@ -17,6 +17,7 @@ public sealed class CliOptions
     public string? IocFile { get; private set; }
     public string? RulesFile { get; private set; }
     public string? ExtractIocsFile { get; private set; }
+    public string? LogFile { get; private set; }
 
     // Triage (symptom-driven scan creation) and adaptive scanning.
     public string? SymptomsText { get; private set; }
@@ -126,6 +127,7 @@ public sealed class CliOptions
                     case "--ioc-file": o.IocFile = Next(a); o._iocSet = true; break;
                     case "--rules": o.RulesFile = Next(a); o._rulesSet = true; break;
                     case "--extract-iocs": o.ExtractIocsFile = Next(a); break;
+                    case "--log": o.LogFile = Next(a); break;
                     case "--max-minutes":
                         if (!int.TryParse(Next(a), out var mm) || mm <= 0)
                         { error = "--max-minutes requires a positive integer"; return o; }
@@ -175,6 +177,9 @@ public sealed class CliOptions
         if (o.Stealth && o.ExtractIocsFile is not null)
         { error = "--extract-iocs cannot be combined with STEALTH mode — every extracted " +
                   "indicator needs an individual operator confirmation at the console (spec §6.6)"; return o; }
+        if (o.Stealth && o.LogFile is not null)
+        { error = "--log cannot be combined with STEALTH mode — a stealth run writes no console " +
+                  "output, so the transcript would be empty; read the .json.gz report instead"; return o; }
         if (o.SymptomsText is not null && o.SymptomsFile is not null)
         { error = "--symptoms and --symptoms-file cannot be combined — pick one source"; return o; }
         if (o.Command != "triage" && (o.SymptomsText is not null || o.SymptomsFile is not null || o.LlmAssist))
@@ -208,6 +213,12 @@ public sealed class CliOptions
         if (Stealth && Interactive)
         {
             error = "profile sets STEALTH mode, which cannot be combined with --interactive";
+            return false;
+        }
+        if (Stealth && LogFile is not null)
+        {
+            error = "profile sets STEALTH mode, which cannot be combined with --log " +
+                    "(a stealth run writes no console output to transcribe)";
             return false;
         }
         if (Stealth && ExtractIocsFile is not null)
@@ -291,6 +302,10 @@ public sealed class CliOptions
                                   profiles' registry checks are reported as unchecked)
           -i, --interactive       post-scan remediation review (typed CONFIRM required)
           -o, --output-dir <dir>  report directory (default .\reports)
+          --log <path>            tee this run's console output to a plain-text transcript
+                                  (unrelated to `zbscan log`, which is the tamper-evident
+                                  record of remediation ACTIONS); written as it happens, so
+                                  a cancelled or crashed run still leaves a usable file
           --html                  also write an HTML report
           --adaptive              in-run escalation: findings arm their IPs/domains/hashes/
                                   filenames as DETECTION-ONLY indicators for later phases,

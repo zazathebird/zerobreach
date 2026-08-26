@@ -51,6 +51,12 @@ $requiredFiles = @(
     'gui\static\js\themes.js'
     'gui\static\js\fx.js'
     'gui\static\js\kraken.js'
+    # Offline report viewer (G4). Opens from file:// with no server, so a technician can
+    # work with an audit_*.json copied off a client machine on their own laptop. That person
+    # has this zip and not the repo, which is why it ships here rather than staying repo-only.
+    'gui\viewer.html'
+    'gui\static\js\viewer.js'
+    'gui\static\css\viewer.css'
     # Vendored third-party assets (audit C3). Without these the "portable" zip is
     # not self-contained: the console silently loses the threat radar chart and
     # falls back to system fonts on any box with no route to cdnjs/Google Fonts.

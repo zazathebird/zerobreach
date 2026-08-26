@@ -1,0 +1,52 @@
+
+
+### CMD: smbclient -L //192.168.10.254 -N
+--- rationale: Null-session share enumeration. If anonymous listing works, any LAN host reads share names+comments pre-auth.
+session setup failed: NT_STATUS_ACCESS_DENIED
+[exit 1]
+
+
+### CMD: smbclient -L //192.168.10.254 -U guest%
+--- rationale: Guest fallback. Windows may refuse null but allow guest; guest+writable share = file drop.
+
+	Sharename       Type      Comment
+	---------       ----      -------
+	ADMIN$          Disk      Remote Admin
+	C$              Disk      Default share
+	IPC$            IPC       Remote IPC
+	Users           Disk      
+SMB1 disabled -- no workgroup available
+[exit 0]
+
+
+### CMD: smbclient -L //192.168.10.254 -U guest% --option=client signing=required
+--- rationale: SMB signing posture. Signing NOT required is the precondition for NTLM relay. Pure protocol negotiation - reads no user data.
+
+	Sharename       Type      Comment
+	---------       ----      -------
+	ADMIN$          Disk      Remote Admin
+	C$              Disk      Default share
+	IPC$            IPC       Remote IPC
+	Users           Disk      
+SMB1 disabled -- no workgroup available
+[exit 0]
+
+
+### CMD: smbclient -L //192.168.10.254 -U guest% --option=client max protocol=SMB3
+--- rationale: Max dialect negotiation. SMB3 vs SMB1/2 determines relay+downgrade exposure. Protocol handshake only.
+
+	Sharename       Type      Comment
+	---------       ----      -------
+	ADMIN$          Disk      Remote Admin
+	C$              Disk      Default share
+	IPC$            IPC       Remote IPC
+	Users           Disk      
+SMB1 disabled -- no workgroup available
+[exit 0]
+
+
+### CMD: smbclient -L //192.168.10.254 -U guest% --option=client max protocol=NT1
+--- rationale: SMB1 explicitly - confirms SMB1 fully disabled (already indicated by 'SMB1 disabled' banner).
+lp_load_ex: Max protocol NT1 is less than min protocol SMB2_02.
+Protocol negotiation to server 192.168.10.254 (for a protocol between SMB2_02 and NT1) failed: NT_STATUS_INVALID_PARAMETER_MIX
+[exit 1]

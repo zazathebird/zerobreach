@@ -21,25 +21,54 @@ if (parseError is not null)
     return 1;
 }
 
-switch (options.Command)
+// --log installs the transcript ONCE, here, around every command. Doing it inside RunScan
+// would miss the triage conversation that precedes a derived scan, and would open the file
+// twice when triage re-parses its derived command line and calls RunScan in-process.
+RunTranscript? transcript = null;
+if (options.LogFile is not null)
 {
-    case "help":
-        Console.WriteLine(CliOptions.Usage);
-        return 0;
-    case "categories":
-        return RunCategoriesCommand();
-    case "triage":
-        return RunTriage(options, args);
-    case "report":
-        return RunReportCommand(options);
-    case "rules":
-        return RunRulesCommand(options);
-    case "vault":
-        return RunVaultCommand(options);
-    case "log":
-        return RunLogCommand(options);
-    default:
-        return RunScan(options);
+    try
+    {
+        transcript = RunTranscript.Start(options.LogFile, Version, args);
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException
+                                  or NotSupportedException)
+    {
+        // Fail before the scan, not after it. An unwritable transcript path discovered at
+        // the END of a DEEP run has already cost the operator the run.
+        Console.Error.WriteLine($"error: --log path unusable: {ex.Message}");
+        return 1;
+    }
+}
+
+try
+{
+    switch (options.Command)
+    {
+        case "help":
+            Console.WriteLine(CliOptions.Usage);
+            return 0;
+        case "categories":
+            return RunCategoriesCommand();
+        case "triage":
+            return RunTriage(options, args);
+        case "report":
+            return RunReportCommand(options);
+        case "rules":
+            return RunRulesCommand(options);
+        case "vault":
+            return RunVaultCommand(options);
+        case "log":
+            return RunLogCommand(options);
+        default:
+            return RunScan(options);
+    }
+}
+finally
+{
+    // finally, not Dispose-on-success: the transcript of a run that threw is the one an
+    // operator most needs to read.
+    transcript?.Dispose();
 }
 
 static int RunTriage(CliOptions options, string[] originalArgs)

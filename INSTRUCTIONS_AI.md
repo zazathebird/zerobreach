@@ -1,8 +1,12 @@
 # INSTRUCTIONS_AI.md — ZeroBreach Scan Engine: architecture & detection catalog
 
-**What this is:** the engineering reference for the engine **as built**. It describes the real
-architecture, the contracts a scanner codes against, where each safety rule is enforced, and
-what all 63 checks actually inspect.
+**What this is:** the engineering reference for the **native (`zbscan`) engine as built** — the
+C# / .NET 8 one. It describes the real architecture, the contracts a scanner codes against, where
+each safety rule is enforced, and what all 63 checks actually inspect.
+
+**This file does not cover the PowerShell engine.** The repo ships two maintained engines; the PS
+fallback (`ZeroBreach-V23.ps1` + `engine/*.ps1`, 162 phases) is documented in `CLAUDE.md` and
+`BLUEPRINT.md` §2. Nothing below applies to it.
 
 **Authority:** `_ENGINE_SPEC_FOR_REBUILD.md` is the contract. This file describes the
 implementation of it. If the two disagree, the spec wins — and within the spec, §6 (the safety
@@ -14,7 +18,9 @@ optionally lets the operator remediate findings behind strict guardrails. It nev
 remote machine, never runs unattended remediation, and never executes anything it finds.
 
 **Status:** all 10 phases, the §6 safety model, remediation, reporting, custom scans, operator
-tooling, and triage are implemented. 293 tests (14 skip off-Windows).
+tooling, and triage are implemented. 293 tests (279 pass, 14 skip off-Windows). Also present and
+not yet catalogued below: `Scanning/IScanLogger.cs`, `ZeroBreach.Cli/RunTranscript.cs`, the
+`--log <path>` run-transcript flag (`CliOptions.cs`), and the `RunTranscriptTests` suite.
 
 ---
 

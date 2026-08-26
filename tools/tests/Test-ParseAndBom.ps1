@@ -20,4 +20,4 @@ foreach ($f in $files) {
     if (-not $bom) { $bad++ }
   }
 }
-Write-Host ("`n{0}" -f $(if($bad -eq 0){'ALL 8 CLEAN'}else{"$bad FILE(S) WITH PROBLEMS"})) -ForegroundColor $(if($bad -eq 0){'Green'}else{'Red'})
+Write-Host ("`n{0}" -f $(if($bad -eq 0){"ALL $($files.Count) CLEAN"}else{"$bad FILE(S) WITH PROBLEMS"})) -ForegroundColor $(if($bad -eq 0){'Green'}else{'Red'})

@@ -1,7 +1,7 @@
 # ZeroBreach Test Lab — Build & Test Guide
 
 **Purpose:** a physically isolated lab that exercises every feature of ZeroBreach, and specifically
-proves or kills the findings in `AUDIT_2026-08-18_INDEPENDENT.md` that static analysis could not
+proves or kills the findings in `docs/_history/AUDIT_2026-08-18_INDEPENDENT.md` that static analysis could not
 settle.
 
 **One boundary, stated once so it's not a surprise later:** I'll design the lab, write the test
@@ -130,6 +130,32 @@ EICAR is a standardised **non-malicious** test string, safe to use.
 | 1.3 | Remediate the exclusion finding | Exclusion removed, nothing else touched | C2 fix (Defender path) |
 
 ### Tier 2 — Benign persistence mimicry ★ highest value
+
+> ## ⚠ THIS SECTION IS PRE-FIX. Read this before running any of it.
+>
+> **Every audit finding Tier 2 tells you to reproduce was fixed on 2026-08-18** and now has a
+> regression test in `tools/tests/` wired into `Run-SecurityTests.ps1`. The "Expected:" lines
+> below describe the **old, broken** behaviour. Run these cases as **regression verification on
+> Windows** — the expected result is now the opposite of what each one says.
+>
+> | Case | Says | Now |
+> |---|---|---|
+> | 2.2 forward-slash path bypass | not caught by `Test-ProtectedTarget` | **blocked** — input normalised before every test (H7/H7b); `Test-H7-Guard.ps1`, `Test-GuardMirrorSync.ps1` |
+> | 2.3 rollback `.reg` unusable | "Expected: it fails" | **succeeds** — snapshot is now a directory of valid exports plus a generated `Restore.cmd`; a real `Checkpoint-Computer` is attempted and reported |
+> | 2.4 false all-clear | "GUI shows a *completed* scan with 0 findings… the most dangerous bug in the audit" | **fixed** — stderr via `ReadToEndAsync`, exit code judged, a failed run emits `scan_failed` and never `scan_complete`; `Test-H2-EngineExit.ps1` |
+> | 2.5 junction traversal | "Fail: `canary.txt` is gone" | **fixed** — `DeleteFile` no longer passes `-Recurse` and refuses reparse points and directories (H6) |
+> | 2.6 reboot-queue fallback throws | "the fallback throws… never queued" | **fixed** — raw `Get-ItemPropertyValue` removed (H10) |
+> | 2.7 wildcard-CORS chain | "Do this before fixing C1" | **fixed** — per-launch token on every `/api/*`, Origin lockdown, `127.0.0.1` bind, all CORS headers removed; `Test-C1-Auth.ps1` |
+> | 2.8 CDN / Google-Fonts dependency | radar chart and font fail offline | **fixed** — everything vendored under `gui/static/`, CSP pinned to `'self'` (C3). Expect a full offline render, zero non-local requests |
+>
+> **Run `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` first.** It already covers
+> all of the above on Linux; the lab's job is to confirm it on real Windows, not to rediscover it.
+>
+> **The real gap Tier 2 does not cover: phases 134-162.** They have never met the PS 5.1 parser, a
+> live registry provider or a real process table. **153-156 need no malware at all** — they are
+> registry/CIM reads — so they belong in Tier 0/2 and are the cheapest high-value lab work
+> available. Expect an FP round on 136/139/141.
+
 
 These create *artifacts that look like malware persistence* without any malicious code. This is
 where the audit findings get settled.

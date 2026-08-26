@@ -1,10 +1,47 @@
 # ZeroBreach — Adversarial Assessment (WS7 input)
 
+> ## ⚠ HISTORICAL — read the status table before believing any claim below
+>
+> **This document was written 2026-08-19 against the engine at 133 phases. It is written in the
+> present tense and most of its "this is missing" claims are now CLOSED.** It is kept because the
+> reasoning is what produced the 134-162 band, and because an assessment rewritten to match the
+> code it produced is worth nothing. **Do not cite a claim from this file without checking it
+> against the table below.** Engine is now **162 phases** (133 DEEP / 162 HUNT).
+>
+> | Item | Was | Now |
+> |---|---|---|
+> | E1 poison the signature DB | CRITICAL, "currently undetectable" | **CLOSED** — `Phases-0.ps1` preflight verifies the manifest and refuses universal FP allowlists |
+> | E2 force 32-bit / WOW64 | "exactly one WOW64-aware line in the tree" | **CLOSED** — `ZB_IS_WOW64`/`ZB_SYS32` in the loader, Phase 0 reports it, phase 137 cross-views Registry64 |
+> | E3 single-view trust | open | **CLOSED** — 134-138 |
+> | E4 timestomp | open | **CLOSED** — 139 |
+> | E5 namespace tricks | open | **CLOSED** — 140 |
+> | E6 fixed task name / budget starvation | open | **STILL OPEN.** Task name is deliberately fixed (`CLAUDE.md`); group-cap rollup is still silent at INFO |
+> | E7 no HMAC on reports / quarantine manifests | open | **STILL OPEN** |
+> | B1 no memory inspection anywhere | open | **CLOSED** — 141-145. This is the single most misleading section in the file as written |
+> | B2/146 PE structure · B3/147 cloud identity · B4/148-152 lateral+AD | open | **STILL OPEN** (stubs) |
+> | B5 the LAN | open | **PARTIALLY CLOSED, and re-scoped** — see the note below |
+> | B6/157 · B7/158 · B8/159 | open | **STILL OPEN** (stubs) |
+> | B9 no correlation | open | **CLOSED** — 160/161 |
+> | B10 no timeline / evidence package | open | **CLOSED** — 162 |
+> | B11 `yara_lite_rules` shape | open | **STILL OPEN** |
+>
+> **B5 / phases 153-156 — the one item this file gets actively wrong.** It says 153-156 would be
+> "the only code in ZeroBreach that touches another machine", gated behind `-Mode HUNT` *and* a
+> `-ScanLan` switch. **That is not what was built.** 153-156 (2026-08-22) are **host-side only** —
+> registry and CIM reads of the machine's own posture, sending no packets and enumerating no
+> network — and **no `-ScanLan` switch exists or will be added.** The active off-box items in
+> this section (probe a nonexistent name, rogue DHCP, ARP anomalies, mitm6, peer sweep) were
+> **deliberately dropped, not deferred**; they are not pending work. Reasoning in `CLAUDE.md`
+> ("Network-exposure band 153-156") and evidence in `docs/ATTACK_LOG.md`.
+>
+> **`WS7_WORK_ORDER.md` does not exist** and never shipped. The remaining briefs are
+> `fable-work/tasks/` (F1-F7).
+
 **Date:** 2026-08-19 · **Branch:** `security/audit-2026-08-18` · **Target:** engine at 133 phases
+(now 162 — see the banner above)
 **Authorization:** built at the request of the tool's author, who holds documented Anthropic CVP
 approval for this project. This document is detection engineering: every evasion below is paired
-with the detection that closes it, and the closures are specified as ZeroBreach phases in
-`WS7_WORK_ORDER.md`.
+with the detection that closes it.
 
 **Method.** Five passes over the same engine, each from a different chair:
 *red-team operator with SYSTEM* (how do I blind this thing?), *pentester* (what does it not look
@@ -12,16 +49,20 @@ at?), *ransomware affiliate* (what do I need it to miss for one hour?), *offsec/
 does it miss about the network, not the host?), and *DFIR lead* (having found something, can I
 actually work the incident from its output?).
 
-Verdict up front: **the host-artifact coverage is genuinely strong** — 133 phases is more disk and
+Verdict up front: **the host-artifact coverage is genuinely strong** — 133 phases (now 162) is more disk and
 registry surface than most commercial agents check. The weaknesses are not "missing signatures."
 They are three structural ones, and they are the whole assessment:
 
 1. **The engine trusts its own inputs.** Signature DB, baseline files, and the Win32 API are all
    consumed without verification. Every one is attacker-writable on a box the attacker owns.
+   *(Now closed — `Phases-0.ps1` preflight.)*
 2. **The engine only looks at disk and registry.** There is no memory, no PE structure, no network
    peer, and no identity/cloud surface. Everything that never touches disk is invisible by design.
+   *(Memory closed — 141-145. Network exposure closed host-side — 153-156. PE structure and cloud
+   identity still open — 146/147.)*
 3. **The engine emits findings, not an incident.** 734 independent findings with no correlation is
    a list, not an answer. The operator does the analysis the tool should have done.
+   *(Now closed — 160-162.)*
 
 ---
 
@@ -163,11 +204,11 @@ report tree; verify on load; treat a baseline that fails verification as absent,
 
 ---
 
-## Part 2 — What walks past all 133 phases
+## Part 2 — What walks past all 133 phases *(now 162 — see banner)*
 
 ### B1 · Memory — the entire category is missing
 
-There is **no memory inspection anywhere in the engine.** Phase 93, the "deep DLL/module injection
+**[SUPERSEDED — phases 141-145 now do memory inspection. Original text follows.]** There is **no memory inspection anywhere in the engine.** Phase 93, the "deep DLL/module injection
 scan," enumerates `$p.Modules` — the loader's module list. Anything that never enters that list is
 invisible:
 
@@ -254,7 +295,7 @@ WS7 Phases 148–152.
 
 ### B5 · The LAN — the tool never looks off-box
 
-Nothing in 133 phases examines the network the host is sitting on. In your lab this is the
+**[SUPERSEDED — see the B5 note in the banner. 153-156 cover network exposure host-side.]** Nothing in 133 phases examines the network the host is sitting on. In your lab this is the
 difference between "patient zero looks clean" and "patient zero is being poisoned by the box next
 to it":
 
@@ -268,6 +309,8 @@ to it":
 - **Peer exposure sweep** — for each peer in the ARP cache: open SMB with signing disabled, SMBv1,
   null-session-readable shares, RDP without NLA, WinRM, and unauthenticated admin shares. This is
   the "what can patient zero reach" question, and it is the question an MSP actually gets asked.
+
+**[NOT WHAT WAS BUILT — 153-156 are host-side, send no packets, and there is no `-ScanLan`.]**
 
 Strictly opt-in and rate-limited — this is the one band that touches other machines, so it is
 gated behind an explicit `-Mode HUNT` **plus** a `-ScanLan` switch, defaults off, and never writes.
@@ -373,6 +416,9 @@ Rule #1 is not negotiable and this band makes it easy to violate: **every new de
 machines (an EDR *is* a legitimate hooking rootkit by every signal in Phase 134), and a CRITICAL +
 `KillProcess` on an EDR's hook would be auto-selected. The correct posture is Info, an allowlist for
 known-good EDR vendors, and an FP round on real hardware before anything becomes actionable.
+
+**[FALSE AS BUILT — nothing in ZeroBreach touches another machine, and no `-ScanLan` exists.
+The paragraph's own closing argument is exactly why the band was built host-side instead.]**
 
 Second: the LAN band (153–156) is the only code in ZeroBreach that touches a machine other than the
 one it runs on. It stays behind `-Mode HUNT` **and** an explicit `-ScanLan` switch, defaults off,

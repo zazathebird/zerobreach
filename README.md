@@ -43,6 +43,11 @@ zbscan --mode full
 Single executable, self-elevates, writes a report next to itself. Exit codes: `0` clean,
 `2` findings, `3` coverage gaps, `1` usage/operational error.
 
+Add `--log <path>` to keep a plain-text transcript of the console alongside the reports —
+written as the run happens, so a cancelled or crashed scan still leaves a readable file.
+(Not to be confused with `zbscan log`, which is the tamper-evident record of remediation
+actions.) `zbscan help` lists every option.
+
 ### PowerShell engine
 1. Double-click **`Launch-GUI.bat`**.
 2. Approve the UAC prompt — it self-elevates.
@@ -84,7 +89,11 @@ Validates every script (parse + BOM) and data file (JSON), then writes
 
 ## Scan modes
 
-Pick in the GUI, or pass `-Mode` / `--mode` on the CLI.
+Pick in the GUI, or pass `-Mode` (PowerShell engine) / `--mode` (native `zbscan`) on the CLI.
+
+**The two engines do not accept the same set.** `-Mode` takes all six below. **`--mode` accepts
+only `QUICK`, `FULL`, `DEEP` and `STEALTH`** — the native engine has no PARANOID or HUNT and
+hard-errors on them (`ZeroBreach.Cli/CliOptions.cs`).
 
 | Mode | Roughly | PS phase ceiling |
 |---|---|---|
@@ -93,12 +102,16 @@ Pick in the GUI, or pass `-Mode` / `--mode` on the CLI.
 | `DEEP` | Full + deeper/slower checks | 133 |
 | `PARANOID` | Most aggressive heuristics, more findings and more noise | 133 |
 | `STEALTH` | Silent; engine emits one JSON blob, parsed at completion | 133 |
-| `HUNT` | DEEP + the threat-hunting band (cross-view rootkit, anti-forensics, process memory) | 162 |
+| `HUNT` | DEEP + the threat-hunting band (cross-view rootkit, anti-forensics, process memory, network exposure) | 162 |
 
 **Time window:** how far back to look. `0` = all time, `N` = last N hours.
 
-HUNT is deliberately not folded into DEEP — it walks process memory and hashes the ESP, so it
-costs real wall-clock and stays an explicit operator choice.
+HUNT is deliberately not folded into DEEP — it walks process memory (phases 141-145), so it costs
+real wall-clock and stays an explicit operator choice.
+
+**162 is the phase-number ceiling, not the count that executes.** Phases 146-152 and 157-159 are
+still stubs, so a HUNT run performs roughly 153 phases. The network-exposure phases 153-156 are
+host-side reads only — they send no packets and do not enumerate the network.
 
 ---
 
@@ -128,7 +141,9 @@ pass — a vendor name in a suspicious path, or any independent malicious signal
 
 - `msp`, `gannon`, `staples` → MSP mode: orange theme, MSP badge.
 - `kraken` → type it and see. Skippable with ESC.
-- `fast` → kills typewriter/decrypt animations and dramatic pauses.
+
+(There is no `fast` keyword — README claimed one until 2026-08-22; it never existed in `app.js`.
+Use the FX intensity tiers instead.)
 
 ## The console (PowerShell engine GUI)
 
@@ -210,4 +225,9 @@ _python\                    Alternate Flask server (parked)
 | `HANDOFF.md` | Current session state and validation runbooks. |
 | `CHANGELOG.md` | Dated history of every fix and false-positive tuning round. |
 | `TEST_LAB_GUIDE.md` | Building and running the malware test lab. |
+| `INSTRUCTIONS_AI.md` | Native (`zbscan`) engine architecture + the catalog of all 63 checks. Native only. |
+| `_ENGINE_SPEC_FOR_REBUILD.md` | Normative build contract for the native engine — read it for *why* a rule exists. |
+| `ADVERSARY_ANALYSIS.md` | Adversarial assessment that produced the 134-162 band. **Historical — read its status banner first.** |
+| `docs/ATTACK_LOG.md` | Authorized adversary-emulation log against the operator's own hardware; every technique that works becomes a detection. |
+| `docs/attack-logs/` | Raw command logs and captures behind `ATTACK_LOG.md`. |
 | `docs/_history/` | Audits, the packaging study, superseded plans. Dated records — read, don't rewrite. |

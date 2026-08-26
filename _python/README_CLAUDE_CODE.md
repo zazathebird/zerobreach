@@ -1,13 +1,33 @@
 # ZeroBreach V23 — Kraken Console
 ## Instructions for Claude Code (`_python/` subdirectory)
 
-This document covers the Python/Flask server only. For the full project picture see `../CLAUDE.md`.
+This document covers the Python/Flask server only. For the full project picture start at
+`../BLUEPRINT.md` (§2 maps both engines); `../CLAUDE.md` is the code-editing rulebook.
+
+> ## ⚠ PARKED — and it can no longer serve the shipped frontend
+>
+> **This is not "one of two ways to serve the frontend" any more.** The C1 auth work
+> (2026-08-18) made `gui/static/js/app.js` require a per-launch token: without one it shows a
+> blocking "LAUNCH TOKEN MISSING" overlay. **`server.py` mints no token**, and the GUI opens
+> `EventSource('/api/events')`, **a route `server.py` does not implement**. So the shipped page
+> will not run against this server as-is.
+>
+> Consequences for everything below: the **SOCKET.IO EVENT REFERENCE** section is accurate for
+> `server.py` internally but **no client consumes it** — the frontend is SSE + fetch with no
+> Socket.IO dependency. `/api/sysinfo` is the exact unauthenticated oracle C1 was filed against
+> and is **still wide open here** while locked down in the PS server. The mode list omits
+> `HUNT`, though `MODE_PHASES` already carries it.
+>
+> The **open TODO items below are Python-only debt, not project debt** — STEALTH parsing, real
+> remediation, MITRE, scan profiles, IOC Manager and HTML/CSV export all shipped in the
+> PowerShell/SSE stack. Do not read them as outstanding product work.
 
 ---
 
 ## WHAT THIS FOLDER IS
 
-`_python/` contains the **optional** Flask/SocketIO server. It is one of two ways to serve the frontend — the other is `ZeroBreach-Server.ps1` (pure PowerShell, no Python needed, the default launch path).
+`_python/` contains the **parked** Flask/SocketIO server. The supported path is
+`ZeroBreach-Server.ps1` (pure PowerShell, no Python needed, the default launch path).
 
 ---
 

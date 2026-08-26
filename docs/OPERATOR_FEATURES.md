@@ -100,7 +100,8 @@ middle. It cannot, on its own, catch **truncation** — deleting entries from th
 shorter chain that still verifies link by link, which would let the record of what was
 destroyed be quietly erased. So every append also writes an anchor file beside the log
 (`action-log.jsonl.anchor`: entry count, last sequence number, head hash), and `log verify`
-reports one of four states:
+reports one of three outcomes (from four internal `ChainState` values — `Broken` and
+`Truncated` both surface as TAMPER EVIDENT):
 
 - **OK** (exit 0) — every link verifies and the anchor confirms the end of the log.
 - **TAMPER EVIDENT** (exit 2) — an entry was edited or removed mid-chain, or the log is

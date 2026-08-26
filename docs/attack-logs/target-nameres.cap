@@ -1,0 +1,31 @@
+tcpdump: verbose output suppressed, use -v[v]... for full protocol decode
+listening on wlp4s0, link-type EN10MB (Ethernet), snapshot length 262144 bytes
+20:22:35.101460 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/2 PTR testbox._dosvc._tcp.local. (364)
+20:22:35.102814 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:22:35.408667 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:22:35.613356 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:22:35.920740 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/4 (Cache flush) PTR testbox._dosvc._tcp.local. (421)
+20:22:35.922256 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/3 (Cache flush) SRV testbox.local.:7680 0 0 (365)
+20:23:34.289376 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 PTR (QU)? _microsoft_mcc._tcp.local. (43)
+20:23:35.313413 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 PTR (QM)? _microsoft_mcc._tcp.local. (43)
+20:24:35.935137 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/2 PTR testbox._dosvc._tcp.local. (364)
+20:24:35.936479 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:24:36.140484 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:24:36.447034 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:24:36.652043 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/4 (Cache flush) PTR testbox._dosvc._tcp.local. (421)
+20:24:36.653516 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/3 (Cache flush) SRV testbox.local.:7680 0 0 (365)
+20:26:36.666429 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/2 PTR testbox._dosvc._tcp.local. (364)
+20:26:36.667777 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:26:36.973530 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:26:37.178443 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 ANY (QM)? testbox._dosvc._tcp.local. (43)
+20:26:37.383306 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/4 (Cache flush) PTR testbox._dosvc._tcp.local. (421)
+20:26:37.384973 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/3 (Cache flush) SRV testbox.local.:7680 0 0 (365)
+20:26:45.473530 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 PTR (QU)? _dosvc._tcp.local. (35)
+20:26:45.473638 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 PTR (QU)? _microsoft_mcc._tcp.local. (43)
+20:26:46.496563 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 PTR (QM)? _microsoft_mcc._tcp.local. (43)
+20:26:46.497736 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0 PTR (QM)? _dosvc._tcp.local. (35)
+20:26:46.499346 IP 192.168.10.254.5353 > 224.0.0.251.5353: 0*- [0q] 1/0/4 PTR testbox._dosvc._tcp.local. (421)
+
+25 packets captured
+28 packets received by filter
+0 packets dropped by kernel
