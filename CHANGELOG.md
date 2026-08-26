@@ -1,5 +1,278 @@
 # CHANGELOG — ZeroBreach V23
 
+## 2026-08-26 — progress review: fable-work and fable-work-2 both confirmed complete
+
+Documentation-only session, no code changed. Reviewed both Fable work packages for completion
+at the user's request and brought `BLUEPRINT.md` §9/§10, `CLAUDE.md`'s Outstanding Work, and
+`HANDOFF.md` up to date.
+
+**`fable-work` (G-series operator tooling)** — already merged into this repo (`e8eea6c`,
+session 16/18). Its `HANDOFF_FABLE.md` records all 8 tasks (G1-G8) complete: 355 assertions
+across nine test suites, green under `pwsh` 7.4.6, every suite proven fail-on-revert. No change
+in status from what `BLUEPRINT.md` already said — confirmed, not new news.
+
+**`fable-work-2` (library layer)** — this *is* new: all 12 tasks (A1-A5 YARA/Sigma rule
+engines, B1-B2 PE/container parsers, C1-C2 path normaliser/rule linter, D1-D3 IOC
+normaliser/baseline diff/config baseline) are complete per `HANDOFF_FABLE2.md`, with D2
+carrying a same-day (2026-08-26) re-verification note. 1,374 tests green across 6 projects
+(`ZeroBreach.Rules/Formats/Paths/Intel/Diff/Baseline` + `.Tests` siblings), zero warnings,
+net8.0 on Linux, no packages beyond xUnit. **It was previously undocumented in this repo** —
+`BLUEPRINT.md` §9 had no row for it and §10 had no roadmap item — because it was still
+in-progress the last time either file was touched. Both are now updated: a new §9 migration
+row, and a new §10 "Next" item 6 (copy the six projects in, then decide how `ZeroBreach.Rules`
+plugs into `SignatureDb`/the 10 scanners and how `ZeroBreach.Formats` feeds a look-inside-the-
+file scanner) sequenced ahead of the existing detection-parity item, since several F-series
+briefs map cleanly onto a library-layer track.
+
+**Correction, same day:** the first draft of this entry said this box has no `dotnet` and that
+the test claims were therefore taken on trust. **That was wrong** — the SDK is installed at
+`~/.dotnet/dotnet` (8.0.424), it is simply not on `PATH`, so `which dotnet` finds nothing. Both
+packages were then built and tested for real. `fable-work-2`: 13 projects, 0 errors, 0 warnings;
+**1,374 tests, 0 failed, 0 skipped** (Rules 529, Paths 418, Intel 143, Formats 135, Baseline 118,
+Diff 31) — exactly the handoff's numbers, with `yara` 4.5.5 present at `/usr/bin/yara` so the
+differential suites ran live rather than vacuously. Recorded because "the tool isn't installed"
+is precisely the kind of unverified claim this project's own rules exist to stop.
+
+## 2026-08-26 — the library layer is in the repo: `lib/`, 1,664 tests green
+
+`fable-work-2` merged. The six library projects and their six test projects now live under a new
+top-level **`lib/`** directory, wired into `ZeroBreach.sln`.
+
+**Why `lib/` and not the repo root.** The five engine projects target `net8.0-windows`; every
+project in this layer targets **`net8.0`** and must keep doing so — that is what makes it
+buildable and *meaningfully testable* from the Linux box this project is developed on, whereas
+the engine projects can only be compiled here. Making that a directory boundary means one
+`lib/Directory.Build.props` carries `net8.0` + `TreatWarningsAsErrors` + pinned `LangVersion`
+for all twelve, instead of twelve edited `.csproj` files, and it inherits the root props for
+identity. It is also a real guard: a `net8.0-windows` project may reference a `net8.0` one, but
+not the reverse — so a Windows dependency **cannot** leak down into this layer by accident. A
+build error there is the boundary working; do not "fix" it by changing the target framework.
+
+**Nothing shipped changed.** `ZeroBreach.Cli` still references only Core/Scanners/Remediation, so
+the single-file exe is byte-for-byte unaffected. The libraries are on disk and building; wiring
+them into `SignatureDb` and the scanners is the next step and a deliberate design decision, not
+part of this merge.
+
+| | Before | After |
+|---|---|---|
+| `dotnet build ZeroBreach.sln` | 6 projects | **18 projects**, 0 errors, 0 warnings |
+| `dotnet test ZeroBreach.sln` | 290 passed / 14 skipped | **1,664 passed / 14 skipped / 0 failed** |
+
+Also copied in: `docs/_history/HANDOFF_FABLE2.md`, matching the `HANDOFF_FABLE.md` precedent.
+
+### Two findings that came out of reading the merged code
+
+**`ZeroBreach.Rules.Linting` is a C# re-implementation of five of this repo's own hard rules** —
+and it did not know it. `AllowlistCanaries` is the universal-pattern canary set from the
+`Join-AllowRegex` integrity gate (eight strings rather than five, and better chosen);
+`CollisionCorpus` is the "no signature entry may collide with a real software name" rule that the
+`houdini` / SideFX bug produced; `BacktrackingProbe` is the 150 ms ReDoS budget; and
+`LintSwallowedDetections` is the "an allowlist must never swallow the case its own detection
+branch exists for" rule that the Phase 130 Discord bug produced. `LintTool` is already
+CLI-shaped with 0/1/2 exit codes. This is the highest-value, lowest-risk first wiring available.
+
+**But it cannot read `data/detection_signatures.json` as it stands, and the reason is a
+documentation error in `CLAUDE.md`.** The linter's model expects allowlists nested under an
+`fp_allowlists` object, because `CLAUDE.md` says FP allowlists "go in the `fp_allowlists` block
+of that same JSON". **The shipped file has no such key.** It is flat — 190 top-level keys, 70 of
+them `_comment_*` strings — and `Join-AllowRegex` reads them by flat name via `Get-Sig $Name`.
+There is a `_comment_fp_allowlists` marker string, which is probably where the belief came from.
+Neither side is broken; they disagree about a schema. Recorded here rather than silently
+patching either, because which one moves is the owner's call.
+
+## 2026-08-22 — documentation sweep: three false capability claims removed
+
+A survey of every `.md` in the tree against the shipped code. Most of it was ordinary drift; three
+items were not.
+
+**`README.md` and `CLAUDE.md` both claimed the HUNT band "hashes the ESP". It does not.** UEFI/ESP
+integrity is phase 159 and is still a stub. The claim was load-bearing — it was the stated
+justification for HUNT costing real wall-clock and staying an explicit operator choice (the real
+reason is the process-memory walk in 141-145). **Corrected rather than implemented.** Documenting a
+capability the engine does not have is the one error class an IR tool cannot afford; it is the same
+failure as a false all-clear, one level up.
+
+**`README.md` documented a `fast` GUI keyword that has never existed.** `app.js` defines
+`TRIGGERS = ['msp','gannon','staples']` and zero occurrences of `fast`.
+
+**`README.md` implied `--mode` and `-Mode` accept the same set.** They do not — the native engine
+hard-errors on `PARANOID` and `HUNT` (`CliOptions.cs`).
+
+**`engine/Phases-5.ps1`'s band map still described 153-156 as "the only code in ZeroBreach that
+touches another machine", requiring `-ScanLan`.** Stale comment in shipped code, contradicting what
+was actually built the same day. Same correction applied to `docs/ATTACK_LOG.md`'s header and to
+`ADVERSARY_ANALYSIS.md`, which proposed that design.
+
+**`ADVERSARY_ANALYSIS.md` given a status banner.** It is a 2026-08-19 assessment written in the
+present tense against the 133-phase engine, and most of its "this is missing" claims are now closed
+(E1-E5, B1, B9, B10). Its B1 section — "there is **no memory inspection anywhere in the engine**" —
+was the most misleading text in the repo. Kept, not rewritten: an assessment edited to match the
+code it produced is worth nothing. Per-item status table at the top, inline supersede marks at the
+five worst claims. Also noted: `WS7_WORK_ORDER.md`, which it cites as the source of its closures,
+does not exist and never shipped.
+
+**`TEST_LAB_GUIDE.md` Tier 2 given a pre-fix banner.** All eight audit findings it instructs the
+operator to reproduce were fixed 2026-08-18 and now carry regression tests. Its "Expected:" lines
+describe the broken behaviour, so following it today reads as "the tool is broken" — including on
+2.4, the false-all-clear case. Reframed as regression verification, with the real gap named: phases
+134-162 have never met a live Windows registry, and 153-156 need no malware to exercise.
+
+**`_python/README_CLAUDE_CODE.md` given a parked banner.** The C1 token work silently broke it: the
+GUI now requires a per-launch token `server.py` does not mint, and opens `/api/events`, a route it
+does not implement. Its open TODO list is Python-only debt and was reading as outstanding product
+work.
+
+Also: `INSTRUCTIONS_AI.md` and `_ENGINE_SPEC_FOR_REBUILD.md` scoped explicitly to the **native**
+engine (neither said which, and the repo now ships two); `CLAUDE.md` "Outstanding Work" rewritten
+and its roadmap cross-reference fixed (pointed at `BLUEPRINT.md` §7, which is now Quality gates —
+the roadmap is §10); doc maps in `BLUEPRINT.md` and `README.md` extended with `ATTACK_LOG.md`,
+`ADVERSARY_ANALYSIS.md`, `INSTRUCTIONS_AI.md` and `_ENGINE_SPEC_FOR_REBUILD.md`.
+
+Suite green throughout.
+
+## 2026-08-22 — phases 153-156: the network-exposure band, built host-side
+
+`engine/Phases-6.ps1` was a 37-line stub. It now implements 153-156 — SMB/auth posture, share
+ACLs, broadcast name-resolution surface, and firewall/advertisement state. 15 findings, all
+`FixAction "Info"` per the 134-162 band rule.
+
+**Scope was deliberately narrowed from the F6 brief.** That brief specified "LAN band, opt-in,
+requires `-ScanLan`". As built the band sends **no packets and enumerates no network** — every
+check is a registry or CIM read of the host's own configuration, and no `-ScanLan` switch was
+introduced. Two reasons, both worth keeping: ZeroBreach runs on client networks under an MSP
+contract, and a tool that probes the customer's LAN can trip the customer's own IDS while being
+indistinguishable on the wire from what it exists to detect; and every finding here is answerable
+from the host's own registry, so probing buys no detection.
+
+**The distinction phase 153 exists to make:** *"server permits signing" is not "server requires
+signing."* An external observer cannot tell those apart — a client that asks for signing gets it
+either way — but only `RequireSecuritySignature=1` closes SMB relay. That gap between what is
+observable from outside and what must be verified from inside is the argument for the whole band
+being host-side.
+
+**A test was passing vacuously.** `Test-Hunt-Band.ps1` §9 (safe-wrapper discipline: no raw
+`Get-ItemPropertyValue`/`Get-AuthenticodeSignature`/`Get-FileHash`, no P/Invoke, no piped
+`Get-ScanFiles`) listed `Phases-0/5/7` but **not** `Phases-6` — harmless while that module was an
+empty stub, not harmless once it carried 15 findings. Added; the band test went 112 → 118
+assertions, and the six new ones were proven to fail by injecting a raw `Get-ItemPropertyValue`
+and an `Add-Type -TypeDefinition` (2 failed, clean on restore). Lesson worth generalising: **when
+a stub becomes real, re-check every test list that names modules explicitly** — the exclusion that
+was reasonable for an empty file becomes a blind spot the moment it is filled.
+
+Provenance and the full command log for the findings behind this band are in `docs/ATTACK_LOG.md`
+and `docs/attack-logs/`.
+
+## 2026-08-22 — `--log`: the native engine finally leaves a transcript
+
+The one output artifact a run did not produce. `zbscan --mode DEEP --log run.txt` now tees
+everything the console shows into a plain-text file beside the reports.
+
+**It replaces `Console.Out`/`Console.Error` rather than threading a writer through the scan.**
+Console output comes from three places — `ConsoleScanLogger`, `Program` directly, and the
+interactive remediation session — and a transcript that quietly missed one of them would be
+worse than no transcript at all. Colour is applied through `Console.ForegroundColor`, never as
+ANSI escapes, so the file is clean text with no filtering step to get wrong.
+
+Decisions worth keeping:
+
+- **stdout and stderr share one synchronized writer**, so an error appears in the transcript at
+  the point it actually happened. The failure case is the main reason anyone reads one of these.
+- **`AutoFlush`, and `FileShare.Read`.** A scan that is cancelled, crashes, or is killed at the
+  console still leaves a complete file, and an operator can tail a long DEEP run while it goes.
+  Buffering would lose exactly the tail that explains what happened.
+- **The transcript is installed once, around the command dispatch, not inside `RunScan`.** Inside
+  `RunScan` it would miss the triage conversation that precedes a derived scan, and would open
+  the file twice, because triage re-parses its derived command line and calls `RunScan`
+  in-process.
+- **An unusable path fails before the scan, not after it** — discovering an unwritable `--log`
+  target at the end of a 40-minute DEEP run has already cost the operator the run. A failed
+  start leaves the console untouched.
+- **Refused in STEALTH mode**, at parse time *and* again in `ApplyProfile` (a profile can turn a
+  run STEALTH after `--log` was already accepted). A stealth run writes no console output, so the
+  transcript would be an empty file implying the scan produced nothing.
+- **Never saved into a `--save-profile` profile.** A transcript path is a per-run decision like
+  `--interactive` and the baselines; a profile that silently re-pointed every future run's log at
+  one operator's case folder would overwrite it.
+- **UTF-8 with a BOM**, because the operator opens this in Notepad and pastes it into a ticket.
+- Named `--log` as asked, which sits next to the existing `zbscan log verify|show` — that is the
+  tamper-evident record of remediation *actions*, an unrelated subsystem. The help text for both
+  now says so explicitly.
+
+11 tests in `ZeroBreach.Tests/RunTranscriptTests.cs`; suite 279 → **290 passed, 14 skipped, 0
+failed**. Revert-proofed: dropping the stderr tee fails 1, turning `AutoFlush` off fails 1,
+removing the two STEALTH refusals fails 2.
+
+**Verified how far:** unit tests plus an end-to-end run of the real CLI (`categories --log`,
+the STEALTH refusal, the unusable-path error, the help text) — but from a **linux-x64** build of
+`ZeroBreach.Cli`, because the shipped configuration is self-contained `win-x64` and will not run
+on this box. The Windows exe path is unexercised, like the rest of the native engine.
+
+Also this session: the .NET 8 SDK was reinstalled into the scratchpad, so the "279 passed / 14
+skipped" figure carried forward unverified since session 17 is now **re-proven here**, not
+inherited. `BLUEPRINT.md` §9 still listed both source trees as "Pending copy-in" three sessions
+after they were copied in; corrected, along with roadmap item Now-1.
+
+
+## 2026-08-22 — completeness pass on the session-17 merge
+
+Review of the previous session's five commits against the work packages they came from.
+The suite was green and the claim "14/14 files green" was true — but it was true because
+the runner only ran 14 of the 24 test files that exist.
+
+### The offline report viewer shipped without its CSS or JS
+
+`gui/viewer.html` was copied into the repo; `gui/static/js/viewer.js` and
+`gui/static/css/viewer.css` were not. The page was a shell — it referenced two files
+that had never been committed, so it rendered unstyled and did nothing. Both existed,
+complete, in the read-only source package at `~/Downloads/claude/fable-work/`; a
+file-by-file diff of that package against the repo showed these two as the **only**
+difference, so the copy step was the whole fault. Copied in and verified: no remote
+origins, `escHtml` covers all five entities, 41/41 assertions pass.
+
+### Nine test files were in the tree but not in the suite
+
+`Test-ZbAssert`, `Test-ScanReport`, `Test-CompareScanRuns`, `Test-PhaseTimingReport`,
+`Test-ViewerAssets`, `Test-ServerParity`, `Test-EventContract`, `Test-CoverageMatrix` and
+`Test-PackagingContract` were delivered by the G-series package and never added to
+`Run-SecurityTests.ps1`. That is why the broken viewer went unnoticed: the test that
+guards it was never run. All nine are now wired in — 24 files, ~966 assertions.
+
+### The runner's pass/fail heuristic could not judge them
+
+The runner flags a failure on `\bFAIL\b` appearing anywhere in a test's output. The
+ZbAssert-based tests print their assertion *descriptions*, and several describe failure
+cases — `ok  ZbTrue: false fails`. Three of the nine would have been reported FAILED
+while exiting 0.
+
+These tests have a reliable contract instead: they exit non-zero on failure and print
+`N passed, M failed`. Entries carrying `Strict = $true` are now judged on that contract.
+It is also strictly the better check — proven against a stub that exits 0 while reporting
+`7 passed, 3 failed`, which `Strict` catches and the prose regex **misses**. Revert-proof:
+hiding `viewer.js` again fails the suite at G4.
+
+### Also
+
+- `Test-ParseAndBom.ps1` checked 12 files and printed `ALL 8 CLEAN`; the count is now
+  derived from the list. The runner's label said 11.
+- Recorded here because sessions 16 and 17 (dual-engine restructure, the native C# engine,
+  the G-series tooling) landed in `HANDOFF.md` and the commit messages but never in this file.
+
+### The viewer now ships in the release zip
+
+The G4 brief raised this as a question for the owner and it was never answered. Answered
+now: `gui\viewer.html`, `viewer.js` and `viewer.css` are on `$requiredFiles` in
+`tools/Build-Release.ps1`. The technician the viewer is designed for — someone holding an
+`audit_*.json` copied off a client machine — has the zip and not the repo, so repo-only
+put the feature out of reach of its only user. Three static files; the validation gate
+already parse/BOM-checks only `.ps1`, so nothing else changes.
+
+### Still open, deliberately
+
+- **The native engine was not rebuilt this session** — no .NET SDK on this box. The
+  279 passed / 14 skipped claim is carried forward from session 17, unverified here.
+- Windows validation is still the gate for everything: no part of this ran on Windows.
+
+
 ## 2026-08-19 — WS7: `-Mode HUNT`, the self-integrity gate, and attack-chain correlation
 
 **Ask:** act as blackhat / whitehat / pentester / offsec admin, find what the tool misses,

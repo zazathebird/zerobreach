@@ -124,7 +124,7 @@ ZeroBreach-V23.ps1  = THIN LOADER  (params/elevation/globals/ALL helpers/banner/
         engine/Phases-3.ps1   phases 90-115  (incl. 99.5) + integrity    │ (see CLAUDE.md)
         engine/Phases-4.ps1   phases 116-133 Extended malware + tamper   │
         engine/Phases-5.ps1   phases 134-145 HUNT cross-view + memory    │
-        engine/Phases-6.ps1   phases 146-159 STUB — see §9               │
+        engine/Phases-6.ps1   153-156 network exposure; rest STUB (§9)  │
         engine/Phases-7.ps1   phases 160-162 synthesis / correlation     ┘
         engine/Summary.ps1    risk score + exits ([Environment]::Exit)
         engine/FixMode.ps1    interactive fix mode (console runs only)
@@ -232,7 +232,7 @@ no ESU. An IR tool gets run on the sick machine.
 **PowerShell engine**
 1. Parse-clean on **live PS 5.1** and PS 7 — all engine modules + server (+ the server's
    here-strings extracted and checked separately); UTF-8 BOM intact.
-2. `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` — 611 assertions.
+2. `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` — 617+ assertions.
 3. `tools\tests\Verify-OnWindows.ps1` from an elevated 5.1 prompt before any release.
 4. AMSI: engine spawns and streams, no `ScriptContainedMaliciousContent`.
 5. Headless `-Auto` scan: contiguous `PHASE N — … took` sequence (no module-trap gaps), clean
@@ -273,11 +273,13 @@ modified.
 
 | Source | What | Status |
 |---|---|---|
-| `~/Downloads/engine1` | The five `ZeroBreach.*` C# projects, `docs/`, `INSTRUCTIONS_AI.md`, `_ENGINE_SPEC_FOR_REBUILD.md` | **Pending copy-in** |
-| `~/Downloads/claude/fable-work` | G-series deliverables: `New-ScanReport.ps1`, `Compare-ScanRuns.ps1`, `Get-PhaseTimingReport.ps1`, `New-CoverageMatrix.ps1`, `gui/viewer.html`, test harness; plus `HANDOFF_FABLE.md` and `PACKAGING_STUDY.md` | **Pending copy-in** |
+| `~/Downloads/engine1` | The five `ZeroBreach.*` C# projects, `docs/`, `INSTRUCTIONS_AI.md`, `_ENGINE_SPEC_FOR_REBUILD.md` | **Copied in** (session 16, committed `41e24d7`). Builds and tests green in this repo. |
+| `~/Downloads/claude/fable-work` | G-series deliverables: `New-ScanReport.ps1`, `Compare-ScanRuns.ps1`, `Get-PhaseTimingReport.ps1`, `New-CoverageMatrix.ps1`, `gui/viewer.html`, test harness; plus `HANDOFF_FABLE.md` and `PACKAGING_STUDY.md` | **Copied in** (session 16, committed `e8eea6c`; `viewer.js`/`viewer.css` were missed and landed in session 18). All 8 tasks (G1-G8) confirmed complete 2026-08-26: 355 assertions green under `pwsh` 7.4.6, every suite fail-on-revert proven. |
 | `zerobreach/fable-work` | F-series briefs (deferred): cloud/DevOps creds, lateral+AD+cred-dumping, rule engine, persistence surface, supply chain, LAN band, UEFI, packaging | **Already here — the only surviving copy.** Becomes the native scanner roadmap. |
+| `~/Downloads/claude/fable-work-2` | The library layer beneath the engine: YARA parser/matcher/conditions/scan-API (A1-A4), Sigma engine (A5), PE structure parser (B1), ZIP/OLE/OOXML container reader (B2), Windows path normaliser (C1), signature/rule linter (C2), IOC feed normaliser — STIX/MISP/OpenIOC (D1), baseline diff engine (D2), configuration baseline evaluator (D3) | **Copied in 2026-08-26** to `lib/`, wired into `ZeroBreach.sln`. All 12 tasks complete; independently re-verified here, not taken on trust: 1,374 tests, 0 failed, 0 skipped, 0 warnings, with `yara` 4.5.5 present so the differential suites ran live. Solution total **1,664 passed / 14 skipped**. Nothing in `ZeroBreach.*` references it yet — see §10 item 6. |
+| `~/Downloads/claude/fable-work-3` | The offline artifact layer and record production: Windows artifact readers (event log, registry hive, shell link, execution evidence), file-system metadata, embedded databases (SQLite, ESE), configuration/policy, storage + firmware inventory, image/package containers, message stores, analysis primitives, script structure, and the correlation/scoring/export/technique-map layer | **Specified 2026-08-26, not yet built.** 11 tracks / 30 tasks / 30 projects, all `net8.0` and Linux-testable. Replaces "ask Windows for it" with "read the documented on-disk format", which is what makes the whole layer developable off Windows. |
 
-Both origin repos are **read-only to this project**. They are also the packages a
+All origin repos are **read-only to this project**. They are also the packages a
 safeguard-restricted assistant will work in, so their sanitized framing must not be disturbed.
 
 The F-series briefs map onto native scanners roughly as: F1 → a new cloud-credential scanner ·
@@ -289,8 +291,8 @@ mapping is a follow-on audit.
 ## 10. Roadmap
 
 ### Now
-1. **Copy in the two source trees** (§9) and get `dotnet build` + `dotnet test` green in this
-   repo.
+1. ~~**Copy in the two source trees** (§9) and get `dotnet build` + `dotnet test` green in this
+   repo.~~ **Done** — 290 passed / 14 skipped / 0 failed.
 2. **Test lab, native engine survival test.** Before any malware: publish the real single-file
    exe, deliver it to a clean Win11 box the way a technician would (downloaded, mark-of-the-web
    intact), and find out whether Defender lets it land and lets it finish. Twenty minutes, zero
@@ -300,19 +302,44 @@ mapping is a follow-on audit.
    takes days to weeks and needs a verifiable business history.
 4. **Windows validation of the HUNT band** — phases 134-162 have never met the PS 5.1 parser, a
    live registry provider or a real process table. Expect the counter to reach 162 and an FP
-   round on 136/139/141.
+   round on 136/139/141. **Now includes 153-156** (network-exposure band, built 2026-08-22):
+   these read real registry values, so a Windows run is the first time their absence rules
+   (absent vs zero vs default-applies) are exercised against a live provider — the single most
+   likely place for them to be wrong.
+4a. **Fill the remaining `Phases-6.ps1` stubs** — 146-152 and 157-159 are still the parallel work
+   package. When filling them, apply the CLAUDE.md rule on stubs and test lists first.
 5. **Windows validation of the Extended band** (116-133) — exercised only on Linux/pwsh so far.
 
 ### Next
-6. **Close the detection parity gap** — port PS coverage into native scanners, F-series first.
-7. **Per-check status in the PS engine** — adopt the native `Completed`/`Inconclusive`/`Skipped`
+6. **Wire up the `lib/` library layer.** ~~Copy it in~~ **done 2026-08-26** — six projects under
+   `lib/`, in the solution, 1,664 tests green, shipped exe unchanged. What remains is the design
+   decision, not a port: how `ZeroBreach.Rules` (YARA + Sigma) plugs into `ZeroBreach.Core`'s
+   `SignatureDb` and the 10 scanners. Replacing hand-written JSON signatures with rule-corpus
+   matching is the actual multiplier; having the library on disk is not. `ZeroBreach.Formats`
+   (PE, containers) is what a `ContentScan`-style scanner needs to look *inside* a file rather
+   than only at it. Prerequisite for item 7, not parallel to it.
+   - **Start with the linter.** `ZeroBreach.Rules.Linting` independently re-implements five hard
+     rules this repo learned the expensive way — the `Join-AllowRegex` universal-pattern canary
+     set, the real-software-name collision corpus, the 150 ms backtracking budget, and the
+     "allowlist must not swallow its own detection branch" check — and `LintTool` is already
+     CLI-shaped with 0/1/2 exit codes. Pointing it at `data/detection_signatures.json` is the
+     highest-value, lowest-risk wiring available, and it improves the **PS** engine from C#.
+   - **One blocker, and it is ours:** the linter expects allowlists under an `fp_allowlists`
+     object because `CLAUDE.md` says they live there. The shipped file has no such key — it is
+     flat, and `Join-AllowRegex` reads flat names via `Get-Sig`. Decide which side moves before
+     writing code against either.
+7. **Close the detection parity gap** — port PS coverage into native scanners, F-series first,
+   built on the item-6 library layer where a track maps onto one (YARA/Sigma → `SignatureDb`,
+   PE/containers → `ContentScan`, path normaliser → the destructive-op guard, IOC normaliser →
+   the IOC manager, baseline diff → cross-run comparison, config baseline → the FP-tuning bands).
+8. **Per-check status in the PS engine** — adopt the native `Completed`/`Inconclusive`/`Skipped`
    discipline and a non-zero exit on coverage gaps. This is the single highest-value idea to
    flow *back* from the rebuild.
-8. **Deterministic finding ids in the PS engine** — baseline diffing depends on identity
+9. **Deterministic finding ids in the PS engine** — baseline diffing depends on identity
    stability.
-9. **FP rounds on both new PS bands** — Extended and HUNT ship `Info` throughout precisely
+10. **FP rounds on both new PS bands** — Extended and HUNT ship `Info` throughout precisely
    because they have never met a real fleet.
-10. **Sign the PS scripts** once a certificate exists — improves AMSI/EDR posture and unlocks
+11. **Sign the PS scripts** once a certificate exists — improves AMSI/EDR posture and unlocks
     per-site `AllSigned` policies, with zero repackaging risk.
 
 ### Later
@@ -331,6 +358,12 @@ mapping is a follow-on audit.
 | `CHANGELOG.md` | Dated narrative of every fix and tuning round. |
 | `TEST_LAB_GUIDE.md` | Building and running the malware test lab. |
 | `README.md` | Operator-facing quick start and deployment. |
+| `docs/ATTACK_LOG.md` | Authorized adversary-emulation log against the operator's own hardware. Every technique that works becomes a detection; each entry ends with the phase that catches it. **Append-only, and it records refusals too.** |
+| `docs/attack-logs/` | Raw command logs and captures behind `ATTACK_LOG.md`. |
 | `docs/_history/` | Audits, packaging study, superseded plans. **Dated records — append, never rewrite.** |
-| `fable-work/` | Deferred F-series scanner briefs (§9). |
+| `fable-work/` | Deferred F-series scanner briefs, and the merged G-series operator tooling's own handoff/packaging docs (§9). |
+| `lib/` | The merged library layer — `net8.0`, platform-neutral, Linux-testable. `lib/Directory.Build.props` documents why the directory boundary exists; do not change its target framework. |
+| `docs/_history/HANDOFF_FABLE2.md` | Every judgement call, file list and test count from the library-layer package, per task. Read before wiring any of `lib/` into the engine. |
+| `~/Downloads/claude/fable-work-2/` (outside this repo — §9) | The origin package for `lib/`. Kept as the sanitized standalone; its framing must not be disturbed. |
+| `~/Downloads/claude/fable-work-3/` (outside this repo — §9) | The **offline artifact layer** package: 11 tracks / 30 tasks, specified but not built. Self-contained `CLAUDE.md`/`README.md`/`BLUEPRINT.md`, and `tools/check_register.py` for auditing its own writing register. |
 | `_python/README_CLAUDE_CODE.md` | Parked Python server spec. |

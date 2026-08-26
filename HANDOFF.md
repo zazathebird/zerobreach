@@ -1,8 +1,224 @@
 # HANDOFF
 
-## Session 2026-08-20 — dual-engine restructure + Fable library package
+## Session 2026-08-26 — progress review: both Fable packages confirmed complete
 
 **Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`, unchanged from the entry below — **no code was touched this
+session.** This was a documentation pass: review `fable-work` and `fable-work-2` for completion
+and bring `BLUEPRINT.md`/`CLAUDE.md`/`CHANGELOG.md` up to date with what each package actually
+shipped. `dotnet` is not installed on this box, so build/test claims below are read from each
+package's own `HANDOFF_FABLE*.md`, not independently re-run — see "Not verified this session".
+
+### `fable-work` (G-series operator tooling) — confirmed complete, already merged
+
+Already landed in this repo (`e8eea6c` session 16, `viewer.js`/`viewer.css` follow-up session
+18 — see `BLUEPRINT.md` §9). Its own `HANDOFF_FABLE.md` closes with "All eight tasks complete.
+Nine test suites, 355 assertions, all green under pwsh 7.4.6; every suite also proven
+fail-on-revert" (G1-G8). Nothing further to do here beyond the pre-existing outstanding items
+(Windows 5.1 runs, the G5 pending shapes, the G8 real-tree audit — all already tracked in
+`BLUEPRINT.md` §10 / `CLAUDE.md` Outstanding Work).
+
+### `fable-work-2` (library layer) — confirmed complete, NOT yet in this repo
+
+Lives at `~/Downloads/claude/fable-work-2/`, outside the tree (see prior entry below for why).
+Its `HANDOFF_FABLE2.md` shows all 12 tasks (A1-A5 YARA/Sigma, B1-B2 PE/containers, C1-C2
+path-normaliser/linter, D1-D3 IOC-normaliser/baseline-diff/config-baseline) marked **complete**,
+each with its own green test run. D2's entry carries a **2026-08-26** re-verification note
+(31/31), so this package was touched again today, not left stale since session 18. Per-project
+totals: `ZeroBreach.Rules.Tests` 529/529 (307 YARA + 122 Sigma + 100 Linting), `ZeroBreach.
+Formats.Tests` 135/135 (66 PE + 69 containers), `ZeroBreach.Paths.Tests` 418/418,
+`ZeroBreach.Intel.Tests` 143/143, `ZeroBreach.Diff.Tests` 31/31, `ZeroBreach.Baseline.Tests`
+118/118 — **1,374 tests total**, all zero-warning, all net8.0 on Linux, no packages beyond
+xUnit. A5's entry records that finishing it "resolved the build break that had been blocking
+`ZeroBreach.Rules`" (a missing `CompiledSigmaRule` type) — earlier entries in the same file
+(B1, D1, D3) still describe that break as live because they were written chronologically
+before A5 finished; the file is organized by task id, not by session order, so read status
+lines as of the latest-dated note per task, not top-to-bottom.
+
+**What is genuinely new here versus the prior entry below:** the earlier "`fable-work-2/` is
+built" note (session 17/18) described the package as in-progress with a suggested task order.
+It is now finished. `BLUEPRINT.md` §9 gained a migration-status row for it and §10 gained a new
+roadmap item (6, renumbering the old 6-10 to 7-11): copy the six projects into this repo's
+solution, then — the actual work, not the mechanical part — decide how `ZeroBreach.Rules`
+(YARA/Sigma) plugs into `SignatureDb` and the 10 scanners, and how `ZeroBreach.Formats`
+(PE/containers) feeds a look-inside-the-file scanner. Detection-parity work (old item 6, now 7)
+is now explicitly sequenced *after* this, since several F-series briefs map cleanly onto a
+library-layer track (YARA/Sigma → new signature source, PE/containers → content inspection,
+path normaliser → the destructive-op guard, IOC normaliser → the IOC manager, baseline diff →
+cross-run comparison already used by G2, config baseline → the FP-tuning bands).
+
+### `dotnet` IS on this box — a correction worth keeping
+
+An earlier draft of this entry said `dotnet` was not installed and that the test numbers were
+therefore taken on trust from the handoff documents. **That was wrong.** The SDK is at
+`~/.dotnet/dotnet` (8.0.424); it is simply not on `PATH`, so `which dotnet` returns nothing.
+Prefix with `export PATH="$HOME/.dotnet:$PATH"` and everything works.
+
+Everything above was then verified for real, not read: `fable-work-2` builds 13 projects with 0
+errors and 0 warnings and runs **1,374 tests, 0 failed, 0 skipped**, matching its handoff exactly.
+`yara` 4.5.5 is present at `/usr/bin/yara`, so the YARA differential suites ran live rather than
+passing vacuously.
+
+### The copy-in is done — `lib/` now holds the library layer
+
+BLUEPRINT.md §10 item 6, the mechanical half. Six library projects plus their six test projects
+are under a new top-level **`lib/`**, added to `ZeroBreach.sln`.
+
+**`lib/` exists because the target framework is a real boundary.** The engine projects are
+`net8.0-windows`; every project in this layer is **`net8.0`** and must stay that way — that is
+what makes it testable rather than merely compilable from Linux. One `lib/Directory.Build.props`
+carries `net8.0` + `TreatWarningsAsErrors` + a pinned `LangVersion` for all twelve and inherits
+the root props for identity, instead of twelve edited `.csproj` files. It also enforces the
+direction: a `net8.0-windows` project may reference a `net8.0` one, never the reverse, so a
+Windows dependency cannot leak downward by accident. **A build error there is the boundary
+working — do not fix it by changing the target framework.**
+
+| | Before | After |
+|---|---|---|
+| `dotnet build ZeroBreach.sln` | 6 projects | **18 projects**, 0 errors, 0 warnings |
+| `dotnet test ZeroBreach.sln` | 290 / 14 skipped | **1,664 passed / 14 skipped / 0 failed** |
+
+`ZeroBreach.Cli` still references only Core/Scanners/Remediation — **the shipped exe is
+unchanged**. `docs/_history/HANDOFF_FABLE2.md` copied in alongside `HANDOFF_FABLE.md`.
+
+### Next step, and it is a design decision not a port
+
+Wiring `ZeroBreach.Rules` into `SignatureDb` and the 10 scanners. The obvious first move, from
+reading the merged code:
+
+**`ZeroBreach.Rules.Linting` independently re-implements five of this repo's own hard rules.**
+`AllowlistCanaries` = the `Join-AllowRegex` universal-pattern canary set. `CollisionCorpus` = the
+"no entry may collide with a real software name" rule the `houdini`/SideFX bug produced.
+`BacktrackingProbe` = the 150 ms ReDoS budget. `LintSwallowedDetections` = the "an allowlist must
+never swallow the case its own detection branch exists for" rule the Phase 130 Discord bug
+produced. `LintTool` is already CLI-shaped with 0/1/2 exit codes. Pointing it at
+`data/detection_signatures.json` is high value and zero risk — a C# tool improving the PS engine.
+
+**It does not run as-is, and the blocker is a `CLAUDE.md` error.** The linter expects allowlists
+nested under an `fp_allowlists` object because `CLAUDE.md` says they "go in the `fp_allowlists`
+block of that same JSON". **There is no such key.** The file is flat — 190 top-level keys, 70 of
+them `_comment_*` — and `Join-AllowRegex` looks them up by flat name through `Get-Sig $Name`. A
+`_comment_fp_allowlists` marker string exists and is likely the source of the belief. Neither
+side is broken; they disagree about a schema, and which one moves is the owner's call. Left
+unpatched deliberately.
+
+### Not verified this session
+
+- No Windows run. Everything above is Linux.
+- The `lib/` layer is on disk and building; **nothing in `ZeroBreach.*` references it yet**, so
+  it has not been exercised against real product data — only against its own fixtures.
+
+---
+
+### State
+
+Branch `security/audit-2026-08-18`. **Nothing pushed; `main` still untouched.** Working tree has
+this session's changes uncommitted on top of the five session-17 commits.
+
+Full PS security suite **green**. `Phases-6.ps1` parses clean under the 7.4.6 parser, BOM intact.
+No C# was touched this session, so the native engine is unchanged (279 passed / 14 skipped).
+
+### What was built
+
+**`engine/Phases-6.ps1` phases 153-156 — the network-exposure band.** The module was a 37-line
+stub; 153-156 are now real (15 findings, all `FixAction "Info"`). 146-152 and 157-159 remain stub.
+
+| Phase | Checks |
+|---|---|
+| 153 | SMB server signing *required* vs merely enabled, client signing, `AllowInsecureGuestAuth`, local Guest account, `RestrictNullSessAccess`, `RestrictAnonymousSAM`, SMB1 |
+| 154 | non-default published shares, share-level ACEs granting Everyone / ANONYMOUS LOGON / Guest, `AutoShareWks` |
+| 155 | LLMNR `EnableMulticast`, NBT-NS `NetbiosOptions` per interface, mDNS `EnableMDNS`, `RestrictSendingNTLMTraffic`, `LmCompatibilityLevel` |
+| 156 | per-NIC `NetConnectionProfile`, enabled inbound Allow rules for 135/139/445/3389/5985/5986, Delivery Optimization `DODownloadMode` |
+
+**Scope was deliberately narrowed and must not be widened back.** The F6 brief said "LAN band,
+opt-in, requires `-ScanLan`". As built the band is **host-side only** — registry/CIM reads, no
+packets, no LAN enumeration, and **no `-ScanLan` switch exists**. Rationale is now a rule in
+`CLAUDE.md` ("Network-exposure band 153-156"): an MSP tool must not probe a client network, and
+every finding is answerable from the host's own registry anyway.
+
+**A test was passing vacuously.** `Test-Hunt-Band.ps1` §9 (safe-wrapper discipline) enumerated
+`Phases-0/5/7` and omitted `Phases-6` — fine for an empty stub, a blind spot once it held 15
+findings. Fixed; 112 → 118 assertions, and the six new ones were **proven to fail** by injecting a
+raw `Get-ItemPropertyValue` and an `Add-Type -TypeDefinition` (2 failed, clean on restore).
+Generalised into a CLAUDE.md rule ("When a stub becomes real…").
+
+### `docs/ATTACK_LOG.md` — new, and it is the provenance for the band
+
+Authorized adversary-emulation log against the operator's own hardware, on their own LAN. Session 1
+(prior) did discovery; session 2 (this one) is §3.x. Raw command logs in `docs/attack-logs/`.
+
+Findings that drove 153-156, against `192.168.10.254` (advertises as `testbox`, formerly
+`DESKTOP-SCBHJVV`):
+
+- **Posture changed between sessions.** Session 1 recorded no SMB/RPC at all. Full 65535-port
+  sweep this session: **135, 139, 445, 49668 open**, all other 65531 filtered with zero RST.
+- **Guest SMB session succeeds.** Null session correctly refused; `-U guest%` enumerates
+  `ADMIN$ C$ IPC$ Users`. `Users` is a deliberately published non-default share.
+- SMB1 off, server permits signing. **"Permits" is not "requires"** — invisible from outside, and
+  the reason the band is host-side.
+- Passive capture: target emits **only mDNS** — zero LLMNR, zero NBT-NS. So the name-resolution
+  poisoning path the log assumed in §2.4 is **not live on this host**.
+
+**Two refusals are recorded in the log on purpose** (§2.3, §3.6): a full-port sweep and the first
+`tcpdump` were blocked by the Claude Code auto mode classifier. Neither was routed around. The
+document's rule is that a coverage claim is worth only what its refusals disclose.
+
+### Open — the `Users` share was NOT accessed
+
+Deliberately. `TEST_LAB_GUIDE.md` §2 defines the authorized lab as an air-gapped switch, no uplink,
+`10.99.0.x` statics, nothing real on the box; `192.168.10.254` is on the live household LAN
+alongside third-party personal devices. `ATTACK_LOG.md` §2.1 records the box was **refurbished by
+an IT firm who replaced parts**, so a prior owner's or prior client's profile data may be present.
+Reading it also adds nothing — every check in 153-156 is a host-side registry read.
+
+**To unblock:** confirm from the console that `C:\Users` holds only the operator's own test
+profile. A rename to `testbox` does not answer this; network topology and disk provenance are
+independent.
+
+The operator planned to move the box to a phone hotspot for isolation. That fixes third-party
+exposure (and would unblock name-resolution work) but does **not** change what is on the disk. Note
+a hotspot is isolation, not an air gap — it has a carrier uplink, so it is fine for auth and
+enumeration testing and **not** fine for the Tier-3 live-sample work in `TEST_LAB_GUIDE.md`.
+
+### Fable — `fable-work-2` (do not collide)
+
+Fable is **actively working** in `~/Downloads/claude/fable-work-2/`. This session added there, and
+nothing else: `tasks/D3_config_baseline.md` + a README row. Fable has since scaffolded all six
+projects incl. `ZeroBreach.Baseline`, so D3 was picked up.
+
+**D3 = configuration baseline evaluator** — the pure comparator half of 153-156. Check table +
+observed values → Compliant / NonCompliant / NotApplicable / Undetermined. Populating the table
+with real content is deliberately **not** Fable's task; that is this side's job, from the 15 checks
+now in 153-156.
+
+**Three known defects in that package, agreed but NOT yet applied** (held back to avoid colliding
+with Fable's live run):
+1. `BLUEPRINT.md` has no §13 for D3 — every other brief cites a section; D3 says there isn't one.
+2. `00_INTEGRATION.md` "Projects owned by this package" omits `ZeroBreach.Baseline`, then says
+   "Nothing else is yours" — a contradiction sitting in front of the project Fable just created.
+3. No `.gitignore`, and 12 `obj/`/`bin/` dirs already exist. This package merges into this repo,
+   where that trap has fired before (session 17: 356 files of compiler output nearly staged).
+
+**Two proposed new tasks for that package, not yet written:** `B3` EVTX parser (A5 evaluates Sigma
+against event records and nothing in the package produces them from a file) and `B4` offline
+registry hive parser (pairs with D3 — produces observed values from a collected image).
+
+### Next
+
+1. Apply the three `fable-work-2` fixes once Fable's run reports.
+2. Windows validation of 153-156 — first time the absence rules (absent vs zero vs
+   default-applies) meet a live registry provider. Most likely place for them to be wrong.
+3. Resolve the `C:\Users` question, then decide whether any further engagement work is worth it.
+4. Everything else in `BLUEPRINT.md` §10.
+
+---
+
+## Session 2026-08-20 — dual-engine restructure + Fable library package
+
+**Superseded — this was the current entry as of 2026-08-20. See the 2026-08-22 entry at the top.**
 
 ### What this repo is now
 
@@ -92,9 +308,9 @@ Open it as its own project. Order: A1→A2→A3→A4 strictly sequential, then a
 The main gap is detection breadth in the native engine — 63 checks vs 162 PS phases. That work
 is mine; Fable cannot touch it.
 
-Also open, in `BLUEPRINT.md` §10: `--log` flag to tee the console transcript to a text file
-(the owner asked for it — the only output artifact currently missing); `HANDOFF`/`TEST_LAB_GUIDE`
-still need dual-engine updates; superseding headers still needed on `docs/_history/*`.
+`--log` is **done** (session 18) — `zbscan --mode DEEP --log run.txt` tees the console into a
+plain-text transcript beside the reports. Still open: `HANDOFF`/`TEST_LAB_GUIDE` need dual-engine
+updates; superseding headers still needed on `docs/_history/*`.
 
 ### Test lab
 

@@ -109,10 +109,14 @@ PowerShell 5.1+, admin rights.
 │   │                           (timestomp, filename/namespace), process memory (unbacked
 │   │                           threads, unexpected CLR host, deleted module backing, image
 │   │                           integrity, suspended processes)
-│   ├── Phases-6.ps1            if($PhasePlan.Hunt) 146-159 — STUB, parallel work package
-│   │                           (see fable-work/): PE structure, cloud+DevOps creds, lateral
-│   │                           /AD/cred-dumping, LAN band, persistence surface, supply
-│   │                           chain, UEFI
+│   ├── Phases-6.ps1            if($PhasePlan.Hunt) 146-159. 153-156 BUILT (2026-08-22) —
+│   │                           network-exposure band, HOST-SIDE ONLY (registry/CIM reads,
+│   │                           sends no packets, no -ScanLan switch): SMB signing/guest/
+│   │                           null-session, shares + share ACLs, LLMNR/NBT-NS/mDNS/NTLM,
+│   │                           firewall profile + inbound rules + Delivery Optimization.
+│   │                           146-152 + 157-159 STILL STUB (parallel work package, see
+│   │                           fable-work/): PE structure, cloud+DevOps creds, lateral
+│   │                           /AD/cred-dumping, persistence surface, supply chain, UEFI
 │   ├── Phases-7.ps1            if($PhasePlan.Hunt) 160-162 — SYNTHESIS. No new detection:
 │   │                           attack-chain correlation, patient zero, timeline export
 │   ├── Summary.ps1             risk score + audit summary + stealth/auto exits
@@ -292,8 +296,16 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Never put malware-signature literals in the `.ps1`** — Defender AMSI blocks the engine at load
   (`ScriptContainedMaliciousContent`, exit 1, no output → "scan did nothing"). All signatures live in
   `data/detection_signatures.json`, loaded at runtime via `Get-Sig` (data files aren't AMSI-scanned).
-- **FP allowlists are NOT signatures** — they go in the `fp_allowlists` block of that same JSON, loaded
-  via `Join-AllowRegex` (empty key → `(?!)`, suppresses nothing). No new literal lists in the `.ps1`.
+- **FP allowlists are NOT signatures** — they live in that same JSON and load via `Join-AllowRegex`
+  (empty key → `(?!)`, suppresses nothing). No new literal lists in the `.ps1`.
+  **Correction (2026-08-26): they are NOT under an `fp_allowlists` block.** This file said so for
+  a long time and it is wrong. `data/detection_signatures.json` is **flat** — 190 top-level keys,
+  70 of them `_comment_*` strings — and `Join-AllowRegex` resolves a bare key name through
+  `Get-Sig $Name`. Allowlist keys are distinguished by naming convention only (`*_benign_*`,
+  `*_allow*`, `trusted_*`). A `_comment_fp_allowlists` marker string exists and is the likely
+  source of the belief. This matters now because `lib/ZeroBreach.Rules/Linting` was written to
+  the documented schema and therefore cannot read the real file — one side has to move, and that
+  is an open decision, not a bug to patch on sight.
 - **An allowlist entry matched against attacker-controllable text (run-key values, command lines,
   task actions) must pin the ENTIRE string to the exact benign shape** — `^…$` anchors, bounded
   wildcards like `[^"]*` (never `.*` spanning the name/value boundary). A name-only prefix pattern
@@ -465,8 +477,11 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **`-Mode HUNT` sits above PARANOID with a ceiling of 162, and that ceiling is mirrored in FOUR
   places** — the loader's `$PhasePlan`, `$MODE_PHASES` in `ZeroBreach-Server.ps1`, `MODE_PHASES`
   in `_python/server.py`, and the mode whitelist in both servers. `Test-Hunt-Band.ps1` checks them
-  together. HUNT is deliberately NOT folded into DEEP: the band walks process memory and hashes
-  the ESP, so it costs real wall-clock and must stay an explicit operator choice.
+  together. HUNT is deliberately NOT folded into DEEP: the band walks process memory (141-145), so
+  it costs real wall-clock and must stay an explicit operator choice. (**It does not hash the
+  ESP** — UEFI/ESP integrity is phase 159 and is still a stub. That claim was in this file and in
+  `README.md` until 2026-08-22; corrected rather than implemented, because documenting a
+  capability the engine does not have is the one error class an IR tool cannot afford.)
 - **Every finding in 134-162 is `FixAction "Info"`. There are no exceptions and there must not
   be**, for a reason specific to this band: its best phases fire on healthy managed endpoints by
   construction. **An EDR is, by every signal phases 134-138 and 141-145 look for, a legitimate
@@ -497,6 +512,45 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **A backtick immediately before a closing double-quote escapes it** and the string never
   terminates. Do not wrap inline commands in markdown backticks inside a `-Description` — use
   single quotes. This broke the build twice while writing this band.
+
+### Network-exposure band 153-156 (`engine/Phases-6.ps1`, added 2026-08-22)
+- **The band is HOST-SIDE and must stay host-side. There is no `-ScanLan` switch and none is to
+  be added.** The original F6 brief specified "LAN band, opt-in, requires `-ScanLan`"; that scope
+  was deliberately dropped. Every check is a registry or CIM read of the machine's own posture,
+  sending **no packets** and enumerating **no network**. Two reasons, and both survive re-reading:
+  ZeroBreach runs on client networks under an MSP contract, and a tool that probes the customer's
+  LAN can trip the customer's own IDS while being indistinguishable on the wire from what it
+  exists to detect; and every finding here is answerable from the host's own registry, so probing
+  buys no detection. `docs/ATTACK_LOG.md` is the evidence — everything learned by scanning that
+  host from outside maps onto a value readable from inside it.
+- **"Permits signing" is not "requires signing," and that distinction is why the band is
+  host-side.** An external observer cannot tell them apart: a client that asks for signing gets it
+  either way. Only `RequireSecuritySignature=1` closes SMB relay, and only a host-side read sees
+  it. Any check whose answer differs between "what an outsider can observe" and "what the defender
+  must verify" belongs here, not in a network probe.
+- **Report the compliant state, not only the failures.** Phase 155 checks all three broadcast
+  name-resolution channels (LLMNR / NBT-NS / mDNS) and prints the good ones. On the machine this
+  band was written against, two of the three were already correct — a check that only reported
+  failures would have printed nothing and taught the operator nothing about what was verified.
+- Findings are `FixAction "Info"` like the rest of 134-162, but here for an additional reason:
+  several of these settings (`LmCompatibilityLevel`, the LSA values, share removal) break file
+  sharing or logon outright if written blind. The exact operator-run command goes in the
+  description.
+
+### When a stub becomes real, re-check every test list that names modules explicitly
+- `Test-Hunt-Band.ps1` §9 (safe-wrapper discipline: no raw `Get-ItemPropertyValue` /
+  `Get-AuthenticodeSignature` / `Get-FileHash`, no P/Invoke, no piped `Get-ScanFiles`) enumerated
+  `Phases-0/5/7` and **omitted `Phases-6`**. That was harmless while `Phases-6` was an empty stub
+  and became a blind spot the moment it carried 15 findings — the suite went on passing, for the
+  wrong reason. Caught and fixed 2026-08-22 (112 → 118 assertions, the six new ones proven to fail
+  by injecting a raw `Get-ItemPropertyValue` and an `Add-Type -TypeDefinition`).
+- The general form: **an exclusion justified by a file being empty expires silently when the file
+  is filled** — and nothing fails to tell you, because the suite still passes. Before filling any
+  remaining stub (146-152 and 157-159, both in `Phases-6.ps1`, and any future module), grep the
+  whole test tree for the module name and add it wherever its siblings already appear. Then prove
+  the new assertions bite by injecting a violation — a list you extended but never tested against
+  is the same blind spot one level up.
+
 
 ### Extended band 116-133 (`engine/Phases-4.ps1`, added 2026-08-19)
 - **The band ships `FixAction "Info"` by default and that is deliberate.** It is new
@@ -557,7 +611,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   wrapper. The suite asserts that count.
 
 ### Security regression suite
-- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 611
+- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 617+
   assertions covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
   (incl. a RUNTIME test of correlation and of the signature-set integrity gate) + WS4 signature
   memo, the parse+BOM gate, and the embedded runspace here-strings.
@@ -696,13 +750,36 @@ Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
 
 ## Outstanding Work
 
-The bulk of the roadmap is **done and merged** (scan-blocking prompts, re-run handling, MITRE, IOC
-Manager, HTML/CSV export, STEALTH parsing, real remediation, safety guard, FP rounds 1–5, engine
-split + WS2 port, live finding stream + UTF-8 pipeline, VFX/themes/sound). The 2026-07-01 browser
-DEEP run **passed the scan/engine path live** (115 phases contiguous, phase counter validated).
-**The last standing acceptance item is the browser click-through** of destructive remediation
-(PURGE + protected HARD block), export downloads, IOC save→re-scan, and STEALTH — now also
-eyeballing the live finding ticker/chips and clean banner glyphs. **The prioritized roadmap lives
-in `BLUEPRINT.md` §7** (WS3 FP-tune of the WS2 detections, FP sign-off list, per-phase progress
-truth, scan profiles, coverage-matrix re-audit, USB field test; `NEXT_STEPS.md`/`UPGRADE_PLAN.md`
-are historical context).
+**The prioritized roadmap lives in `BLUEPRINT.md` §10** (§7 is the quality gates). Current session
+state, including anything in flight, is the top entry of `HANDOFF.md`. This section is only the
+short orientation.
+
+Most of the roadmap is **done and merged** on both engines: scan-blocking prompts, re-run handling,
+MITRE, IOC Manager, HTML/CSV export, STEALTH parsing, real remediation, the three-layer safety
+guard, FP rounds 1-5, the engine split + WS2 port, the live finding stream + UTF-8 pipeline,
+VFX/themes/sound, the extended band 116-133, the HUNT band 134-145 and 160-162, the preflight
+integrity gate, and the native C# engine (10 scanners / 63 checks).
+
+**What is actually outstanding:**
+
+1. **Windows validation.** The whole 116-162 span has been exercised only on Linux/pwsh. It has
+   never met the PS 5.1 parser, a live registry provider or a real process table. `Phases-6.ps1`
+   153-156 is the newest and the most exposed here — its absence rules (absent vs zero vs
+   default-applies) are pure theory until a real registry answers them.
+2. **`tools\tests\Verify-OnWindows.ps1` from an elevated 5.1 prompt**, and the browser
+   click-through: destructive remediation (PURGE + protected HARD block), export downloads, IOC
+   save→re-scan, STEALTH, plus the live finding ticker/chips and clean-banner glyphs.
+3. **FP rounds on the new bands.** Extended and HUNT ship `Info` throughout precisely because they
+   have never met a real fleet.
+4. **`engine/Phases-6.ps1` stubs 146-152 and 157-159** — the remaining parallel work package. Read
+   the "When a stub becomes real" rule above before filling either.
+5. **Detection parity** — port PS coverage into the native scanners; and per-check status +
+   deterministic finding ids flowing the other way, from native into PS.
+6. **Wire up `lib/`** (BLUEPRINT.md §10 item 6). The copy-in is **done** (2026-08-26): YARA +
+   Sigma rule engines, PE + container parsers, a Windows path normaliser, a signature/rule
+   linter, an IOC feed normaliser and two diff/baseline engines are in `lib/`, in the solution,
+   1,664 tests green. **Nothing in `ZeroBreach.*` references them yet.** Item 5 (detection
+   parity) should be built on top of this, not run as a separate track. Start with the linter
+   against `data/detection_signatures.json` — but read the `fp_allowlists` note below first.
+
+`docs/_history/NEXT_STEPS.md` and `UPGRADE_PLAN.md` are historical context, not live plans.

@@ -1,0 +1,32 @@
+<Project>
+
+  <!-- Inherit the repo-root props (Nullable, ImplicitUsings, Company/Product/Version) so the
+       library assemblies carry the same identity as the engine they ship inside. -->
+  <Import Project="$([MSBuild]::GetPathOfFileAbove($(MSBuildThisFile), $(MSBuildThisFileDirectory)../))" />
+
+  <PropertyGroup>
+    <!-- net8.0, NOT net8.0-windows, and this is the whole point of lib/ being its own
+         directory. Everything under here is platform-neutral: bytes in, structured data out,
+         no P/Invoke, no registry, no Windows-only API. That is what lets the entire layer be
+         built and tested from Linux, where this project is actually developed — the engine
+         projects at the repo root can only be *built* here, never meaningfully exercised.
+
+         A net8.0-windows project may reference a net8.0 project, so the engine can consume
+         these freely. The reverse does not compile, which is exactly the guard we want: it is
+         structurally impossible for a Windows dependency to leak down into this layer by
+         accident. Do not "fix" a build error here by changing this to net8.0-windows —
+         that error is the boundary doing its job. -->
+    <TargetFramework>net8.0</TargetFramework>
+
+    <!-- The package was authored and mutation-tested under warnings-as-errors and every task
+         in docs/_history/HANDOFF_FABLE2.md claims "zero warnings" on that basis. Dropping it
+         would silently retire that claim. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+
+    <!-- Pinned rather than inheriting the root's "latest": identical under the current SDK
+         (8.0.424 → C# 12), but this layer parses attacker-authored content and its behaviour
+         should not shift because a future SDK moved "latest". -->
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+
+</Project>
