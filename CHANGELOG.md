@@ -172,13 +172,21 @@ sites, not one**, and all three are load-bearing:
 `"ZBEND"` and the buffer label `zbf-format`, because the paired header is written as the hex
 bytes `7A 42 46 31` and renaming one half made a fictional format disagree with itself.
 
-**Deliberately still carrying the old name, outside the tree:** the git remote
-(`github.com/zazathebird/zerobreach.git`), this checkout's own path
+**The GitHub repository was renamed too** (2026-08-28): `zazathebird/zerobreach` →
+**`zazathebird/scythe`**, and `remote.origin.url` now points at the new URL. GitHub redirects the
+old path — an API call against `repos/zazathebird/zerobreach` answers `zazathebird/scythe` — so
+any clone, script or bookmark still using the old URL keeps working; updating them is tidiness,
+not repair.
+
+**Still carrying the old name outside the tree, and deliberately so:** this checkout's own path
 (`~/Downloads/claude/zerobreach/`, which also names the Claude Code memory directory derived from
 it), `~/Downloads/claude/zerobreach-backup-prerename/`, and — on any machine that ran a
 pre-rename build — `%ProgramData%\ZeroBreach` and the scheduled task the loader now cleans up.
-Renaming the GitHub repository is a web-UI action and is best done after this branch merges;
-GitHub redirects the old URL, so a stale remote keeps working either way.
+The checkout path is what leaks into build metadata: `*/obj/**/*.sourcelink.json` and the
+`FileListAbsolute.txt` files embed it, so a compiled PDB names it. That output is gitignored and
+regenerated on every build, so it is not a repository defect — but it is the reason the folder
+rename is worth doing, and it must be done from **outside** a running session, since the working
+directory and the memory directory are both keyed to that path.
 
 
 ## 2026-08-26 — progress review: fable-work and fable-work-2 both confirmed complete
