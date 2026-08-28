@@ -125,6 +125,62 @@ Not automated, because a silent dual-root read is worse than an operator doing i
 The pre-rename tree is copied whole to `~/Downloads/claude/zerobreach-backup-prerename/`. Delete
 it once the rename has been exercised on Windows — nothing in this repo depends on it.
 
+### Pushed — and what GitHub blocked on the way out
+
+The branch went to `origin` for the first time: `security/audit-2026-08-18` at `fc164ca`, 24
+commits, tracking set. `main` is untouched at `22e582a` — nothing is merged, and this branch has
+never had a PR opened against it.
+
+**The first push was rejected by GitHub push protection (`GH013`), and the finding was a false
+positive in the security suite's own fixtures.** The match was `Slack Incoming Webhook URL`, at
+`tools/tests/Test-Extended-Band.ps1:235` and its copy at
+`fable-work/reference/_deferred/Test-Extended-Band.ps1.reference:231`, in three commits
+(`620cd6e`, `e8eea6c`, `fc164ca`). The string is
+`https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX` — a placeholder
+sitting between equally fake Discord and Telegram URLs in the `webhook_c2_rules` **Hit** set,
+i.e. the vectors that assert the rule fires. All zeros and X's; it authenticates nothing.
+
+Resolved by **allowlisting it through the unblock URL, not by editing history.** Two reasons.
+Rewriting would have meant `filter-repo` over 24 commits and a new SHA for every one of them, to
+change a value that would have to stay webhook-shaped anyway — a rule that matches
+`https://hooks.slack.com/EXAMPLE` proves nothing about a rule meant to match a real webhook. And
+the same shape is what the detection exists to find, so this will recur: **any future
+Slack/Discord/Telegram vector added to those rules will block a push until it is allowed too.**
+The allowance is per-secret, not per-repository.
+
+### The old name after the push: where it legitimately survives
+
+Full audit of the tracked tree (case-insensitive, excluding `.git`, `_archive`, `bin`, `obj`):
+the old product name appears in **9 files** and the `zb` stem in **3**. Every occurrence is
+accounted for — but `CLAUDE.md` said "exactly five places" and that undercounted. The
+accurate list, now in `CLAUDE.md`:
+
+*Documentation and config, where it is describing history:* the `CLAUDE.md` rename section;
+`CHANGELOG.md`, `HANDOFF.md` and `docs/_history/SECURITY_AUDIT_2026-08-18.md`;
+`docs/MERGE_ARTIFACT_LAYER.md`; the `.gitignore` work-rig-drop rules; `_archive/` itself.
+
+*Shipped code, where it is backward compatibility with a machine that ran the old build —* **three
+sites, not one**, and all three are load-bearing:
+
+| Site | Why the old name must stay |
+|---|---|
+| `Scythe-V23.ps1:123` | `-Schedule` unregisters a leftover `ZeroBreach_V22_Scheduled` task, so an upgraded box runs one nightly scan, not two |
+| `Scythe.Scanners/ContentScanScanner.cs:553-555` | self-exclusion for the pre-rename quarantine/vault/report directories; without it the content scanner reports its own quarantined evidence back as findings |
+| `data/detection_signatures.json` `script_own_strings` | the Phase-2 script-block-logging self-filter; without both spellings the engine flags log entries written by its own already-deployed copy |
+
+*One test fixture:* `lib/Scythe.Rules.Tests/Yara/CorpusValidationTests.cs` keeps the trailer
+`"ZBEND"` and the buffer label `zbf-format`, because the paired header is written as the hex
+bytes `7A 42 46 31` and renaming one half made a fictional format disagree with itself.
+
+**Deliberately still carrying the old name, outside the tree:** the git remote
+(`github.com/zazathebird/zerobreach.git`), this checkout's own path
+(`~/Downloads/claude/zerobreach/`, which also names the Claude Code memory directory derived from
+it), `~/Downloads/claude/zerobreach-backup-prerename/`, and — on any machine that ran a
+pre-rename build — `%ProgramData%\ZeroBreach` and the scheduled task the loader now cleans up.
+Renaming the GitHub repository is a web-UI action and is best done after this branch merges;
+GitHub redirects the old URL, so a stale remote keeps working either way.
+
+
 ## 2026-08-26 — progress review: fable-work and fable-work-2 both confirmed complete
 
 Documentation-only session, no code changed. Reviewed both Fable work packages for completion

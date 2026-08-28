@@ -6,9 +6,18 @@
 
 ### State
 
-Branch `security/audit-2026-08-18`. **Nothing is committed** — 396 changed paths sit in the
-working tree, including the `BLUEPRINT.md` / `HANDOFF.md` edits that were already uncommitted
-from the previous session. Full detail of both pieces of work is the top entry of `CHANGELOG.md`.
+Branch `security/audit-2026-08-18`, **committed and pushed** (updated 2026-08-27). The rename
+plus `docs/MERGE_ARTIFACT_LAYER.md` went in as `fc164ca` (397 files, +3,436 / -2,892); the branch
+is now on `origin` at that commit with tracking set, 24 commits ahead of `main`, which is
+untouched at `22e582a`. No PR is open. Working tree clean. Full detail of both pieces of work is
+the top entry of `CHANGELOG.md`.
+
+**The first push was rejected** — GitHub push protection `GH013`, matching a placeholder Slack
+webhook URL in the `webhook_c2_rules` Hit vectors of `tools/tests/Test-Extended-Band.ps1:235`
+(and its `_deferred` copy). It is a fixture, not a credential; the owner allowlisted it through
+the unblock URL rather than rewriting 24 commits, since the vector has to stay webhook-shaped for
+the assertion to mean anything. **Expect this again** whenever a new Slack/Discord/Telegram vector
+is added to those rules — the allowance is per-secret.
 
 Everything is verified green from a clean tree:
 

@@ -46,21 +46,45 @@ Verified after: `dotnet build` 18 projects 0 warnings, `dotnet test` **1,664 pas
 
 Three things about it are durable rules, not history:
 
-- **The old name survives in exactly five places, and nowhere else.** This section; the one
-  loader line described below; `docs/MERGE_ARTIFACT_LAYER.md`, which names the pre-rename
-  archive folders; the dated history in `CHANGELOG.md`, `HANDOFF.md` and `docs/_history/`; the `.gitignore`
-  rules naming the `zerobreach-main` drop that `_archive/` still holds; and `_archive/` itself. To
-  check for a regression, run the case-insensitive search for the old product name and the
-  `zb` identifier stem over the tree excluding `.git`, `_archive`, `bin` and `obj`, then confirm
-  every hit is one of those five. `_archive/` is excluded on purpose: it is a 432 MB dump of the
-  pre-rename repo including compiled build artifacts, and rewriting names inside it would be
-  meaningless.
+- **The old name survives in a closed list of places, and nowhere else.** Audited 2026-08-27
+  after the push: the old product name appears in **9 files** and the `zb` stem in **3**. Audit
+  at file granularity, not by occurrence count — the counts drift every time one of these
+  documents describes the rename again, the file list does not. Run the case-insensitive search
+  for the old product name and the `zb` identifier stem over the tree excluding `.git`,
+  `_archive`, `bin` and `obj`, then confirm every hit is on this list:
+  - **History and config, describing the past:** this section; the dated entries in
+    `CHANGELOG.md`, `HANDOFF.md` and `docs/_history/SECURITY_AUDIT_2026-08-18.md`;
+    `docs/MERGE_ARTIFACT_LAYER.md`, which names the pre-rename archive folders; the `.gitignore`
+    rules naming the `zerobreach-main` drop that `_archive/` still holds; and `_archive/` itself.
+  - **Shipped code, for backward compatibility — three sites**, listed in the bullet below.
+  - **One test fixture:** `lib/Scythe.Rules.Tests/Yara/CorpusValidationTests.cs` keeps the
+    trailer `"ZBEND"` and the label `zbf-format`. Its paired header is the hex bytes
+    `7A 42 46 31`; renaming one half made a fictional format disagree with itself.
+
+  `_archive/` is excluded on purpose: it is a 432 MB dump of the pre-rename repo including
+  compiled build artifacts, and rewriting names inside it would be meaningless. Note the search
+  is **case-sensitive by default in most tools and the stems are mixed-case** (`ZB_`, `Zb`,
+  `zb`) — that is how `Test-ZbAssert.ps1` survived the first sweep.
 - **`V22`/`V23` in strings stays.** `Scythe_V22_Scheduled`, the banners, `Scythe-V23.ps1` — the
   version self-identification was already deliberate before the rename and still is.
-- **A machine scheduled before the rename carries a `ZeroBreach_V22_Scheduled` task.** The
-  `-Schedule` branch in the loader now unregisters it before registering the new one, so an
-  existing deployment upgrades to one nightly scan rather than two. That is the **only** place
-  the old name may legitimately appear in shipped code. Do not add a second.
+- **Shipped code may name the old product in exactly three places, and every one of them is
+  backward compatibility with a machine that ran the pre-rename build. Do not add a fourth, and
+  do not "clean up" these three** — each fails silently and badly:
+  - `Scythe-V23.ps1` — the `-Schedule` branch unregisters a leftover `ZeroBreach_V22_Scheduled`
+    task before registering the new one, so an existing deployment upgrades to one nightly scan
+    rather than two.
+  - `Scythe.Scanners/ContentScanScanner.cs` — the self-exclusion list carries the old
+    quarantine/vault/report directory names. Drop them and the content scanner reports the tool's
+    own quarantined evidence back as findings.
+  - `data/detection_signatures.json` → `script_own_strings` — the Phase-2 script-block-logging
+    self-filter. Drop the old spelling and the engine flags log entries written by its own
+    already-deployed copy.
+
+  Related and **accepted, not fixed**: `Scythe.Remediation/ScythePaths.cs` moved the data root
+  from `%ProgramData%\ZeroBreach` to `%ProgramData%\Scythe`. An upgraded machine keeps its vault
+  and its tamper-evident action log under the old root and the hash chain cannot span the move.
+  The remedy is an operator renaming the directory before the first new run — a silent dual-root
+  read would be worse.
 
 The pre-rename tree is copied whole to `~/Downloads/claude/zerobreach-backup-prerename/`. Delete
 it once the rename has been exercised on Windows.
