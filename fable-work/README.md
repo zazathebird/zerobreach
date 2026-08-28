@@ -1,11 +1,11 @@
-# fable-work — parallel work package for ZeroBreach V23
+# fable-work — parallel work package for Scythe V23
 
 Open **this folder** as its own project. `CLAUDE.md` here is the rule book for the session;
 you do not need the parent tree's documentation and you should not load it.
 
 ## The one-paragraph context
 
-ZeroBreach V23 is a Windows endpoint audit-and-reporting tool used by a managed-service
+Scythe V23 is a Windows endpoint audit-and-reporting tool used by a managed-service
 provider. A PowerShell HTTP server sits between a browser front end and a PowerShell scan engine
 that walks the machine and writes a run record. This package is the work that surrounds that
 engine — what the operator sees, what gets handed to the client, how long a run takes, how it
@@ -33,7 +33,7 @@ G2.
 | [G4](tasks/G4_offline_report_viewer.md) | Offline report viewer page | M | `gui/viewer.html` + assets |
 | [G5](tasks/G5_server_parity_tests.md) | Parity tests for the mirrored tables | M | two test files |
 | [G6](tasks/G6_coverage_matrix.md) | Regenerate the coverage matrix | M | `tools/New-CoverageMatrix.ps1` |
-| [G7](tasks/G7_test_harness.md) | Shared assertions + machine-readable results | S–M | `tools/tests/lib/ZbAssert.ps1` |
+| [G7](tasks/G7_test_harness.md) | Shared assertions + machine-readable results | S–M | `tools/tests/lib/ScytheAssert.ps1` |
 | [G8](tasks/G8_standalone_packaging.md) | Standalone packaging study | L | `PACKAGING_STUDY.md` + prototype |
 
 ## Reference

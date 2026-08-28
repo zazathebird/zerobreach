@@ -80,7 +80,7 @@
 
 ---
 
-## Recommended Additions to ZeroBreach
+## Recommended Additions to Scythe
 
 ### 1. New Threat Signatures (detection_signatures.json)
 
@@ -130,6 +130,6 @@ All three alerts follow a **phishing + social engineering** vector:
 4. Defender catches it at execution time
 
 **Mitigation Focus:**
-- Email gateway filtering (not ZeroBreach scope)
-- User awareness training (not ZeroBreach scope)
-- **ZeroBreach scope:** Improve detection of email attachment artifacts and obfuscated scripts
+- Email gateway filtering (not Scythe scope)
+- User awareness training (not Scythe scope)
+- **Scythe scope:** Improve detection of email attachment artifacts and obfuscated scripts

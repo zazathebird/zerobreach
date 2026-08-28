@@ -1,7 +1,7 @@
 ﻿# NOTE - Detection vocabulary in this file is deliberate.
 # Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
 # named malware families, are detection category labels, operator-facing report text, or
-# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# MITRE ATT&CK tactic names (a published standard). Scythe is a defensive incident-
 # response tool; these strings are what it reports, not what it does. See CLAUDE.md,
 # "The detection vocabulary is deliberate". Do not sanitise them.
 
@@ -942,7 +942,7 @@ foreach ($pd in $pathDirs) {
     # System32 are already audited by Phase 15, so this is no coverage loss, just FP suppression.
     if ($pd.TrimEnd('\').ToLower().StartsWith($env:WINDIR.ToLower())) { continue }
     try {
-        $testFile = "$pd\__zbtest_$(Get-Random).tmp"
+        $testFile = "$pd\__scythetest_$(Get-Random).tmp"
         [IO.File]::WriteAllText($testFile, "test")
         Remove-Item $testFile -Force -ErrorAction SilentlyContinue
         Out-Typewriter "  -> WRITABLE PATH ENTRY: $pd" "WARN"
@@ -1004,7 +1004,7 @@ if (Test-Path $hostsPath) {
         Add-Finding -ID "HOSTS_PURGE" -Phase "PHASE 33" -ThreatType "DNS Hijack" -Severity $SEV_HIGH `
             -Description ("Hosts file contains $($badHosts.Count) non-standard entries. Review them above first — some may be " +
                 "deliberate. To back up and purge by hand (System32 is never auto-remediated): " +
-                "Copy-Item '$hostsPath' '$hostsPath.zbbak' -Force; " +
+                "Copy-Item '$hostsPath' '$hostsPath.scythebak' -Force; " +
                 "(Get-Content '$hostsPath') | Where-Object { `$_ -match '^#' -or `$_ -notmatch '\S' -or `$_ -match '^(127\.0\.0\.1|::1|0\.0\.0\.0)\s+(localhost|ip6)' } | Set-Content '$hostsPath'") `
             -Target $hostsPath -FixAction "Info" `
             -Group "Hosts File Hijack"

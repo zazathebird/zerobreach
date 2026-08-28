@@ -1,5 +1,5 @@
 {
-  "_comment": "ZeroBreach permission / integrity / privilege-escalation baseline. Externalized from ZeroBreach-V23.ps1 so the engine body holds no path/signature literals (AMSI-safe; data files are not AMSI-scanned). Consumed by the FORENSIC PERMISSION & INTEGRITY AUDIT phases (108-115). All values are filesystem paths, registry keys, account names, and service names — NOT malware signatures. Edit here without touching the engine.",
+  "_comment": "Scythe permission / integrity / privilege-escalation baseline. Externalized from Scythe-V23.ps1 so the engine body holds no path/signature literals (AMSI-safe; data files are not AMSI-scanned). Consumed by the FORENSIC PERMISSION & INTEGRITY AUDIT phases (108-115). All values are filesystem paths, registry keys, account names, and service names — NOT malware signatures. Edit here without touching the engine.",
 
   "_acl_note": "critical_acl_paths: directories/files that must NEVER be writable by Everyone / BUILTIN\\Users / Authenticated Users. A write/modify/fullcontrol Allow ACE for those identities on these paths = privilege-escalation surface (an attacker can replace a SYSTEM-run binary).",
   "critical_acl_paths": [

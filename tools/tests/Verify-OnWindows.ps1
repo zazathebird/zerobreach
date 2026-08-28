@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    The Windows-only half of ZeroBreach's validation — everything that CANNOT be
+    The Windows-only half of Scythe's validation — everything that CANNOT be
     checked from the Linux dev box.
 .DESCRIPTION
     Run from the PROJECT ROOT, in an ELEVATED Windows PowerShell 5.1 prompt:
@@ -62,7 +62,7 @@ if ($psv.Major -ne 5) {
 # and the single-element array-unwrap traps only surface on the 5.1 parser/runtime.
 Section '1. Parse + BOM on this host''s parser'
 $shipped = @(
-    'ZeroBreach-Server.ps1','ZeroBreach-V23.ps1',
+    'Scythe-Server.ps1','Scythe-V23.ps1',
     'engine\Phases-0.ps1','engine\Phases-1.ps1','engine\Phases-2.ps1','engine\Phases-3.ps1','engine\Phases-5.ps1','engine\Phases-6.ps1','engine\Phases-7.ps1',
     'engine\Summary.ps1','engine\FixMode.ps1'
 )
@@ -82,7 +82,7 @@ foreach ($f in $shipped) {
 }
 
 # ParseFile on the server does NOT reach the runspace here-strings — parse them too.
-$srv = Get-Content (Join-Path $root 'ZeroBreach-Server.ps1') -Raw
+$srv = Get-Content (Join-Path $root 'Scythe-Server.ps1') -Raw
 $sAst = [System.Management.Automation.Language.Parser]::ParseInput($srv, [ref]$null, [ref]$null)
 $hereAssigns = $sAst.FindAll({
     param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst] -and
@@ -117,7 +117,7 @@ $fnAst = $sAst.FindAll({
 foreach ($f in $fnAst) { . ([scriptblock]::Create($f.Extent.Text)) }
 Check 'Protect-ReportsDirectory extracted' ((Get-Command Protect-ReportsDirectory -EA SilentlyContinue) -ne $null)
 
-$acDir = Join-Path $env:TEMP ("zb_acl_" + [Guid]::NewGuid().ToString('N').Substring(0,8))
+$acDir = Join-Path $env:TEMP ("scythe_acl_" + [Guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $acDir -Force | Out-Null
 try {
     # Give BUILTIN\Users an explicit Modify ALLOW — the exact rule M9 exists to downgrade.
@@ -168,7 +168,7 @@ try {
 
 # ══ 4. M10 — per-launch log retention ══════════════════════════════════════════
 Section '4. M10  Remove-OldServerLogs retention'
-$lgDir = Join-Path $env:TEMP ("zb_log_" + [Guid]::NewGuid().ToString('N').Substring(0,8))
+$lgDir = Join-Path $env:TEMP ("scythe_log_" + [Guid]::NewGuid().ToString('N').Substring(0,8))
 New-Item -ItemType Directory -Path $lgDir -Force | Out-Null
 try {
     $t0 = Get-Date
@@ -236,10 +236,10 @@ if (-not $Live) {
 } else {
     Section '6. Live server surface (-Live)'
     $livePort = Get-TestPort
-    $logOut = Join-Path $env:TEMP ("zb_live_{0}.out" -f $livePort)
-    $logErr = Join-Path $env:TEMP ("zb_live_{0}.err" -f $livePort)
+    $logOut = Join-Path $env:TEMP ("scythe_live_{0}.out" -f $livePort)
+    $logErr = Join-Path $env:TEMP ("scythe_live_{0}.err" -f $livePort)
     $proc = Start-Process -FilePath (Get-Process -Id $PID).Path `
-        -ArgumentList @('-NoProfile','-File', (Join-Path $root 'ZeroBreach-Server.ps1'),
+        -ArgumentList @('-NoProfile','-File', (Join-Path $root 'Scythe-Server.ps1'),
                         '-NoBrowser','-Port', $livePort) `
         -RedirectStandardOutput $logOut -RedirectStandardError $logErr `
         -WindowStyle Hidden -PassThru
@@ -319,7 +319,7 @@ Section 'STILL NEEDS YOUR EYES — a script cannot check these'
  '2.  CSP breaks nothing visually: themes, VFX tiers, the kraken cinematic, PURGE modal.'
  '    Anything blocked is named by directive in the browser console.'
  '3.  QUICK scan: counter runs 1..30 and stops at 30/30; phases advance; scan_complete fires.'
- '4.  Rename ZeroBreach-V23.ps1 briefly -> red "SCAN DID NOT COMPLETE" panel, NOT a green'
+ '4.  Rename Scythe-V23.ps1 briefly -> red "SCAN DID NOT COMPLETE" panel, NOT a green'
  '    all-clear. (H2 — the worst bug an IR tool can ship.)'
  '5.  Drop the CLAUDE.md tripwires -> FULL scan -> FINDINGS -> REMEDIATION -> type PURGE.'
  '    Protected targets must show as blocked and be un-tickable.'

@@ -37,8 +37,8 @@ $ErrorActionPreference = 'Stop'
 # engine modules themselves: a phase body edited to `return` early is as effective a
 # blinding as an allowlist of '.*', and costs the attacker exactly as little.
 $targets = @(
-    'ZeroBreach-V23.ps1'
-    'ZeroBreach-Server.ps1'
+    'Scythe-V23.ps1'
+    'Scythe-Server.ps1'
     'engine\Phases-0.ps1'
     'engine\Phases-1.ps1'
     'engine\Phases-2.ps1'
@@ -104,7 +104,7 @@ if ($missing.Count) {
 }
 
 $manifest = [ordered]@{
-    schema    = 'zerobreach.integrity/1'
+    schema    = 'scythe.integrity/1'
     generated = (Get-Date).ToString('yyyy-MM-ddTHH:mm:ss')
     algorithm = 'SHA256'
     note      = 'Verified by engine/Phases-0.ps1 before phase 1. Regenerate after any edit to a listed file: tools/New-IntegrityManifest.ps1'

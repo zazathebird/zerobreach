@@ -1,4 +1,4 @@
-# ZeroBreach — "Opus Treatment" Upgrade Plan (post-/clear handoff)
+# Scythe — "Opus Treatment" Upgrade Plan (post-/clear handoff)
 
 > **⚠ STATUS 2026-07-02 — largely delivered; the live roadmap is `BLUEPRINT.md` §7.**
 > Workstream scoreboard: **WS0** coverage matrix exists (`data/coverage_matrix.json`) but was
@@ -57,7 +57,7 @@ heuristic logic, and hands back diffs. The main session integrates, de-dupes, pa
 and AMSI-tests. **Inventory the existing 107 phases FIRST** so we extend rather than duplicate.
 
 ### WS0 — Inventory & gap analysis (do this first, single pass)
-Map all 107 phases of `ZeroBreach-V23.ps1`: what each detects, which MITRE techniques it
+Map all 107 phases of `Scythe-V23.ps1`: what each detects, which MITRE techniques it
 covers, where the signature data lives. Produce a coverage matrix (phase → ATT&CK technique →
 data source). Output: `data/coverage_matrix.json` + a short gap list. Everything else keys off this.
 
@@ -126,16 +126,16 @@ Implement STEALTH-mode JSON parsing in both servers (currently neither parses it
    `Start-Process powershell.exe -ArgumentList '-NoProfile -ExecutionPolicy Bypass -File "<path>" -Mode QUICK -Hours 0 -Auto -OutDir "<reports>"' -NoNewWindow -RedirectStandardError err.txt`
    with an ~12s timeout, then kill. PASS = banner/phases stream and stderr has **no**
    `ScriptContainedMaliciousContent`.
-3. **BOM:** any rewrite of `ZeroBreach-V23.ps1` / `ZeroBreach-Server.ps1` MUST keep the UTF-8
+3. **BOM:** any rewrite of `Scythe-V23.ps1` / `Scythe-Server.ps1` MUST keep the UTF-8
    BOM (`EF BB BF`) — use `[IO.File]::WriteAllText($p,$txt,(New-Object System.Text.UTF8Encoding($true)))`.
 4. **JSON outputs** stay UTF-8 **no-BOM** (`UTF8Encoding($false)`) — see NEXT_STEPS Phase 1.
 5. **Live GUI run:** `Launch-GUI.bat` as admin → scan reaches Phase 107 → JSON in `reports/` →
    clean re-run. (The one acceptance test still outstanding.)
 
 ## Key file:line anchors (verified 2026-06-06)
-- Signature loader / `Get-Sig`: `ZeroBreach-V23.ps1` ~line 639 (replaces old inline IOC block).
+- Signature loader / `Get-Sig`: `Scythe-V23.ps1` ~line 639 (replaces old inline IOC block).
 - Signature data: `data/detection_signatures.json`.
-- YARA-lite consumer: `ZeroBreach-V23.ps1:~2843` (`$rule.Pattern` / `$rule.Severity`).
+- YARA-lite consumer: `Scythe-V23.ps1:~2843` (`$rule.Pattern` / `$rule.Severity`).
 - Inline regexes to harden (WS1): see list above.
 - MITRE mapping (ready, unused): `data/mitre_mapping.json`.
 - IOC import format: `data/ioc_defaults.json` (`-IocFile`).

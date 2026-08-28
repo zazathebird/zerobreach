@@ -31,7 +31,7 @@ Write-Host "`n=== WS7 SYNTHESIS BAND (160-162) — RUNTIME ===" -ForegroundColor
 $global:STEALTH_MODE = $true          # suppresses banner writes
 $global:PARANOID_MODE = $false
 $SEV_CRITICAL='CRITICAL'; $SEV_HIGH='HIGH'; $SEV_POSSIBLE='POSSIBLE'; $SEV_INFO='INFO'
-$OUT_ROOT = Join-Path ([IO.Path]::GetTempPath()) "zbcorr_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
+$OUT_ROOT = Join-Path ([IO.Path]::GetTempPath()) "scythecorr_$([Guid]::NewGuid().ToString('N').Substring(0,8))"
 New-Item -ItemType Directory -Path $OUT_ROOT -Force | Out-Null
 $STAMP = '20260819_120000'
 $PhasePlan = @{ Hunt = $true }
@@ -144,14 +144,14 @@ Assert-That 'a low-severity chain is promoted by kill-chain stage coverage' $qui
 # ── UNC paths must correlate too (lateral-movement findings name them) ──────
 $script:added.Clear(); $global:AuditFindings.Clear()
 Seed 'U1' 'PHASE 66' 'Worm' 'HIGH' '\\\\FS01\\public\\spread.exe' 'Worm copy found at \\\\FS01\\public\\spread.exe' 'Share Worm'
-Seed 'U2' 'PHASE 29' 'Persistence' 'CRITICAL' 'Task \\ZB' 'Scheduled task action runs \\\\FS01\\public\\spread.exe' 'Task'
+Seed 'U2' 'PHASE 29' 'Persistence' 'CRITICAL' 'Task \\SCYTHE' 'Scheduled task action runs \\\\FS01\\public\\spread.exe' 'Task'
 Seed 'U3' 'PHASE 59' 'RAT / C2 Beacon' 'HIGH' 'PID:99' 'Beacon from \\\\FS01\\public\\spread.exe to bad.top' 'C2'
 . (Join-Path $root 'engine/Phases-7.ps1')
 $unc = @($script:added | Where-Object { $_.ID -like 'CHAIN160_*' })
 Assert-That 'UNC-path findings correlate into one chain' $unc.Count 1
 
 # ── Phases 161/162 resolve real files, so they need a real Windows path ─────
-# Get-ZbEntities matches drive-letter and UNC paths only — correct for a Windows-only
+# Get-ScytheEntities matches drive-letter and UNC paths only — correct for a Windows-only
 # tool, but it means a POSIX temp path is invisible to it. Rather than weaken the engine
 # regex to make a test pass on Linux, these two assertions are declared Windows-only.
 if (-not $IsWindows) {

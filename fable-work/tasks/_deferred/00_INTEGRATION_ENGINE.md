@@ -81,7 +81,7 @@ suite checks them together.
 # ...banner comment: what the band does and why...
 
 # helpers (unconditional, so the AST tests can find them)
-function Get-ZbSomething { ... }
+function Get-ScytheSomething { ... }
 
 if ($PhasePlan.Hunt) {
     trap { Write-RecoveredError $_; continue }   # localize faults inside the group

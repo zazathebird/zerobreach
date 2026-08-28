@@ -8,7 +8,7 @@ deliberately infected peers — this is the difference between "patient zero loo
 
 ## ⚠ Gating — read this before writing a line
 
-This is **the only code in ZeroBreach that touches a machine other than the one it runs on.** An
+This is **the only code in Scythe that touches a machine other than the one it runs on.** An
 IR tool that port-scans a client's production network unprompted is an incident of its own, and
 it will get the tool banned from the fleet.
 
@@ -16,7 +16,7 @@ Requirements, all of them mandatory:
 
 - Gated on `$PhasePlan.Hunt` **and** a new `-ScanLan` switch. **Default off.** Add the switch to
   the loader `param()` block — that is the one loader edit you are authorised to make, and keep it
-  to exactly that one line plus a `$global:ZB_SCAN_LAN` assignment.
+  to exactly that one line plus a `$global:SCYTHE_SCAN_LAN` assignment.
 - **Read-only.** Never write to a peer, never authenticate with credentials, never mount a share.
 - **Rate-limited** and bounded: the ARP-cache neighbour set only, a hard cap on hosts, a
   wall-clock budget like the existing `SCAN_DEADLINE_S`.

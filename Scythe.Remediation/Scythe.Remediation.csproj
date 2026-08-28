@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- This project is the auditable destructive-action module (spec §6 / §8).
+         Keep it small and dependency-free: Core only, no scanner code. -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Scythe.Core\Scythe.Core.csproj" />
+  </ItemGroup>
+
+</Project>

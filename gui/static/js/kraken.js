@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ZEROBREACH — THE KRAKEN UNLOCK CINEMATIC
+   SCYTHE — THE KRAKEN UNLOCK CINEMATIC
    Typing "kraken" summons a ~19s full-screen set piece:
      0 TARGET LOCK   — your typed word gets signature-locked
      1 INTRUSION     — klaxon, RGB-split glitch, the console is breached
@@ -9,17 +9,17 @@
      5 CONTACT       — biomass incalculable; eyes open; tentacles; ROAR
      6 HANDSHAKE     — the kraken doesn't attack. It interfaces. Neural veins.
      7 REBIRTH       — THE ABYSS ACCEPTS YOU. Console reborn in KRAKEN theme.
-   Click or ESC skips straight to the unlock. All audio synthesized (ZBSound).
+   Click or ESC skips straight to the unlock. All audio synthesized (ScytheSound).
    ═══════════════════════════════════════════════════════════════════════════ */
 'use strict';
 
-const ZBKraken = (() => {
+const ScytheKraken = (() => {
   let running = false, finished = false;
   let ov, cv, ctx, bg, flash, els = {};
   let w = 0, h = 0, raf = 0, t0 = 0;
   let shards = [], cracks = [], bubbles = [], rings = [], tents = [], veins = [], maxDepthV = 1;
   const HEX = '0123456789ABCDEF';
-  const snd = n => window.ZBSound && ZBSound.play(n);
+  const snd = n => window.ScytheSound && ScytheSound.play(n);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const ez = p => 1 - Math.pow(1 - p, 3);                       // ease-out cubic
   const ezio = p => p < .5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2;
@@ -61,28 +61,28 @@ const ZBKraken = (() => {
       { at: 0,    fn: () => { snd('lock'); show(els.ghost, 1); show(els.skip, 1); } },
       { at: 250,  fn: () => snd('tick') }, { at: 500, fn: () => snd('tick') }, { at: 750, fn: () => snd('tick') },
       { at: 900,  fn: () => { show(els.sig, 1); els.sig.textContent = 'SIGNATURE ACCEPTED // ABYSSAL CLEARANCE α-0'; snd('confirm'); } },
-      { at: T.INTRUDE,        fn: () => { show(els.ghost, 0); show(els.sig, 0); show(els.warn, 1); ov.classList.add('kr-red'); snd('klaxon'); window.ZBFX && ZBFX.shake('hard', 700); } },
+      { at: T.INTRUDE,        fn: () => { show(els.ghost, 0); show(els.sig, 0); show(els.warn, 1); ov.classList.add('kr-red'); snd('klaxon'); window.ScytheFX && ScytheFX.shake('hard', 700); } },
       { at: T.INTRUDE + 300,  fn: () => snd('glitch') },
-      { at: T.INTRUDE + 900,  fn: () => { snd('glitch'); window.ZBFX && ZBFX.shake('med', 400); } },
+      { at: T.INTRUDE + 900,  fn: () => { snd('glitch'); window.ScytheFX && ScytheFX.shake('med', 400); } },
       { at: T.DECRYPT,        fn: () => { show(els.warn, 0); ov.classList.remove('kr-red'); bg.style.opacity = .92; show(els.dec, 1); snd('open'); } },
       ...locks,
       { at: T.SHATTER - 300,  fn: () => snd('danger') },
-      { at: T.SHATTER,        fn: () => { show(els.dec, 0); doFlash(); snd('flashbang'); snd('shatter'); makeCracks(); window.ZBFX && ZBFX.shake('hard', 800); } },
+      { at: T.SHATTER,        fn: () => { show(els.dec, 0); doFlash(); snd('flashbang'); snd('shatter'); makeCracks(); window.ScytheFX && ScytheFX.shake('hard', 800); } },
       { at: T.SHATTER + 480,  fn: () => { bg.style.opacity = 1; makeShards(); } },
       { at: T.DESCENT,        fn: () => { snd('splash'); snd('descend'); show(els.depth, 1); makeBubbles(); } },
       { at: T.DESCENT + 800,  fn: () => ping() }, { at: T.DESCENT + 1800, fn: () => ping() }, { at: T.DESCENT + 2600, fn: () => ping() },
       { at: T.CONTACT - 900,  fn: () => snd('heartbeat') }, { at: T.CONTACT - 300, fn: () => snd('heartbeat') },
       { at: T.CONTACT,        fn: () => { show(els.depth, 0); show(els.contact, 1); snd('alert'); makeTentacles(); } },
-      { at: T.ROAR,           fn: () => { snd('kraken'); window.ZBFX && ZBFX.shake('hard', 1200); rings.push({ t: 0 }); } },
+      { at: T.ROAR,           fn: () => { snd('kraken'); window.ScytheFX && ScytheFX.shake('hard', 1200); rings.push({ t: 0 }); } },
       { at: T.ROAR + 900,     fn: () => snd('heartbeat') },
       { at: T.SHAKE,          fn: () => { show(els.contact, 0); makeVeins(); snd('surge'); show(els.hand, 1); els.hand.innerHTML = 'NEURAL HANDSHAKE: LEVIATHAN &#8652; OPERATOR'; } },
       { at: T.SHAKE + 1700,   fn: () => { els.hand.innerHTML = 'THE ABYSS ACCEPTS YOU.'; snd('confirm'); } },
-      { at: T.REBIRTH,        fn: () => { show(els.hand, 0); unlock(); show(els.final, 1); snd('complete'); window.ZBFX && ZBFX.decrypt(els.ftitle, 'K R A K E N', 1300); bg.style.transition = 'opacity 1.8s'; bg.style.opacity = 0; } },
+      { at: T.REBIRTH,        fn: () => { show(els.hand, 0); unlock(); show(els.final, 1); snd('complete'); window.ScytheFX && ScytheFX.decrypt(els.ftitle, 'K R A K E N', 1300); bg.style.transition = 'opacity 1.8s'; bg.style.opacity = 0; } },
       { at: T.END,            fn: () => finish() },
     ];
   }
   function doFlash() { flash.style.transition = 'none'; flash.style.opacity = 1; requestAnimationFrame(() => requestAnimationFrame(() => { flash.style.transition = 'opacity .9s'; flash.style.opacity = 0; })); }
-  function lockBlock(i) { const b = els.blocks.children[i]; if (!b) return; b.classList.add('locked'); snd('thunk'); window.ZBFX && ZBFX.shake('low', 180); els.pct.textContent = Math.round(((i + 1) / 12) * 100) + '%'; }
+  function lockBlock(i) { const b = els.blocks.children[i]; if (!b) return; b.classList.add('locked'); snd('thunk'); window.ScytheFX && ScytheFX.shake('low', 180); els.pct.textContent = Math.round(((i + 1) / 12) * 100) + '%'; }
   function ping() { rings.push({ t: 0, sonar: 1 }); snd('sonar'); }
 
   // ── scene element generators ──
@@ -269,7 +269,7 @@ const ZBKraken = (() => {
   function release() {
     if (running) return;
     running = true; finished = false;
-    window.ZBSound && ZBSound.unlock();
+    window.ScytheSound && ScytheSound.unlock();
     build();
     events = buildEvents();
     t0 = performance.now();
@@ -281,14 +281,14 @@ const ZBKraken = (() => {
   function escSkip(e) { if (e.key === 'Escape') finish(); }
 
   function unlock() {
-    localStorage.setItem('zb_god', '1');
-    window.ZBThemes && ZBThemes.apply('kraken');
+    localStorage.setItem('scythe_god', '1');
+    window.ScytheThemes && ScytheThemes.apply('kraken');
     if (!document.getElementById('god-badge')) {
       const hr = document.getElementById('header-right');
       if (hr) { const b = document.createElement('div'); b.id = 'god-badge'; b.textContent = '🐙 ABYSSAL'; hr.insertBefore(b, hr.firstChild); }
     }
     if (window.addLogLine) addLogLine('[KRAKEN UNLEASHED] // ABYSSAL PROTOCOL ENGAGED — GOD MODE ACTIVE', 'HUNT');
-    document.dispatchEvent(new CustomEvent('zb-god-unlocked'));
+    document.dispatchEvent(new CustomEvent('scythe-god-unlocked'));
   }
 
   function finish() {
@@ -304,4 +304,4 @@ const ZBKraken = (() => {
 
   return { release, isRunning: () => running };
 })();
-window.ZBKraken = ZBKraken;
+window.ScytheKraken = ScytheKraken;

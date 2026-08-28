@@ -31,7 +31,7 @@ that lineage traces back to this upload).
 
 ## 2026-06-09 (Tuesday) — 0.7h · 1 session · 2 commits
 
-True project baseline. "Initial commit" establishes ZeroBreach V23 "Kraken Console" — the
+True project baseline. "Initial commit" establishes Scythe V23 "Kraken Console" — the
 PowerShell scan engine plus the cyberpunk HTML/JS frontend (themes, sound, VFX, kraken cinematic)
 — as the current tree. Followed immediately by a merge folding in the old 2026-05-19 upload
 history so the legacy files stop conflicting with it.
@@ -68,7 +68,7 @@ First real detection-engineering day:
   harness/checker.
 - Wired **MITRE ATT&CK tagging, the IOC Manager, HTML/CSV export, STEALTH-mode parsing, and real
   remediation** end-to-end — the single largest feature-wiring commit in the project.
-- Documented the benign remediation test tripwires (the `ZeroBreach_TEST_DELETEME` artifacts
+- Documented the benign remediation test tripwires (the `Scythe_TEST_DELETEME` artifacts
   used to validate scan → findings → remediation without real malware).
 - Built the **two-layer remediation safety guard**: a hard block on protected/system-critical
   resources first, then a frontend Layer 2 plus a completion-modal count fix.
@@ -121,7 +121,7 @@ to origin.
 `CHANGELOG.md` for bug-fix history.
 
 **Evening (18:01-18:48), the engine split:**
-- Rewrote `ZeroBreach-V23.ps1` from one monolithic script into a thin loader plus dot-sourced
+- Rewrote `Scythe-V23.ps1` from one monolithic script into a thin loader plus dot-sourced
   `engine/Phases-1/2/3.ps1` modules.
 - Merged in WS1/WS2 detection research from a separate work-rig branch.
 - Ported those WS2 detections into the new split modules (all graded `FixAction Info` —

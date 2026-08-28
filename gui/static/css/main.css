@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ZEROBREACH V23 — KRAKEN CONSOLE STYLESHEET
+   SCYTHE V23 — KRAKEN CONSOLE STYLESHEET
    Hollywood-grade tactical cyber ops aesthetic
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -756,8 +756,8 @@ select.path-input option { background: var(--bg-raised); color: var(--text); }
 .ioc-rejects-row { color: var(--text-dim); word-break: break-all; line-height: 1.6; }
 
 /* Toasts */
-#zb-toast-host { position: fixed; right: 18px; bottom: 18px; z-index: 100000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
-.zb-toast {
+#scythe-toast-host { position: fixed; right: 18px; bottom: 18px; z-index: 100000; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.scythe-toast {
   background: rgba(8, 16, 24, 0.95);
   border: 1px solid var(--accent);
   border-left: 3px solid var(--accent);
@@ -771,7 +771,7 @@ select.path-input option { background: var(--bg-raised); color: var(--text); }
   transform: translateX(20px);
   transition: opacity .3s, transform .3s;
 }
-.zb-toast.show { opacity: 1; transform: translateX(0); }
+.scythe-toast.show { opacity: 1; transform: translateX(0); }
 
 #findings-footer { display: flex; gap: 8px; flex-shrink: 0; padding-top: 8px; }
 

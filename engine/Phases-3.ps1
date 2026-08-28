@@ -1,7 +1,7 @@
 ﻿# NOTE - Detection vocabulary in this file is deliberate.
 # Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
 # named malware families, are detection category labels, operator-facing report text, or
-# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# MITRE ATT&CK tactic names (a published standard). Scythe is a defensive incident-
 # response tool; these strings are what it reports, not what it does. See CLAUDE.md,
 # "The detection vocabulary is deliberate". Do not sanitise them.
 

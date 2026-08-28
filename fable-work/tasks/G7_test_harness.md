@@ -12,9 +12,9 @@ readable output, so nothing can gate on it automatically.
 ## Deliverables
 
 ```
-tools/tests/lib/ZbAssert.ps1              shared assertion helpers, dot-sourced
+tools/tests/lib/ScytheAssert.ps1              shared assertion helpers, dot-sourced
 tools/tests/New-TestReport.ps1            JUnit XML + a one-page HTML summary
-tools/tests/Test-ZbAssert.ps1             tests for the assertion helpers themselves
+tools/tests/Test-ScytheAssert.ps1             tests for the assertion helpers themselves
 ```
 
 **Do not edit the existing test files** to use the new library — the main session has several of
@@ -22,7 +22,7 @@ them open. Ship the library, ship its tests, and write the migration as a note i
 `HANDOFF_FABLE.md` listing which file gets which mechanical change. Migration lands later, in
 one commit, when nobody else is holding those files.
 
-## `ZbAssert.ps1`
+## `ScytheAssert.ps1`
 
 Provide at minimum: true, false, equality, collection-contains, string-matches, throws, and a
 "section" grouping helper. Every helper records a structured result — name, section, outcome,

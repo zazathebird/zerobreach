@@ -1,4 +1,4 @@
-# PACKAGING_STUDY — shipping ZeroBreach as a single application
+# PACKAGING_STUDY — shipping Scythe as a single application
 
 **G8 deliverable. Study first, prototype second. Supersedes the F8 draft.**
 
@@ -45,7 +45,7 @@ option.
 
 ### What the tool looks like to endpoint protection
 
-A ZeroBreach run, viewed from an EDR's telemetry: an elevated process enumerates running
+A Scythe run, viewed from an EDR's telemetry: an elevated process enumerates running
 processes and loaded modules, reads autorun and service configuration across the registry,
 walks scheduled tasks and WMI subscriptions, reads event logs, hashes files in user-writable
 paths, and (in remediation) kills processes and deletes files. That is the canonical
@@ -101,7 +101,7 @@ the assumptions behind it in three distinct ways:
   extraction folder lands the client-facing report in `%TEMP%\<random>\reports`, deleted on
   exit. Whatever the package, the rule is: output resolves through the root global to a
   location the technician can find — next to the entry point, or an explicit
-  `%USERPROFILE%\Documents\ZeroBreach` — never relative to "wherever the code happens to be".
+  `%USERPROFILE%\Documents\Scythe` — never relative to "wherever the code happens to be".
 - **Working directory is not script root.** Double-click, "Run as administrator", scheduled
   task and `runas` all start with different working directories (elevation famously lands in
   `C:\Windows\System32`). Only the root global, seeded once from the real entry-point
@@ -114,13 +114,13 @@ including after the merge, against the real launcher.
 
 > The root global's *name* is not documented in `BLUEPRINT.md`, and the real launcher is
 > off-limits to this work package. The prototype and test take the name as a parameter
-> (`-ProjectRootVariable`, fixture default `ZbRoot`). **Owner: supply the real name; one
+> (`-ProjectRootVariable`, fixture default `ScytheRoot`). **Owner: supply the real name; one
 > command-line argument, no code change.**
 
 ## 3. The data-file boundary — the disqualifier
 
 The platform's script-scanning interface (AMSI) inspects script content at load time.
-ZeroBreach's rule data — malware family names, suspicious registry paths, LOLBin lists,
+Scythe's rule data — malware family names, suspicious registry paths, LOLBin lists,
 attack-technique keywords — is, byte for byte, the most heuristic-triggering text the
 product contains. Inline in a script body it has already, historically, caused the engine to
 be blocked before producing output, and the failure mode is the worst one in the product:
@@ -243,18 +243,18 @@ shipping logic.
 The owner's checklist — each step says what "pass" looks like:
 
 1. **Build against the real tree:**
-   `tools\prototype\Build-SingleFile.ps1 -Root . -ProjectRootVariable <real global name> -OutPath dist\ZeroBreach-Standalone.zip`
+   `tools\prototype\Build-SingleFile.ps1 -Root . -ProjectRootVariable <real global name> -OutPath dist\Scythe-Standalone.zip`
    Pass: exit 0, every contract check green. An exit 3 naming real launcher lines is the
    §2 audit doing its job — fix the named lines or report them, do not suppress.
 2. **Contract test against the real tree:**
    `powershell -File tools\tests\Test-PackagingContract.ps1 -Root <tree> -ProjectRootVariable <name>`
    Pass: exit 0.
 3. **Extraction + first run as a technician would:** copy the zip to a clean VM (so
-   mark-of-the-web is present), Extract All to `C:\ZeroBreach`, double-click the launcher.
+   mark-of-the-web is present), Extract All to `C:\Scythe`, double-click the launcher.
    Pass: UAC prompt appears, GUI opens, a QUICK scan streams live lines with box-drawing
    characters and glyphs rendered correctly (mojibake here = §4 encoding regression).
 4. **Output location:** after the scan, `reports\audit_<stamp>.json` and friends exist under
-   `C:\ZeroBreach\reports` — not under `%TEMP%`, not under `System32`.
+   `C:\Scythe\reports` — not under `%TEMP%`, not under `System32`.
 5. **Elevated-start working directory:** launch once via right-click → Run as administrator
    (working directory becomes `System32`). Pass: output still lands in step 4's location.
 6. **Manifest audit:** `manifest.json` in the zip lists every file that the extracted tree

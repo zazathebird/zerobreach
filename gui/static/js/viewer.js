@@ -478,7 +478,7 @@
       var blob = new Blob([lines.join('\r\n')], { type: 'text/csv' });
       var a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = 'zerobreach_findings_filtered.csv';
+      a.download = 'scythe_findings_filtered.csv';
       document.body.appendChild(a);
       a.click();
       setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);

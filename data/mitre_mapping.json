@@ -1,12 +1,12 @@
 {
   "metadata": {
-    "name": "ZeroBreach V23 MITRE ATT&CK Mapping",
+    "name": "Scythe V23 MITRE ATT&CK Mapping",
     "schema_version": "1.0",
     "attack_version": "v17 (Enterprise)",
     "attack_domain": "enterprise-attack",
     "generated": "2026-06-06",
     "source": "https://attack.mitre.org",
-    "description": "Maps ZeroBreach findings to MITRE ATT&CK techniques. Three independent lookup tables are provided so consumers can tag at whatever granularity they have: phase_map (by 'PHASE N'), threat_type_map (by the 10 server.py THREAT_MAP categories), and keyword_map (by substring, for line-level tagging). Resolve any technique id against the 'techniques' dictionary for display name, tactic(s), and URL.",
+    "description": "Maps Scythe findings to MITRE ATT&CK techniques. Three independent lookup tables are provided so consumers can tag at whatever granularity they have: phase_map (by 'PHASE N'), threat_type_map (by the 10 server.py THREAT_MAP categories), and keyword_map (by substring, for line-level tagging). Resolve any technique id against the 'techniques' dictionary for display name, tactic(s), and URL.",
     "lookup_priority": [
       "keyword_map",
       "threat_type_map",

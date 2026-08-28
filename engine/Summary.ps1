@@ -1,7 +1,7 @@
 ﻿# NOTE - Detection vocabulary in this file is deliberate.
 # Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
 # named malware families, are detection category labels, operator-facing report text, or
-# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# MITRE ATT&CK tactic names (a published standard). Scythe is a defensive incident-
 # response tool; these strings are what it reports, not what it does. See CLAUDE.md,
 # "The detection vocabulary is deliberate". Do not sanitise them.
 
@@ -119,7 +119,7 @@ try { [System.IO.File]::WriteAllText($AUDIT_JSON,    $auditJson, $utf8NoBom) } c
 try { [System.IO.File]::WriteAllText($BASELINE_PATH, $auditJson, $utf8NoBom) } catch {}
 
 # Write TXT log
-$LOG_LINES.Insert(0, "ZEROBREACH V22 | $HOST_NAME | $(Get-Date) | $($global:ScanMode) | $($global:TW_LABEL) | PARANOID:$($global:PARANOID_MODE)")
+$LOG_LINES.Insert(0, "SCYTHE V22 | $HOST_NAME | $(Get-Date) | $($global:ScanMode) | $($global:TW_LABEL) | PARANOID:$($global:PARANOID_MODE)")
 $LOG_LINES.Insert(1, "RISK:$totalRisk | FINDINGS:$findingCount | CRIT:$critCount | HIGH:$highCount | POSSIBLE:$possibleCount | INFO:$infoCount")
 $LOG_LINES.Insert(2, "RAT:$($global:RATHits) | ROOT:$($global:RootkitHits) | RANSOM:$($global:RansomwareRisk) | KL:$($global:KeyloggerHits) | MINER:$($global:MinerHits) | WORM:$($global:WormHits) | TROJAN:$($global:TrojanHits) | UAC:$($global:UACBypassHits)")
 $LOG_LINES.Insert(3, "="*80)
@@ -170,7 +170,7 @@ function Write-HtmlReport {
     $riskClass = if ($totalRisk -gt 20) {"crit"} elseif ($totalRisk -gt 10) {"high"} elseif ($totalRisk -gt 3) {"med"} else {"low"}
     $html = @"
 <!DOCTYPE html><html><head><meta charset='UTF-8'>
-<title>ZeroBreach V22 — $HOST_NAME</title>
+<title>Scythe V22 — $HOST_NAME</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Consolas,'Courier New',monospace;background:#0a0a0a;color:#e5e5e5;padding:24px;line-height:1.6}
@@ -220,7 +220,7 @@ li{margin:4px 0}
 .phase-bar{background:#141414;border:1px solid #1e1e1e;border-radius:4px;padding:10px;margin:8px 0;font-size:11px;color:#888}
 @media print{body{background:#fff;color:#000;padding:8px}.risk{font-size:22px}.btn-csv,.btn-print,.toolbar{display:none!important}td,th{border:1px solid #ccc!important;padding:4px}table{font-size:10px}.sev-critical td:first-child{border-left:3px solid #cc0000!important}}
 </style></head><body>
-<h1><span>◈ ZeroBreach V22 — Forensic Audit Report</span>
+<h1><span>◈ Scythe V22 — Forensic Audit Report</span>
 <span class='h1-actions'>
 <button class='btn btn-csv' onclick='exportCSV()'>⬇ Export CSV</button>
 <button class='btn btn-print' onclick='window.print()'>🖨 Print</button>
@@ -258,7 +258,7 @@ $deltaHtml
 <th onclick='sortTable(5)'>Fix</th>
 </tr></thead>
 <tbody>$($rows -join "`n")</tbody></table>
-<div class='footer'>ZeroBreach V22 · Project Kraken · Gannon MSP · $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
+<div class='footer'>Scythe V22 · Project Kraken · Gannon MSP · $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
 <script>
 var curSev='ALL',curQ='';
 function filterAll(){curQ=document.getElementById('srch').value.toLowerCase();applyFilters()}
@@ -266,7 +266,7 @@ function filterSev(s,b){document.querySelectorAll('.filters .btn').forEach(funct
 function applyFilters(){document.querySelectorAll('#tbl tbody tr').forEach(function(r){var sevOk=curSev==='ALL'||r.classList.contains('sev-'+curSev.toLowerCase());var txtOk=!curQ||r.innerText.toLowerCase().includes(curQ);r.style.display=(sevOk&&txtOk)?'':'none'})}
 var sortDir={};
 function sortTable(col){var tbl=document.getElementById('tbl');var rows=Array.from(tbl.tBodies[0].rows);var asc=sortDir[col]!==1;sortDir={};sortDir[col]=asc?1:-1;rows.sort(function(a,b){var va=a.cells[col].innerText.trim();var vb=b.cells[col].innerText.trim();return asc?va.localeCompare(vb,undefined,{numeric:true}):vb.localeCompare(va,undefined,{numeric:true})});rows.forEach(function(r){tbl.tBodies[0].appendChild(r)})}
-function exportCSV(){var csv=$csvDataJs;var blob=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='ZeroBreach_V22_$HOST_NAME_$(Get-Date -Format 'yyyyMMdd').csv';a.click()}
+function exportCSV(){var csv=$csvDataJs;var blob=new Blob([csv],{type:'text/csv'});var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Scythe_V22_$HOST_NAME_$(Get-Date -Format 'yyyyMMdd').csv';a.click()}
 </script></body></html>
 "@
     $html | Out-File -FilePath $OutPath -Encoding UTF8 -ErrorAction SilentlyContinue
@@ -280,8 +280,8 @@ if ($global:HTML_REPORT -or $Html) {
 # Email report (scheduled task mode or -SmtpTo supplied)
 if ($SmtpTo -and $SmtpServer -and $SmtpFrom) {
     Out-Typewriter "SENDING EMAIL REPORT TO $SmtpTo ..." "ACT"
-    $subject = "ZeroBreach V22 — $HOST_NAME — RISK:$totalRisk ($riskLabel) — $findingCount findings"
-    $body    = "ZeroBreach V22 Audit Report`n$('='*60)`nHost: $HOST_NAME`nUser: $USER_NAME`nMode: $($global:ScanMode)`nWindow: $($global:TW_LABEL)`nRisk Score: $totalRisk — $riskLabel`n`nCRITICAL: $critCount`nHIGH:     $highCount`nPOSSIBLE: $possibleCount`nINFO:     $infoCount`n`nReport: $REPORT_PATH`n"
+    $subject = "Scythe V22 — $HOST_NAME — RISK:$totalRisk ($riskLabel) — $findingCount findings"
+    $body    = "Scythe V22 Audit Report`n$('='*60)`nHost: $HOST_NAME`nUser: $USER_NAME`nMode: $($global:ScanMode)`nWindow: $($global:TW_LABEL)`nRisk Score: $totalRisk — $riskLabel`n`nCRITICAL: $critCount`nHIGH:     $highCount`nPOSSIBLE: $possibleCount`nINFO:     $infoCount`n`nReport: $REPORT_PATH`n"
     if ($global:HTML_REPORT -or $Html) { $body += "HTML: $HTML_PATH`n" }
     $body += "`n--- TOP CRITICAL/HIGH FINDINGS ---`n"
     $global:AuditFindings | Where-Object { $_.Severity -in @("CRITICAL","HIGH") } | Select-Object -First 20 | ForEach-Object {
@@ -323,7 +323,7 @@ if ($global:STEALTH_MODE) {
 # console stdin, so every interactive fix-mode prompt below (fix entry, finding selector,
 # final confirm, "press any key") would block forever. Remediation is driven by the GUI.
 if ($Auto) {
-    if ($env:ZB_CACHE_DEBUG) {
+    if ($env:SCYTHE_CACHE_DEBUG) {
         Write-Host ("[CACHE] ScanFiles memo: {0} distinct walks, {1} cache hits (on={2})" -f `
             $global:SCAN_FILE_CACHE.Count, $global:SCAN_FILE_CACHE_HITS, $global:SCAN_FILE_CACHE_ON)
         Write-Host ("[CACHE] ProcSnapshot memo: {0} cache hits, TTL {1}s (on={2})" -f `

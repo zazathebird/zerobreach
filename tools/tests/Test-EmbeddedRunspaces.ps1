@@ -1,6 +1,6 @@
 # The runspace scripts live inside @'...'@ here-strings, so ParseFile on the outer
 # file never validates them. Extract each and parse it as its own script.
-$src = (Resolve-Path 'ZeroBreach-Server.ps1').Path
+$src = (Resolve-Path 'Scythe-Server.ps1').Path
 $t=$null;$e=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($src,[ref]$t,[ref]$e)
 if ($e.Count) { Write-Host "outer file has parse errors!" -ForegroundColor Red; exit 1 }

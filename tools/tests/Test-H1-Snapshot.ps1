@@ -1,6 +1,6 @@
 # Runs the real snapshot block's logic with `reg export` stubbed (no Windows registry
 # on Linux), then validates the artifacts it produces — which is where H1 actually was.
-$SNAPSHOT_DIR = Join-Path ([System.IO.Path]::GetTempPath()) "zb_snap_test"
+$SNAPSHOT_DIR = Join-Path ([System.IO.Path]::GetTempPath()) "scythe_snap_test"
 if (Test-Path $SNAPSHOT_DIR) { Remove-Item $SNAPSHOT_DIR -Recurse -Force }
 $HOST_NAME = 'TESTBOX'
 New-Item -ItemType Directory -Path $SNAPSHOT_DIR -Force | Out-Null
@@ -24,11 +24,11 @@ foreach ($re in $regExports) {
 # ── verbatim from engine/FixMode.ps1 ──
 $rc = @()
 $rc += '@echo off'
-$rc += 'REM ZeroBreach registry rollback — generated ' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' on ' + $HOST_NAME
+$rc += 'REM Scythe registry rollback — generated ' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' on ' + $HOST_NAME
 $rc += 'REM Restores the registry keys captured BEFORE remediation ran.'
 $rc += 'REM Deleted FILES are not covered here (see the vault note below).'
 $rc += 'net session >nul 2>&1 || (echo Run this as Administrator. & pause & exit /b 1)'
-$rc += 'echo Restoring ZeroBreach registry snapshot...'
+$rc += 'echo Restoring Scythe registry snapshot...'
 foreach ($sf in $snapshotFiles) { $rc += ('reg import "%~dp0' + $sf + '" || echo FAILED: ' + $sf) }
 $rc += 'echo Done. A reboot is recommended.'
 $rc += 'pause'
@@ -55,7 +55,7 @@ Check 'pure ASCII (no BOM/mojibake)'      ((([System.IO.File]::ReadAllBytes($cmd
 Check 'starts with @echo off'             ($cmdText.StartsWith('@echo off')) $true
 
 Write-Host "`n== Regression: the OLD bundle format would have failed this ==" -ForegroundColor Yellow
-$oldStyle = @("ZEROBREACH V22 SNAPSHOT | $(Get-Date) | Host: $HOST_NAME", "="*80)
+$oldStyle = @("SCYTHE V22 SNAPSHOT | $(Get-Date) | Host: $HOST_NAME", "="*80)
 foreach ($sf in $snapshotFiles) { $oldStyle += (Get-Content -LiteralPath (Join-Path $SNAPSHOT_DIR $sf) -Raw) }
 $oldFirst = $oldStyle[0]
 Check 'old bundle first line was NOT the header (proves the bug)' ($oldFirst -eq 'Windows Registry Editor Version 5.00') $false

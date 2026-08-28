@@ -1,9 +1,9 @@
 # Extract the real Get-KillParam from the shipped loader (no retyping).
 $t=$null;$e=$null
-$ast=[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'ZeroBreach-V23.ps1').Path,[ref]$t,[ref]$e)
+$ast=[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'Scythe-V23.ps1').Path,[ref]$t,[ref]$e)
 $fn=$ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-KillParam'},$true)
 . ([scriptblock]::Create($fn[0].Extent.Text))
-Write-Host "Extracted Get-KillParam from ZeroBreach-V23.ps1" -ForegroundColor Cyan
+Write-Host "Extracted Get-KillParam from Scythe-V23.ps1" -ForegroundColor Cyan
 
 # The executors' identity check, mirrored exactly as written in both copies.
 function Test-KillIdentity {

@@ -2,7 +2,7 @@
 
 **Priority 8.** Size: L. This is a *design + prototype* task, not a detection task.
 
-The stated goal is for ZeroBreach to ship as a standalone application rather than a PowerShell
+The stated goal is for Scythe to ship as a standalone application rather than a PowerShell
 tree. This brief is the honest version of what that costs, because the cost is not in the packing
 step — it is in everything the packing step breaks.
 
@@ -14,7 +14,7 @@ step — it is in everything the packing step breaks.
    on arrival at client sites. This is the single largest risk and it is commercial, not technical.
    Budget for an EV cert.
 2. **`$PSScriptRoot` disappears.** The engine resolves `data\*.json`, `engine\*.ps1` and
-   `reports\` relative to it. A packed EXE needs an explicit extraction/asset root. `$global:ZB_ROOT`
+   `reports\` relative to it. A packed EXE needs an explicit extraction/asset root. `$global:SCYTHE_ROOT`
    already exists as the single choke point — good — but every `Join-Path $PSScriptRoot` in the
    *loader* needs auditing.
 3. **The AMSI data-file exemption is lost.** Signatures live in `data/*.json` specifically because

@@ -1,15 +1,15 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ZEROBREACH — SOUND ENGINE (Web Audio, fully synthesized — no audio files)
+   SCYTHE — SOUND ENGINE (Web Audio, fully synthesized — no audio files)
    Ported from PirateLife PLSound, extended with cinematic SFX for the
    Kraken unlock sequence. AudioContext is created lazily on first user
    gesture (browser autoplay policy). Theme sets base frequency + waveform.
    ═══════════════════════════════════════════════════════════════════════════ */
 'use strict';
 
-const ZBSound = (() => {
+const ScytheSound = (() => {
   let ctx = null, master = null;
-  let muted  = (localStorage.getItem('zb_muted') === '1');
-  let volume = parseFloat(localStorage.getItem('zb_vol') || '0.5');
+  let muted  = (localStorage.getItem('scythe_muted') === '1');
+  let volume = parseFloat(localStorage.getItem('scythe_vol') || '0.5');
   let base = 300, wave = 'triangle';
   let ambient = null;
 
@@ -114,12 +114,12 @@ const ZBSound = (() => {
   return {
     play,
     setTheme(t) { if (t && t.sound) { base = t.sound.base; wave = t.sound.wave; } },
-    setMuted(m) { muted = m; localStorage.setItem('zb_muted', m ? '1' : '0'); if (master) master.gain.value = m ? 0 : volume; if (m) stopAmbient(); },
+    setMuted(m) { muted = m; localStorage.setItem('scythe_muted', m ? '1' : '0'); if (master) master.gain.value = m ? 0 : volume; if (m) stopAmbient(); },
     isMuted() { return muted; },
-    setVolume(v) { volume = v; localStorage.setItem('zb_vol', String(v)); if (master && !muted) master.gain.value = v; },
+    setVolume(v) { volume = v; localStorage.setItem('scythe_vol', String(v)); if (master && !muted) master.gain.value = v; },
     getVolume() { return volume; },
     startAmbient, stopAmbient,
     unlock() { ensure(); resume(); },
   };
 })();
-window.ZBSound = ZBSound;
+window.ScytheSound = ScytheSound;

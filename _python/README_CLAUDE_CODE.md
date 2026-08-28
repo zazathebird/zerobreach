@@ -1,4 +1,4 @@
-# ZeroBreach V23 — Kraken Console
+# Scythe V23 — Kraken Console
 ## Instructions for Claude Code (`_python/` subdirectory)
 
 This document covers the Python/Flask server only. For the full project picture start at
@@ -27,7 +27,7 @@ This document covers the Python/Flask server only. For the full project picture 
 ## WHAT THIS FOLDER IS
 
 `_python/` contains the **parked** Flask/SocketIO server. The supported path is
-`ZeroBreach-Server.ps1` (pure PowerShell, no Python needed, the default launch path).
+`Scythe-Server.ps1` (pure PowerShell, no Python needed, the default launch path).
 
 ---
 
@@ -53,7 +53,7 @@ Launch-GUI.bat python
 BASE_DIR = Path(__file__).parent       # _python/
 ROOT_DIR = BASE_DIR.parent             # project root
 
-PS_SCRIPT   = ROOT_DIR / "ZeroBreach-V23.ps1"
+PS_SCRIPT   = ROOT_DIR / "Scythe-V23.ps1"
 REPORTS_DIR = ROOT_DIR / "reports"
 
 app = Flask(
@@ -72,7 +72,7 @@ Do not change these back to relative strings — Flask resolves relative `templa
 `build_ps_command()` assembles the subprocess call:
 
 ```
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File <ROOT>/ZeroBreach-V23.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File <ROOT>/Scythe-V23.ps1
   -Mode QUICK|FULL|DEEP|PARANOID|STEALTH
   -Hours 0          (0 = all time, N = last N hours)
   -Auto             (skip interactive menus)
@@ -96,7 +96,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File <ROOT>/ZeroBreach-V23.ps
 |------|---------|-----------|
 | `server.py` | Flask app, PS launcher, SocketIO bridge | Changing API routes, PS params, parsing logic |
 | `requirements.txt` | Python deps | Adding packages |
-| `zerobreach.spec` | PyInstaller build | Build config changes |
+| `scythe.spec` | PyInstaller build | Build config changes |
 | `../gui/templates/index.html` | All HTML structure | Adding views, UI elements |
 | `../gui/static/css/main.css` | All styling + CSS theme vars | Visual changes |
 | `../gui/static/js/app.js` | All UI logic, socket handlers | Frontend behavior |
@@ -137,8 +137,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File <ROOT>/ZeroBreach-V23.ps
 
 ```powershell
 pip install pyinstaller
-pyinstaller _python\zerobreach.spec
-# Output: dist/ZeroBreach.exe
+pyinstaller _python\scythe.spec
+# Output: dist/Scythe.exe
 ```
 
 The spec sets `uac_admin=True` for automatic elevation. Still needed:
@@ -162,7 +162,7 @@ The spec sets `uac_admin=True` for automatic elevation. Still needed:
 - [ ] **Report HTML export**: Add `/api/export/html` route rendering a standalone HTML report
 
 ### Priority 3 — Build
-- [ ] Test `pyinstaller _python\zerobreach.spec` end-to-end
+- [ ] Test `pyinstaller _python\scythe.spec` end-to-end
 - [ ] Add `assets/icon.ico`
 - [ ] Add `version_info.txt`
 

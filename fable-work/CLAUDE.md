@@ -4,7 +4,7 @@ Project instructions for a session opened with **this folder as its working dire
 
 ## What this folder is
 
-`fable-work/` is a **parallel work package** for ZeroBreach V23, a Windows endpoint
+`fable-work/` is a **parallel work package** for Scythe V23, a Windows endpoint
 audit-and-reporting tool for a managed-service provider. The main session works in the parent
 tree; this package holds work that does not touch any file the main session is editing, so both
 can run at once and the results merge cleanly.
@@ -20,7 +20,7 @@ writing the detection modules.
 - **Do not open `tasks/_deferred/` or `reference/_deferred/`.** Those hold a different work
   package that belongs to the main session; reading them here wastes context and creates merge
   conflicts. A `README.md` in each explains what they are.
-- **Do not edit `engine/`, `ZeroBreach-V23.ps1` or `data/detection_signatures.json`** in the
+- **Do not edit `engine/`, `Scythe-V23.ps1` or `data/detection_signatures.json`** in the
   parent tree. Those are the main session's.
 
 ## The runtime, and the four traps that actually bite

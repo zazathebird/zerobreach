@@ -26,7 +26,7 @@ tools/tests/Test-ServerParity.ps1
 tools/tests/Test-EventContract.ps1
 ```
 
-Read-only against `ZeroBreach-V23.ps1`, `ZeroBreach-Server.ps1`, `_python/server.py`,
+Read-only against `Scythe-V23.ps1`, `Scythe-Server.ps1`, `_python/server.py`,
 `gui/static/js/app.js`. **Change none of them.** If you find a real divergence, write it up in
 `HANDOFF_FABLE.md` with the exact line references and let the main session fix it — a
 one-character edit in those files is a merge conflict.

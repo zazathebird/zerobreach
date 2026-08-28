@@ -1,7 +1,7 @@
 ﻿# NOTE - Detection vocabulary in this file is deliberate.
 # Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
 # named malware families, are detection category labels, operator-facing report text, or
-# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# MITRE ATT&CK tactic names (a published standard). Scythe is a defensive incident-
 # response tool; these strings are what it reports, not what it does. See CLAUDE.md,
 # "The detection vocabulary is deliberate". Do not sanitise them.
 
@@ -24,7 +24,7 @@ trap { Write-RecoveredError $_; continue }   # module-level resilience (see CLAU
 #
 #  That is a deliberate narrowing of the original F6 scope ("LAN band, opt-in, requires
 #  -ScanLan"). Reasons, recorded so nobody widens it back by accident:
-#    * ZeroBreach runs on client networks under an MSP contract. A tool that probes the
+#    * Scythe runs on client networks under an MSP contract. A tool that probes the
 #      customer's LAN can trip the customer's own IDS and is indistinguishable, on the
 #      wire, from the activity it exists to detect.
 #    * Every finding below is answerable from the host's own configuration. Probing the

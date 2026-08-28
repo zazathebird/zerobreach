@@ -1,5 +1,5 @@
 # Extract the real guard functions from the shipped source via AST (no retyping).
-$src = (Resolve-Path 'ZeroBreach-Server.ps1').Path
+$src = (Resolve-Path 'Scythe-Server.ps1').Path
 $t=$null;$e=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($src,[ref]$t,[ref]$e)
 $want='Test-RequestAuth','Test-RequestOrigin','Add-SecurityHeaders'
@@ -33,8 +33,8 @@ Check 'correct token, wrong case (ordinal compare)'  (Test-RequestAuth (New-Ctx 
 Check 'token prefix only'                            (Test-RequestAuth (New-Ctx @{t='a1b2c3d4'})) $false
 Check 'token + trailing junk'                        (Test-RequestAuth (New-Ctx @{t='a1b2c3d4e5f60718293a4b5c6d7e8f90X'})) $false
 Check 'correct token in ?t='                         (Test-RequestAuth (New-Ctx @{t='a1b2c3d4e5f60718293a4b5c6d7e8f90'})) $true
-Check 'correct token in X-ZB-Token header'           (Test-RequestAuth (New-Ctx @{} @{'X-ZB-Token'='a1b2c3d4e5f60718293a4b5c6d7e8f90'})) $true
-Check 'wrong token in header'                        (Test-RequestAuth (New-Ctx @{} @{'X-ZB-Token'='nope'})) $false
+Check 'correct token in X-SCYTHE-Token header'           (Test-RequestAuth (New-Ctx @{} @{'X-SCYTHE-Token'='a1b2c3d4e5f60718293a4b5c6d7e8f90'})) $true
+Check 'wrong token in header'                        (Test-RequestAuth (New-Ctx @{} @{'X-SCYTHE-Token'='nope'})) $false
 
 Write-Host "`n== Test-RequestOrigin ==" -ForegroundColor Yellow
 Check 'no Origin (same-origin GET / local tool)'     (Test-RequestOrigin (New-Ctx)) $true

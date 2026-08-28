@@ -1,11 +1,11 @@
-# ZeroBreach — Independent Audit (second pass), 2026-08-18
+# Scythe — Independent Audit (second pass), 2026-08-18
 
 **Auditor:** fresh independent read of the live stack. I deliberately did **not** read the finding
 bodies of `SECURITY_AUDIT_2026-08-18.md` before auditing, so overlap below is *independent
 confirmation*, not agreement with a document I had just read. Reconciliation with that pass is in
 §7.
 
-**Scope:** live stack only — `ZeroBreach-Server.ps1`, `ZeroBreach-V23.ps1`, `engine/*.ps1`,
+**Scope:** live stack only — `Scythe-Server.ps1`, `Scythe-V23.ps1`, `engine/*.ps1`,
 `gui/**`, `data/**`, `tools/**`, `Launch-GUI.bat`. Parked `_python/` and `_archive/` excluded per
 instruction (risk notes only, §6).
 
@@ -71,7 +71,7 @@ the Windows filesystem or registry is still `[NEEDS REPRO]`.
 
 | Finding | Change |
 |---|---|
-| **C1** | Per-launch 64-hex token from `RNGCryptoServiceProvider` required on every `/api/*` call (`?t=` or `X-ZB-Token`); Origin lockdown on every route; listener rebound to `127.0.0.1`; **all** `Access-Control-Allow-*` headers removed incl. SSE + preflight; nosniff/Referrer-Policy/X-Frame-Options/CSP added. Frontend `zbApi()` wraps all 13 call sites, token cached in sessionStorage then stripped from the URL, tokenless load shows a plain-language overlay. |
+| **C1** | Per-launch 64-hex token from `RNGCryptoServiceProvider` required on every `/api/*` call (`?t=` or `X-SCYTHE-Token`); Origin lockdown on every route; listener rebound to `127.0.0.1`; **all** `Access-Control-Allow-*` headers removed incl. SSE + preflight; nosniff/Referrer-Policy/X-Frame-Options/CSP added. Frontend `scytheApi()` wraps all 13 call sites, token cached in sessionStorage then stripped from the URL, tokenless load shows a plain-language overlay. |
 | **C3** | GSAP + Chart.js vendored to `gui/static/js/vendor/` (verified against cdnjs's published SRI), 27 woff2 subsets + `fonts.css` vendored, `@import` removed, both scripts `defer`red, build manifest extended with `$requiredDirs`. **Verified in Chrome: zero non-local requests.** |
 | **H1** | Snapshot is now a folder of individually-valid `.reg` exports + a generated `Restore.cmd` + `README.txt`; `Checkpoint-Computer` actually attempted and honestly reported; banner and all three stale `regedit /S` references corrected. |
 | **H2** | `ReadToEndAsync` replaces the discard-everything `BeginErrorReadLine`; `ExitCode` read; non-zero exit **or** zero phases parsed emits `scan_failed` (never `scan_complete`); stderr surfaced; remediation stays locked; GUI renders a red "NOT A CLEAN RESULT" panel. |
@@ -142,7 +142,7 @@ still have never run. `Verify-OnWindows.ps1` exists precisely to make that run o
 
 ### C1 — Zero authentication + wildcard CORS on an API that deletes files and runs commands as admin
 **[STATIC — chain is certain; only the port-discovery step is timing-dependent]**
-`ZeroBreach-Server.ps1` — `Write-JsonResponse` / `Send-StaticFile` / SSE all set
+`Scythe-Server.ps1` — `Write-JsonResponse` / `Send-StaticFile` / SSE all set
 `Access-Control-Allow-Origin: *`; the `OPTIONS` handler additionally returns
 `Access-Control-Allow-Methods: GET, POST, OPTIONS` and `Access-Control-Allow-Headers: Content-Type`.
 There is no token, no `Origin` check, no CSRF nonce, and no `SameSite` anything (there are no
@@ -164,7 +164,7 @@ host returns 400. But plain cross-origin `fetch()` from `https://evil.example` s
 The random port is the only real barrier, and `GET /api/sysinfo` is a perfect oracle to sweep for
 it from JS in a few seconds.
 
-**Full chain:** operator is running ZeroBreach on a box mid-incident → opens any tab (or a malicious
+**Full chain:** operator is running Scythe on a box mid-incident → opens any tab (or a malicious
 ad loads) → page sweeps localhost for the sysinfo oracle → `GET /api/report` to read a real finding's
 `ID` → `POST /api/remediate {report, ids:[thatID]}` → the runspace executes that finding's
 `FixAction`. If it is a `RunCmd` finding, that is **arbitrary command execution as admin, with no
@@ -250,7 +250,7 @@ No `integrity=`, no `crossorigin`, no local copy, no pin beyond the version in t
 cdnjs returns executes with full DOM access in the page that can call `POST /api/remediate` — which,
 per **C1**, needs no authentication. So: **remote JS → admin RCE**, chained.
 
-What makes this worse than the usual "add SRI" note is *where this tool runs*. ZeroBreach is
+What makes this worse than the usual "add SRI" note is *where this tool runs*. Scythe is
 deployed onto **machines that are already compromised**, and it detects — in its own phases — the
 exact primitives an attacker uses to control that fetch:
 
@@ -258,7 +258,7 @@ exact primitives an attacker uses to control that fetch:
 - Phase 39 — rogue root CA in the trust store
 - Phase 37 — malicious proxy configuration
 
-So a box that fails ZeroBreach's own Phase 36/37/39 checks can feed ZeroBreach's GUI attacker-chosen
+So a box that fails Scythe's own Phase 36/37/39 checks can feed Scythe's GUI attacker-chosen
 JavaScript. **The tool is vulnerable to the conditions it exists to find.**
 
 Both libraries **are** used and both are correctly guarded (`if (window.gsap)` at `app.js:84,826`;
@@ -292,7 +292,7 @@ The banner says *"A registry/VSS rollback snapshot will be created BEFORE any fi
 separate problems:
 
 1. **The `.reg` file cannot be imported.** Line 43 builds the bundle starting with
-   `@("ZEROBREACH V22 SNAPSHOT | ...", "="*80)` and then concatenates the raw text of five separate
+   `@("SCYTHE V22 SNAPSHOT | ...", "="*80)` and then concatenates the raw text of five separate
    `reg export` outputs. `regedit /S` requires `Windows Registry Editor Version 5.00` as the
    **first line**; here the first line is a banner. Every concatenated export also carries its own
    header line mid-file. The advertised recovery command at line 49/756
@@ -308,11 +308,11 @@ very large on a real machine; this runs synchronously before the fix UI appears.
 
 **Suggested direction:** write each export as its own file in a snapshot *folder* and emit a
 `Restore.cmd` that imports them in order; or drop the `.reg` approach for
-`Checkpoint-Computer -Description "ZeroBreach pre-fix"` and be honest in the banner about what is
+`Checkpoint-Computer -Description "Scythe pre-fix"` and be honest in the banner about what is
 and isn't covered.
 
 ### H2 — A crashed engine is indistinguishable from a clean machine
-**[STATIC — certain]** `ZeroBreach-Server.ps1`, scan runspace.
+**[STATIC — certain]** `Scythe-Server.ps1`, scan runspace.
 
 - `$proc.BeginErrorReadLine()` is called but **no `ErrorDataReceived` handler is ever registered**.
   This correctly prevents a stderr-buffer deadlock, and then discards every byte of stderr.
@@ -329,7 +329,7 @@ in the `finally`, and emit a distinct `scan_failed` event the GUI renders as an 
 clean bill of health.
 
 ### H3 — `Get-FixClass` calls `RunCmd` and `KillProcess` "SAFE", and its destructive list is dead code
-**[STATIC — certain]** `ZeroBreach-V23.ps1:1175-1184`
+**[STATIC — certain]** `Scythe-V23.ps1:1175-1184`
 
 ```powershell
 $destructive = @('DeleteFile','DeleteReg')          # assigned, never read
@@ -366,7 +366,7 @@ no stdin. That is precisely the `-Auto` hang CHANGELOG says was already fixed on
 both files, exactly as the three phase modules do.
 
 ### H5 — `KillProcess` fires on a stale PID with no identity re-validation
-**[STATIC]** `ZeroBreach-Server.ps1` (remediation runspace) and `engine/FixMode.ps1:657-668`.
+**[STATIC]** `Scythe-Server.ps1` (remediation runspace) and `engine/FixMode.ps1:657-668`.
 
 `FixParam` is a PID captured during the scan. Remediation may run many minutes later. Both copies do
 `Get-Process -Id $procId` → `Stop-Process -Force` and **never compare the process name/path/start
@@ -419,7 +419,7 @@ is the safe direction to fail, but it is a coverage gap worth a conscious decisi
 canonicalised prefixes rather than regex-matching raw strings.
 
 ### H8 — CSV export is a formula-injection vector aimed straight at the MSP's Excel
-**[STATIC — certain]** `ZeroBreach-Server.ps1`, `Get-CsvReport`:
+**[STATIC — certain]** `Scythe-Server.ps1`, `Get-CsvReport`:
 
 ```powershell
 $line = ($cells | ForEach-Object { '"' + ($_ -replace '"','""') + '"' }) -join ','

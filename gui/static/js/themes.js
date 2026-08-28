@@ -1,13 +1,13 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ZEROBREACH — THEME ENGINE
-   Each theme = CSS custom properties (ZeroBreach var vocabulary) + a VFX
+   SCYTHE — THEME ENGINE
+   Each theme = CSS custom properties (Scythe var vocabulary) + a VFX
    profile + a sound palette. Live-swappable. Vars are set inline on <body>
    so they win over the legacy body.theme-* class rules in main.css.
    The KRAKEN theme is secret until god mode is unlocked (type "kraken").
    ═══════════════════════════════════════════════════════════════════════════ */
 'use strict';
 
-const ZBThemes = (() => {
+const ScytheThemes = (() => {
 
   function rgb(hex) {
     const h = hex.replace('#', '');
@@ -120,7 +120,7 @@ const ZBThemes = (() => {
 
   const MAP = Object.fromEntries(THEMES.map(t => [t.id, t]));
 
-  function isGod() { return localStorage.getItem('zb_god') === '1'; }
+  function isGod() { return localStorage.getItem('scythe_god') === '1'; }
 
   function apply(id, opts) {
     const t = MAP[id] || THEMES[0];
@@ -130,18 +130,18 @@ const ZBThemes = (() => {
     // legacy body.theme-* classes are superseded by inline vars; clear them
     document.body.classList.remove('theme-orange', 'theme-red', 'theme-green');
     document.body.dataset.theme = t.id;
-    localStorage.setItem('zb_theme', t.id);
-    if (window.ZBSound) ZBSound.setTheme(t);
-    if (window.ZBFX) ZBFX.applyTheme(t);
-    document.dispatchEvent(new CustomEvent('zb-theme', { detail: t }));
+    localStorage.setItem('scythe_theme', t.id);
+    if (window.ScytheSound) ScytheSound.setTheme(t);
+    if (window.ScytheFX) ScytheFX.applyTheme(t);
+    document.dispatchEvent(new CustomEvent('scythe-theme', { detail: t }));
     return t;
   }
 
-  function current() { return MAP[document.body.dataset.theme] || MAP[localStorage.getItem('zb_theme')] || THEMES[0]; }
+  function current() { return MAP[document.body.dataset.theme] || MAP[localStorage.getItem('scythe_theme')] || THEMES[0]; }
   function visible() { return THEMES.filter(t => isGod() || !t.secret); }
 
-  function restore() { apply(localStorage.getItem('zb_theme') || 'kraken-blue'); }
+  function restore() { apply(localStorage.getItem('scythe_theme') || 'kraken-blue'); }
 
   return { THEMES, MAP, apply, current, visible, restore, isGod };
 })();
-window.ZBThemes = ZBThemes;
+window.ScytheThemes = ScytheThemes;

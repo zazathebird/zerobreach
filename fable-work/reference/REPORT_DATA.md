@@ -12,8 +12,8 @@ A run writes into `reports/` (created automatically, `-OutDir` overrides it):
 |---|---|
 | `audit_<stamp>.json` | the run record, schema below |
 | `KrakenBaseline_<stamp>.json` | byte-identical copy, kept as the comparison baseline |
-| `ZeroBreach_<stamp>.txt` | the plain-text log |
-| `ZeroBreach_<stamp>.html` | the engine's own HTML report (`-Html`) |
+| `Scythe_<stamp>.txt` | the plain-text log |
+| `Scythe_<stamp>.html` | the engine's own HTML report (`-Html`) |
 | `KrakenConsole_<stamp>.log` | the server's durable console log |
 
 Both JSON files are **UTF-8 without BOM**. Read them with `Get-Content -Raw | ConvertFrom-Json`

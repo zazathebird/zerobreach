@@ -1,7 +1,7 @@
 ﻿# NOTE - Detection vocabulary in this file is deliberate.
 # Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
 # named malware families, are detection category labels, operator-facing report text, or
-# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# MITRE ATT&CK tactic names (a published standard). Scythe is a defensive incident-
 # response tool; these strings are what it reports, not what it does. See CLAUDE.md,
 # "The detection vocabulary is deliberate". Do not sanitise them.
 
@@ -37,7 +37,7 @@ trap { Write-RecoveredError $_; continue }   # module-level resilience (see CLAU
 #  is where real artifact times are recovered from the filesystem.
 # ══════════════════════════════════════════════════════════════════════════════
 
-function Get-ZbEntities {
+function Get-ScytheEntities {
     # Pull the real-world objects a finding is ABOUT out of its Target and Description.
     # Returns a de-duplicated lowercase string set of "kind:value" keys. Kinds are kept
     # distinct so a PID can never collide with a path that happens to contain digits.
@@ -69,7 +69,7 @@ function Get-ZbEntities {
     return ,$set
 }
 
-function Get-ZbSeverityWeight {
+function Get-ScytheSeverityWeight {
     param([string]$Severity)
     switch ("$Severity") {
         'CRITICAL' { 10 } 'HIGH' { 6 } 'POSSIBLE' { 2 } default { 0 }
@@ -94,7 +94,7 @@ if ($PhasePlan.Hunt) {
         $ccEnt    = New-Object 'System.Collections.Generic.List[object]'
         $ccByEnt  = @{}
         for ($i = 0; $i -lt $ccN; $i++) {
-            $e = Get-ZbEntities -Target "$($ccAll[$i].Target)" -Description "$($ccAll[$i].Description)"
+            $e = Get-ScytheEntities -Target "$($ccAll[$i].Target)" -Description "$($ccAll[$i].Description)"
             $ccEnt.Add($e)
             foreach ($k in $e) {
                 if (-not $ccByEnt.ContainsKey($k)) { $ccByEnt[$k] = New-Object 'System.Collections.Generic.List[int]' }
@@ -104,7 +104,7 @@ if ($PhasePlan.Hunt) {
         $parent = New-Object int[] $ccN
         for ($i = 0; $i -lt $ccN; $i++) { $parent[$i] = $i }
         # Iterative find with path compression — recursion in PS is slow and stack-limited.
-        function Get-ZbRoot { param([int]$X)
+        function Get-ScytheRoot { param([int]$X)
             $r = $X
             while ($parent[$r] -ne $r) { $r = $parent[$r] }
             while ($parent[$X] -ne $r) { $n = $parent[$X]; $parent[$X] = $r; $X = $n }
@@ -116,15 +116,15 @@ if ($PhasePlan.Hunt) {
             # common noun — 'C:\Windows\System32\cmd.exe' appears in dozens of unrelated
             # descriptions. Linking on it would fuse the whole scan into one chain.
             if ($members.Count -lt 2 -or $members.Count -gt 12) { continue }
-            $a = Get-ZbRoot $members[0]
+            $a = Get-ScytheRoot $members[0]
             for ($j = 1; $j -lt $members.Count; $j++) {
-                $b = Get-ZbRoot $members[$j]
+                $b = Get-ScytheRoot $members[$j]
                 if ($a -ne $b) { $parent[$b] = $a }
             }
         }
         $ccGroups = @{}
         for ($i = 0; $i -lt $ccN; $i++) {
-            $r = Get-ZbRoot $i
+            $r = Get-ScytheRoot $i
             if (-not $ccGroups.ContainsKey($r)) { $ccGroups[$r] = New-Object 'System.Collections.Generic.List[int]' }
             $ccGroups[$r].Add($i)
         }
@@ -136,7 +136,7 @@ if ($PhasePlan.Hunt) {
             $score = 0; $tt = @{}; $stages = @{}
             foreach ($i in $idx) {
                 $f = $ccAll[$i]
-                $score += (Get-ZbSeverityWeight "$($f.Severity)")
+                $score += (Get-ScytheSeverityWeight "$($f.Severity)")
                 $tt["$($f.ThreatType)"] = $true
                 foreach ($sp in @($KILLCHAIN_STAGES)) {
                     if ("$($f.ThreatType) $($f.Group) $($f.Phase)" -match "$($sp.pattern)") { $stages["$($sp.stage)"] = $true }
@@ -160,7 +160,7 @@ if ($PhasePlan.Hunt) {
             $shared   = @()
             foreach ($k in $ccByEnt.Keys) {
                 $mm = $ccByEnt[$k]
-                if ($mm.Count -ge 2 -and $mm.Count -le 12 -and (Get-ZbRoot $mm[0]) -eq $chain.Root) { $shared += $k }
+                if ($mm.Count -ge 2 -and $mm.Count -le 12 -and (Get-ScytheRoot $mm[0]) -eq $chain.Root) { $shared += $k }
             }
             $sharedTxt = if ($shared.Count) { ($shared | Select-Object -First 6) -join '; ' } else { 'n/a' }
             Out-Typewriter "  -> CHAIN (score $($chain.Score)): $($members.Count) findings across $(@($chain.Stages).Count) kill-chain stage(s)" "CRIT"
@@ -187,7 +187,7 @@ if ($PhasePlan.Hunt) {
     $pzSeen  = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $pzItems = New-Object 'System.Collections.Generic.List[object]'
     foreach ($f in @($global:AuditFindings | Where-Object { "$($_.Severity)" -ne 'INFO' })) {
-        foreach ($k in (Get-ZbEntities -Target "$($f.Target)" -Description "$($f.Description)")) {
+        foreach ($k in (Get-ScytheEntities -Target "$($f.Target)" -Description "$($f.Description)")) {
             if (-not $k.StartsWith('file:')) { continue }
             $path = $k.Substring(5)
             if (-not $pzSeen.Add($path)) { continue }

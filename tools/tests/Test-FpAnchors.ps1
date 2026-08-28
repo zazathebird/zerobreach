@@ -48,7 +48,7 @@ function Get-MatchRegex {
 $taskRx = Get-MatchRegex 'engine/Phases-1.ps1' '$taskCmd' 'EncodedCommand'
 
 $taskTP = @(
-    'cmd.exe /c rem ZeroBreach_TEST_DELETEME benign no-op'   # CLAUDE.md tripwire — MUST keep firing
+    'cmd.exe /c rem Scythe_TEST_DELETEME benign no-op'   # CLAUDE.md tripwire — MUST keep firing
     'C:\Windows\System32\cmd.exe /c evil.bat'
     'wscript.exe C:\Users\bob\AppData\Local\Temp\a.vbs'
     'powershell.exe -nop -w hidden -enc SQBFAFgA'
@@ -108,7 +108,7 @@ T 'P64 pool anchored' ($minerRx -match '\\bpool')
 # Classify lives inside the $script:SCAN_SCRIPT here-string, which ParseFile on the
 # outer file never validates. Extract the here-string, then lift out the two tables
 # and the function by AST and load them here.
-$serverSrc = Get-Content (Join-Path $root 'ZeroBreach-Server.ps1') -Raw
+$serverSrc = Get-Content (Join-Path $root 'Scythe-Server.ps1') -Raw
 $e = $null
 $sAst = [System.Management.Automation.Language.Parser]::ParseInput($serverSrc, [ref]$null, [ref]$e)
 $scanAssign = $sAst.FindAll({
@@ -151,7 +151,7 @@ T '[VER] is INFO'       ((Classify '[VER] task audit complete').sev      -eq 'IN
 # untagged prose still falls back
 T 'untagged IOC HIT -> CRITICAL' ((Classify 'IOC HIT: 8.8.8.8 seen in DNS cache').sev -eq 'CRITICAL')
 T 'untagged SCANNING -> HUNT'    ((Classify 'SCANNING REGISTRY RUN KEYS').sev         -eq 'HUNT')
-T 'unmatched line -> INFO'       ((Classify 'ZeroBreach V23 Kraken Console').sev      -eq 'INFO')
+T 'unmatched line -> INFO'       ((Classify 'Scythe V23 Kraken Console').sev      -eq 'INFO')
 # the two tables must stay separated — tags out of the prose table, prose out of tags
 T 'prose table carries no bracket tags' (-not ($SEV_RX.Values.ToString -and ($SEV_RX.Keys | Where-Object { $SEV_RX[$_].ToString() -match '\\\[' })))
 T 'tag table carries no bare prose'     (-not ($SEV_TAG.Keys | Where-Object { $SEV_TAG[$_].ToString() -match 'SUSPICIOUS|ANOMAL|BLATANT|SCANNING' }))

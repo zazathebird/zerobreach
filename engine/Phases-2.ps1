@@ -1,7 +1,7 @@
 ﻿# NOTE - Detection vocabulary in this file is deliberate.
 # Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
 # named malware families, are detection category labels, operator-facing report text, or
-# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# MITRE ATT&CK tactic names (a published standard). Scythe is a defensive incident-
 # response tool; these strings are what it reports, not what it does. See CLAUDE.md,
 # "The detection vocabulary is deliberate". Do not sanitise them.
 
@@ -280,7 +280,7 @@ $sigSw   = [System.Diagnostics.Stopwatch]::StartNew()
 $sigBudgetHit = $false
 # The IR tool itself usually lives under a shared user profile (e.g. a "Users" share), so never
 # flag — let alone offer to DELETE — the scanner's own files. Skip anything under our script root.
-$selfRoot = $global:ZB_ROOT
+$selfRoot = $global:SCYTHE_ROOT
 # The local user-profiles tree (C:\Users) is frequently shared as "Users", but the exes under it
 # are the operator's OWN downloads/installers/dev builds (7-Zip, app setups, PyInstaller dist\*.exe)
 # — not a worm someone dropped into a foreign share. The worm-propagation concern is an unsigned

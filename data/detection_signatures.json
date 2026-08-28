@@ -1,5 +1,5 @@
 {
-  "_comment": "ZeroBreach detection signatures, externalized from ZeroBreach-V23.ps1 so the engine's script body contains no malware-signature literals (avoids AMSI/Defender false positives). Loaded at runtime via Get-Content|ConvertFrom-Json — data files are not AMSI-scanned. Edit signatures here without touching the engine.",
+  "_comment": "Scythe detection signatures, externalized from Scythe-V23.ps1 so the engine's script body contains no malware-signature literals (avoids AMSI/Defender false positives). Loaded at runtime via Get-Content|ConvertFrom-Json — data files are not AMSI-scanned. Edit signatures here without touching the engine.",
   "known_miner_procs": [
     "xmrig",
     "xmrig-notls",
@@ -790,24 +790,27 @@
     "stordiag"
   ],
   "script_own_strings": [
-    "ZeroBreach",
+    "Scythe",
     "Project Kraken",
     "Gannon MSP",
     "KrakenReport",
-    "ZEROBREACH",
+    "SCYTHE",
     "Out-Typewriter",
     "Invoke-QuantumBar",
     "TACTICAL BOOT MENU",
     "FORENSIC EXORCIST",
     "KrakenSnapshot",
     "KrakenBaseline",
-    "ZeroBreach_AuditCache",
+    "Scythe_AuditCache",
     "Add-Finding",
     "Show-PhaseHeader",
     "SCRIPT_OWN_STRINGS",
     "YARA_LITE_RULES",
     "KNOWN_MINER_PROCS",
-    "KNOWN_RAT_PROCS"
+    "KNOWN_RAT_PROCS",
+    "ZeroBreach",
+    "ZEROBREACH",
+    "ZeroBreach_AuditCache"
   ],
   "email_phishing_trojans": [
     "Trojan:HTML/Phish",

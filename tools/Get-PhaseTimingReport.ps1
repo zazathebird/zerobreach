@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Shows where a ZeroBreach run's wall-clock actually goes, and gates it against a budget.
+    Shows where a Scythe run's wall-clock actually goes, and gates it against a budget.
 
 .DESCRIPTION
     Get-PhaseTimingReport.ps1 reads phase timings from a run record (-Path) or a server
@@ -74,9 +74,9 @@ $ErrorActionPreference = 'Stop'
 
 # Phase ceiling per mode (another copy of the mirrored table — see HANDOFF_FABLE.md; the G5
 # parity test is extended to read this file so all copies are proven to agree).
-$script:ZbModeCeiling = @{ QUICK = 30; FULL = 80; DEEP = 133; PARANOID = 133; STEALTH = 133; HUNT = 162 }
+$script:ScytheModeCeiling = @{ QUICK = 30; FULL = 80; DEEP = 133; PARANOID = 133; STEALTH = 133; HUNT = 162 }
 
-function Get-ZbProp {
+function Get-ScytheProp {
     param($Object, [string]$Name, $Default)
     if ($null -eq $Object) { return $Default }
     $pp = $Object.PSObject.Properties[$Name]
@@ -84,20 +84,20 @@ function Get-ZbProp {
     return $Default
 }
 
-function Get-ZbFullPath {
+function Get-ScytheFullPath {
     param([string]$AnyPath)
     if ([System.IO.Path]::IsPathRooted($AnyPath)) { return $AnyPath }
     return (Join-Path -Path (Get-Location).Path -ChildPath $AnyPath)
 }
 
-function ConvertTo-ZbHtml {
+function ConvertTo-ScytheHtml {
     param([string]$Text)
     if ($null -eq $Text) { return '' }
     $encoded = [System.Net.WebUtility]::HtmlEncode($Text)
     return ($encoded -replace "'", '&#39;')
 }
 
-function Get-ZbPhaseKey {
+function Get-ScythePhaseKey {
     # "PHASE 74.5 — TITLE" -> "74.5". The decimal is kept; truncating double-counts (§5).
     param([string]$Label)
     if ([string]::IsNullOrEmpty($Label)) { return $null }
@@ -106,7 +106,7 @@ function Get-ZbPhaseKey {
     return $null
 }
 
-function Format-ZbSeconds {
+function Format-ScytheSeconds {
     param([double]$Seconds)
     $whole = [int][math]::Floor($Seconds)
     $mins = [int][math]::Floor($whole / 60)
@@ -115,7 +115,7 @@ function Format-ZbSeconds {
     return ('{0:0.0}s' -f $Seconds)
 }
 
-function Format-ZbNum {
+function Format-ScytheNum {
     param([double]$Value, [string]$Pattern = '0.0')
     return $Value.ToString($Pattern, [System.Globalization.CultureInfo]::InvariantCulture)
 }
@@ -125,9 +125,9 @@ function Format-ZbNum {
 # plus bookkeeping. Take-last applies to both, for the same reason in both.
 # --------------------------------------------------------------------------------------------
 
-function Read-ZbTimingsFromRecord {
+function Read-ScytheTimingsFromRecord {
     param([string]$RecordPath)
-    $full = Get-ZbFullPath -AnyPath $RecordPath
+    $full = Get-ScytheFullPath -AnyPath $RecordPath
     if (-not (Test-Path -LiteralPath $full)) { throw "Run record not found: $full" }
     $record = $null
     try {
@@ -138,9 +138,9 @@ function Read-ZbTimingsFromRecord {
     }
     $agg = [ordered]@{}
     $dups = 0
-    foreach ($t in @(Get-ZbProp $record 'PhaseTimings' @())) {
-        $label = '' + (Get-ZbProp $t 'Phase' '')
-        $key = Get-ZbPhaseKey -Label $label
+    foreach ($t in @(Get-ScytheProp $record 'PhaseTimings' @())) {
+        $label = '' + (Get-ScytheProp $t 'Phase' '')
+        $key = Get-ScythePhaseKey -Label $label
         if ($null -eq $key) { $key = $label }
         $prevDups = 0
         if ($agg.Contains($key)) {
@@ -150,14 +150,14 @@ function Read-ZbTimingsFromRecord {
         $agg[$key] = [pscustomobject]@{
             Key        = $key
             Label      = $label
-            Seconds    = [double](Get-ZbProp $t 'Seconds' 0)
+            Seconds    = [double](Get-ScytheProp $t 'Seconds' 0)
             Duplicates = $prevDups
         }
     }
     return [pscustomobject]@{
         Source              = 'RunRecord'
         SourcePath          = $full
-        Mode                = ('' + (Get-ZbProp $record 'Mode' '')).ToUpperInvariant()
+        Mode                = ('' + (Get-ScytheProp $record 'Mode' '')).ToUpperInvariant()
         Entries             = @($agg.Values)
         DuplicatesDiscarded = $dups
         Incomplete          = $false
@@ -165,9 +165,9 @@ function Read-ZbTimingsFromRecord {
     }
 }
 
-function Read-ZbTimingsFromLog {
+function Read-ScytheTimingsFromLog {
     param([string]$ConsoleLogPath)
-    $full = Get-ZbFullPath -AnyPath $ConsoleLogPath
+    $full = Get-ScytheFullPath -AnyPath $ConsoleLogPath
     if (-not (Test-Path -LiteralPath $full)) { throw "Console log not found: $full" }
     $agg = [ordered]@{}
     $started = [ordered]@{}
@@ -182,7 +182,7 @@ function Read-ZbTimingsFromLog {
         $tm = $timingRx.Match($line)
         if ($tm.Success) {
             $label = $tm.Groups[1].Value
-            $key = Get-ZbPhaseKey -Label $label
+            $key = Get-ScythePhaseKey -Label $label
             if ($null -eq $key) { $key = $label }
             $prevDups = 0
             if ($agg.Contains($key)) {
@@ -220,7 +220,7 @@ function Read-ZbTimingsFromLog {
 # The result object — everything computed here, rendered later
 # --------------------------------------------------------------------------------------------
 
-function New-ZbTimingResult {
+function New-ScytheTimingResult {
     param($SourceData, $BudgetTable, [string]$BudgetPath, $CompareData, [int]$TopN)
 
     $entries = @($SourceData.Entries | Sort-Object -Property @{ Expression = { - $_.Seconds } }, @{ Expression = { $_.Key } })
@@ -253,7 +253,7 @@ function New-ZbTimingResult {
 
     $mode = $SourceData.Mode
     $ceiling = $null
-    if ($script:ZbModeCeiling.ContainsKey($mode)) { $ceiling = $script:ZbModeCeiling[$mode] }
+    if ($script:ScytheModeCeiling.ContainsKey($mode)) { $ceiling = $script:ScytheModeCeiling[$mode] }
     $shortfall = 0
     if ($null -ne $ceiling -and $phases.Count -lt $ceiling) { $shortfall = $ceiling - $phases.Count }
 
@@ -263,19 +263,19 @@ function New-ZbTimingResult {
     $overBy = 0.0
     $phaseOverruns = @()
     if ($null -ne $BudgetTable) {
-        $totals = Get-ZbProp $BudgetTable 'mode_totals' $null
+        $totals = Get-ScytheProp $BudgetTable 'mode_totals' $null
         if ($null -ne $totals -and $mode) {
-            $mb = Get-ZbProp $totals $mode 0
+            $mb = Get-ScytheProp $totals $mode 0
             $modeBudget = [double]$mb
             if ($modeBudget -gt 0 -and $total -gt $modeBudget) {
                 $overBudget = $true
                 $overBy = [math]::Round($total - $modeBudget, 1)
             }
         }
-        $perPhase = Get-ZbProp $BudgetTable 'phase_budgets' $null
+        $perPhase = Get-ScytheProp $BudgetTable 'phase_budgets' $null
         if ($null -ne $perPhase) {
             foreach ($p in $phases) {
-                $pb = [double](Get-ZbProp $perPhase $p.Key 0)
+                $pb = [double](Get-ScytheProp $perPhase $p.Key 0)
                 if ($pb -gt 0 -and $p.Seconds -gt $pb) {
                     $phaseOverruns += [pscustomobject]@{ Key = $p.Key; Label = $p.Label; Seconds = $p.Seconds; Budget = $pb }
                 }
@@ -343,7 +343,7 @@ function New-ZbTimingResult {
 # Renderers
 # --------------------------------------------------------------------------------------------
 
-function ConvertTo-ZbTimingText {
+function ConvertTo-ScytheTimingText {
     param($Result)
     $out = New-Object System.Collections.Generic.List[string]
     $sourceWord = 'run record'
@@ -369,7 +369,7 @@ function ConvertTo-ZbTimingText {
     if ($Result.Incomplete) {
         $out.Add(('!! Log ends with unfinished work: phase(s) {0} started but never reported a timing. The scan was cut short or is still running.' -f (@($Result.IncompletePhases) -join ', ')))
     }
-    $out.Add(('Total wall-clock: {0} across {1} phases.' -f (Format-ZbSeconds -Seconds $Result.TotalSeconds), $Result.PhaseCount))
+    $out.Add(('Total wall-clock: {0} across {1} phases.' -f (Format-ScytheSeconds -Seconds $Result.TotalSeconds), $Result.PhaseCount))
     if ($Result.DuplicatesDiscarded -gt 0) {
         $out.Add(('Note: {0} duplicate TIMING line(s) for re-run phases were discarded; the last value per phase is used.' -f $Result.DuplicatesDiscarded))
     }
@@ -378,24 +378,24 @@ function ConvertTo-ZbTimingText {
     foreach ($p in @($Result.TopPhases)) {
         $dupNote = ''
         if ($p.Duplicates -gt 0) { $dupNote = ('  (re-run {0}x, last kept)' -f $p.Duplicates) }
-        $out.Add(('  {0,8}s  {1,5}%  {2}{3}' -f (Format-ZbNum -Value $p.Seconds), (Format-ZbNum -Value $p.Share), $p.Label, $dupNote))
+        $out.Add(('  {0,8}s  {1,5}%  {2}{3}' -f (Format-ScytheNum -Value $p.Seconds), (Format-ScytheNum -Value $p.Share), $p.Label, $dupNote))
     }
     $out.Add('')
     $out.Add(('{0} of {1} phases account for 80% of the time — that is where optimisation effort pays.' -f $Result.P80Count, $Result.PhaseCount))
 
     if ($Result.ModeBudget -gt 0) {
         if ($Result.OverBudget) {
-            $out.Add(('!! OVER BUDGET: {0} allows {1}; this run took {2} — over by {3}.' -f $Result.Mode, (Format-ZbSeconds -Seconds $Result.ModeBudget), (Format-ZbSeconds -Seconds $Result.TotalSeconds), (Format-ZbSeconds -Seconds $Result.OverBy)))
+            $out.Add(('!! OVER BUDGET: {0} allows {1}; this run took {2} — over by {3}.' -f $Result.Mode, (Format-ScytheSeconds -Seconds $Result.ModeBudget), (Format-ScytheSeconds -Seconds $Result.TotalSeconds), (Format-ScytheSeconds -Seconds $Result.OverBy)))
         }
         else {
-            $out.Add(('Within budget: {0} allows {1}; this run took {2}.' -f $Result.Mode, (Format-ZbSeconds -Seconds $Result.ModeBudget), (Format-ZbSeconds -Seconds $Result.TotalSeconds)))
+            $out.Add(('Within budget: {0} allows {1}; this run took {2}.' -f $Result.Mode, (Format-ScytheSeconds -Seconds $Result.ModeBudget), (Format-ScytheSeconds -Seconds $Result.TotalSeconds)))
         }
     }
     else {
         $out.Add('No total budget set for this mode (0 = unbudgeted in the budget table) — no gate applied.')
     }
     foreach ($o in @($Result.PhaseOverruns)) {
-        $out.Add(('!! Phase over budget: {0} took {1}s against a {2}s budget.' -f $o.Label, (Format-ZbNum -Value $o.Seconds), (Format-ZbNum -Value $o.Budget)))
+        $out.Add(('!! Phase over budget: {0} took {1}s against a {2}s budget.' -f $o.Label, (Format-ScytheNum -Value $o.Seconds), (Format-ScytheNum -Value $o.Budget)))
     }
 
     if ($null -ne $Result.Comparison) {
@@ -406,18 +406,18 @@ function ConvertTo-ZbTimingText {
             $tag = ''
             if ($row.Status -eq 'added') { $tag = 'not in comparison run' }
             elseif ($row.Status -eq 'removed') { $tag = 'no longer runs' }
-            $out.Add(('  {0,-8} {1,10} {2,10} {3,10}  {4}' -f $row.Key, (Format-ZbNum -Value $row.Before), (Format-ZbNum -Value $row.After), (Format-ZbNum -Value $row.Delta), $tag))
+            $out.Add(('  {0,-8} {1,10} {2,10} {3,10}  {4}' -f $row.Key, (Format-ScytheNum -Value $row.Before), (Format-ScytheNum -Value $row.After), (Format-ScytheNum -Value $row.Delta), $tag))
         }
     }
     return ($out -join [Environment]::NewLine)
 }
 
-function ConvertTo-ZbTimingHtml {
+function ConvertTo-ScytheTimingHtml {
     param($Result)
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
     [void]$sb.Append('<meta http-equiv="Content-Security-Policy" content="default-src ''none''; style-src ''unsafe-inline''">')
-    [void]$sb.Append('<title>Phase timing — ' + (ConvertTo-ZbHtml $Result.SourcePath) + '</title><style>')
+    [void]$sb.Append('<title>Phase timing — ' + (ConvertTo-ScytheHtml $Result.SourcePath) + '</title><style>')
     [void]$sb.Append(@'
 :root{--bg:#f5f6f8;--card:#fff;--fg:#1d2833;--muted:#5b6b7b;--line:#d8dee6;--accent:#20567a;--warnbg:#fdf3d7;--warnfg:#5c4a12;--warnline:#e0c26a;--bar:#20567a}
 @media (prefers-color-scheme: dark){:root{--bg:#12161b;--card:#1a2027;--fg:#dde5ee;--muted:#94a4b5;--line:#2d3945;--accent:#7db4d8;--warnbg:#332b14;--warnfg:#e8d9a0;--warnline:#6b5a25;--bar:#7db4d8}}
@@ -434,29 +434,29 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 .note{color:var(--muted);font-size:.85rem}
 @media print{html,body{background:#fff;color:#000}section{border:none;padding:.3rem 0}thead{display:table-header-group}tr{break-inside:avoid}}
 '@)
-    [void]$sb.Append('</style></head><body><main><h1>Phase timing — ' + (ConvertTo-ZbHtml $Result.SourcePath) + '</h1><section>')
+    [void]$sb.Append('</style></head><body><main><h1>Phase timing — ' + (ConvertTo-ScytheHtml $Result.SourcePath) + '</h1><section>')
     if ($Result.Shortfall -gt 0) {
         [void]$sb.Append('<p class="warnbox">' + $Result.Mode + ' mode plans ' + $Result.Ceiling + ' phases; only ' + $Result.PhaseCount + ' reported. Find out why before trusting these totals.</p>')
     }
     if ($Result.Incomplete) {
-        [void]$sb.Append('<p class="warnbox">Phase(s) ' + (ConvertTo-ZbHtml (@($Result.IncompletePhases) -join ', ')) + ' started but never finished — the log is cut short.</p>')
+        [void]$sb.Append('<p class="warnbox">Phase(s) ' + (ConvertTo-ScytheHtml (@($Result.IncompletePhases) -join ', ')) + ' started but never finished — the log is cut short.</p>')
     }
     if ($Result.OverBudget) {
-        [void]$sb.Append('<p class="warnbox">OVER BUDGET: ' + (ConvertTo-ZbHtml (Format-ZbSeconds -Seconds $Result.TotalSeconds)) + ' against ' + (ConvertTo-ZbHtml (Format-ZbSeconds -Seconds $Result.ModeBudget)) + ' allowed.</p>')
+        [void]$sb.Append('<p class="warnbox">OVER BUDGET: ' + (ConvertTo-ScytheHtml (Format-ScytheSeconds -Seconds $Result.TotalSeconds)) + ' against ' + (ConvertTo-ScytheHtml (Format-ScytheSeconds -Seconds $Result.ModeBudget)) + ' allowed.</p>')
     }
-    [void]$sb.Append('<p>Total <strong>' + (ConvertTo-ZbHtml (Format-ZbSeconds -Seconds $Result.TotalSeconds)) + '</strong> across ' + $Result.PhaseCount + ' phases; ' + $Result.P80Count + ' of them account for 80% of the time.</p>')
+    [void]$sb.Append('<p>Total <strong>' + (ConvertTo-ScytheHtml (Format-ScytheSeconds -Seconds $Result.TotalSeconds)) + '</strong> across ' + $Result.PhaseCount + ' phases; ' + $Result.P80Count + ' of them account for 80% of the time.</p>')
     if ($Result.DuplicatesDiscarded -gt 0) {
         [void]$sb.Append('<p class="note">' + $Result.DuplicatesDiscarded + ' duplicate TIMING line(s) discarded — last value per phase kept.</p>')
     }
     [void]$sb.Append('</section><section><table><thead><tr><th>Phase</th><th>Seconds</th><th>Share</th><th></th></tr></thead><tbody>')
     foreach ($p in @($Result.TopPhases)) {
-        [void]$sb.Append('<tr><td>' + (ConvertTo-ZbHtml $p.Label) + '</td><td class="num">' + (Format-ZbNum -Value $p.Seconds) + '</td><td class="num">' + (Format-ZbNum -Value $p.Share) + '%</td><td style="width:30%"><div class="bar" style="width:' + (Format-ZbNum -Value $p.Share) + '%"></div></td></tr>')
+        [void]$sb.Append('<tr><td>' + (ConvertTo-ScytheHtml $p.Label) + '</td><td class="num">' + (Format-ScytheNum -Value $p.Seconds) + '</td><td class="num">' + (Format-ScytheNum -Value $p.Share) + '%</td><td style="width:30%"><div class="bar" style="width:' + (Format-ScytheNum -Value $p.Share) + '%"></div></td></tr>')
     }
     [void]$sb.Append('</tbody></table></section>')
     if ($null -ne $Result.Comparison) {
         [void]$sb.Append('<section><table><thead><tr><th>Phase</th><th>Before</th><th>After</th><th>Delta</th><th></th></tr></thead><tbody>')
         foreach ($row in @($Result.Comparison)) {
-            [void]$sb.Append('<tr><td>' + (ConvertTo-ZbHtml $row.Key) + '</td><td class="num">' + (Format-ZbNum -Value $row.Before) + '</td><td class="num">' + (Format-ZbNum -Value $row.After) + '</td><td class="num">' + (Format-ZbNum -Value $row.Delta) + '</td><td>' + (ConvertTo-ZbHtml $row.Status) + '</td></tr>')
+            [void]$sb.Append('<tr><td>' + (ConvertTo-ScytheHtml $row.Key) + '</td><td class="num">' + (Format-ScytheNum -Value $row.Before) + '</td><td class="num">' + (Format-ScytheNum -Value $row.After) + '</td><td class="num">' + (Format-ScytheNum -Value $row.Delta) + '</td><td>' + (ConvertTo-ScytheHtml $row.Status) + '</td></tr>')
         }
         [void]$sb.Append('</tbody></table></section>')
     }
@@ -474,13 +474,13 @@ if ([string]::IsNullOrWhiteSpace($Path) -and [string]::IsNullOrWhiteSpace($LogPa
 
 $sourceData = $null
 if (-not [string]::IsNullOrWhiteSpace($Path)) {
-    $sourceData = Read-ZbTimingsFromRecord -RecordPath $Path
+    $sourceData = Read-ScytheTimingsFromRecord -RecordPath $Path
     if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
         Write-Verbose 'Both sources given; using the run record (the log can span several scans).'
     }
 }
 else {
-    $sourceData = Read-ZbTimingsFromLog -ConsoleLogPath $LogPath
+    $sourceData = Read-ScytheTimingsFromLog -ConsoleLogPath $LogPath
 }
 
 $budgetPath = $Budget
@@ -502,19 +502,19 @@ else {
 
 $compareData = $null
 if (-not [string]::IsNullOrWhiteSpace($Compare)) {
-    $compareData = Read-ZbTimingsFromRecord -RecordPath $Compare
+    $compareData = Read-ScytheTimingsFromRecord -RecordPath $Compare
 }
 
-$result = New-ZbTimingResult -SourceData $sourceData -BudgetTable $budgetTable -BudgetPath $budgetPath -CompareData $compareData -TopN $Top
+$result = New-ScytheTimingResult -SourceData $sourceData -BudgetTable $budgetTable -BudgetPath $budgetPath -CompareData $compareData -TopN $Top
 
 if ($PassThru) {
     $result
 }
 else {
     switch ($Format) {
-        'Text' { ConvertTo-ZbTimingText -Result $result }
+        'Text' { ConvertTo-ScytheTimingText -Result $result }
         'Json' { ConvertTo-Json -InputObject $result -Depth 8 }
-        'Html' { ConvertTo-ZbTimingHtml -Result $result }
+        'Html' { ConvertTo-ScytheTimingHtml -Result $result }
     }
 }
 

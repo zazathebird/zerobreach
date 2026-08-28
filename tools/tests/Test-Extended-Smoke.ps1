@@ -30,7 +30,7 @@ function Assert-That { param([string]$Name, $Actual, $Expected)
 
 # ── the stub contract: every helper below must still exist in the loader ─────
 $lt = $null; $le = $null
-$loaderAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'ZeroBreach-V23.ps1'), [ref]$lt, [ref]$le)
+$loaderAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Scythe-V23.ps1'), [ref]$lt, [ref]$le)
 $loaderFns = @{}
 foreach ($f in $loaderAst.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst]}, $true)) { $loaderFns[$f.Name] = $f }
 $stubbed = @('Write-RecoveredError','Show-PhaseHeader','Out-Typewriter','Out-Decrypt','Out-ThreatBanner',
@@ -46,7 +46,7 @@ foreach ($p in @('ID','Phase','ThreatType','Severity','Description','Target','Fi
     Assert-That ("Add-Finding still takes -$p") ($afParams -contains $p) $true
 }
 
-$fix = Join-Path ([System.IO.Path]::GetTempPath()) ("zb_smoke_" + [guid]::NewGuid().ToString('N').Substring(0,8))
+$fix = Join-Path ([System.IO.Path]::GetTempPath()) ("scythe_smoke_" + [guid]::NewGuid().ToString('N').Substring(0,8))
 try {
 New-Item -ItemType Directory -Path $fix -Force | Out-Null
 function New-Fixture { param([string]$Rel, [string]$Body)

@@ -18,16 +18,16 @@ set it.
 report (`case_id` / `operator`) and the HTML header — so a report handed to a client or
 attached to a ticket is self-identifying. Per-run only; never saved into profiles.
 
-## Reading reports back (`zbscan report show`)
+## Reading reports back (`scythescan report show`)
 
-`zbscan report show <file>` re-renders any saved report — plain `.json` or the STEALTH
+`scythescan report show <file>` re-renders any saved report — plain `.json` or the STEALTH
 `.json.gz` blob (detected by content, so a renamed file still loads): summary, findings,
 checks that did not complete, phase timings. Exit codes mirror a live scan (0 clean,
 2 findings, 3 coverage gaps), so scripts can consume a stealth blob the same way as a run.
 
-## Linting rules files (`zbscan rules lint`)
+## Linting rules files (`scythescan rules lint`)
 
-`zbscan rules lint <file>` loads a custom rules/IOC file exactly the way a scan would —
+`scythescan rules lint <file>` loads a custom rules/IOC file exactly the way a scan would —
 JSON rules shape or plain-text indicator lines — and reports the sets and entry counts it
 produced plus every load error (malformed JSON, bad regexes, empty patterns), without
 scanning anything. Catch the typo'd regex at authoring time, not mid-engagement.
@@ -38,7 +38,7 @@ You often arrive at a machine holding free-form text: an EDR alert, a threat-int
 ticket. Save it to a file and run:
 
 ```
-zbscan --mode FULL --extract-iocs alert.txt
+scythescan --mode FULL --extract-iocs alert.txt
 ```
 
 The engine extracts indicator candidates — SHA-256 hashes, IPv4 addresses, domains,
@@ -75,7 +75,7 @@ The count of baseline-suppressed findings is always disclosed in the summary, as
 
 ## Vault lifecycle: `verify` and `purge`
 
-`zbscan vault verify` integrity-checks every vaulted file against the SHA-256 recorded in
+`scythescan vault verify` integrity-checks every vaulted file against the SHA-256 recorded in
 its manifest at quarantine time — read-only, and the companion to the tamper-evident
 action log: together they prove both *what was done* and *that the evidence is intact*.
 Items report as ok, no-hash (couldn't be hashed at quarantine time — unprovable either
@@ -83,7 +83,7 @@ way, never assumed fine), MISSING, or TAMPERED; any missing/tampered item makes 
 command exit 2.
 
 Quarantine is reversible by design (spec §6.4) — but a confirmed-bad file shouldn't sit in
-the vault forever. `zbscan vault purge <id>` permanently deletes one quarantined file and
+the vault forever. `scythescan vault purge <id>` permanently deletes one quarantined file and
 its manifest:
 
 - shows the original path, hash, and size first, then requires the typed
@@ -93,7 +93,7 @@ its manifest:
 - writes a `purge_from_vault` entry (with the file's SHA-256) to the tamper-evident
   action log, so what was destroyed remains provable.
 
-## `zbscan log verify` and the truncation anchor
+## `scythescan log verify` and the truncation anchor
 
 The action log is a hash chain, which catches an entry being edited or removed from the
 middle. It cannot, on its own, catch **truncation** — deleting entries from the end leaves a
@@ -115,7 +115,7 @@ The anchor is not a secret and can be deleted along with the log. What it buys i
 shortening the record now takes two consistent edits instead of one, and that the tool never
 claims an unprovable log is intact.
 
-## `zbscan categories`
+## `scythescan categories`
 
 Prints the detection categories in the running build — phase number, group name (the token
 `--only`/`--skip` and profiles accept), minimum scan mode, and the phase's full name. Read

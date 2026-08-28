@@ -1,145 +1,145 @@
 /* viewer.css — offline report viewer.
-   Self-contained theme tokens (--zb-*). main.css is linked before this file; if the product
+   Self-contained theme tokens (--scythe-*). main.css is linked before this file; if the product
    stylesheet defines the same custom properties they take precedence because this block only
-   sets them on :root where main.css has not. All component rules below use only --zb-*
+   sets them on :root where main.css has not. All component rules below use only --scythe-*
    tokens, so reconciling with the product theme is a token-mapping exercise, not a rewrite. */
 
 :root {
-  --zb-bg: #f5f6f8;
-  --zb-card: #ffffff;
-  --zb-fg: #1d2833;
-  --zb-muted: #5b6b7b;
-  --zb-line: #d8dee6;
-  --zb-accent: #20567a;
-  --zb-warn-bg: #fdf3d7;
-  --zb-warn-fg: #5c4a12;
-  --zb-warn-line: #e0c26a;
-  --zb-crit: #a11d11;
-  --zb-high: #b35a00;
-  --zb-poss: #6b6100;
-  --zb-info: #47586a;
-  --zb-other: #5b3d7a;
-  --zb-badge-fg: #ffffff;
-  --zb-focus: #2f7fb8;
+  --scythe-bg: #f5f6f8;
+  --scythe-card: #ffffff;
+  --scythe-fg: #1d2833;
+  --scythe-muted: #5b6b7b;
+  --scythe-line: #d8dee6;
+  --scythe-accent: #20567a;
+  --scythe-warn-bg: #fdf3d7;
+  --scythe-warn-fg: #5c4a12;
+  --scythe-warn-line: #e0c26a;
+  --scythe-crit: #a11d11;
+  --scythe-high: #b35a00;
+  --scythe-poss: #6b6100;
+  --scythe-info: #47586a;
+  --scythe-other: #5b3d7a;
+  --scythe-badge-fg: #ffffff;
+  --scythe-focus: #2f7fb8;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --zb-bg: #12161b;
-    --zb-card: #1a2027;
-    --zb-fg: #dde5ee;
-    --zb-muted: #94a4b5;
-    --zb-line: #2d3945;
-    --zb-accent: #7db4d8;
-    --zb-warn-bg: #332b14;
-    --zb-warn-fg: #e8d9a0;
-    --zb-warn-line: #6b5a25;
-    --zb-crit: #e05a4e;
-    --zb-high: #e08b3d;
-    --zb-poss: #c9b83a;
-    --zb-info: #8299b0;
-    --zb-other: #a986cf;
-    --zb-badge-fg: #10141a;
+    --scythe-bg: #12161b;
+    --scythe-card: #1a2027;
+    --scythe-fg: #dde5ee;
+    --scythe-muted: #94a4b5;
+    --scythe-line: #2d3945;
+    --scythe-accent: #7db4d8;
+    --scythe-warn-bg: #332b14;
+    --scythe-warn-fg: #e8d9a0;
+    --scythe-warn-line: #6b5a25;
+    --scythe-crit: #e05a4e;
+    --scythe-high: #e08b3d;
+    --scythe-poss: #c9b83a;
+    --scythe-info: #8299b0;
+    --scythe-other: #a986cf;
+    --scythe-badge-fg: #10141a;
   }
 }
 
 * { box-sizing: border-box; }
-html { background: var(--zb-bg); }
+html { background: var(--scythe-bg); }
 body {
   margin: 0;
   font: 15px/1.5 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: var(--zb-fg);
-  background: var(--zb-bg);
+  color: var(--scythe-fg);
+  background: var(--scythe-bg);
 }
 h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
-h2 { font-size: 1.1rem; color: var(--zb-accent); margin: 0 0 .6rem; }
+h2 { font-size: 1.1rem; color: var(--scythe-accent); margin: 0 0 .6rem; }
 code { font-family: Consolas, "Cascadia Mono", Menlo, monospace; font-size: .9em; word-break: break-all; }
 
 .vw-top, main { max-width: 76rem; margin: 0 auto; padding: 1rem; }
-.vw-sub { color: var(--zb-muted); margin: 0 0 1rem; }
+.vw-sub { color: var(--scythe-muted); margin: 0 0 1rem; }
 
 .vw-drop {
   display: block;
-  border: 2px dashed var(--zb-line);
+  border: 2px dashed var(--scythe-line);
   border-radius: 10px;
   padding: 1.6rem;
   text-align: center;
   cursor: pointer;
-  color: var(--zb-muted);
+  color: var(--scythe-muted);
 }
-.vw-drop.vw-over { border-color: var(--zb-accent); color: var(--zb-accent); }
-.vw-browse { color: var(--zb-accent); text-decoration: underline; }
+.vw-drop.vw-over { border-color: var(--scythe-accent); color: var(--scythe-accent); }
+.vw-browse { color: var(--scythe-accent); text-decoration: underline; }
 .vw-drop input { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; }
-.vw-error { color: var(--zb-crit); font-weight: 600; }
+.vw-error { color: var(--scythe-crit); font-weight: 600; }
 
 .vw-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 1rem; margin-bottom: 1rem; }
-.vw-card { background: var(--zb-card); border: 1px solid var(--zb-line); border-radius: 8px; padding: 1rem 1.2rem; }
+.vw-card { background: var(--scythe-card); border: 1px solid var(--scythe-line); border-radius: 8px; padding: 1rem 1.2rem; }
 .vw-card h3 { margin: 0 0 .4rem; font-size: 1rem; overflow-wrap: anywhere; }
 .vw-card dl { display: grid; grid-template-columns: auto 1fr; gap: .1rem .8rem; margin: 0; font-size: .9rem; }
-.vw-card dt { color: var(--zb-muted); }
+.vw-card dt { color: var(--scythe-muted); }
 .vw-card dd { margin: 0; overflow-wrap: anywhere; }
 .vw-counts { margin-top: .5rem; display: flex; gap: .35rem; flex-wrap: wrap; }
 
-.vw-cmp, .vw-findings { background: var(--zb-card); border: 1px solid var(--zb-line); border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1rem; }
+.vw-cmp, .vw-findings { background: var(--scythe-card); border: 1px solid var(--scythe-line); border-radius: 8px; padding: 1rem 1.2rem; margin-bottom: 1rem; }
 .vw-cmp table { margin-top: .4rem; }
 
 .vw-warn {
-  background: var(--zb-warn-bg); color: var(--zb-warn-fg);
-  border: 1px solid var(--zb-warn-line); border-radius: 6px;
+  background: var(--scythe-warn-bg); color: var(--scythe-warn-fg);
+  border: 1px solid var(--scythe-warn-line); border-radius: 6px;
   padding: .5rem .8rem; margin-bottom: .8rem; font-size: .9rem;
 }
 
 .vw-controls { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin-bottom: .8rem; }
 .vw-controls input[type=search] {
   flex: 1 1 12rem; min-width: 9rem;
-  padding: .35rem .6rem; border: 1px solid var(--zb-line); border-radius: 6px;
-  background: var(--zb-bg); color: var(--zb-fg);
+  padding: .35rem .6rem; border: 1px solid var(--scythe-line); border-radius: 6px;
+  background: var(--scythe-bg); color: var(--scythe-fg);
 }
 .vw-controls select {
-  padding: .3rem .4rem; border: 1px solid var(--zb-line); border-radius: 6px;
-  background: var(--zb-bg); color: var(--zb-fg); max-width: 14rem;
+  padding: .3rem .4rem; border: 1px solid var(--scythe-line); border-radius: 6px;
+  background: var(--scythe-bg); color: var(--scythe-fg); max-width: 14rem;
 }
 .vw-controls button, .vw-pager button, .vw-tabs button {
-  border: 1px solid var(--zb-line); background: var(--zb-bg); color: var(--zb-fg);
+  border: 1px solid var(--scythe-line); background: var(--scythe-bg); color: var(--scythe-fg);
   border-radius: 6px; padding: .3rem .7rem; cursor: pointer; font: inherit; font-size: .85rem;
 }
-.vw-controls button:hover, .vw-pager button:hover, .vw-tabs button:hover { border-color: var(--zb-accent); }
+.vw-controls button:hover, .vw-pager button:hover, .vw-tabs button:hover { border-color: var(--scythe-accent); }
 .vw-tabs { display: flex; gap: .4rem; flex-wrap: wrap; margin-bottom: .6rem; }
-.vw-tabs button[aria-selected="true"] { border-color: var(--zb-accent); color: var(--zb-accent); font-weight: 700; }
+.vw-tabs button[aria-selected="true"] { border-color: var(--scythe-accent); color: var(--scythe-accent); font-weight: 700; }
 
 .vw-chips { display: inline-flex; gap: .35rem; flex-wrap: wrap; }
-.vw-chip { border: 1px solid var(--zb-line); border-radius: 999px; padding: .15rem .6rem; font-size: .8rem; cursor: pointer; user-select: none; }
-.vw-chip input { accent-color: var(--zb-accent); vertical-align: -1px; }
+.vw-chip { border: 1px solid var(--scythe-line); border-radius: 999px; padding: .15rem .6rem; font-size: .8rem; cursor: pointer; user-select: none; }
+.vw-chip input { accent-color: var(--scythe-accent); vertical-align: -1px; }
 
 .vw-badge {
   display: inline-block; border-radius: 4px; padding: 0 .45em;
   font-size: .75rem; font-weight: 700; letter-spacing: .04em;
-  color: var(--zb-badge-fg); white-space: nowrap;
+  color: var(--scythe-badge-fg); white-space: nowrap;
 }
-.vw-badge.sev-critical { background: var(--zb-crit); }
-.vw-badge.sev-high { background: var(--zb-high); }
-.vw-badge.sev-possible { background: var(--zb-poss); }
-.vw-badge.sev-info { background: var(--zb-info); }
-.vw-badge.sev-other { background: var(--zb-other); }
+.vw-badge.sev-critical { background: var(--scythe-crit); }
+.vw-badge.sev-high { background: var(--scythe-high); }
+.vw-badge.sev-possible { background: var(--scythe-poss); }
+.vw-badge.sev-info { background: var(--scythe-info); }
+.vw-badge.sev-other { background: var(--scythe-other); }
 
 .vw-tablewrap { overflow-x: auto; }
 .vw-tbl { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .vw-tbl th {
   text-align: left; font-size: .75rem; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--zb-muted); border-bottom: 2px solid var(--zb-line); padding: .35rem .5rem;
+  color: var(--scythe-muted); border-bottom: 2px solid var(--scythe-line); padding: .35rem .5rem;
 }
-.vw-tbl td { border-bottom: 1px solid var(--zb-line); padding: .4rem .5rem; vertical-align: top; overflow-wrap: anywhere; }
-.vw-ghead td { background: var(--zb-bg); font-weight: 600; cursor: pointer; }
-.vw-ghead .vw-gcount { color: var(--zb-muted); font-weight: 400; font-size: .85rem; }
+.vw-tbl td { border-bottom: 1px solid var(--scythe-line); padding: .4rem .5rem; vertical-align: top; overflow-wrap: anywhere; }
+.vw-ghead td { background: var(--scythe-bg); font-weight: 600; cursor: pointer; }
+.vw-ghead .vw-gcount { color: var(--scythe-muted); font-weight: 400; font-size: .85rem; }
 .vw-ghead button {
   border: 0; background: none; color: inherit; font: inherit; font-weight: 600;
   cursor: pointer; padding: 0; width: 100%; text-align: left;
 }
-.vw-empty td { color: var(--zb-muted); text-align: center; padding: 1rem; }
+.vw-empty td { color: var(--scythe-muted); text-align: center; padding: 1rem; }
 
-.vw-pager { display: flex; gap: .5rem; align-items: center; margin-top: .8rem; font-size: .9rem; color: var(--zb-muted); }
+.vw-pager { display: flex; gap: .5rem; align-items: center; margin-top: .8rem; font-size: .9rem; color: var(--scythe-muted); }
 
 button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible, .vw-drop:focus-within {
-  outline: 2px solid var(--zb-focus);
+  outline: 2px solid var(--scythe-focus);
   outline-offset: 2px;
 }
 

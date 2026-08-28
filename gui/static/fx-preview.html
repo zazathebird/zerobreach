@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ZeroBreach — VFX Checker</title>
+<title>Scythe — VFX Checker</title>
 <!-- the REAL stylesheets, so we test the shipping CSS not a copy -->
 <link rel="stylesheet" href="css/main.css">
 <link rel="stylesheet" href="css/fx.css">
@@ -12,53 +12,53 @@
   html,body{height:100%;margin:0;background:var(--bg-base,#050a0f);color:var(--text,#cde);
     font-family:"JetBrains Mono",ui-monospace,monospace;overflow:hidden;}
   #app{height:100%;}
-  #zb-bar{position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;flex-wrap:wrap;gap:6px;
+  #scythe-bar{position:fixed;top:0;left:0;right:0;z-index:9999;display:flex;flex-wrap:wrap;gap:6px;
     align-items:center;padding:8px 10px;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
     border-bottom:1px solid var(--border-bright,#2af);font-size:12px;pointer-events:auto;}
-  #zb-bar b{color:var(--accent,#0df);letter-spacing:2px;margin-right:6px;}
-  #zb-bar select,#zb-bar button{background:#111;color:var(--text,#cde);border:1px solid var(--accent,#0df);
+  #scythe-bar b{color:var(--accent,#0df);letter-spacing:2px;margin-right:6px;}
+  #scythe-bar select,#scythe-bar button{background:#111;color:var(--text,#cde);border:1px solid var(--accent,#0df);
     border-radius:4px;padding:4px 8px;font:inherit;cursor:pointer;}
-  #zb-bar .grp{display:flex;gap:4px;align-items:center;border-left:1px solid #333;padding-left:8px;}
-  #zb-bar button.on{background:var(--accent,#0df);color:#000;font-weight:700;}
-  #zb-hint{position:fixed;left:12px;bottom:10px;z-index:9999;font-size:30px;font-weight:800;
+  #scythe-bar .grp{display:flex;gap:4px;align-items:center;border-left:1px solid #333;padding-left:8px;}
+  #scythe-bar button.on{background:var(--accent,#0df);color:#000;font-weight:700;}
+  #scythe-hint{position:fixed;left:12px;bottom:10px;z-index:9999;font-size:30px;font-weight:800;
     letter-spacing:4px;color:var(--accent,#0df);text-shadow:0 0 18px var(--accent-glow,#0df8);pointer-events:none;}
-  #zb-sub{position:fixed;left:12px;bottom:46px;z-index:9999;font-size:12px;color:var(--text-mid,#8ab);pointer-events:none;}
+  #scythe-sub{position:fixed;left:12px;bottom:46px;z-index:9999;font-size:12px;color:var(--text-mid,#8ab);pointer-events:none;}
   /* audit report overlay */
-  #zb-audit{position:fixed;inset:0;z-index:99999;background:#05080c;overflow:auto;padding:24px;display:none;}
-  #zb-audit h1{font-size:20px;letter-spacing:3px;margin:0 0 4px;}
-  #zb-audit .sum{font-size:15px;margin-bottom:16px;}
-  #zb-audit .pass{color:#39ff9a;} #zb-audit .fail{color:#ff3b5c;}
-  #zb-audit table{border-collapse:collapse;width:100%;font-size:12px;}
-  #zb-audit td,#zb-audit th{border:1px solid #1d2733;padding:6px 8px;text-align:left;vertical-align:top;}
-  #zb-audit img{width:160px;height:90px;object-fit:cover;border:1px solid #1d2733;display:block;background:#000;}
-  #zb-audit .badge{font-weight:700;padding:2px 8px;border-radius:4px;}
-  #zb-audit .badge.ok{background:#0c3;color:#021;} #zb-audit .badge.no{background:#c03;color:#fee;}
-  pre#zb-json{white-space:pre-wrap;color:#5a7;font-size:11px;margin-top:18px;}
+  #scythe-audit{position:fixed;inset:0;z-index:99999;background:#05080c;overflow:auto;padding:24px;display:none;}
+  #scythe-audit h1{font-size:20px;letter-spacing:3px;margin:0 0 4px;}
+  #scythe-audit .sum{font-size:15px;margin-bottom:16px;}
+  #scythe-audit .pass{color:#39ff9a;} #scythe-audit .fail{color:#ff3b5c;}
+  #scythe-audit table{border-collapse:collapse;width:100%;font-size:12px;}
+  #scythe-audit td,#scythe-audit th{border:1px solid #1d2733;padding:6px 8px;text-align:left;vertical-align:top;}
+  #scythe-audit img{width:160px;height:90px;object-fit:cover;border:1px solid #1d2733;display:block;background:#000;}
+  #scythe-audit .badge{font-weight:700;padding:2px 8px;border-radius:4px;}
+  #scythe-audit .badge.ok{background:#0c3;color:#021;} #scythe-audit .badge.no{background:#c03;color:#fee;}
+  pre#scythe-json{white-space:pre-wrap;color:#5a7;font-size:11px;margin-top:18px;}
 </style>
 </head>
 <body>
 <div id="app"></div>
 
-<div id="zb-bar">
+<div id="scythe-bar">
   <b>VFX CHECK</b>
   <div class="grp">THEME
-    <select id="zb-theme"></select>
+    <select id="scythe-theme"></select>
   </div>
   <div class="grp">VIEW
-    <select id="zb-view"></select>
+    <select id="scythe-view"></select>
   </div>
-  <div class="grp" id="zb-fx-grp">FX</div>
-  <div class="grp"><button id="zb-run-audit">▶ RUN AUDIT</button></div>
+  <div class="grp" id="scythe-fx-grp">FX</div>
+  <div class="grp"><button id="scythe-run-audit">▶ RUN AUDIT</button></div>
 </div>
 
-<div id="zb-sub">title scrambles + per-view treatment shown for the selected view</div>
-<div id="zb-hint">ZEROBREACH</div>
+<div id="scythe-sub">title scrambles + per-view treatment shown for the selected view</div>
+<div id="scythe-hint">SCYTHE</div>
 
-<div id="zb-audit"></div>
-<pre id="zb-json" hidden></pre>
+<div id="scythe-audit"></div>
+<pre id="scythe-json" hidden></pre>
 
-<!-- stub ZBSound so themes.apply() never touches AudioContext in a headless/no-gesture context -->
-<script>window.ZBSound = { setTheme(){}, play(){}, setMuted(){}, setVolume(){} };</script>
+<!-- stub ScytheSound so themes.apply() never touches AudioContext in a headless/no-gesture context -->
+<script>window.ScytheSound = { setTheme(){}, play(){}, setMuted(){}, setVolume(){} };</script>
 <!-- the REAL modules under test -->
 <script src="js/themes.js"></script>
 <script src="js/fx.js"></script>
@@ -84,35 +84,35 @@
 
   function applyView(v) {
     ensureViewFxLayer();
-    document.body.classList.toggle('fx-off', ZBFX.getIntensity() === 'off');
+    document.body.classList.toggle('fx-off', ScytheFX.getIntensity() === 'off');
     document.body.dataset.view = v;
-    const titleEl = document.getElementById('zb-hint');
-    ZBFX.decrypt(titleEl, v.toUpperCase(), 700);
+    const titleEl = document.getElementById('scythe-hint');
+    ScytheFX.decrypt(titleEl, v.toUpperCase(), 700);
   }
 
   function setFx(tier) {
-    ZBFX.setIntensity(tier);
+    ScytheFX.setIntensity(tier);
     document.body.classList.toggle('fx-off', tier === 'off');
-    [...document.querySelectorAll('#zb-fx-grp button')].forEach(b =>
+    [...document.querySelectorAll('#scythe-fx-grp button')].forEach(b =>
       b.classList.toggle('on', b.dataset.fx === tier));
   }
 
   // ── boot ──
-  ZBFX.init();
+  ScytheFX.init();
   ensureViewFxLayer();
 
   // build theme dropdown (include secret kraken via force)
-  const themeSel = document.getElementById('zb-theme');
-  ZBThemes.THEMES.forEach(t => {
+  const themeSel = document.getElementById('scythe-theme');
+  ScytheThemes.THEMES.forEach(t => {
     const o = document.createElement('option'); o.value = t.id; o.textContent = t.name; themeSel.appendChild(o);
   });
-  themeSel.addEventListener('change', () => ZBThemes.apply(themeSel.value, { force:true }));
+  themeSel.addEventListener('change', () => ScytheThemes.apply(themeSel.value, { force:true }));
 
-  const viewSel = document.getElementById('zb-view');
+  const viewSel = document.getElementById('scythe-view');
   VIEWS.forEach(v => { const o=document.createElement('option'); o.value=v; o.textContent=v; viewSel.appendChild(o); });
   viewSel.addEventListener('change', () => applyView(viewSel.value));
 
-  const fxGrp = document.getElementById('zb-fx-grp');
+  const fxGrp = document.getElementById('scythe-fx-grp');
   ['off','lite','full','max'].forEach(t => {
     const b=document.createElement('button'); b.dataset.fx=t; b.textContent=t.toUpperCase();
     b.addEventListener('click',()=>setFx(t)); fxGrp.appendChild(b);
@@ -123,7 +123,7 @@
   const startView  = qs.get('view')  || 'launchpad';
   const startFx    = qs.get('fx')    || 'full';
   setFx(startFx);
-  ZBThemes.apply(startTheme, { force:true }); themeSel.value = ZBThemes.current().id;
+  ScytheThemes.apply(startTheme, { force:true }); themeSel.value = ScytheThemes.current().id;
   applyView(startView); viewSel.value = startView;
 
   // ── self-test (audit) ──
@@ -180,9 +180,9 @@
     const themeRows = [], viewRows = [];
 
     // THEME canvas checks
-    for (const t of ZBThemes.THEMES) {
+    for (const t of ScytheThemes.THEMES) {
       errors = [];
-      ZBThemes.apply(t.id, { force:true });
+      ScytheThemes.apply(t.id, { force:true });
       applyView('launchpad');
       await sleep(260);                 // let renderers build + paint
       const s1 = sampleCanvas();
@@ -210,17 +210,17 @@
     }
 
     // VIEW per-view CSS checks
-    ZBThemes.apply('kraken-blue', { force:true });
+    ScytheThemes.apply('kraken-blue', { force:true });
     setFx('full');
     for (const v of VIEWS) {
       applyView(v);
       // The Scan Monitor sweep bar is now an opt-in Cinematic FX toggle
-      // (body.zbfx-scansweep, off by default). Enable it just for this check so
+      // (body.scythefx-scansweep, off by default). Enable it just for this check so
       // the audit still verifies the sweep CSS renders, then restore.
-      if (v === 'scanmonitor') document.body.classList.add('zbfx-scansweep');
+      if (v === 'scanmonitor') document.body.classList.add('scythefx-scansweep');
       await sleep(60);
       const active = viewFxActive();
-      if (v === 'scanmonitor') document.body.classList.remove('zbfx-scansweep');
+      if (v === 'scanmonitor') document.body.classList.remove('scythefx-scansweep');
       viewRows.push({ view:v, active:+active.toFixed(3), pass: active > 0.001,
                       why: active > 0.001 ? '' : 'no #view-fx pseudo-element active' });
     }
@@ -236,10 +236,10 @@
     const tPass = themeRows.filter(r=>r.pass).length, tAll = themeRows.length;
     const vPass = viewRows.filter(r=>r.pass).length, vAll = viewRows.length;
     const allOk = tPass===tAll && vPass===vAll && offHidden;
-    const el = document.getElementById('zb-audit');
+    const el = document.getElementById('scythe-audit');
     el.style.display = 'block';
     el.innerHTML =
-      '<h1>ZEROBREACH VFX AUDIT</h1>' +
+      '<h1>SCYTHE VFX AUDIT</h1>' +
       '<div class="sum">Themes <b class="'+(tPass===tAll?'pass':'fail')+'">'+tPass+'/'+tAll+'</b> · ' +
         'Views <b class="'+(vPass===vAll?'pass':'fail')+'">'+vPass+'/'+vAll+'</b> · ' +
         'OFF hides layer <b class="'+(offHidden?'pass':'fail')+'">'+(offHidden?'YES':'NO')+'</b> · ' +
@@ -262,16 +262,16 @@
     const summary = { verdict: allOk?'PASS':'FAIL', themes:{pass:tPass,total:tAll},
                       views:{pass:vPass,total:vAll}, offHidesLayer:offHidden,
                       themeRows: themeRows.map(({thumb,...r})=>r), viewRows };
-    window.__ZB_AUDIT = summary;
-    const pre = document.getElementById('zb-json'); pre.hidden = false;
-    pre.textContent = 'ZB_AUDIT_JSON ' + JSON.stringify(summary) + ' ZB_AUDIT_END';
+    window.__SCYTHE_AUDIT = summary;
+    const pre = document.getElementById('scythe-json'); pre.hidden = false;
+    pre.textContent = 'SCYTHE_AUDIT_JSON ' + JSON.stringify(summary) + ' SCYTHE_AUDIT_END';
     document.title = 'VFX AUDIT: ' + summary.verdict + ' (themes '+tPass+'/'+tAll+', views '+vPass+'/'+vAll+')';
     return summary;
   }
 
   // expose for headless drivers (CDP) and the toolbar button
-  window.__zbAudit = runAudit;
-  document.getElementById('zb-run-audit').addEventListener('click', () => { window.__auditPromise = runAudit(); });
+  window.__scytheAudit = runAudit;
+  document.getElementById('scythe-run-audit').addEventListener('click', () => { window.__auditPromise = runAudit(); });
   if (qs.get('audit') === '1') window.__auditPromise = runAudit();
 })();
 </script>

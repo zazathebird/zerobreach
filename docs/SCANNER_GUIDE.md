@@ -9,12 +9,12 @@ Background: `_ENGINE_SPEC_FOR_REBUILD.md` §3 (your category), §4, §5, §6, an
 `INSTRUCTIONS_AI.md` §2 (the contracts) and §5 (what each existing check does). The Core
 contracts you code against:
 
-- `ZeroBreach.Core/Scanning/IScanner.cs`, `ScanContext.cs`, `IFindingSink.cs`,
+- `Scythe.Core/Scanning/IScanner.cs`, `ScanContext.cs`, `IFindingSink.cs`,
   `EnumerationBudget.cs`, `FindingCollector.cs`
-- `ZeroBreach.Core/Model/Finding.cs`, `Severity.cs`, `FixAction.cs`, `CheckStatus.cs`
-- `ZeroBreach.Core/Signatures/SignatureDb.cs`, `IndicatorEntry.cs`
-- `ZeroBreach.Core/Profiles/UserProfile.cs`
-- `ZeroBreach.Core/Util/FileHasher.cs`
+- `Scythe.Core/Model/Finding.cs`, `Severity.cs`, `FixAction.cs`, `CheckStatus.cs`
+- `Scythe.Core/Signatures/SignatureDb.cs`, `IndicatorEntry.cs`
+- `Scythe.Core/Profiles/UserProfile.cs`
+- `Scythe.Core/Util/FileHasher.cs`
 
 ## Hard rules (spec §6 — violations fail review)
 
@@ -64,7 +64,7 @@ contracts you code against:
 10. **Signatures external**: NO indicator strings/paths-of-badness inline in C# beyond
     structural constants (registry locations you enumerate are fine). Pattern lists, known
     names, hashes, family strings go in your category's
-    `ZeroBreach.Scanners/Signatures/<category>.json` (embedded automatically), read via
+    `Scythe.Scanners/Signatures/<category>.json` (embedded automatically), read via
     `ctx.Signatures.Set("<category>.<set_name>")`. JSON shape:
 
     ```json
@@ -101,7 +101,7 @@ contracts you code against:
 ## Class shape
 
 ```csharp
-namespace ZeroBreach.Scanners;
+namespace Scythe.Scanners;
 
 public sealed class <Name>Scanner : IScanner
 {
@@ -119,10 +119,10 @@ public sealed class <Name>Scanner : IScanner
 }
 ```
 
-One file: `ZeroBreach.Scanners/<Name>Scanner.cs` (helpers as private methods or a nested
+One file: `Scythe.Scanners/<Name>Scanner.cs` (helpers as private methods or a nested
 static class in the same file). Signature data:
-`ZeroBreach.Scanners/Signatures/<category>.json`. A detection change should not need to touch
-another category's files, and must never need to touch `ZeroBreach.Remediation`.
+`Scythe.Scanners/Signatures/<category>.json`. A detection change should not need to touch
+another category's files, and must never need to touch `Scythe.Remediation`.
 
 ## Definition of done
 
@@ -130,5 +130,5 @@ another category's files, and must never need to touch `ZeroBreach.Remediation`.
   including `ScannerReadOnlyAuditTests`, which fails if a scanner gains a destructive call.
 - Every check path ends in exactly one of: findings + Completed, Inconclusive, or Skipped.
 - New or changed checks are reflected in the `INSTRUCTIONS_AI.md` §5 catalog, and a new
-  category is added to the list in `CliOptions.Usage` (`zbscan categories` reads the live
+  category is added to the list in `CliOptions.Usage` (`scythescan categories` reads the live
   scanner list, so it needs no edit).

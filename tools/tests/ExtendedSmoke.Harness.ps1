@@ -168,7 +168,7 @@ $SIG = Get-Content (Join-Path $root 'data/detection_signatures.json') -Raw | Con
 function Get-Sig([string]$Name) { if ($SIG -and $null -ne $SIG.$Name) { @($SIG.$Name) } else { @() } }
 function Join-AllowRegex([string]$Name) { $a = @(Get-Sig $Name); if ($a.Count) { ($a -join '|') } else { '(?!)' } }
 $lt=$null; $le=$null
-$lAst=[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'ZeroBreach-V23.ps1').Path,[ref]$lt,[ref]$le)
+$lAst=[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'Scythe-V23.ps1').Path,[ref]$lt,[ref]$le)
 $loaded=0
 foreach ($a in $lAst.FindAll({param($n) $n -is [System.Management.Automation.Language.AssignmentStatementAst]},$true)) {
     $txt = $a.Extent.Text

@@ -1,7 +1,7 @@
 ﻿# MEDIUM-tier regression guards (audit M2/M3/M4/M6/M7/M8).
 # Like every other file in this suite, the functions under test are pulled out of the
 # shipped source via the AST — a test here cannot drift from the code it guards.
-$srv = (Resolve-Path 'ZeroBreach-Server.ps1').Path
+$srv = (Resolve-Path 'Scythe-Server.ps1').Path
 $t=$null;$e=$null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($srv, [ref]$t, [ref]$e)
 foreach ($fn in @('Test-IocRegexSafe','Test-IocIpValue','ConvertTo-IocSet','Clear-FinishedRunspaces')) {
@@ -111,7 +111,7 @@ foreach ($vn in @('$script:RUNCMD_DESTRUCTIVE','$script:RUNCMD_MUTATING','$scrip
 }
 $destructive = @('DeleteFile','DeleteReg','DeleteRegKey','KillProcess','RunCmd','Quarantine')
 $alwaysBlocked = @()
-foreach ($src2 in @((Resolve-Path 'ZeroBreach-V23.ps1').Path) + @(Get-ChildItem engine -Filter *.ps1 | ForEach-Object { $_.FullName })) {
+foreach ($src2 in @((Resolve-Path 'Scythe-V23.ps1').Path) + @(Get-ChildItem engine -Filter *.ps1 | ForEach-Object { $_.FullName })) {
     $t2=$null;$e2=$null
     $a2 = [System.Management.Automation.Language.Parser]::ParseFile($src2, [ref]$t2, [ref]$e2)
     foreach ($c in $a2.FindAll({param($n) $n -is [System.Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Add-Finding'}, $true)) {
@@ -131,7 +131,7 @@ foreach ($src2 in @((Resolve-Path 'ZeroBreach-V23.ps1').Path) + @(Get-ChildItem 
         if (-not $prm) { continue }
         $prm = $prm.Trim('"')
         # placeholder-substitute anything the engine interpolates at runtime
-        $prm = $prm -replace '\$\([^)]*\)', 'ZBVAR' -replace '\$[A-Za-z_][\w:.]*', 'ZBVAR'
+        $prm = $prm -replace '\$\([^)]*\)', 'SCYTHEVAR' -replace '\$[A-Za-z_][\w:.]*', 'SCYTHEVAR'
         $why = Test-ProtectedTarget $act $prm '' "$($h['Description'])"
         if ($why) { $alwaysBlocked += ("{0}:{1} {2} -> {3}" -f (Split-Path $src2 -Leaf), $c.Extent.StartLineNumber, $act, $why) }
     }
@@ -154,7 +154,7 @@ Check 'kill lsass refused by name' `
 Check 'kill svchost refused by name' `
     ([bool](Test-ProtectedTarget 'KillProcess' '4321|svchost|63080000' 'PID:4321' 'suspicious process')) $true
 Check 'kill IR tool refused by name' `
-    ([bool](Test-ProtectedTarget 'KillProcess' '4321|zerobreach|63080000' 'PID:4321' 'x')) $true
+    ([bool](Test-ProtectedTarget 'KillProcess' '4321|scythe|63080000' 'PID:4321' 'x')) $true
 Check 'bare PID falls back to the description' `
     ([bool](Test-ProtectedTarget 'KillProcess' '4321' 'PID:4321' 'lsass.exe doing something odd')) $true
 Check 'bare PID, benign description, allowed' `
@@ -178,7 +178,7 @@ Write-Host "`n== M10 retention ==" -ForegroundColor Yellow
 # Functional: 25 fake logs of each kind, keep the newest 20.
 $fnR = $ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Remove-OldServerLogs'}, $true)
 . ([scriptblock]::Create($fnR[0].Extent.Text))
-$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("zbret_" + [guid]::NewGuid().ToString('N'))
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("scytheret_" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 $base = Get-Date
 foreach ($i in 1..25) {

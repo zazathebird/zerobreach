@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Answers "did the cleanup stick?" — compares two ZeroBreach run records, or trends several.
+    Answers "did the cleanup stick?" — compares two Scythe run records, or trends several.
 
 .DESCRIPTION
     Compare-ScanRuns.ps1 joins two run records on finding ID (the stable key across runs) and
@@ -73,10 +73,10 @@ $ErrorActionPreference = 'Stop'
 # Shared shapes (same conventions as New-ScanReport.ps1; each tool stands alone by design)
 # --------------------------------------------------------------------------------------------
 
-$script:ZbSevRank = @{ CRITICAL = 0; HIGH = 1; POSSIBLE = 2; INFO = 3 }
-$script:ZbOtherRank = 4
+$script:ScytheSevRank = @{ CRITICAL = 0; HIGH = 1; POSSIBLE = 2; INFO = 3 }
+$script:ScytheOtherRank = 4
 
-function Get-ZbProp {
+function Get-ScytheProp {
     param($Object, [string]$Name, $Default)
     if ($null -eq $Object) { return $Default }
     $pp = $Object.PSObject.Properties[$Name]
@@ -84,32 +84,32 @@ function Get-ZbProp {
     return $Default
 }
 
-function Get-ZbFullPath {
+function Get-ScytheFullPath {
     param([string]$AnyPath)
     if ([System.IO.Path]::IsPathRooted($AnyPath)) { return $AnyPath }
     return (Join-Path -Path (Get-Location).Path -ChildPath $AnyPath)
 }
 
-function Get-ZbSevKey {
+function Get-ScytheSevKey {
     param([string]$Severity)
     $sevText = ('' + $Severity).Trim().ToUpperInvariant()
-    if ($script:ZbSevRank.ContainsKey($sevText)) { return $sevText }
+    if ($script:ScytheSevRank.ContainsKey($sevText)) { return $sevText }
     return 'OTHER'
 }
 
-function Get-ZbSevRank {
+function Get-ScytheSevRank {
     param([string]$Severity)
-    $sevKey = Get-ZbSevKey -Severity $Severity
-    if ($sevKey -eq 'OTHER') { return $script:ZbOtherRank }
-    return $script:ZbSevRank[$sevKey]
+    $sevKey = Get-ScytheSevKey -Severity $Severity
+    if ($sevKey -eq 'OTHER') { return $script:ScytheOtherRank }
+    return $script:ScytheSevRank[$sevKey]
 }
 
-function Test-ZbGroupCap {
+function Test-ScytheGroupCap {
     param($Finding)
-    return (('' + (Get-ZbProp $Finding 'ID' '')) -like 'GROUPCAP_*')
+    return (('' + (Get-ScytheProp $Finding 'ID' '')) -like 'GROUPCAP_*')
 }
 
-function Format-ZbTimestamp {
+function Format-ScytheTimestamp {
     param($Value)
     if ($Value -is [datetime]) {
         return $Value.ToString('yyyy-MM-dd HH:mm:ss', [System.Globalization.CultureInfo]::InvariantCulture)
@@ -120,7 +120,7 @@ function Format-ZbTimestamp {
     return ('' + $Value)
 }
 
-function Get-ZbSortableTime {
+function Get-ScytheSortableTime {
     # For ordering runs. Falls back to zero so a record with a broken timestamp still renders.
     param($Value)
     if ($Value -is [datetime]) { return $Value.Ticks }
@@ -133,16 +133,16 @@ function Get-ZbSortableTime {
     return 0
 }
 
-function ConvertTo-ZbHtml {
+function ConvertTo-ScytheHtml {
     param([string]$Text)
     if ($null -eq $Text) { return '' }
     $encoded = [System.Net.WebUtility]::HtmlEncode($Text)
     return ($encoded -replace "'", '&#39;')
 }
 
-function Import-ZbRunRecord {
+function Import-ScytheRunRecord {
     param([string]$RecordPath, [string]$Label)
-    $full = Get-ZbFullPath -AnyPath $RecordPath
+    $full = Get-ScytheFullPath -AnyPath $RecordPath
     if (-not (Test-Path -LiteralPath $full)) {
         throw "$Label not found: $full"
     }
@@ -164,53 +164,53 @@ function Import-ZbRunRecord {
 # Per-run digest: identity, totals (all severities, GROUPCAP excluded), and the working set
 # --------------------------------------------------------------------------------------------
 
-function New-ZbRunDigest {
+function New-ScytheRunDigest {
     param($Record, [string]$SourcePath, [bool]$WithInfo)
-    $real = @(@(Get-ZbProp $Record 'Findings' @()) | Where-Object { -not (Test-ZbGroupCap $_) })
+    $real = @(@(Get-ScytheProp $Record 'Findings' @()) | Where-Object { -not (Test-ScytheGroupCap $_) })
     $counts = [ordered]@{ CRITICAL = 0; HIGH = 0; POSSIBLE = 0; INFO = 0; OTHER = 0 }
     foreach ($f in $real) {
-        $sevKey = Get-ZbSevKey -Severity (Get-ZbProp $f 'Severity' '')
+        $sevKey = Get-ScytheSevKey -Severity (Get-ScytheProp $f 'Severity' '')
         $counts[$sevKey] = $counts[$sevKey] + 1
     }
     $working = $real
     if (-not $WithInfo) {
-        $working = @($real | Where-Object { (Get-ZbSevKey -Severity (Get-ZbProp $_ 'Severity' '')) -ne 'INFO' })
+        $working = @($real | Where-Object { (Get-ScytheSevKey -Severity (Get-ScytheProp $_ 'Severity' '')) -ne 'INFO' })
     }
     return [pscustomobject]@{
-        Path           = Split-Path -Path (Get-ZbFullPath -AnyPath $SourcePath) -Leaf
-        Host           = '' + (Get-ZbProp $Record 'Host' '')
-        Timestamp      = Format-ZbTimestamp -Value (Get-ZbProp $Record 'Timestamp' '')
-        SortTicks      = Get-ZbSortableTime -Value (Get-ZbProp $Record 'Timestamp' '')
-        Mode           = ('' + (Get-ZbProp $Record 'Mode' '')).ToUpperInvariant()
-        TimeWindow     = '' + (Get-ZbProp $Record 'TimeWindow' '')
-        RiskScore      = [int](Get-ZbProp $Record 'RiskScore' 0)
+        Path           = Split-Path -Path (Get-ScytheFullPath -AnyPath $SourcePath) -Leaf
+        Host           = '' + (Get-ScytheProp $Record 'Host' '')
+        Timestamp      = Format-ScytheTimestamp -Value (Get-ScytheProp $Record 'Timestamp' '')
+        SortTicks      = Get-ScytheSortableTime -Value (Get-ScytheProp $Record 'Timestamp' '')
+        Mode           = ('' + (Get-ScytheProp $Record 'Mode' '')).ToUpperInvariant()
+        TimeWindow     = '' + (Get-ScytheProp $Record 'TimeWindow' '')
+        RiskScore      = [int](Get-ScytheProp $Record 'RiskScore' 0)
         SeverityCounts = [pscustomobject]$counts
         TotalFindings  = $real.Count
         Working        = $working
     }
 }
 
-function Select-ZbFindingSummary {
+function Select-ScytheFindingSummary {
     param($Finding)
     return [pscustomobject]@{
-        ID          = '' + (Get-ZbProp $Finding 'ID' '')
-        Severity    = '' + (Get-ZbProp $Finding 'Severity' '')
-        ThreatType  = '' + (Get-ZbProp $Finding 'ThreatType' '')
-        Description = '' + (Get-ZbProp $Finding 'Description' '')
-        Target      = '' + (Get-ZbProp $Finding 'Target' '')
+        ID          = '' + (Get-ScytheProp $Finding 'ID' '')
+        Severity    = '' + (Get-ScytheProp $Finding 'Severity' '')
+        ThreatType  = '' + (Get-ScytheProp $Finding 'ThreatType' '')
+        Description = '' + (Get-ScytheProp $Finding 'Description' '')
+        Target      = '' + (Get-ScytheProp $Finding 'Target' '')
     }
 }
 
-function Sort-ZbBySeverity {
+function Sort-ScytheBySeverity {
     param($Items)
-    return @($Items | Sort-Object -Property @{ Expression = { Get-ZbSevRank (Get-ZbProp $_ 'Severity' '') } }, @{ Expression = { '' + (Get-ZbProp $_ 'ID' '') } })
+    return @($Items | Sort-Object -Property @{ Expression = { Get-ScytheSevRank (Get-ScytheProp $_ 'Severity' '') } }, @{ Expression = { '' + (Get-ScytheProp $_ 'ID' '') } })
 }
 
 # --------------------------------------------------------------------------------------------
 # The comparison itself
 # --------------------------------------------------------------------------------------------
 
-function New-ZbComparison {
+function New-ScytheComparison {
     param($RefDigest, $CurDigest, [bool]$WithInfo)
 
     $warnings = @()
@@ -222,9 +222,9 @@ function New-ZbComparison {
     }
 
     $refById = @{}
-    foreach ($f in $RefDigest.Working) { $refById[('' + (Get-ZbProp $f 'ID' ''))] = $f }
+    foreach ($f in $RefDigest.Working) { $refById[('' + (Get-ScytheProp $f 'ID' ''))] = $f }
     $curById = @{}
-    foreach ($f in $CurDigest.Working) { $curById[('' + (Get-ZbProp $f 'ID' ''))] = $f }
+    foreach ($f in $CurDigest.Working) { $curById[('' + (Get-ScytheProp $f 'ID' ''))] = $f }
 
     $resolved = @()
     $newOnes = @()
@@ -232,31 +232,31 @@ function New-ZbComparison {
     $changed = @()
 
     foreach ($f in $RefDigest.Working) {
-        $fid = '' + (Get-ZbProp $f 'ID' '')
+        $fid = '' + (Get-ScytheProp $f 'ID' '')
         if (-not $curById.ContainsKey($fid)) { $resolved += $f }
     }
     foreach ($f in $CurDigest.Working) {
-        $fid = '' + (Get-ZbProp $f 'ID' '')
+        $fid = '' + (Get-ScytheProp $f 'ID' '')
         if (-not $refById.ContainsKey($fid)) {
             $newOnes += $f
             continue
         }
-        $refSev = Get-ZbSevKey -Severity (Get-ZbProp $refById[$fid] 'Severity' '')
-        $curSev = Get-ZbSevKey -Severity (Get-ZbProp $f 'Severity' '')
+        $refSev = Get-ScytheSevKey -Severity (Get-ScytheProp $refById[$fid] 'Severity' '')
+        $curSev = Get-ScytheSevKey -Severity (Get-ScytheProp $f 'Severity' '')
         if ($refSev -eq $curSev) {
             $persistent += $f
         }
         else {
             $direction = 'escalated'
-            if ((Get-ZbSevRank -Severity $curSev) -gt (Get-ZbSevRank -Severity $refSev)) { $direction = 'improved' }
+            if ((Get-ScytheSevRank -Severity $curSev) -gt (Get-ScytheSevRank -Severity $refSev)) { $direction = 'improved' }
             $changed += [pscustomobject]@{
                 ID          = $fid
-                From        = '' + (Get-ZbProp $refById[$fid] 'Severity' '')
-                To          = '' + (Get-ZbProp $f 'Severity' '')
+                From        = '' + (Get-ScytheProp $refById[$fid] 'Severity' '')
+                To          = '' + (Get-ScytheProp $f 'Severity' '')
                 Direction   = $direction
-                ThreatType  = '' + (Get-ZbProp $f 'ThreatType' '')
-                Description = '' + (Get-ZbProp $f 'Description' '')
-                Target      = '' + (Get-ZbProp $f 'Target' '')
+                ThreatType  = '' + (Get-ScytheProp $f 'ThreatType' '')
+                Description = '' + (Get-ScytheProp $f 'Description' '')
+                Target      = '' + (Get-ScytheProp $f 'Target' '')
             }
         }
     }
@@ -266,20 +266,20 @@ function New-ZbComparison {
     $drift = @()
     $newByKey = @{}
     foreach ($f in $newOnes) {
-        $key = (('' + (Get-ZbProp $f 'Target' '')).ToUpperInvariant()) + '|' + (('' + (Get-ZbProp $f 'ThreatType' '')).ToUpperInvariant())
+        $key = (('' + (Get-ScytheProp $f 'Target' '')).ToUpperInvariant()) + '|' + (('' + (Get-ScytheProp $f 'ThreatType' '')).ToUpperInvariant())
         if (-not $newByKey.ContainsKey($key)) { $newByKey[$key] = New-Object System.Collections.Generic.List[object] }
         $newByKey[$key].Add($f)
     }
-    foreach ($f in @(Sort-ZbBySeverity -Items $resolved)) {
-        $key = (('' + (Get-ZbProp $f 'Target' '')).ToUpperInvariant()) + '|' + (('' + (Get-ZbProp $f 'ThreatType' '')).ToUpperInvariant())
+    foreach ($f in @(Sort-ScytheBySeverity -Items $resolved)) {
+        $key = (('' + (Get-ScytheProp $f 'Target' '')).ToUpperInvariant()) + '|' + (('' + (Get-ScytheProp $f 'ThreatType' '')).ToUpperInvariant())
         if ($newByKey.ContainsKey($key) -and $newByKey[$key].Count -gt 0) {
             $mate = $newByKey[$key][0]
             $newByKey[$key].RemoveAt(0)
             $drift += [pscustomobject]@{
-                ResolvedId = '' + (Get-ZbProp $f 'ID' '')
-                NewId      = '' + (Get-ZbProp $mate 'ID' '')
-                Target     = '' + (Get-ZbProp $f 'Target' '')
-                ThreatType = '' + (Get-ZbProp $f 'ThreatType' '')
+                ResolvedId = '' + (Get-ScytheProp $f 'ID' '')
+                NewId      = '' + (Get-ScytheProp $mate 'ID' '')
+                Target     = '' + (Get-ScytheProp $f 'Target' '')
+                ThreatType = '' + (Get-ScytheProp $f 'ThreatType' '')
             }
         }
     }
@@ -294,10 +294,10 @@ function New-ZbComparison {
         Warnings        = $warnings
         ReferenceEmpty  = $refEmpty
         RiskDelta       = ($CurDigest.RiskScore - $RefDigest.RiskScore)
-        Resolved        = @(Sort-ZbBySeverity -Items $resolved | ForEach-Object { Select-ZbFindingSummary $_ })
-        New             = @(Sort-ZbBySeverity -Items $newOnes | ForEach-Object { Select-ZbFindingSummary $_ })
-        Persistent      = @(Sort-ZbBySeverity -Items $persistent | ForEach-Object { Select-ZbFindingSummary $_ })
-        Changed         = @($changed | Sort-Object -Property @{ Expression = { Get-ZbSevRank $_.To } }, @{ Expression = { $_.ID } })
+        Resolved        = @(Sort-ScytheBySeverity -Items $resolved | ForEach-Object { Select-ScytheFindingSummary $_ })
+        New             = @(Sort-ScytheBySeverity -Items $newOnes | ForEach-Object { Select-ScytheFindingSummary $_ })
+        Persistent      = @(Sort-ScytheBySeverity -Items $persistent | ForEach-Object { Select-ScytheFindingSummary $_ })
+        Changed         = @($changed | Sort-Object -Property @{ Expression = { Get-ScytheSevRank $_.To } }, @{ Expression = { $_.ID } })
         ResolvedCount   = $resolved.Count
         NewCount        = $newOnes.Count
         PersistentCount = $persistent.Count
@@ -306,7 +306,7 @@ function New-ZbComparison {
     }
 }
 
-function New-ZbTrend {
+function New-ScytheTrend {
     param($Digests)
     $ordered = @($Digests | Sort-Object -Property @{ Expression = { $_.SortTicks } }, @{ Expression = { $_.Path } })
     $warnings = @()
@@ -329,12 +329,12 @@ function New-ZbTrend {
 # Renderers — everything below reads only the result object
 # --------------------------------------------------------------------------------------------
 
-function Format-ZbRunLine {
+function Format-ScytheRunLine {
     param($RunInfo)
     return ('{0}  ({1}, "{2}", {3}, risk {4})' -f $RunInfo.Path, $RunInfo.Mode, $RunInfo.TimeWindow, $RunInfo.Timestamp, $RunInfo.RiskScore)
 }
 
-function ConvertTo-ZbText {
+function ConvertTo-ScytheText {
     param($Result)
     $out = New-Object System.Collections.Generic.List[string]
 
@@ -350,8 +350,8 @@ function ConvertTo-ZbText {
     }
 
     $out.Add('RUN COMPARISON — ' + $Result.Current.Host)
-    $out.Add('Reference: ' + (Format-ZbRunLine -RunInfo $Result.Reference))
-    $out.Add('Current:   ' + (Format-ZbRunLine -RunInfo $Result.Current))
+    $out.Add('Reference: ' + (Format-ScytheRunLine -RunInfo $Result.Reference))
+    $out.Add('Current:   ' + (Format-ScytheRunLine -RunInfo $Result.Current))
     $out.Add('')
     foreach ($w in @($Result.Warnings)) { $out.Add('!! ' + $w); $out.Add('') }
 
@@ -402,7 +402,7 @@ function ConvertTo-ZbText {
     return ($out -join [Environment]::NewLine)
 }
 
-function ConvertTo-ZbCompareHtml {
+function ConvertTo-ScytheCompareHtml {
     param($Result)
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">')
@@ -431,19 +431,19 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
     [void]$sb.Append('</style></head><body><main>')
 
     if ($Result.Kind -eq 'Trend') {
-        [void]$sb.Append('<h1>Severity trend — ' + (ConvertTo-ZbHtml @($Result.Runs)[0].Host) + '</h1><section>')
-        foreach ($w in @($Result.Warnings)) { [void]$sb.Append('<p class="warnbox">' + (ConvertTo-ZbHtml $w) + '</p>') }
+        [void]$sb.Append('<h1>Severity trend — ' + (ConvertTo-ScytheHtml @($Result.Runs)[0].Host) + '</h1><section>')
+        foreach ($w in @($Result.Warnings)) { [void]$sb.Append('<p class="warnbox">' + (ConvertTo-ScytheHtml $w) + '</p>') }
         [void]$sb.Append('<table><thead><tr><th>Run</th><th>Mode</th><th>Window</th><th>Critical</th><th>High</th><th>Possible</th><th>Info</th><th>Other</th><th>Risk</th></tr></thead><tbody>')
         foreach ($r in @($Result.Runs)) {
-            [void]$sb.Append('<tr><td>' + (ConvertTo-ZbHtml $r.Path) + '<div class="note">' + (ConvertTo-ZbHtml $r.Timestamp) + '</div></td><td>' + (ConvertTo-ZbHtml $r.Mode) + '</td><td>' + (ConvertTo-ZbHtml $r.TimeWindow) + '</td><td class="num">' + $r.SeverityCounts.CRITICAL + '</td><td class="num">' + $r.SeverityCounts.HIGH + '</td><td class="num">' + $r.SeverityCounts.POSSIBLE + '</td><td class="num">' + $r.SeverityCounts.INFO + '</td><td class="num">' + $r.SeverityCounts.OTHER + '</td><td class="num">' + $r.RiskScore + '</td></tr>')
+            [void]$sb.Append('<tr><td>' + (ConvertTo-ScytheHtml $r.Path) + '<div class="note">' + (ConvertTo-ScytheHtml $r.Timestamp) + '</div></td><td>' + (ConvertTo-ScytheHtml $r.Mode) + '</td><td>' + (ConvertTo-ScytheHtml $r.TimeWindow) + '</td><td class="num">' + $r.SeverityCounts.CRITICAL + '</td><td class="num">' + $r.SeverityCounts.HIGH + '</td><td class="num">' + $r.SeverityCounts.POSSIBLE + '</td><td class="num">' + $r.SeverityCounts.INFO + '</td><td class="num">' + $r.SeverityCounts.OTHER + '</td><td class="num">' + $r.RiskScore + '</td></tr>')
         }
         [void]$sb.Append('</tbody></table></section></main></body></html>')
         return $sb.ToString()
     }
 
-    [void]$sb.Append('<h1>Run comparison — ' + (ConvertTo-ZbHtml $Result.Current.Host) + '</h1>')
-    [void]$sb.Append('<section><p><strong>Reference:</strong> ' + (ConvertTo-ZbHtml (Format-ZbRunLine -RunInfo $Result.Reference)) + '<br><strong>Current:</strong> ' + (ConvertTo-ZbHtml (Format-ZbRunLine -RunInfo $Result.Current)) + '</p>')
-    foreach ($w in @($Result.Warnings)) { [void]$sb.Append('<p class="warnbox">' + (ConvertTo-ZbHtml $w) + '</p>') }
+    [void]$sb.Append('<h1>Run comparison — ' + (ConvertTo-ScytheHtml $Result.Current.Host) + '</h1>')
+    [void]$sb.Append('<section><p><strong>Reference:</strong> ' + (ConvertTo-ScytheHtml (Format-ScytheRunLine -RunInfo $Result.Reference)) + '<br><strong>Current:</strong> ' + (ConvertTo-ScytheHtml (Format-ScytheRunLine -RunInfo $Result.Current)) + '</p>')
+    foreach ($w in @($Result.Warnings)) { [void]$sb.Append('<p class="warnbox">' + (ConvertTo-ScytheHtml $w) + '</p>') }
     $deltaClass = 'note'
     if ($Result.RiskDelta -lt 0) { $deltaClass = 'good' }
     elseif ($Result.RiskDelta -gt 0) { $deltaClass = 'bad' }
@@ -461,14 +461,14 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
         @('New — not present in the reference run', $Result.New)
     )
     foreach ($bucket in $buckets) {
-        [void]$sb.Append('<section><h2>' + (ConvertTo-ZbHtml $bucket[0]) + ' (' + @($bucket[1]).Count + ')</h2>')
+        [void]$sb.Append('<section><h2>' + (ConvertTo-ScytheHtml $bucket[0]) + ' (' + @($bucket[1]).Count + ')</h2>')
         if (@($bucket[1]).Count -eq 0) {
             [void]$sb.Append('<p class="note">None.</p>')
         }
         else {
             [void]$sb.Append('<table><thead><tr><th>Severity</th><th>ID</th><th>Description</th><th>Target</th></tr></thead><tbody>')
             foreach ($f in @($bucket[1])) {
-                [void]$sb.Append('<tr><td>' + (ConvertTo-ZbHtml $f.Severity) + '</td><td>' + (ConvertTo-ZbHtml $f.ID) + '</td><td>' + (ConvertTo-ZbHtml $f.Description) + '</td><td>' + (ConvertTo-ZbHtml $f.Target) + '</td></tr>')
+                [void]$sb.Append('<tr><td>' + (ConvertTo-ScytheHtml $f.Severity) + '</td><td>' + (ConvertTo-ScytheHtml $f.ID) + '</td><td>' + (ConvertTo-ScytheHtml $f.Description) + '</td><td>' + (ConvertTo-ScytheHtml $f.Target) + '</td></tr>')
             }
             [void]$sb.Append('</tbody></table>')
         }
@@ -484,7 +484,7 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
         foreach ($c in @($Result.Changed)) {
             $dirClass = 'bad'
             if ($c.Direction -eq 'improved') { $dirClass = 'good' }
-            [void]$sb.Append('<tr><td>' + (ConvertTo-ZbHtml $c.ID) + '</td><td>' + (ConvertTo-ZbHtml $c.From) + '</td><td>' + (ConvertTo-ZbHtml $c.To) + '</td><td class="' + $dirClass + '">' + (ConvertTo-ZbHtml $c.Direction) + '</td><td>' + (ConvertTo-ZbHtml $c.Description) + '</td></tr>')
+            [void]$sb.Append('<tr><td>' + (ConvertTo-ScytheHtml $c.ID) + '</td><td>' + (ConvertTo-ScytheHtml $c.From) + '</td><td>' + (ConvertTo-ScytheHtml $c.To) + '</td><td class="' + $dirClass + '">' + (ConvertTo-ScytheHtml $c.Direction) + '</td><td>' + (ConvertTo-ScytheHtml $c.Description) + '</td></tr>')
         }
         [void]$sb.Append('</tbody></table>')
     }
@@ -494,7 +494,7 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
     if (@($Result.IdDrift).Count -gt 0) {
         [void]$sb.Append('<h2>Possible ID drift (' + @($Result.IdDrift).Count + ')</h2><p class="note">These resolved/new pairs share the same target and category — likely the same condition under a new ID, not a fix plus a regression.</p><table><thead><tr><th>Resolved ID</th><th>New ID</th><th>Target</th><th>Category</th></tr></thead><tbody>')
         foreach ($d in @($Result.IdDrift)) {
-            [void]$sb.Append('<tr><td>' + (ConvertTo-ZbHtml $d.ResolvedId) + '</td><td>' + (ConvertTo-ZbHtml $d.NewId) + '</td><td>' + (ConvertTo-ZbHtml $d.Target) + '</td><td>' + (ConvertTo-ZbHtml $d.ThreatType) + '</td></tr>')
+            [void]$sb.Append('<tr><td>' + (ConvertTo-ScytheHtml $d.ResolvedId) + '</td><td>' + (ConvertTo-ScytheHtml $d.NewId) + '</td><td>' + (ConvertTo-ScytheHtml $d.Target) + '</td><td>' + (ConvertTo-ScytheHtml $d.ThreatType) + '</td></tr>')
         }
         [void]$sb.Append('</tbody></table>')
     }
@@ -506,34 +506,34 @@ td.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 # Main
 # --------------------------------------------------------------------------------------------
 
-$refRecord = Import-ZbRunRecord -RecordPath $Reference -Label 'Reference run record'
-$refDigest = New-ZbRunDigest -Record $refRecord -SourcePath $Reference -WithInfo:$IncludeInfo
+$refRecord = Import-ScytheRunRecord -RecordPath $Reference -Label 'Reference run record'
+$refDigest = New-ScytheRunDigest -Record $refRecord -SourcePath $Reference -WithInfo:$IncludeInfo
 
 $curDigests = @()
 foreach ($curPath in $Current) {
-    $curRecord = Import-ZbRunRecord -RecordPath $curPath -Label 'Current run record'
-    $curDigests += New-ZbRunDigest -Record $curRecord -SourcePath $curPath -WithInfo:$IncludeInfo
+    $curRecord = Import-ScytheRunRecord -RecordPath $curPath -Label 'Current run record'
+    $curDigests += New-ScytheRunDigest -Record $curRecord -SourcePath $curPath -WithInfo:$IncludeInfo
 }
 
 if ($curDigests.Count -gt 1) {
-    $result = New-ZbTrend -Digests (@($refDigest) + $curDigests)
+    $result = New-ScytheTrend -Digests (@($refDigest) + $curDigests)
 }
 else {
-    $result = New-ZbComparison -RefDigest $refDigest -CurDigest $curDigests[0] -WithInfo:$IncludeInfo
+    $result = New-ScytheComparison -RefDigest $refDigest -CurDigest $curDigests[0] -WithInfo:$IncludeInfo
 }
 
 $rendered = $null
 switch ($Format) {
-    'Text' { $rendered = ConvertTo-ZbText -Result $result }
+    'Text' { $rendered = ConvertTo-ScytheText -Result $result }
     'Json' { $rendered = ConvertTo-Json -InputObject $result -Depth 8 }
-    'Html' { $rendered = ConvertTo-ZbCompareHtml -Result $result }
+    'Html' { $rendered = ConvertTo-ScytheCompareHtml -Result $result }
     default { }
 }
 
 if (-not [string]::IsNullOrWhiteSpace($OutFile)) {
     $toWrite = $rendered
     if ($null -eq $toWrite) { $toWrite = ConvertTo-Json -InputObject $result -Depth 8 }
-    $outFull = Get-ZbFullPath -AnyPath $OutFile
+    $outFull = Get-ScytheFullPath -AnyPath $OutFile
     $outDir = Split-Path -Path $outFull -Parent
     if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
         New-Item -ItemType Directory -Path $outDir -Force | Out-Null

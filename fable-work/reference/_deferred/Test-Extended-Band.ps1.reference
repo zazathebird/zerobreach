@@ -59,13 +59,13 @@ if (Test-Path $modPath) {
 }
 
 # ── 3. plan ceiling agrees across engine + both servers ──────────────────────
-$loaderRaw = Get-Content (Join-Path $root 'ZeroBreach-V23.ps1') -Raw
+$loaderRaw = Get-Content (Join-Path $root 'Scythe-V23.ps1') -Raw
 Assert-That 'loader dot-sources Phases-4 after Phases-3' `
     ($loaderRaw -match 'Phases-3\.ps1"\s*\r?\n\.\s*"\$PSScriptRoot\\engine\\Phases-4\.ps1"') $true
 Assert-That 'DEEP plan ceiling is 133'     ($loaderRaw -match '"DEEP"\s*\{\s*@\{\s*Min=1;\s*Max=133') $true
 Assert-That 'PARANOID plan ceiling is 133' ($loaderRaw -match '"PARANOID"\s*\{\s*@\{\s*Min=1;\s*Max=133') $true
 Assert-That 'STEALTH plan ceiling is 133'  ($loaderRaw -match '"STEALTH"\s*\{\s*@\{\s*Min=1;\s*Max=133') $true
-$srvRaw = Get-Content (Join-Path $root 'ZeroBreach-Server.ps1') -Raw
+$srvRaw = Get-Content (Join-Path $root 'Scythe-Server.ps1') -Raw
 Assert-That 'PS server MODE_PHASES matches the plan' `
     ($srvRaw -match '\$MODE_PHASES\s*=\s*@\{\s*QUICK=30;\s*FULL=80;\s*DEEP=133;\s*PARANOID=133;\s*STEALTH=133\s*\}') $true
 $pyPath = Join-Path $root '_python/server.py'
@@ -103,7 +103,7 @@ Assert-That 'the rest are Info' (@($fixActions | Where-Object { $_ -eq 'Info' })
 # Load the REAL engine guard and prove each destructive fix is ACCEPTED (audit M1: a
 # finding that is auto-selected and then always reported `blocked` teaches operators to
 # distrust the guard), while a control case is still refused.
-$loaderAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'ZeroBreach-V23.ps1'), [ref]$t, [ref]$e)
+$loaderAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root 'Scythe-V23.ps1'), [ref]$t, [ref]$e)
 foreach ($fn in @('ConvertTo-EGuardPath','Test-EDestructiveRunCmd','Test-EProtected')) {
     $d = @($loaderAst.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $fn}, $true))[0]
     if ($d) { . ([scriptblock]::Create($d.Extent.Text)) } else { $fail++; Write-Host "  FAIL  guard function $fn not found" -ForegroundColor Red }
@@ -385,12 +385,12 @@ if ($authAst) {
     [void](Get-AuthSig 'C:\Windows\System32\locked.exe')
     Assert-That 'memo: a throwing (locked) file is cached too' $global:REAL_CALLS 1
     Assert-That 'memo: a throwing file returns $null not an exception' ($null -eq (Get-AuthSig 'C:\Windows\System32\locked.exe')) $true
-    # ZB_NOCACHE must produce a genuinely cache-free run.
+    # SCYTHE_NOCACHE must produce a genuinely cache-free run.
     $global:SCAN_FILE_CACHE_ON = $false
     $global:AUTHSIG_CACHE = @{}; $global:REAL_CALLS = 0
     1..3 | ForEach-Object { [void](Get-AuthSig 'C:\Users\jdoe\AppData\Local\Temp\c.exe') }
-    Assert-That 'ZB_NOCACHE bypasses the memo'          $global:REAL_CALLS 3
-    Assert-That 'ZB_NOCACHE stores nothing'             $global:AUTHSIG_CACHE.Count 0
+    Assert-That 'SCYTHE_NOCACHE bypasses the memo'          $global:REAL_CALLS 3
+    Assert-That 'SCYTHE_NOCACHE stores nothing'             $global:AUTHSIG_CACHE.Count 0
     # Bounded: a signature object carries a cert chain, so the memo must not grow forever.
     $global:SCAN_FILE_CACHE_ON = $true
     $global:AUTHSIG_CACHE = @{}; $global:AUTHSIG_CACHE_MAX = 3; $global:REAL_CALLS = 0

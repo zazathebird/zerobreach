@@ -1,12 +1,12 @@
-# ZeroBreach — Adversary Emulation Log
+# Scythe — Adversary Emulation Log
 
 Running command history of authorized testing against the operator's own hardware, kept so that
-every technique that *works* becomes a ZeroBreach detection. Authorized by the repo owner for
+every technique that *works* becomes a Scythe detection. Authorized by the repo owner for
 their own test machine on their own LAN.
 
 **Rule of this document:** a technique is only written up once it has actually been executed and
 observed to work. Nothing here is theoretical. Each entry ends with `→ DETECT:` naming the
-ZeroBreach phase that should catch it.
+Scythe phase that should catch it.
 
 Target slot in the engine: `engine/Phases-6.ps1` reserved **148-152 (lateral movement / AD /
 credential dumping)** and **153-156**. 153-156 were **built 2026-08-22** — as a *host-side*
@@ -294,7 +294,7 @@ account this is the highest-value finding of the engagement so far.
 | max dialect NT1 (SMB1) | `SMB1 disabled` | **SMB1 off — good** |
 
 Server permitting signing is *not* the same as server **requiring** it. Only `RequireSecuritySignature=1`
-defeats relay; that is a host-side registry read, which is ZeroBreach's job, not the attacker's.
+defeats relay; that is a host-side registry read, which is Scythe's job, not the attacker's.
 
 → **DETECT (LAN band 153-156 + a new host-side share/auth band):**
 
@@ -329,7 +329,7 @@ because §2.3 set the precedent of logging refusals:
 
 `Users\` is by definition where documents, desktops, browser profiles and credential material
 live. **And reading it adds nothing to the deliverable:** every hardening check in §3.3 is a
-host-side registry/WMI read. ZeroBreach does not need a file exfiltrated to know
+host-side registry/WMI read. Scythe does not need a file exfiltrated to know
 `AllowInsecureGuestAuth` should be `0`.
 
 Blocked pending: console confirmation that `192.168.10.254` is the disposable box with no real
@@ -389,7 +389,7 @@ worth what its refusals disclose.
 posture, sending no packets and enumerating no network. No `-ScanLan` switch was introduced.
 Reasons, recorded so nobody widens it back:
 
-- ZeroBreach runs on client networks under an MSP contract. A tool that probes the customer's LAN
+- Scythe runs on client networks under an MSP contract. A tool that probes the customer's LAN
   can trip the customer's own IDS and is, on the wire, indistinguishable from what it detects.
 - Every finding here is answerable from the host's own configuration. Probing adds no detection
   the registry cannot supply. Session 2 is itself the proof: everything learned by scanning from

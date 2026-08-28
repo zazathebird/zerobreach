@@ -92,8 +92,8 @@ foreach ($rel in @('engine/Phases-5.ps1','engine/Phases-6.ps1','engine/Phases-7.
 }
 
 # ── 4. Phase ceiling 162 is mirrored in every place that must agree ───────────
-$loader = Get-Content (Join-Path $root 'ZeroBreach-V23.ps1') -Raw
-$srv    = Get-Content (Join-Path $root 'ZeroBreach-Server.ps1') -Raw
+$loader = Get-Content (Join-Path $root 'Scythe-V23.ps1') -Raw
+$srv    = Get-Content (Join-Path $root 'Scythe-Server.ps1') -Raw
 $py     = Get-Content (Join-Path $root '_python/server.py') -Raw
 Assert-True 'loader  — HUNT PhasePlan Max=162'      ($loader -match '"HUNT"\s*\{\s*@\{\s*Min=1;\s*Max=162')
 Assert-True 'loader  — HUNT in -Mode ValidateSet'   ($loader -match 'ValidateSet\("","QUICK","FULL","DEEP","PARANOID","STEALTH","HUNT"\)')
@@ -113,8 +113,8 @@ for ($i=1; $i -lt $idx.Count; $i++) { if ($idx[$i] -le $idx[$i-1]) { $sorted = $
 Assert-True 'loader  — dot-source order is execution order' $sorted
 
 # ── 6. WOW64 truth: the engine knows its own bitness and can escape redirection ──
-Assert-True 'loader  — ZB_IS_WOW64 computed'   ($loader -match '\$global:ZB_IS_WOW64\s*=\s*\(\(-not \[Environment\]::Is64BitProcess\)')
-Assert-True 'loader  — ZB_SYS32 uses Sysnative' ($loader -match "ZB_SYS32.*Sysnative")
+Assert-True 'loader  — SCYTHE_IS_WOW64 computed'   ($loader -match '\$global:SCYTHE_IS_WOW64\s*=\s*\(\(-not \[Environment\]::Is64BitProcess\)')
+Assert-True 'loader  — SCYTHE_SYS32 uses Sysnative' ($loader -match "SCYTHE_SYS32.*Sysnative")
 foreach ($fn in @('Get-RegVal64','Get-RegNames64','Get-RegSubKeys64')) {
     Assert-True "loader  — $fn defined" ($loader -match "function $fn\b")
     Assert-True "loader  — $fn uses the 64-bit registry view" `
@@ -122,13 +122,13 @@ foreach ($fn in @('Get-RegVal64','Get-RegNames64','Get-RegSubKeys64')) {
 }
 $p5 = Get-Content (Join-Path $root 'engine/Phases-5.ps1') -Raw
 Assert-True 'Phase 134 reads TaskCache through the 64-bit view' `
-    ($p5 -match '(?s)Get-ZbTaskTreeLeaves.*?Get-RegNames64')
+    ($p5 -match '(?s)Get-ScytheTaskTreeLeaves.*?Get-RegNames64')
 
 # ── 7. Allowlist integrity gate (ADVERSARY_ANALYSIS E1) ──────────────────────
 Assert-True 'loader  — Join-AllowRegex sanitises before compiling' `
     ($loader -match '(?s)function Join-AllowRegex.*?Test-AllowPatternSafety')
 Assert-True 'loader  — refusals are recorded for reporting' `
-    ($loader -match '(?s)function Join-AllowRegex.*?ZB_SIG_TAMPER')
+    ($loader -match '(?s)function Join-AllowRegex.*?SCYTHE_SIG_TAMPER')
 Assert-True 'loader  — an emptied allowlist still fails closed to (?!)' `
     ($loader -match '(?s)function Join-AllowRegex.*?if \(\$keep\.Count -eq 0\) \{ return ''\(\?\!\)'' \}')
 Assert-True 'loader  — Test-AllowPatternSafety enforces a match timeout' `
@@ -186,7 +186,7 @@ foreach ($rel in @('engine/Phases-0.ps1','engine/Phases-5.ps1','engine/Phases-6.
 
 # ── 10. Cross-view phases must actually consult two sources ──────────────────
 Assert-True 'Phase 134 — compares registry against Get-ScheduledTask' `
-    ($p5 -match '(?s)PHASE 134.*?Get-ScheduledTask.*?Get-ZbTaskTreeLeaves|(?s)Get-ZbTaskTreeLeaves.*?PHASE 134.*?Get-ScheduledTask')
+    ($p5 -match '(?s)PHASE 134.*?Get-ScheduledTask.*?Get-ScytheTaskTreeLeaves|(?s)Get-ScytheTaskTreeLeaves.*?PHASE 134.*?Get-ScheduledTask')
 Assert-True 'Phase 135 — compares registry against Win32_Service'   ($p5 -match '(?s)PHASE 135.*?Win32_Service')
 Assert-True 'Phase 138 — compares registry against Win32_SystemDriver' ($p5 -match '(?s)PHASE 138.*?Win32_SystemDriver')
 Assert-True 'Phase 144 — compares PEB path against WMI path'        ($p5 -match '(?s)PHASE 144.*?ExecutablePath')
@@ -200,38 +200,38 @@ Assert-True 'Phase 141 — bounds module ranges by ModuleMemorySize'  ($p5 -matc
 # ADVERSARY_ANALYSIS.md E1: do not delete a detection (a missing key fails closed and is
 # conspicuous), widen an allowlist instead, because allowlists fail OPEN.
 Write-Host "`n-- runtime: signature-set integrity gate --" -ForegroundColor Cyan
-$loaderAst = Get-Ast 'ZeroBreach-V23.ps1'
+$loaderAst = Get-Ast 'Scythe-V23.ps1'
 $wanted = @('Test-AllowPatternSafety','Join-AllowRegex')
 $defs = $loaderAst.FindAll({ param($n)
     $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
     $wanted -contains $n.Name }, $true)
 Assert-That 'both integrity functions extracted from the loader' $defs.Count 2
-$global:ZB_SIG_TAMPER = New-Object System.Collections.Generic.List[string]
+$global:SCYTHE_SIG_TAMPER = New-Object System.Collections.Generic.List[string]
 $script:SIGSTUB = $null
 function Get-Sig([string]$Name) { if ($script:SIGSTUB -and $null -ne $script:SIGSTUB[$Name]) { @($script:SIGSTUB[$Name]) } else { @() } }
 foreach ($d in $defs) { . ([scriptblock]::Create($d.Extent.Text)) }
 
 # (a) a healthy allowlist survives untouched
 $script:SIGSTUB = @{ k = @('\\AppData\\Roaming\\Vendor\\', '\.tmp$') }
-$global:ZB_SIG_TAMPER.Clear()
+$global:SCYTHE_SIG_TAMPER.Clear()
 $r = Join-AllowRegex 'k'
 Assert-True  'healthy allowlist compiles through unchanged' ($r -eq '\\AppData\\Roaming\\Vendor\\|\.tmp$')
-Assert-That  'healthy allowlist records no tampering' $global:ZB_SIG_TAMPER.Count 0
+Assert-That  'healthy allowlist records no tampering' $global:SCYTHE_SIG_TAMPER.Count 0
 
 # (b) THE ATTACK: one entry widened to '.*' must be refused, not honoured
 $script:SIGSTUB = @{ k = @('\\AppData\\Roaming\\Vendor\\', '.*') }
-$global:ZB_SIG_TAMPER.Clear()
+$global:SCYTHE_SIG_TAMPER.Clear()
 $r = Join-AllowRegex 'k'
 Assert-True  'universal pattern is DROPPED from the compiled allowlist' ($r -notmatch '\.\*')
 Assert-True  'the legitimate sibling entry survives'  ($r -eq '\\AppData\\Roaming\\Vendor\\')
-Assert-That  'the refusal is recorded for reporting'  $global:ZB_SIG_TAMPER.Count 1
-Assert-True  'the refusal names the offending key'    ("$($global:ZB_SIG_TAMPER[0])" -match '^k:')
-Assert-True  'the refusal is described as UNIVERSAL'  ("$($global:ZB_SIG_TAMPER[0])" -match 'UNIVERSAL')
+Assert-That  'the refusal is recorded for reporting'  $global:SCYTHE_SIG_TAMPER.Count 1
+Assert-True  'the refusal names the offending key'    ("$($global:SCYTHE_SIG_TAMPER[0])" -match '^k:')
+Assert-True  'the refusal is described as UNIVERSAL'  ("$($global:SCYTHE_SIG_TAMPER[0])" -match 'UNIVERSAL')
 
 # (c) other universal spellings are caught too — '.*' is not the only way to say it
 foreach ($u in @('.+', '^.*$', '(?s).*', '[\s\S]*', '.*|foo', '')) {
     $script:SIGSTUB = @{ k = @($u) }
-    $global:ZB_SIG_TAMPER.Clear()
+    $global:SCYTHE_SIG_TAMPER.Clear()
     $r = Join-AllowRegex 'k'
     Assert-True "universal/empty spelling '$u' is refused (fails closed to (?!))" ($r -eq '(?!)')
 }
@@ -245,7 +245,7 @@ Assert-True 'a fully-refused allowlist suppresses nothing' (-not ([regex]::IsMat
 
 # (e) a catastrophic-backtracking pattern is refused rather than hanging the scan
 $script:SIGSTUB = @{ k = @('(a+)+$') }
-$global:ZB_SIG_TAMPER.Clear()
+$global:SCYTHE_SIG_TAMPER.Clear()
 $sw = [System.Diagnostics.Stopwatch]::StartNew()
 $r = Join-AllowRegex 'k'
 $sw.Stop()

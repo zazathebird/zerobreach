@@ -23,7 +23,7 @@ Two real classes of problem were present and are the focus of tonight:
    these (name AND `.zip/.txt/.log/.db` ext) — I verified the current filter excludes the
    `.py/.pyc/.png` files that flooded. So this is already fixed in HEAD; tonight's run confirms it.
 
-## Fixes I made (engine `ZeroBreach-V23.ps1` only)
+## Fixes I made (engine `Scythe-V23.ps1` only)
 - Added **`Get-RegVal`** safe wrapper (try/catch → `$null`) and routed all 14 raw
   `Get-ItemPropertyValue` call sites through it. Kills the 6 property "RECOVERED ERROR"s and
   prevents the other 8 latent ones on other machines.

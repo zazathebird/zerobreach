@@ -9,7 +9,7 @@ repo root for the full reasoning behind each move.
 - `TIME_LOG.md` / `.csv` / `.xlsx` — dated git-log-derived time estimate, generated 2026-07-03,
   not updated since.
 - `claude working files` — empty stray file, no known content or references.
-- `zerobreach-main-dump/` — everything that was in the untracked `zerobreach-main/` folder dropped
+- `scythe-main-dump/` — everything that was in the untracked `scythe-main/` folder dropped
   into the repo root on 2026-08-18. Turned out to contain no source code (no Cargo.toml, no .rs
   files) — only a Rust/Tauri build cache and two real client scan-report HTML files. **Gitignored**
   (see `.gitignore`) — the build cache is 335MB of reproducible compiler output, and the reports

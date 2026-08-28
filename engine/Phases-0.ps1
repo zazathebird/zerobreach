@@ -1,7 +1,7 @@
 ﻿# NOTE - Detection vocabulary in this file is deliberate.
 # Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
 # named malware families, are detection category labels, operator-facing report text, or
-# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# MITRE ATT&CK tactic names (a published standard). Scythe is a defensive incident-
 # response tool; these strings are what it reports, not what it does. See CLAUDE.md,
 # "The detection vocabulary is deliberate". Do not sanitise them.
 
@@ -34,8 +34,8 @@ $pfIssues = 0
 # The loader already SANITISED the allowlists (fail-closed) before compiling them.
 # This reports what it refused. An FP allowlist that matches everything is not a
 # false-positive suppression, it is an off switch for the phases that use it.
-if ($global:ZB_SIG_TAMPER -and $global:ZB_SIG_TAMPER.Count -gt 0) {
-    foreach ($tm in $global:ZB_SIG_TAMPER) {
+if ($global:SCYTHE_SIG_TAMPER -and $global:SCYTHE_SIG_TAMPER.Count -gt 0) {
+    foreach ($tm in $global:SCYTHE_SIG_TAMPER) {
         $pfIssues++
         Out-Typewriter "  -> SIGNATURE SET REFUSED AN ENTRY: $tm" "CRIT"
         Add-Finding -ID "PF_SIGTAMPER_$([Math]::Abs($tm.GetHashCode()))" -Phase "PREFLIGHT" `
@@ -51,7 +51,7 @@ if ($global:ZB_SIG_TAMPER -and $global:ZB_SIG_TAMPER.Count -gt 0) {
 # data\integrity_manifest.json pins the SHA256 of every shipped data file and engine
 # module. Generate it at release time with tools\New-IntegrityManifest.ps1. Absent, we
 # say so rather than pretending: an unverifiable scanner is a known-unknown, not a pass.
-$pfManifest = Join-Path $global:ZB_ROOT 'data\integrity_manifest.json'
+$pfManifest = Join-Path $global:SCYTHE_ROOT 'data\integrity_manifest.json'
 if (Test-Path -LiteralPath $pfManifest) {
     $pfMan = $null
     try { $pfMan = Get-Content -LiteralPath $pfManifest -Raw -Encoding UTF8 | ConvertFrom-Json } catch { $pfMan = $null }
@@ -67,7 +67,7 @@ if (Test-Path -LiteralPath $pfManifest) {
         foreach ($mp in @($pfMan.files.PSObject.Properties)) {
             $rel  = "$($mp.Name)"
             $want = "$($mp.Value)".ToUpper().Trim()
-            $abs  = Join-Path $global:ZB_ROOT $rel
+            $abs  = Join-Path $global:SCYTHE_ROOT $rel
             if (-not (Test-Path -LiteralPath $abs)) {
                 $pfBad++; $pfIssues++
                 Out-Typewriter "  -> MANIFEST FILE MISSING: $rel" "CRIT"
@@ -84,7 +84,7 @@ if (Test-Path -LiteralPath $pfManifest) {
                 Out-Typewriter "  -> MANIFEST HASH MISMATCH: $rel" "CRIT"
                 Add-Finding -ID "PF_MANIFEST_MISMATCH_$($rel -replace '[^a-zA-Z0-9]','')" -Phase "PREFLIGHT" `
                     -ThreatType "Security Tool Tampering" -Severity $SEV_CRITICAL `
-                    -Description "$rel does not match the SHA256 recorded for this release (expected $want, found $got). Either this copy of ZeroBreach was modified, or something on this machine modified it — which is what an attacker does to a scanner it cannot stop. Do not trust this scan. Restore from a known-good release, on a different machine if possible, and re-run." `
+                    -Description "$rel does not match the SHA256 recorded for this release (expected $want, found $got). Either this copy of Scythe was modified, or something on this machine modified it — which is what an attacker does to a scanner it cannot stop. Do not trust this scan. Restore from a known-good release, on a different machine if possible, and re-run." `
                     -Target $abs -FixAction "Info" -Group "Scanner Integrity"
             }
         }
@@ -101,12 +101,12 @@ if (Test-Path -LiteralPath $pfManifest) {
 }
 
 # ── P0.3 · Bitness / WOW64 redirection ────────────────────────────────────────
-if ($global:ZB_IS_WOW64) {
+if ($global:SCYTHE_IS_WOW64) {
     $pfIssues++
     Out-Typewriter "  -> 32-BIT ENGINE ON 64-BIT WINDOWS — System32 and HKLM\SOFTWARE are REDIRECTED." "CRIT"
     Add-Finding -ID "PF_WOW64_REDIRECTED" -Phase "PREFLIGHT" `
         -ThreatType "Scan Coverage Gap" -Severity $SEV_CRITICAL `
-        -Description "ZeroBreach is running as a 32-BIT process on 64-bit Windows. The OS silently redirects C:\Windows\System32 to SysWOW64 and HKLM\SOFTWARE to Wow6432Node, so the System32 binary audits (phases 15/109/113) and every HKLM\SOFTWARE registry phase are reading the WRONG half of this machine — malware in the real System32 and real HKLM run keys is invisible to them. The WS7 band routes its own access around this, but the legacy phases do not. RE-RUN FROM A 64-BIT POWERSHELL: %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe (note that from a 32-bit shell you must type %SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe to reach it)." `
+        -Description "Scythe is running as a 32-BIT process on 64-bit Windows. The OS silently redirects C:\Windows\System32 to SysWOW64 and HKLM\SOFTWARE to Wow6432Node, so the System32 binary audits (phases 15/109/113) and every HKLM\SOFTWARE registry phase are reading the WRONG half of this machine — malware in the real System32 and real HKLM run keys is invisible to them. The WS7 band routes its own access around this, but the legacy phases do not. RE-RUN FROM A 64-BIT POWERSHELL: %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe (note that from a 32-bit shell you must type %SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe to reach it)." `
         -Target "Process bitness: 32-bit on x64" -FixAction "Info" -Group "Scanner Integrity"
 } else {
     Out-Typewriter "  -> BITNESS OK — no WOW64 file-system or registry redirection in effect." "OK"
@@ -141,7 +141,7 @@ try {
             Out-Typewriter "  -> FOREIGN MODULE IN SCANNER PROCESS: $pmf" "WARN"
             Add-Finding -ID "PF_SELFMOD_$([Math]::Abs($pmf.ToLower().GetHashCode()))" -Phase "PREFLIGHT" `
                 -ThreatType "Security Tool Tampering" -Severity $SEV_POSSIBLE `
-                -Description "A DLL outside the system and Program Files trees is loaded inside ZeroBreach's own process: $pmf — On an elevated scanner this is either an EDR/AV user-mode hook (common and expected on a managed endpoint; identify the vendor and move on) or a DLL injected to filter what this scan can see. Verify the publisher of that file before trusting phases that enumerate files, processes or registry values." `
+                -Description "A DLL outside the system and Program Files trees is loaded inside Scythe's own process: $pmf — On an elevated scanner this is either an EDR/AV user-mode hook (common and expected on a managed endpoint; identify the vendor and move on) or a DLL injected to filter what this scan can see. Verify the publisher of that file before trusting phases that enumerate files, processes or registry values." `
                 -Target $pmf -FixAction "Info" -Group "Scanner Integrity"
         }
     }

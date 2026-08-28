@@ -1,4 +1,129 @@
-# CHANGELOG — ZeroBreach V23
+# CHANGELOG — Scythe V23
+
+## 2026-08-27 — renamed the project to Scythe, and rebuilt the third Fable package as a standalone
+
+Two pieces of work, related only in that the second forced the first.
+
+### The offline-artifact work package was tripping Fable, and the cause was volume
+
+On 2026-08-27 a Fable session opened `~/Downloads/claude/fable-work-3/`, read its `README.md`
+(19.5 KB), ran one `ls`, and was refused on the very next turn — `model_refusal_no_fallback`,
+category `cyber`, session unusable until `/model`. The package's own register audit returned its
+clean known-good baseline on that same content, so **the trip was on volume, not vocabulary**:
+19.5 KB of entry-point prose plus a 10.0 KB `CLAUDE.md`, against 3.5-4.0 KB and ~5.5 KB in the
+two packages Fable had run successfully.
+
+The fix is a **copy**, not an edit — `fable-work-3/` is untouched and kept as the archive. The
+live package is `~/Downloads/claude/scythe-work/`:
+
+- `README.md` 19.5 → 7.6 KB, `CLAUDE.md` 10.0 → 6.1 KB. The README is now a router: a task table,
+  a dependency graph, and about a kilobyte of prose.
+- **`BLUEPRINT.md` deleted** — 648 KB and 11,698 lines, tracked, and a byte-for-byte duplicate of
+  its 17 `_bp_*.md` fragments. One `cat` of it would have ended a session on its own. The
+  fragments became `reference/`, split one file per `### N.x` subsection: 69 files, largest 39 KB,
+  and a session now reads exactly two of them. All 55 citations in the briefs were rewritten to
+  direct links. `tools/assemble_blueprint.py` went with it.
+- **Every pointer out of the folder removed**: "the parent tree", "the parent project tree", "do
+  not open the host tree", "the owner wires them into the real solution at merge", "a
+  compound-file reader already exists in an earlier package", "a shared `*.Common`". The shared
+  reference §1 was reframed from a product description ("a Windows endpoint audit tool… a
+  technician runs it on a client workstation") to a statement about formats and APIs.
+- `tools/check_register.py` + `register_terms.txt` moved out to
+  `~/Downloads/claude/register-audit/`, so a plaintext list of 46 trigger words is no longer
+  inside the folder a session opens. `check_briefs.py` stayed, gained a sixth check — every
+  cited `reference/` file exists and every present one is indexed — and both new assertions were
+  proven to bite by injecting the matching fault.
+- Per-brief prose was **left alone**. It is already in the register that works, the audit passes
+  on it, and a session reads one brief out of thirty-seven.
+
+Both checkers are at baseline in the new package: `check_briefs.py` exits 0 (14 tracks, 37 briefs,
+37 projects, 12 edges), the register audit exits 1 on the same 30 known-benign occurrences in 4
+documents (SQLite/VHDX `payload` field names, the UTF-8 `C2` lead-byte range).
+
+`docs/MERGE_ARTIFACT_LAYER.md` is the new receiving end in this repo: the 37-project table, the
+landing procedure, the four things the package's own definition of done cannot check, and the
+decisions this repo has to make on arrival.
+
+### The rename
+
+The project name was itself a term on the package's register list, which is what forced the
+question. Renamed globally, everywhere, in one mechanical pass:
+
+`ZeroBreach`/`ZEROBREACH`/`zerobreach` → `Scythe`/`SCYTHE`/`scythe`, plus the short internal
+prefixes: `ZB_ROOT` → `SCYTHE_ROOT`, `Get-ZbProp` → `Get-ScytheProp`, `zbApi()` → `scytheApi()`,
+`ZBSound`/`ZBThemes`/`ZBKraken` → `Scythe*`, `ZBFX` → `ScytheFX`, `zbfx-*` → `scythefx-*`,
+`--zb-accent` → `--scythe-accent`, `X-ZB-Token` → `X-SCYTHE-Token`, `zbscan` → `scythescan`.
+
+**1,405 name occurrences and 243 distinct `zb`-stem identifiers across 377 files, plus 36 renamed
+paths** (`Scythe-Server.ps1`, `Scythe-V23.ps1`, `Scythe.sln`, the five root projects, the twelve
+under `lib/`, and three test files whose `Zb` casing the first pass missed — `find -name` is
+case-sensitive, which is exactly how `Test-ZbAssert.ps1` survived the first sweep and showed up
+as the one `MISS` in the suite).
+
+All 243 `zb` tokens were enumerated before the pass and checked by hand: there is no English word
+containing `zb`, so a case-aware stem replacement had no false-positive class to worry about.
+UTF-8 BOMs were preserved by doing the substitution at byte level rather than through a text
+decoder.
+
+Verified after, from a clean tree with every `bin/` and `obj/` deleted:
+
+- `dotnet build Scythe.sln` — 18 projects, **0 errors, 0 warnings**.
+- `dotnet test Scythe.sln` — **1,664 passed, 0 failed, 14 skipped**, matching the pre-rename
+  baseline exactly across all seven test projects.
+- `tools/tests/Run-SecurityTests.ps1` under `pwsh` 7.4.6 — **all suites pass**, including the
+  three-copy guard equivalence check (35 vectors), the two runtime suites, and the parse+BOM gate.
+
+**A machine scheduled before the rename still carries a `ZeroBreach_V22_Scheduled` task.** Left
+alone it would keep firing beside the new one — two scans a night, the old one pointing at a
+script path that no longer exists. The `-Schedule` branch in the loader now unregisters it before
+registering `Scythe_V22_Scheduled`. That is the only place the old name legitimately appears in
+shipped code.
+
+`V22`/`V23` in strings is unchanged and still deliberate.
+
+### What a mechanical rename gets wrong, found by review afterwards
+
+Two review passes over the diff caught seven places where the substitution should not have
+applied, or applied and broke something. Recorded because the class recurs, not because these
+particular ones will:
+
+1. **`gui/static/js/vendor/gsap.min.js`** — GSAP's minifier had emitted a local function named
+   `zb`, which the stem rule renamed along with its three call sites. A vendored third-party file
+   must stay byte-identical to upstream or it can no longer be verified against the distribution.
+   Restored from the backup, and all 29 files under `gui/static/js/vendor/` and
+   `gui/static/css/fonts/` re-verified byte-identical. **Exclude the vendor tree from any future
+   sweep.**
+2. **`.gitignore`** — the rules naming `_archive/zerobreach-main-dump/…` were rewritten, but
+   `_archive/` was deliberately excluded from the rename, so the rule stopped matching and 335 MB
+   of Rust build cache became untracked and offered for commit. Reverted, along with the
+   `zerobreach-main/` and `zerobreach/` work-rig-drop rules and the audit in `docs/_history/`
+   that records them: **an ignore rule names a directory that exists, not a directory you wish
+   existed.**
+3. **`lib/Scythe.Formats.Tests/PeFixtureBuilder.cs`** — `.zbdbg` became `.scythedbg`, and
+   `IMAGE_SECTION_HEADER.Name` is a fixed 8-byte field the builder silently truncates. The fixture
+   would have emitted `.scythed` while the source said `.scythedbg`. Now `.scydbg`.
+4. **`lib/Scythe.Rules.Tests/Yara/CorpusValidationTests.cs`** — a fictional test format's trailer
+   `"ZBEND"` was renamed while its paired header, written as the hex bytes `7A 42 46 31`, was not.
+   Header and trailer no longer agreed. Reverted the trailer.
+5. **`Scythe.Scanners/ContentScanScanner.cs`** — the self-exclusion list for the tool's own
+   quarantine store was renamed wholesale. On a machine that ran the pre-rename build, the old
+   directories still exist and the content scanner would have reported its own quarantined
+   evidence back as findings. Both spellings are now in the list.
+6. **`data/detection_signatures.json` `script_own_strings`** — the Phase-2 script-block-logging
+   self-filter. Renaming it alone stops it recognising log entries written by an already-deployed
+   copy, so the engine would flag its own prior runs. Both spellings are now present.
+7. **`gui/static/css/fx.css`** — `zbshakeh` became the run-together `scytheshakeh`; now
+   `scythe-shake-hard`.
+
+**Known and accepted:** `Scythe.Remediation/ScythePaths.cs` moved the on-disk data root from
+`%ProgramData%\ZeroBreach` to `%ProgramData%\Scythe`. A machine that ran the old build keeps its
+vault and its tamper-evident action log under the old root, and the log's hash chain cannot be
+continued across the move. The remedy is manual — rename the directory before the first new run.
+Not automated, because a silent dual-root read is worse than an operator doing it deliberately.
+
+
+The pre-rename tree is copied whole to `~/Downloads/claude/zerobreach-backup-prerename/`. Delete
+it once the rename has been exercised on Windows — nothing in this repo depends on it.
 
 ## 2026-08-26 — progress review: fable-work and fable-work-2 both confirmed complete
 
@@ -15,12 +140,12 @@ in status from what `BLUEPRINT.md` already said — confirmed, not new news.
 engines, B1-B2 PE/container parsers, C1-C2 path normaliser/rule linter, D1-D3 IOC
 normaliser/baseline diff/config baseline) are complete per `HANDOFF_FABLE2.md`, with D2
 carrying a same-day (2026-08-26) re-verification note. 1,374 tests green across 6 projects
-(`ZeroBreach.Rules/Formats/Paths/Intel/Diff/Baseline` + `.Tests` siblings), zero warnings,
+(`Scythe.Rules/Formats/Paths/Intel/Diff/Baseline` + `.Tests` siblings), zero warnings,
 net8.0 on Linux, no packages beyond xUnit. **It was previously undocumented in this repo** —
 `BLUEPRINT.md` §9 had no row for it and §10 had no roadmap item — because it was still
 in-progress the last time either file was touched. Both are now updated: a new §9 migration
-row, and a new §10 "Next" item 6 (copy the six projects in, then decide how `ZeroBreach.Rules`
-plugs into `SignatureDb`/the 10 scanners and how `ZeroBreach.Formats` feeds a look-inside-the-
+row, and a new §10 "Next" item 6 (copy the six projects in, then decide how `Scythe.Rules`
+plugs into `SignatureDb`/the 10 scanners and how `Scythe.Formats` feeds a look-inside-the-
 file scanner) sequenced ahead of the existing detection-parity item, since several F-series
 briefs map cleanly onto a library-layer track.
 
@@ -36,7 +161,7 @@ is precisely the kind of unverified claim this project's own rules exist to stop
 ## 2026-08-26 — the library layer is in the repo: `lib/`, 1,664 tests green
 
 `fable-work-2` merged. The six library projects and their six test projects now live under a new
-top-level **`lib/`** directory, wired into `ZeroBreach.sln`.
+top-level **`lib/`** directory, wired into `Scythe.sln`.
 
 **Why `lib/` and not the repo root.** The five engine projects target `net8.0-windows`; every
 project in this layer targets **`net8.0`** and must keep doing so — that is what makes it
@@ -48,21 +173,21 @@ identity. It is also a real guard: a `net8.0-windows` project may reference a `n
 not the reverse — so a Windows dependency **cannot** leak down into this layer by accident. A
 build error there is the boundary working; do not "fix" it by changing the target framework.
 
-**Nothing shipped changed.** `ZeroBreach.Cli` still references only Core/Scanners/Remediation, so
+**Nothing shipped changed.** `Scythe.Cli` still references only Core/Scanners/Remediation, so
 the single-file exe is byte-for-byte unaffected. The libraries are on disk and building; wiring
 them into `SignatureDb` and the scanners is the next step and a deliberate design decision, not
 part of this merge.
 
 | | Before | After |
 |---|---|---|
-| `dotnet build ZeroBreach.sln` | 6 projects | **18 projects**, 0 errors, 0 warnings |
-| `dotnet test ZeroBreach.sln` | 290 passed / 14 skipped | **1,664 passed / 14 skipped / 0 failed** |
+| `dotnet build Scythe.sln` | 6 projects | **18 projects**, 0 errors, 0 warnings |
+| `dotnet test Scythe.sln` | 290 passed / 14 skipped | **1,664 passed / 14 skipped / 0 failed** |
 
 Also copied in: `docs/_history/HANDOFF_FABLE2.md`, matching the `HANDOFF_FABLE.md` precedent.
 
 ### Two findings that came out of reading the merged code
 
-**`ZeroBreach.Rules.Linting` is a C# re-implementation of five of this repo's own hard rules** —
+**`Scythe.Rules.Linting` is a C# re-implementation of five of this repo's own hard rules** —
 and it did not know it. `AllowlistCanaries` is the universal-pattern canary set from the
 `Join-AllowRegex` integrity gate (eight strings rather than five, and better chosen);
 `CollisionCorpus` is the "no signature entry may collide with a real software name" rule that the
@@ -98,7 +223,7 @@ failure as a false all-clear, one level up.
 **`README.md` implied `--mode` and `-Mode` accept the same set.** They do not — the native engine
 hard-errors on `PARANOID` and `HUNT` (`CliOptions.cs`).
 
-**`engine/Phases-5.ps1`'s band map still described 153-156 as "the only code in ZeroBreach that
+**`engine/Phases-5.ps1`'s band map still described 153-156 as "the only code in Scythe that
 touches another machine", requiring `-ScanLan`.** Stale comment in shipped code, contradicting what
 was actually built the same day. Same correction applied to `docs/ATTACK_LOG.md`'s header and to
 `ADVERSARY_ANALYSIS.md`, which proposed that design.
@@ -139,7 +264,7 @@ ACLs, broadcast name-resolution surface, and firewall/advertisement state. 15 fi
 **Scope was deliberately narrowed from the F6 brief.** That brief specified "LAN band, opt-in,
 requires `-ScanLan`". As built the band sends **no packets and enumerates no network** — every
 check is a registry or CIM read of the host's own configuration, and no `-ScanLan` switch was
-introduced. Two reasons, both worth keeping: ZeroBreach runs on client networks under an MSP
+introduced. Two reasons, both worth keeping: Scythe runs on client networks under an MSP
 contract, and a tool that probes the customer's LAN can trip the customer's own IDS while being
 indistinguishable on the wire from what it exists to detect; and every finding here is answerable
 from the host's own registry, so probing buys no detection.
@@ -164,7 +289,7 @@ and `docs/attack-logs/`.
 
 ## 2026-08-22 — `--log`: the native engine finally leaves a transcript
 
-The one output artifact a run did not produce. `zbscan --mode DEEP --log run.txt` now tees
+The one output artifact a run did not produce. `scythescan --mode DEEP --log run.txt` now tees
 everything the console shows into a plain-text file beside the reports.
 
 **It replaces `Console.Out`/`Console.Error` rather than threading a writer through the scan.**
@@ -194,17 +319,17 @@ Decisions worth keeping:
   `--interactive` and the baselines; a profile that silently re-pointed every future run's log at
   one operator's case folder would overwrite it.
 - **UTF-8 with a BOM**, because the operator opens this in Notepad and pastes it into a ticket.
-- Named `--log` as asked, which sits next to the existing `zbscan log verify|show` — that is the
+- Named `--log` as asked, which sits next to the existing `scythescan log verify|show` — that is the
   tamper-evident record of remediation *actions*, an unrelated subsystem. The help text for both
   now says so explicitly.
 
-11 tests in `ZeroBreach.Tests/RunTranscriptTests.cs`; suite 279 → **290 passed, 14 skipped, 0
+11 tests in `Scythe.Tests/RunTranscriptTests.cs`; suite 279 → **290 passed, 14 skipped, 0
 failed**. Revert-proofed: dropping the stderr tee fails 1, turning `AutoFlush` off fails 1,
 removing the two STEALTH refusals fails 2.
 
 **Verified how far:** unit tests plus an end-to-end run of the real CLI (`categories --log`,
 the STEALTH refusal, the unusable-path error, the help text) — but from a **linux-x64** build of
-`ZeroBreach.Cli`, because the shipped configuration is self-contained `win-x64` and will not run
+`Scythe.Cli`, because the shipped configuration is self-contained `win-x64` and will not run
 on this box. The Windows exe path is unexercised, like the rest of the native engine.
 
 Also this session: the .NET 8 SDK was reinstalled into the scratchpad, so the "279 passed / 14
@@ -231,7 +356,7 @@ origins, `escHtml` covers all five entities, 41/41 assertions pass.
 
 ### Nine test files were in the tree but not in the suite
 
-`Test-ZbAssert`, `Test-ScanReport`, `Test-CompareScanRuns`, `Test-PhaseTimingReport`,
+`Test-ScytheAssert`, `Test-ScanReport`, `Test-CompareScanRuns`, `Test-PhaseTimingReport`,
 `Test-ViewerAssets`, `Test-ServerParity`, `Test-EventContract`, `Test-CoverageMatrix` and
 `Test-PackagingContract` were delivered by the G-series package and never added to
 `Run-SecurityTests.ps1`. That is why the broken viewer went unnoticed: the test that
@@ -240,8 +365,8 @@ guards it was never run. All nine are now wired in — 24 files, ~966 assertions
 ### The runner's pass/fail heuristic could not judge them
 
 The runner flags a failure on `\bFAIL\b` appearing anywhere in a test's output. The
-ZbAssert-based tests print their assertion *descriptions*, and several describe failure
-cases — `ok  ZbTrue: false fails`. Three of the nine would have been reported FAILED
+ScytheAssert-based tests print their assertion *descriptions*, and several describe failure
+cases — `ok  ScytheTrue: false fails`. Three of the nine would have been reported FAILED
 while exiting 0.
 
 These tests have a reliable contract instead: they exit non-zero on failure and print
@@ -276,7 +401,7 @@ already parse/BOM-checks only `.ps1`, so nothing else changes.
 ## 2026-08-19 — WS7: `-Mode HUNT`, the self-integrity gate, and attack-chain correlation
 
 **Ask:** act as blackhat / whitehat / pentester / offsec admin, find what the tool misses,
-and increase its power. The answer began with an adversarial assessment of ZeroBreach itself
+and increase its power. The answer began with an adversarial assessment of Scythe itself
 (`ADVERSARY_ANALYSIS.md`), because three of the findings were about the scanner, not the malware.
 
 ### The three structural problems found
@@ -309,9 +434,9 @@ and increase its power. The answer began with an adversarial assessment of ZeroB
 - **`Join-AllowRegex` is now the signature-set integrity choke point.** Every allowlist passes
   through it; a pattern that fails to compile, blows a 150 ms match budget, or is **universal**
   (matches five deliberately unrelated canaries) is **dropped** — fail-closed, so the phase goes
-  noisy rather than blind — and recorded in `$global:ZB_SIG_TAMPER` for Phase 0 to report CRITICAL.
-- **`Get-RegVal64` / `Get-RegNames64` / `Get-RegSubKeys64`**, `$global:ZB_IS_WOW64`,
-  `$global:ZB_SYS32`. Deliberately **no auto-relaunch**: it would orphan the redirected stdout
+  noisy rather than blind — and recorded in `$global:SCYTHE_SIG_TAMPER` for Phase 0 to report CRITICAL.
+- **`Get-RegVal64` / `Get-RegNames64` / `Get-RegSubKeys64`**, `$global:SCYTHE_IS_WOW64`,
+  `$global:SCYTHE_SYS32`. Deliberately **no auto-relaunch**: it would orphan the redirected stdout
   the server reads and the GUI would see the scan die.
 - **`-Mode HUNT`**, above PARANOID, ceiling **162**. Mirrored in the loader `$PhasePlan`, both
   servers' `MODE_PHASES`, both mode whitelists, the interactive menu and a new GUI tile.
@@ -439,7 +564,7 @@ dropped speculative mutex GUIDs — an unpublished IOC never matches and is just
 
 `Get-AuthSig` had **no cache** while 14 call sites across 13 phases (4 of them in QUICK)
 verify overlapping file sets, and each miss can block on an online CRL/OCSP check.
-Memoised per path (`$global:AUTHSIG_CACHE`, case-insensitive, bounded, shares `ZB_NOCACHE`);
+Memoised per path (`$global:AUTHSIG_CACHE`, case-insensitive, bounded, shares `SCYTHE_NOCACHE`);
 `$null` for a locked file is cached too. `Get-SignatureVerdict` was calling
 `Get-AuthenticodeSignature` **raw**, bypassing both the wrapper and the memo — now routed
 through `Get-AuthSig`, so exactly one raw call exists in the tree.
@@ -479,7 +604,7 @@ Suite **289 → 472 assertions**, all green under pwsh 7.4.6.
 
 ### Also updated
 
-`ZeroBreach-Server.ps1` + `_python/server.py` phase totals (the Python mirror was stale at
+`Scythe-Server.ps1` + `_python/server.py` phase totals (the Python mirror was stale at
 107), `data/mitre_mapping.json` (+26 techniques, +18 phase entries, 0 dangling refs),
 `Test-ParseAndBom.ps1` (8 shipped files), `CLAUDE.md` (new rule sections), `BLUEPRINT.md`.
 
@@ -726,8 +851,8 @@ Second WS4 caching step (after the `Get-ScanFiles` memo): **7 phases each ran th
 `Win32_Process` WMI enumeration** per scan. New loader helper `Get-ProcSnapshot` memoizes the
 snapshot with a **90-second TTL** — unlike the filesystem (static in audit mode) the process
 table changes during a run, so adjacent phase clusters share one enumeration while phases
-minutes apart still see fresh data. Shares the WS4 `ZB_NOCACHE` kill-switch
-(`$global:SCAN_FILE_CACHE_ON`); `ZB_CACHE_DEBUG` now also prints a `[CACHE] ProcSnapshot`
+minutes apart still see fresh data. Shares the WS4 `SCYTHE_NOCACHE` kill-switch
+(`$global:SCAN_FILE_CACHE_ON`); `SCYTHE_CACHE_DEBUG` now also prints a `[CACHE] ProcSnapshot`
 stats line.
 
 - **Converted (6 sites):** Phase 3 (ancestry/injection), 4 (LOLBIN), 44 (elevated procs in
@@ -745,7 +870,7 @@ stats line.
 
 Validated live on 5.1.26100 (BOMs intact, parse-clean 5.1+7): headless QUICK (exactly 30
 phases, 0 recovered errors), DEEP `-Hours 1` (**115 phases contiguous, 0 recovered errors,
-~8.9 min**), and a `ZB_CACHE_DEBUG` QUICK confirming 1 snapshot hit (Phase 4 reusing
+~8.9 min**), and a `SCYTHE_CACHE_DEBUG` QUICK confirming 1 snapshot hit (Phase 4 reusing
 Phase 3's enumeration). Noted for a future FP round: Phase 56 flagged 3 transient-process
 discrepancies during the DEEP run (its two enums are ~1s apart, so short-lived processes land
 in one list only) — pre-existing behavior, Info-only/never auto-acted, but a re-check that the
@@ -764,7 +889,7 @@ before the `[CACHE]` debug line can print. Three latent cache hazards hardened a
    later identical call with a nondeterministic partial file set. Now only *complete* walks and
    *MaxFiles-capped* walks (deterministic on a static tree) enter the memo; a deadline-hit call
    returns its partial result uncached so the next identical call gets a fresh budgeted walk.
-2. **Cache writes are gated on `$global:SCAN_FILE_CACHE_ON`** — a `ZB_NOCACHE` run previously
+2. **Cache writes are gated on `$global:SCAN_FILE_CACHE_ON`** — a `SCYTHE_NOCACHE` run previously
    still populated the hashtable (never read); A/B runs are now truly cache-free. Also documented
    that the kill-switch is PRESENCE-based: any value, including `"0"`, disables it.
 3. **The cache key keeps caller root order (no more `Sort-Object`).** Under truncation the walk
@@ -781,7 +906,7 @@ exposure). Also corrected the stale Phase-82 row in `data/coverage_matrix.json` 
 
 Validated: parse-clean live 5.1.26100 + 7 (BOMs intact), JSON valid; headless FULL + DEEP
 `-Hours 1` runs (cache-on with stats, decoy PuTTY-suite files in TEMP → POSSIBLE) + a
-`ZB_NOCACHE` run proving the memo stays empty. Details in the runs below this entry's date.
+`SCYTHE_NOCACHE` run proving the memo stays empty. Details in the runs below this entry's date.
 
 ---
 
@@ -792,8 +917,8 @@ zero caching.** Since the engine is audit-only in `-Auto` (the filesystem is sta
 and spawns as a fresh subprocess per scan, byte-identical `(roots, filter, timescope, caps,
 prune)` calls are guaranteed to return identical results. Added a script-scope memo in
 `Get-ScanFiles` keyed on that full param tuple (`$global:SCAN_FILE_CACHE`), plus
-`$global:SCAN_FILE_CACHE_ON` (a `ZB_NOCACHE` env kill-switch for the field / A-B validation)
-and a `ZB_CACHE_DEBUG`-gated stats line in `Summary.ps1`. The cached array is never mutated by
+`$global:SCAN_FILE_CACHE_ON` (a `SCYTHE_NOCACHE` env kill-switch for the field / A-B validation)
+and a `SCYTHE_CACHE_DEBUG`-gated stats line in `Summary.ps1`. The cached array is never mutated by
 callers (they filter into new collections); return shape kept as `,$arr` per the CLAUDE rule.
 
 **Explicitly NOT done: true phase parallelism** — the architecture shares variables across
@@ -802,7 +927,7 @@ would race that shared state. Caching is the safe win; parallelism stays a non-g
 
 Validated (A/B, live PS 5.1.26100, DEEP `-Hours 1`): parse-clean 5.1 + 7, BOMs intact; both
 runs exit 0, 120 phase headers contiguous, 0 recovered errors. **Cache fires: 18 of 41 walks
-(44%) served from memo.** Correctness — cache-on vs `ZB_NOCACHE=1`: **CRITICAL 5=5, HIGH 8=8
+(44%) served from memo.** Correctness — cache-on vs `SCYTHE_NOCACHE=1`: **CRITICAL 5=5, HIGH 8=8
 identical** (auto-destructive set unchanged); the only total delta (257 vs 254) is entirely in
 the POSSIBLE/INFO tail and is environmental drift over the ~7-min gap + moving `-Hours 1`
 window (DNS cache, prefetch files, one licensing task + a Firefox `prefs.js` crossing the
@@ -1021,7 +1146,7 @@ The server's phase regex `PHASE\s+(\d+)[^\d]` truncated fractional phases (55.5,
 tagged with the wrong phase, and the fractional `phase_map` keys that already existed in
 `data/mitre_mapping.json` ("PHASE 55.5", "PHASE 74.5/.6/.7", "PHASE 99.5") were **unreachable**.
 
-- **`ZeroBreach-Server.ps1`** (server-only; engine untouched): `$PREX` → `PHASE\s+(\d+(?:\.\d+)?)[^\d]`;
+- **`Scythe-Server.ps1`** (server-only; engine untouched): `$PREX` → `PHASE\s+(\d+(?:\.\d+)?)[^\d]`;
   phase values keep their decimal (int stays int — no `74.0` artifacts in JSON); all 5 parse
   sites updated (parse loop, `[FINDING]` intercept, STEALTH blob, `Get-ReportFindings`);
   both `Resolve-Mitre` copies now try the exact (possibly fractional) `phase_map` key first,
@@ -1038,12 +1163,12 @@ tagged with the wrong phase, and the fractional `phase_map` keys that already ex
 The user's core requirement — "copy/download/transfer this tool and run on any Windows system" —
 productized:
 
-- **`tools/Build-Release.ps1`** (new): builds `dist/ZeroBreach-V23_<stamp>.zip` + SHA256 sidecar
+- **`tools/Build-Release.ps1`** (new): builds `dist/Scythe-V23_<stamp>.zip` + SHA256 sidecar
   from runtime files only (entry BAT/PS1s, `engine/`, `gui/`, `data/`, README; excludes reports/
   dev docs/work-rig; `-IncludePython` opt-in, `-OutDir` can target a USB directly). Refuses to
   pack unless every script parses clean WITH its UTF-8 BOM and every data JSON parses — the
   release gate is the same as the dev gate. `dist/` gitignored.
-- **MotW self-unblock** (`ZeroBreach-Server.ps1` startup): transferred/downloaded copies carry
+- **MotW self-unblock** (`Scythe-Server.ps1` startup): transferred/downloaded copies carry
   Zone.Identifier ADS on every file; the server now `Unblock-File`s the runtime tree (root
   entry files + `engine/` + `gui/` + `data/`, never `reports/`) at startup. `-ExecutionPolicy
   Bypass` already covers our scripts — this is defense-in-depth for foreign boxes. README gained
@@ -1124,7 +1249,7 @@ severity-distribution numbers.
 ## 2026-07-01 — Engine split into `engine/` modules + WS2 detection port + the dot-source trap fix
 
 Opus had begun (on the `quarantine-work-dump-…` work-rig branch, dropped into the repo as the nested
-`zerobreach/` folder) splitting the monolithic engine into a dot-sourced `engine/` folder and doing a
+`scythe/` folder) splitting the monolithic engine into a dot-sourced `engine/` folder and doing a
 big WS1/WS2 detection expansion. **We adopted that architecture but rebuilt it on `main`'s
 live-validated engine** (which carries FP rounds 1-5 + the safety guard the fork's copy predated), so
 we keep the maintainability win without regressing any FP tuning.
@@ -1135,7 +1260,7 @@ loader + `engine/Phases-1.ps1` (1-58), `Phases-2.ps1` (59-89), `Phases-3.ps1` (9
 `FixMode.ps1`. Split **by contiguous phase RANGE, not category** — phases run in numeric order and
 reuse variables across phases (`$ransomScanFiles` 51→53, `$bcdedit2` 40→58, `$dnsCache2` 59→60);
 dot-sourcing into the loader's one scope preserves that. Six targeted deviations from the monolith
-text: `$global:ZB_ROOT` set unconditionally (Phase 66's self-file guard needs the project root, since
+text: `$global:SCYTHE_ROOT` set unconditionally (Phase 66's self-file guard needs the project root, since
 `$PSScriptRoot` in a module = `engine\`); 4× process-terminating `exit` → `[Environment]::Exit(0)` in
 Summary/FixMode (a plain `exit` in a dot-sourced file only returns to the loader → would fall through
 into FixMode's prompt and hang `-Auto`).
@@ -1179,13 +1304,13 @@ Re-checked live: the Sysinternals readme is now POSSIBLE/Info, Phase 53 auto-des
 
 **New durable rules in CLAUDE.md:** edit modules-not-monolith; every phase module needs its own
 top-level trap; module `exit` must be `[Environment]::Exit`; `$PSScriptRoot` in a module = `engine\`
-(use `$global:ZB_ROOT`).
+(use `$global:SCYTHE_ROOT`).
 
 ## 2026-06-28 — UI phase-"skipping" (display artifact, NOT engine) + durable run logs (`c0477ae`)
 
 User reported a live DEEP run "skipped MANY MANY phases (unless instant)." It did **not** — the
 console log (`KrakenConsole_20260628_152000.log`) shows **all 115 phases ran contiguous, 0 RECOVERED
-ERRORs**; many phases just run in 0–0.3s. Two **server-only** fixes (`ZeroBreach-Server.ps1`; engine
+ERRORs**; many phases just run in 0–0.3s. Two **server-only** fixes (`Scythe-Server.ps1`; engine
 untouched; parse-clean PS 5.1 + 7, all here-strings, BOM intact):
 
 | Bug | Root cause | Fix |
@@ -1196,7 +1321,7 @@ untouched; parse-clean PS 5.1 + 7, all here-strings, BOM intact):
 ## 2026-06-25 — live DEEP run cleanup (recovered-error noise + the REAL Phase-68 flood)
 
 A live admin `-Mode DEEP -Hours 0` run was re-run end-to-end and graded. Four classes of problem,
-all in `ZeroBreach-V23.ps1`, all fixed + re-validated on a clean DEEP run. Three new **safe-wrapper**
+all in `Scythe-V23.ps1`, all fixed + re-validated on a clean DEEP run. Three new **safe-wrapper**
 helpers added next to `Get-AuthSig` (~`:942`); all raw call sites routed through them.
 
 | Bug | Root cause | Fix |
@@ -1259,22 +1384,22 @@ Fix: restructured both so try/catch is a trailing **statement**; path pre-filter
 
 | File | Bug | Fix |
 |---|---|---|
-| `ZeroBreach-V23.ps1` | Hard **parse error** at `:1445` — `"...\$sm:..."` parsed as a scoped variable ref, whole engine failed to load | `$sm:` → `${sm}` |
-| `ZeroBreach-V23.ps1` | Engine blocked on Phase 43 VSS `Read-Host` (`:1811`); server child has no stdin → hung | Guarded with `if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) { $vssChoice="no" }` |
-| `ZeroBreach-V23.ps1` | Fix-mode prompts also blocked in `-Auto` | `if ($Auto) { exit 0 }` right after the STEALTH JSON exit |
-| `ZeroBreach-Server.ps1` | SSE loop's `$idx` never rewound after `EventLog.Clear()` → open tabs went silent on re-run | Rewind `$idx = 0` when `$idx -gt $count` |
+| `Scythe-V23.ps1` | Hard **parse error** at `:1445` — `"...\$sm:..."` parsed as a scoped variable ref, whole engine failed to load | `$sm:` → `${sm}` |
+| `Scythe-V23.ps1` | Engine blocked on Phase 43 VSS `Read-Host` (`:1811`); server child has no stdin → hung | Guarded with `if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) { $vssChoice="no" }` |
+| `Scythe-V23.ps1` | Fix-mode prompts also blocked in `-Auto` | `if ($Auto) { exit 0 }` right after the STEALTH JSON exit |
+| `Scythe-Server.ps1` | SSE loop's `$idx` never rewound after `EventLog.Clear()` → open tabs went silent on re-run | Rewind `$idx = 0` when `$idx -gt $count` |
 | `gui/static/js/app.js` | Non-OK `/api/scan/start` ignored → UI stuck on `● SCANNING` | `.then()` throws on non-OK; `.catch()` resets state, shows `● ERROR` |
 
 ## 2025-05-19 — initial server/launch fixes
 
 | File | Bug | Fix |
 |---|---|---|
-| `ZeroBreach-Server.ps1` | No UTF-8 BOM — PS5.1 read the file as Windows-1252, corrupting box-drawing char bytes | Added UTF-8 BOM (`EF BB BF`) |
-| `ZeroBreach-Server.ps1` | `"[ZeroBreach]..."` inside `catch {}`/`finally {}` triggered a PS5.1 parser crash | Single-quoted strings + concatenation |
-| `ZeroBreach-Server.ps1` | Stderr redirected but never read → child deadlocked when stderr buffer filled | Added `$proc.BeginErrorReadLine()` |
+| `Scythe-Server.ps1` | No UTF-8 BOM — PS5.1 read the file as Windows-1252, corrupting box-drawing char bytes | Added UTF-8 BOM (`EF BB BF`) |
+| `Scythe-Server.ps1` | `"[Scythe]..."` inside `catch {}`/`finally {}` triggered a PS5.1 parser crash | Single-quoted strings + concatenation |
+| `Scythe-Server.ps1` | Stderr redirected but never read → child deadlocked when stderr buffer filled | Added `$proc.BeginErrorReadLine()` |
 | `_python/server.py` | Paths pointed inside `_python/` instead of project root | Added `ROOT_DIR = BASE_DIR.parent` |
-| `ZeroBreach-V23.ps1` | `$global:TW_LABEL = "ALL TIME"` at init hid the interactive time-window menu | Initialized to `""`; auto mode sets it explicitly |
-| `Launch-GUI.bat` | Called nonexistent `PirateLife-GUI.ps1` | Rewrote to call `ZeroBreach-Server.ps1`; added `python` flag |
+| `Scythe-V23.ps1` | `$global:TW_LABEL = "ALL TIME"` at init hid the interactive time-window menu | Initialized to `""`; auto mode sets it explicitly |
+| `Launch-GUI.bat` | Called nonexistent `PirateLife-GUI.ps1` | Rewrote to call `Scythe-Server.ps1`; added `python` flag |
 
 ---
 

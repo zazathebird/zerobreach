@@ -21,7 +21,7 @@
 #    147      IDENTITY        Cloud + DevOps credential theft — the 2026 crown jewels.
 #    148-152  LATERAL / AD    What was done TO this host from the network, and what
 #                             this host can be used to do to the rest of it.
-#    153-156  LAN             The only code in ZeroBreach that touches another machine.
+#    153-156  LAN             The only code in Scythe that touches another machine.
 #                             Requires -Mode HUNT *and* -ScanLan. Read-only, rate-limited.
 #    157-159  SURFACE         Remaining persistence, supply chain / dev tooling, UEFI.
 #    160-162  SYNTHESIS       Correlate findings into scored attack chains, then emit
@@ -52,7 +52,7 @@
 # Defined unconditionally (they cost nothing when the band does not run) so the AST
 # tests can find them and so a future phase outside the gate can reuse them.
 
-function Get-ZbTaskTreeLeaves {
+function Get-ScytheTaskTreeLeaves {
     # Every scheduled task as the REGISTRY sees it, which is the ground truth the
     # Task Scheduler service itself boots from. Walk TaskCache\Tree; a leaf carrying an
     # 'Id' value is a task, and its 'SD' value is the security descriptor.
@@ -92,7 +92,7 @@ function Get-ZbTaskTreeLeaves {
     return ,$out
 }
 
-function ConvertFrom-ZbWmiDate {
+function ConvertFrom-ScytheWmiDate {
     # WMI CIM_DATETIME -> [datetime], or $null. ManagementDateTimeConverter throws on a
     # malformed value, and an unhandled throw here would unwind to the module trap and
     # cost the rest of the phase.
@@ -101,7 +101,7 @@ function ConvertFrom-ZbWmiDate {
     try { return [System.Management.ManagementDateTimeConverter]::ToDateTime($Value) } catch { return $null }
 }
 
-function Test-ZbNameAnomaly {
+function Test-ScytheNameAnomaly {
     # Filename-level anti-forensics (ADVERSARY_ANALYSIS.md E5). Returns a reason string,
     # or '' when the name is unremarkable. Operates on the LEAF name only.
     param([string]$Name)
@@ -133,7 +133,7 @@ if ($PhasePlan.Hunt) {
     # ── PHASE 134: SCHEDULED TASK CROSS-VIEW ──────────────────────────────────
     Show-PhaseHeader "PHASE 134" "SCHEDULED TASK CROSS-VIEW (HIDDEN / SD-DELETED TASKS)" "ROOTKIT"
     Out-Typewriter "COMPARING THE TASK SCHEDULER API AGAINST THE REGISTRY IT BOOTS FROM..." "HUNT"
-    $htLeaves = Get-ZbTaskTreeLeaves
+    $htLeaves = Get-ScytheTaskTreeLeaves
     $htApi    = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $htApiOk  = $false
     try {
@@ -230,8 +230,8 @@ if ($PhasePlan.Hunt) {
         if ([string]::IsNullOrWhiteSpace($ppid) -or $ppid -eq '0') { continue }
         $par = $paById[$ppid]
         if ($null -eq $par) { continue }          # parent exited — normal, not evidence
-        $cKid = ConvertFrom-ZbWmiDate "$($p.CreationDate)"
-        $cPar = ConvertFrom-ZbWmiDate "$($par.CreationDate)"
+        $cKid = ConvertFrom-ScytheWmiDate "$($p.CreationDate)"
+        $cPar = ConvertFrom-ScytheWmiDate "$($par.CreationDate)"
         if ($null -eq $cKid -or $null -eq $cPar) { continue }
         # Allow a second of slack: the two timestamps come from the same clock but are
         # sampled by different subsystems, and a genuine parent created in the same tick
@@ -393,7 +393,7 @@ if ($PhasePlan.Hunt) {
         $fn   = "$($f.Name)"
         $full = "$($f.FullName)"
         if ($full -match $HUNT_FILENAME_BENIGN_RE) { continue }
-        $why = Test-ZbNameAnomaly $fn
+        $why = Test-ScytheNameAnomaly $fn
         if (-not $why -and $full.Length -ge 250) {
             $why = "sits at a path length of $($full.Length) characters, at or past the MAX_PATH boundary where many tools — including parts of this scan — silently stop being able to open it"
         }

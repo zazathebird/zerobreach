@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// ZeroBreach VFX checker — drives Chrome/Edge over the DevTools Protocol against
+// Scythe VFX checker — drives Chrome/Edge over the DevTools Protocol against
 // gui/static/fx-preview.html (which loads the REAL themes.js / fx.js).
 //   node tools/check-visuals.mjs          → run the self-test audit + capture a gallery, print PASS/FAIL
 //   node tools/check-visuals.mjs --open   → just open the interactive harness in your browser
@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PAGE = join(ROOT, 'gui', 'static', 'fx-preview.html');
 const OUT  = join(ROOT, 'fx-audit');
-const PROF = join(tmpdir(), 'zb-vfx-profile');
+const PROF = join(tmpdir(), 'scythe-vfx-profile');
 
 const CANDIDATES = [
   'C:/Program Files/Google/Chrome/Application/chrome.exe',

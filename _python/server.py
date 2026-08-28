@@ -1,5 +1,5 @@
 """
-ZeroBreach V23 — Python/Flask WebSocket Bridge
+Scythe V23 — Python/Flask WebSocket Bridge
 Spawns PowerShell engine, streams output to HTML frontend via SocketIO.
 """
 
@@ -22,7 +22,7 @@ from flask_socketio import SocketIO, emit
 # ── App Setup ─────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).parent
 ROOT_DIR = BASE_DIR.parent  # project root (one level up from _python/)
-PS_SCRIPT = ROOT_DIR / "ZeroBreach-V23.ps1"
+PS_SCRIPT = ROOT_DIR / "Scythe-V23.ps1"
 REPORTS_DIR = ROOT_DIR / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
 
@@ -31,7 +31,7 @@ app = Flask(
     template_folder=str(ROOT_DIR / "gui" / "templates"),
     static_folder=str(ROOT_DIR / "gui" / "static"),
 )
-app.config["SECRET_KEY"] = "zerobreach-kraken-2024"
+app.config["SECRET_KEY"] = "scythe-kraken-2024"
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
 
 # ── Global Scan State ─────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ THREAT_MAP = {
     "Other": ["backdoor", "rootkit", "exploit", "cve-", "lolbin", "uac bypass"]
 }
 
-# Mirror of $SEV_TAG / $SEV_RX in ZeroBreach-Server.ps1 — keep the two in sync.
+# Mirror of $SEV_TAG / $SEV_RX in Scythe-Server.ps1 — keep the two in sync.
 # The engine's bracket tag is authoritative; the prose words are bare substrings and
 # the engine prints its own prose ("CHECKING FOR SUSPICIOUS DRIVERS...",
 # "-> [OK ] NO ANOMALOUS SERVICES."), which used to colour a clean scan red.
@@ -349,7 +349,7 @@ def get_report(filename):
 
 @socketio.on("connect")
 def on_connect():
-    emit("connected", {"status": "ZeroBreach bridge online"})
+    emit("connected", {"status": "Scythe bridge online"})
 
 @socketio.on("ping_state")
 def on_ping():
@@ -374,7 +374,7 @@ def find_free_port(start=5000):
 if __name__ == "__main__":
     port = find_free_port()
     url = f"http://localhost:{port}"
-    print(f"[ZeroBreach] Starting server on {url}")
+    print(f"[Scythe] Starting server on {url}")
     
     def open_browser():
         time.sleep(1.2)

@@ -1,6 +1,6 @@
 # Runtime output
 reports/
-zerobreach_launch_error.log
+scythe_launch_error.log
 
 # FX visual-audit gallery output (regenerable via tools/check-visuals.mjs)
 fx-audit/
@@ -18,6 +18,8 @@ build/
 # Its engine-split architecture + WS1/WS2 research were adopted onto main 2026-07-01
 # (see CHANGELOG). Kept locally as a reference for the remaining WS3-WS6 items; safe to
 # delete once those are ported. Ignored so it never gets committed into the outer repo.
+# Both spellings: the drop historically arrived under the pre-rename name.
+scythe/
 zerobreach/
 
 # Same work-rig-drop pattern, 2026-08-18: an untracked zerobreach-main/ folder appeared
@@ -30,7 +32,7 @@ zerobreach/
 zerobreach-main/
 _archive/zerobreach-main-dump/native-app/src-tauri/target/
 
-# .NET build output for the native engine (ZeroBreach.*). Note the leading slash is
+# .NET build output for the native engine (Scythe.*). Note the leading slash is
 # deliberately ABSENT — every one of the five projects has its own bin/ and obj/, and
 # `dotnet publish` writes the single-file exe under bin/. All of it is reproducible from
 # source with `dotnet build`; none of it belongs in the repo.

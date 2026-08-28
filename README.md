@@ -1,15 +1,15 @@
-# ZeroBreach — "Kraken Console"
+# Scythe — "Kraken Console"
 
 Windows-only MSP incident-response / malware-detection tool. Scans a local machine for
 indicators of compromise, triages findings with severity + MITRE ATT&CK tagging, and offers
 reversible, operator-confirmed remediation behind a hard safety guard.
 
-**ZeroBreach ships as two engines that do the same job.**
+**Scythe ships as two engines that do the same job.**
 
 | | Native engine (primary) | PowerShell engine (fallback) |
 |---|---|---|
-| What it is | `zbscan` — a single self-contained `win-x64` executable | `ZeroBreach-V23.ps1` + `engine\*.ps1`, run by `powershell.exe` |
-| Built from | C# / .NET 8 (`ZeroBreach.*` projects) | PowerShell 5.1 |
+| What it is | `scythescan` — a single self-contained `win-x64` executable | `Scythe-V23.ps1` + `engine\*.ps1`, run by `powershell.exe` |
+| Built from | C# / .NET 8 (`Scythe.*` projects) | PowerShell 5.1 |
 | Delivery | Download one file, run it. No install, no .NET runtime. | Copy a folder, double-click `Launch-GUI.bat` |
 | Detection surface | 10 scanners / 63 checks | 162 phases (`-Mode HUNT`) |
 | Why it exists | The goal. One file a technician downloads and runs. | The escape hatch — see below. |
@@ -38,15 +38,15 @@ away by Defender.** Both are maintained. See `BLUEPRINT.md` §2 for the full rea
 
 ### Native engine
 ```powershell
-zbscan --mode full
+scythescan --mode full
 ```
 Single executable, self-elevates, writes a report next to itself. Exit codes: `0` clean,
 `2` findings, `3` coverage gaps, `1` usage/operational error.
 
 Add `--log <path>` to keep a plain-text transcript of the console alongside the reports —
 written as the run happens, so a cancelled or crashed scan still leaves a readable file.
-(Not to be confused with `zbscan log`, which is the tamper-evident record of remediation
-actions.) `zbscan help` lists every option.
+(Not to be confused with `scythescan log`, which is the tamper-evident record of remediation
+actions.) `scythescan help` lists every option.
 
 ### PowerShell engine
 1. Double-click **`Launch-GUI.bat`**.
@@ -77,7 +77,7 @@ Win10-lineage builds, so Win10 support *is* server support. See `BLUEPRINT.md` �
 powershell -ExecutionPolicy Bypass -File tools\Build-Release.ps1
 ```
 Validates every script (parse + BOM) and data file (JSON), then writes
-`dist\ZeroBreach-V23_<stamp>.zip` + a `.sha256` sidecar. `-OutDir D:\` writes straight to USB.
+`dist\Scythe-V23_<stamp>.zip` + a `.sha256` sidecar. `-OutDir D:\` writes straight to USB.
 
 **B. Copy the whole folder** — works, but brings dev files and old reports along.
 
@@ -89,11 +89,11 @@ Validates every script (parse + BOM) and data file (JSON), then writes
 
 ## Scan modes
 
-Pick in the GUI, or pass `-Mode` (PowerShell engine) / `--mode` (native `zbscan`) on the CLI.
+Pick in the GUI, or pass `-Mode` (PowerShell engine) / `--mode` (native `scythescan`) on the CLI.
 
 **The two engines do not accept the same set.** `-Mode` takes all six below. **`--mode` accepts
 only `QUICK`, `FULL`, `DEEP` and `STEALTH`** — the native engine has no PARANOID or HUNT and
-hard-errors on them (`ZeroBreach.Cli/CliOptions.cs`).
+hard-errors on them (`Scythe.Cli/CliOptions.cs`).
 
 | Mode | Roughly | PS phase ceiling |
 |---|---|---|
@@ -159,7 +159,7 @@ the scan.
 ## Running the PowerShell engine directly
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Mode FULL -Hours 0 -Auto
+powershell -ExecutionPolicy Bypass -File .\Scythe-V23.ps1 -Mode FULL -Hours 0 -Auto
 ```
 
 | Param | Values | Notes |
@@ -175,22 +175,22 @@ powershell -ExecutionPolicy Bypass -File .\ZeroBreach-V23.ps1 -Mode FULL -Hours 
 | `-Schedule` | DAILY / WEEKLY | Registers a 02:00 SYSTEM scheduled task, then exits |
 | `-SmtpTo` / `-SmtpFrom` / `-SmtpServer` | string | Email delivery for scheduled runs |
 
-`ZeroBreach-Server.ps1` accepts `-Port <n>` (default: auto-pick a free port) and `-NoBrowser`.
+`Scythe-Server.ps1` accepts `-Port <n>` (default: auto-pick a free port) and `-NoBrowser`.
 
 ---
 
 ## Where things live
 
 ```
-ZeroBreach.Cli/             Native engine entry point (zbscan)
-ZeroBreach.Core/            Finding model, ledger, budgets, profiles, signatures, reporting
-ZeroBreach.Scanners/        The 10 detection scanners + their signature JSON. Read-only.
-ZeroBreach.Remediation/     The only module that mutates the machine
-ZeroBreach.Tests/           xUnit suite
+Scythe.Cli/             Native engine entry point (scythescan)
+Scythe.Core/            Finding model, ledger, budgets, profiles, signatures, reporting
+Scythe.Scanners/        The 10 detection scanners + their signature JSON. Read-only.
+Scythe.Remediation/     The only module that mutates the machine
+Scythe.Tests/           xUnit suite
 
 Launch-GUI.bat              PowerShell engine entry point (double-click)
-ZeroBreach-Server.ps1       Local web server for the PS engine
-ZeroBreach-V23.ps1          PS scan-engine loader (dot-sources engine\)
+Scythe-Server.ps1       Local web server for the PS engine
+Scythe-V23.ps1          PS scan-engine loader (dot-sources engine\)
 engine\                     The 162 PS scan phases + summary + fix mode
 gui\                        Web UI (HTML/CSS/JS)
 
@@ -212,7 +212,7 @@ _python\                    Alternate Flask server (parked)
 - **The native exe was quarantined on arrival** — expected until code signing is in place. Use
   the PowerShell engine at that site and see `BLUEPRINT.md` §2.
 - **Reports not appearing** — check `reports\` is writable (not read-only or an ejected drive).
-- **Launch failure** — `Launch-GUI.bat` stays open and writes `zerobreach_launch_error.log`.
+- **Launch failure** — `Launch-GUI.bat` stays open and writes `scythe_launch_error.log`.
 
 ---
 
@@ -225,7 +225,7 @@ _python\                    Alternate Flask server (parked)
 | `HANDOFF.md` | Current session state and validation runbooks. |
 | `CHANGELOG.md` | Dated history of every fix and false-positive tuning round. |
 | `TEST_LAB_GUIDE.md` | Building and running the malware test lab. |
-| `INSTRUCTIONS_AI.md` | Native (`zbscan`) engine architecture + the catalog of all 63 checks. Native only. |
+| `INSTRUCTIONS_AI.md` | Native (`scythescan`) engine architecture + the catalog of all 63 checks. Native only. |
 | `_ENGINE_SPEC_FOR_REBUILD.md` | Normative build contract for the native engine — read it for *why* a rule exists. |
 | `ADVERSARY_ANALYSIS.md` | Adversarial assessment that produced the 134-162 band. **Historical — read its status banner first.** |
 | `docs/ATTACK_LOG.md` | Authorized adversary-emulation log against the operator's own hardware; every technique that works becomes a detection. |

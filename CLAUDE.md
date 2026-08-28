@@ -10,13 +10,13 @@ Guidance for Claude Code (claude.ai/code) working in this repo.
 
 ## What This Project Is
 
-ZeroBreach is a **Windows-only MSP incident-response tool**, shipped as **two independent engines
+Scythe is a **Windows-only MSP incident-response tool**, shipped as **two independent engines
 that do the same job**:
 
-1. **Native engine (primary)** — `zbscan`, a single self-contained `win-x64` executable built from
-   the C# / .NET 8 `ZeroBreach.*` projects. 10 scanners / 63 checks. This is the product goal: one
+1. **Native engine (primary)** — `scythescan`, a single self-contained `win-x64` executable built from
+   the C# / .NET 8 `Scythe.*` projects. 10 scanners / 63 checks. This is the product goal: one
    file a technician downloads and runs, no install, no runtime.
-2. **PowerShell engine (fallback)** — `ZeroBreach-V23.ps1` + `engine/*.ps1` behind a PowerShell HTTP
+2. **PowerShell engine (fallback)** — `Scythe-V23.ps1` + `engine/*.ps1` behind a PowerShell HTTP
    server and a cyberpunk HTML/JS frontend. **162 phases** (133 in DEEP, 162 in `-Mode HUNT`). A
    parked Python/Flask server (`_python/server.py`) is an alternative to the PS server.
 
@@ -31,7 +31,39 @@ per-check `Completed`/`Inconclusive`/`Skipped` status, deterministic finding ids
 table in `BLUEPRINT.md` §2.
 
 The PS engine still self-identifies as "V22"/"V23" in some strings (scheduled task name
-`ZeroBreach_V22_Scheduled`, banners) — **intentional, not a bug to fix.**
+`Scythe_V22_Scheduled`, banners) — **intentional, not a bug to fix.**
+
+### The project was renamed to Scythe on 2026-08-27 — the old name must not come back
+
+Everything was called **ZeroBreach** until 2026-08-27. The rename was global and mechanical:
+`ZeroBreach`/`ZEROBREACH`/`zerobreach` → `Scythe`/`SCYTHE`/`scythe`, and the short internal
+prefixes with it — `ZB_ROOT` → `SCYTHE_ROOT`, `Get-ZbProp` → `Get-ScytheProp`, `zbApi()` →
+`scytheApi()`, `ZBSound` → `ScytheSound`, `zbfx-*` → `scythefx-*`, `--zb-accent` →
+`--scythe-accent`, `X-ZB-Token` → `X-SCYTHE-Token`, `zbscan` → `scythescan`. 1,405 name
+occurrences and 243 distinct `zb`-stem identifiers across 377 files, plus 36 renamed paths.
+Verified after: `dotnet build` 18 projects 0 warnings, `dotnet test` **1,664 passed / 0 failed /
+14 skipped**, and the full PowerShell suite green.
+
+Three things about it are durable rules, not history:
+
+- **The old name survives in exactly five places, and nowhere else.** This section; the one
+  loader line described below; `docs/MERGE_ARTIFACT_LAYER.md`, which names the pre-rename
+  archive folders; the dated history in `CHANGELOG.md`, `HANDOFF.md` and `docs/_history/`; the `.gitignore`
+  rules naming the `zerobreach-main` drop that `_archive/` still holds; and `_archive/` itself. To
+  check for a regression, run the case-insensitive search for the old product name and the
+  `zb` identifier stem over the tree excluding `.git`, `_archive`, `bin` and `obj`, then confirm
+  every hit is one of those five. `_archive/` is excluded on purpose: it is a 432 MB dump of the
+  pre-rename repo including compiled build artifacts, and rewriting names inside it would be
+  meaningless.
+- **`V22`/`V23` in strings stays.** `Scythe_V22_Scheduled`, the banners, `Scythe-V23.ps1` — the
+  version self-identification was already deliberate before the rename and still is.
+- **A machine scheduled before the rename carries a `ZeroBreach_V22_Scheduled` task.** The
+  `-Schedule` branch in the loader now unregisters it before registering the new one, so an
+  existing deployment upgrades to one nightly scan rather than two. That is the **only** place
+  the old name may legitimately appear in shipped code. Do not add a second.
+
+The pre-rename tree is copied whole to `~/Downloads/claude/zerobreach-backup-prerename/`. Delete
+it once the rename has been exercised on Windows.
 
 ### The detection vocabulary is deliberate — do not sanitise it
 
@@ -67,30 +99,30 @@ Launch-GUI.bat            # Default — pure PowerShell server, no Python (recom
 Launch-GUI.bat python     # Python/Flask server (needs deps installed first)
 ```
 
-`Launch-GUI.bat` self-elevates to admin, then launches `ZeroBreach-Server.ps1`. On failure the window
-stays open and writes `zerobreach_launch_error.log` to the project root. Requires Windows 10/11,
+`Launch-GUI.bat` self-elevates to admin, then launches `Scythe-Server.ps1`. On failure the window
+stays open and writes `scythe_launch_error.log` to the project root. Requires Windows 10/11,
 PowerShell 5.1+, admin rights.
 
 ## Architecture
 
-**Data flow (both servers):** Browser → POST `/api/scan/start` → server spawns `ZeroBreach-V23.ps1`
+**Data flow (both servers):** Browser → POST `/api/scan/start` → server spawns `Scythe-V23.ps1`
 → stdout streamed line-by-line → parsed/classified → events pushed to frontend in real time.
 
 **Three layers:**
-1. **Server** — `ZeroBreach-Server.ps1` (default) or `_python/server.py`. Hosts the UI, manages scan
+1. **Server** — `Scythe-Server.ps1` (default) or `_python/server.py`. Hosts the UI, manages scan
    state, spawns and reads the PS subprocess.
 2. **`gui/static/js/app.js`** — all frontend logic; view switching (boot → config → scan →
    remediation). Native `EventSource('/api/events')` (SSE) — **matches the PS server; there is no
    SSE/SocketIO mismatch** (the Python server uses SocketIO, but it's parked).
-3. **`ZeroBreach-V23.ps1`** — the scan engine. Called via subprocess; **not modified for UI changes.**
+3. **`Scythe-V23.ps1`** — the scan engine. Called via subprocess; **not modified for UI changes.**
 
 ### File structure
 
 ```
 ├── Launch-GUI.bat              Entry point (self-elevates)
-├── ZeroBreach-Server.ps1       Pure-PS HTTP server (default). HttpListener + SSE at /api/events.
+├── Scythe-Server.ps1       Pure-PS HTTP server (default). HttpListener + SSE at /api/events.
 │                               SAVED WITH UTF-8 BOM — do not remove (see rules).
-├── ZeroBreach-V23.ps1          THIN LOADER (also BOM). param()/elevation/schedule/globals/ALL
+├── Scythe-V23.ps1          THIN LOADER (also BOM). param()/elevation/schedule/globals/ALL
 │                               helpers/Get-Sig/Get-Perm/banner/resilience trap/menus, then
 │                               dot-sources engine/* in execution order. Self-elevates via RunAs.
 ├── engine/                     Dot-sourced phase modules (each UTF-8 BOM). Split BY RANGE, not
@@ -128,10 +160,10 @@ PowerShell 5.1+, admin rights.
 │       ├── css/fx.css          VFX overlays, cmd palette, danger modal, cinematic FX toggles
 │       └── js/  (load order: sound → themes → fx → kraken → app)
 │           ├── app.js          SSE client, views, cmd palette (Ctrl+K), PURGE modal, CINE_FX
-│           ├── sound.js        ZBSound — synthesized Web Audio SFX (no audio files)
-│           ├── themes.js       ZBThemes — 12 themes + secret KRAKEN theme (inline body CSS vars)
-│           ├── fx.js           ZBFX — canvas renderers + intensity tiers OFF/LITE/FULL/MAX
-│           └── kraken.js       ZBKraken — ~19s "kraken" unlock cinematic
+│           ├── sound.js        ScytheSound — synthesized Web Audio SFX (no audio files)
+│           ├── themes.js       ScytheThemes — 12 themes + secret KRAKEN theme (inline body CSS vars)
+│           ├── fx.js           ScytheFX — canvas renderers + intensity tiers OFF/LITE/FULL/MAX
+│           └── kraken.js       ScytheKraken — ~19s "kraken" unlock cinematic
 ├── _python/                    Parked Flask/SocketIO server + PyInstaller spec (see README there)
 ├── data/
 │   ├── ioc_defaults.json            Default IOC list for -IocFile
@@ -147,7 +179,7 @@ PowerShell 5.1+, admin rights.
 For the Python server specifically, read `_python/README_CLAUDE_CODE.md` (full route table, SocketIO
 payloads, PyInstaller notes).
 
-### Scan Engine CLI (`ZeroBreach-V23.ps1`)
+### Scan Engine CLI (`Scythe-V23.ps1`)
 
 Self-elevates (`Start-Process -Verb RunAs`, re-passing args). Params:
 
@@ -219,7 +251,7 @@ These are hard constraints distilled from every past regression (`CHANGELOG.md` 
 Violating one silently breaks a scan, hangs the tool, or damages a user's machine.
 
 ### Engine is split — edit the modules, and mind the two dot-source traps
-- **The engine is `ZeroBreach-V23.ps1` (thin loader) + `engine/*.ps1` (dot-sourced phase modules).**
+- **The engine is `Scythe-V23.ps1` (thin loader) + `engine/*.ps1` (dot-sourced phase modules).**
   Edit a **phase** in the matching `engine/*.ps1`; edit **globals/helpers/Get-Sig loads/elevation**
   in the loader. All modules dot-source into the loader's single scope, so cross-phase variables,
   functions and traps carry across exactly as when it was one file — but two gotchas bite ONLY after
@@ -235,7 +267,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   (this hung `-Auto`: `Summary.ps1`'s exit fell through into `FixMode.ps1`'s interactive prompt).
   Applied in `Summary.ps1` + `FixMode.ps1`. The loader's own `exit`s (elevation/schedule) are fine.
 - **`$PSScriptRoot` inside a module resolves to `engine\`, not the project root** — use
-  `$global:ZB_ROOT` (set unconditionally near the top of the loader) for project-root paths.
+  `$global:SCYTHE_ROOT` (set unconditionally near the top of the loader) for project-root paths.
 - **Keep all 6 files parse-clean on live `powershell.exe` 5.1 AND `pwsh` 7, UTF-8 BOM intact.** The
   split preserves numeric phase order; if you subdivide a module further, cut only at a `# SECTION N`
   banner (comment lines, never mid-statement).
@@ -257,7 +289,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
    nothing is lost. If it is **not** a good time to clear (mid-edit, unsaved reasoning, an
    in-flight scan), say that too.
 
-### PowerShell engine safety (`ZeroBreach-V23.ps1`)
+### PowerShell engine safety (`Scythe-V23.ps1`)
 - **PowerShell variables are CASE-INSENSITIVE — never give a local the same letters as a
   broader-scope variable.** `$sev = 'INFO'` inside a function silently shadows a script-scope
   `$SEV` dictionary, so `$SEV.Keys` reads the *string* and returns `$null` — no error, the loop
@@ -303,7 +335,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   70 of them `_comment_*` strings — and `Join-AllowRegex` resolves a bare key name through
   `Get-Sig $Name`. Allowlist keys are distinguished by naming convention only (`*_benign_*`,
   `*_allow*`, `trusted_*`). A `_comment_fp_allowlists` marker string exists and is the likely
-  source of the belief. This matters now because `lib/ZeroBreach.Rules/Linting` was written to
+  source of the belief. This matters now because `lib/Scythe.Rules/Linting` was written to
   the documented schema and therefore cannot read the real file — one side has to move, and that
   is an open decision, not a bug to patch on sight.
 - **An allowlist entry matched against attacker-controllable text (run-key values, command lines,
@@ -313,7 +345,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   2026-07-02). Path-only allowlists are fine — attackers don't control where OneDrive installs.
 - **Prefer downgrade-to-POSSIBLE over deleting a detection.** POSSIBLE is shown but never auto-acted-on.
 
-### Remediation safety (`ZeroBreach-Server.ps1` — engine stays audit-only in `-Auto`)
+### Remediation safety (`Scythe-Server.ps1` — engine stays audit-only in `-Auto`)
 - **`Test-ProtectedTarget` = HARD block**, defense-in-depth across all 3 layers (server tags
   `protected`; frontend disables the checkbox + excludes from auto/Select-All/POST; the
   `$script:REMEDIATE_SCRIPT` runspace **refuses** even on manual override, reporting `blocked`). Covers
@@ -333,7 +365,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   (`$script:AUTH_TOKEN`, `RNGCryptoServiceProvider` — **never `Get-Random`**, which is a seeded
   `System.Random` and therefore guessable) and opens the browser at `/?t=<token>`. A new route is
   gated automatically by the `$path -like '/api/*'` check in `Handle-Request`; a new **frontend**
-  call is not — **wrap every new fetch/EventSource URL in `zbApi()`** or it will 401. Static assets
+  call is not — **wrap every new fetch/EventSource URL in `scytheApi()`** or it will 401. Static assets
   stay ungated on purpose so a tokenless browser can still load the page and explain itself.
 - **Never re-add an `Access-Control-Allow-*` header.** Same-origin needs no CORS, and `ACAO: *` on
   an elevated remediation API is what made a drive-by web page able to run commands as admin. The
@@ -357,7 +389,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 ### Guard mirrors + destructive-command inspection (added 2026-08-18, audit H5/H6/H7/H7b; extended 2026-08-19, M1)
 - **The guard exists in THREE copies and they must change together:** the main thread
   (`ConvertTo-GuardPath` / `Test-DestructiveRunCmd` / `Test-ProtectedTarget` in
-  `ZeroBreach-Server.ps1`), the remediation runspace (`…-RGuardPath` / `Test-RDestructiveRunCmd` /
+  `Scythe-Server.ps1`), the remediation runspace (`…-RGuardPath` / `Test-RDestructiveRunCmd` /
   `Test-RProtected`, inside `$script:REMEDIATE_SCRIPT`), and the **engine** (`ConvertTo-EGuardPath`
   / `Test-EDestructiveRunCmd` / `Test-EProtected` in the loader, used by `Invoke-FixMode` — the
   interactive CLI is the fourth executor and had no guard at all until 2026-08-19). The tables
@@ -449,7 +481,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   suppresses everything it finds and still prints its `[OK ]` banner. `Join-AllowRegex` now
   refuses any pattern that does not compile, blows a 150 ms match budget, or is **universal**
   (matches five deliberately unrelated canary strings). Refusals **fail closed** — the entry is
-  dropped so the phase goes NOISY, never BLIND — and land in `$global:ZB_SIG_TAMPER`, which
+  dropped so the phase goes NOISY, never BLIND — and land in `$global:SCYTHE_SIG_TAMPER`, which
   `engine/Phases-0.ps1` reports as CRITICAL. **Never move an allowlist off `Join-AllowRegex`**,
   and never "fix" a noisy phase by adding a broad pattern — the engine will now accuse itself of
   being compromised, correctly.
@@ -459,7 +491,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   and every `HKLM\SOFTWARE` phase read the wrong half of the machine. This fires by ACCIDENT far
   more often than by attack (a technician's 32-bit shell, an x86 RMM agent, an x86 PS2EXE build).
   Use **`Get-RegVal64` / `Get-RegNames64` / `Get-RegSubKeys64`** for `HKLM\SOFTWARE` and
-  `$global:ZB_SYS32` for System32. `$global:ZB_IS_WOW64` records the condition and Phase 0 reports
+  `$global:SCYTHE_SYS32` for System32. `$global:SCYTHE_IS_WOW64` records the condition and Phase 0 reports
   it CRITICAL. **Do not add an auto-relaunch** — it would orphan the redirected stdout the server
   reads, and the GUI would see the scan die.
 - **`engine/Phases-0.ps1` is PREFLIGHT, not a numbered phase.** It must never print a
@@ -475,7 +507,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 
 ### HUNT band 134-162 (`engine/Phases-5/6/7.ps1`, added 2026-08-19)
 - **`-Mode HUNT` sits above PARANOID with a ceiling of 162, and that ceiling is mirrored in FOUR
-  places** — the loader's `$PhasePlan`, `$MODE_PHASES` in `ZeroBreach-Server.ps1`, `MODE_PHASES`
+  places** — the loader's `$PhasePlan`, `$MODE_PHASES` in `Scythe-Server.ps1`, `MODE_PHASES`
   in `_python/server.py`, and the mode whitelist in both servers. `Test-Hunt-Band.ps1` checks them
   together. HUNT is deliberately NOT folded into DEEP: the band walks process memory (141-145), so
   it costs real wall-clock and must stay an explicit operator choice. (**It does not hash the
@@ -518,7 +550,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   be added.** The original F6 brief specified "LAN band, opt-in, requires `-ScanLan`"; that scope
   was deliberately dropped. Every check is a registry or CIM read of the machine's own posture,
   sending **no packets** and enumerating **no network**. Two reasons, and both survive re-reading:
-  ZeroBreach runs on client networks under an MSP contract, and a tool that probes the customer's
+  Scythe runs on client networks under an MSP contract, and a tool that probes the customer's
   LAN can trip the customer's own IDS while being indistinguishable on the wire from what it
   exists to detect; and every finding here is answerable from the host's own registry, so probing
   buys no detection. `docs/ATTACK_LOG.md` is the evidence — everything learned by scanning that
@@ -568,7 +600,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   stops the machine logging in at all, so the finding carries the stock value and a warning
   instead of a fix.
 - **`$PhasePlan.Extended` gates the band; the ceiling is mirrored in FOUR places** —
-  the loader's `$PhasePlan`, `$MODE_PHASES` in `ZeroBreach-Server.ps1`, `MODE_PHASES` in
+  the loader's `$PhasePlan`, `$MODE_PHASES` in `Scythe-Server.ps1`, `MODE_PHASES` in
   `_python/server.py`, and the `$ScanState.PhaseTotal` default. Change one, change all four
   (the test checks them together).
 
@@ -602,7 +634,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 
 ### Authenticode memo (WS4, added 2026-08-19)
 - **`Get-AuthSig` is memoised per path** (`$global:AUTHSIG_CACHE`, case-insensitive key,
-  bounded by `AUTHSIG_CACHE_MAX`, sharing the `ZB_NOCACHE` kill-switch). It is the engine's
+  bounded by `AUTHSIG_CACHE_MAX`, sharing the `SCYTHE_NOCACHE` kill-switch). It is the engine's
   most expensive repeated operation — the cert chain build does online CRL/OCSP — and 14
   call sites across 13 phases verify overlapping file sets. A `$null` (locked file) result
   is cached too: that is a real answer and re-asking costs the same timeout.
@@ -623,7 +655,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   `Test-Extended-Band.ps1`.** The harness stubs ~20 loader helpers and verifies that stub contract
   against the loader via the AST, so a renamed helper fails the test instead of drifting. Every test pulls the real functions out of the shipped source
   **via the AST**, so a test cannot drift from the code it guards. **`ParseFile` on
-  `ZeroBreach-Server.ps1` does NOT validate the runspace here-strings** (`$script:SCAN_SCRIPT`,
+  `Scythe-Server.ps1` does NOT validate the runspace here-strings** (`$script:SCAN_SCRIPT`,
   `SSE_SCRIPT`, `REMEDIATE_SCRIPT`) — `Test-EmbeddedRunspaces.ps1` is what catches a syntax error
   in those.
 - **The suite runs on Linux. `tools\tests\Verify-OnWindows.ps1` is the other half** and must be run
@@ -650,7 +682,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   means a module trap is missing, not display cadence.
 
 ### GUI
-- **Adding a cinematic effect = one `CINE_FX` entry in `app.js` + the matching `body.zbfx-<id>` CSS**
+- **Adding a cinematic effect = one `CINE_FX` entry in `app.js` + the matching `body.scythefx-<id>` CSS**
   in the "CINEMATIC FX TOGGLES" block of `fx.css`. Keep it theme-var-tinted (`--accent`/`--accent-2`/
   `--accent-glow`) and **OFF by default**. The cinematic layer is deliberately **independent** of the
   intensity tier — don't re-gate it on `body.fx-off`. Honor `prefers-reduced-motion`.
@@ -667,7 +699,7 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **MITRE ATT&CK tagging** — server loads `data/mitre_mapping.json` into the scan runspace;
   `Resolve-Mitre`/`Resolve-MitreMain` resolve each finding (keyword → threat-type → phase map) and
   attach `mitre {id,name,tactic,url}`. Frontend renders a clickable `.item-mitre` badge.
-- **HTTP routes** (`ZeroBreach-Server.ps1`): `GET|POST /api/profiles` (scan profiles — 4 read-only
+- **HTTP routes** (`Scythe-Server.ps1`): `GET|POST /api/profiles` (scan profiles — 4 read-only
   built-ins from `$script:PROFILE_BUILTINS` + user presets in `reports/scan_profiles.json`; save is
   upsert-by-name with fail-closed validation; built-ins deliberately carry **no `ioc_file` key** so
   applying one never blanks the IOC Manager's path. **All POST bodies parse via `Read-JsonBody` —
@@ -699,45 +731,45 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   in `data/detection_signatures.json` (WS2 keys: `byovd_*`, `known_malware_mutexes`, `ransom_note_*`,
   `c2_pipe_regex_anchored`, `banking_named_pipes`, `*_behavior_rules`, `inhibit_recovery_rules`, …).
 - **GUI feature layer** — 12 themes + secret KRAKEN (type "kraken" for a ~19s cinematic, sets
-  `zb_god=1`); synthesized sound; canvas VFX; command palette (Ctrl+K); EXECUTE REMEDIATION requires
+  `scythe_god=1`); synthesized sound; canvas VFX; command palette (Ctrl+K); EXECUTE REMEDIATION requires
   typing `PURGE`. **MSP Mode**: type "msp"/"gannon"/"staples" pre-scan → `gannon-orange` theme + badge.
 - **Boot self-heal** — inline watchdog in `index.html <head>` reloads once (capped at 2 via
-  `sessionStorage.zb_boot_retry`) if `window.__ZB_BOOTED` isn't set within 9s; server polls
+  `sessionStorage.scythe_boot_retry`) if `window.__SCYTHE_BOOTED` isn't set within 9s; server polls
   `Invoke-WebRequest` until 200 before opening the browser.
 
 ## Remediation test tripwires (safe, benign — never commit)
 
 To validate scan→findings→remediation **without real malware**, drop inert artifacts named
-`ZeroBreach_TEST_DELETEME` that trip a detection phase with a known fix action, then run a FULL/DEEP
+`Scythe_TEST_DELETEME` that trip a detection phase with a known fix action, then run a FULL/DEEP
 scan (all time) → FINDINGS → REMEDIATION → `PURGE`. `.bat`/`.cmd` are plain text (zero AV risk).
 
 | Artifact | Detection | Severity | FixAction |
 |---|---|---|---|
-| `%TEMP%\ZeroBreach_TEST_DELETEME.bat` | Phase 10 — exe-ext in Temp | HIGH | `DeleteFile` |
-| `Downloads\ZeroBreach_TEST_DELETEME.cmd` | Phase 10 — exe-ext in Downloads | POSSIBLE | `DeleteFile` |
-| `HKCU:\…\Run\ZeroBreach_TEST_DELETEME` | Phase 20 — Run-key data matches `Temp` | CRITICAL | `DeleteReg` |
-| `…\Content.Outlook\ZBTEST\invoice_…DELETEME.bat` | Phase 74.5 — attach-ext in Outlook cache | HIGH | `Quarantine` |
-| Scheduled task `\ZeroBreach_TEST_DELETEME` (disabled) | Phase 29 — action matches `cmd` | CRITICAL | `RunCmd` |
+| `%TEMP%\Scythe_TEST_DELETEME.bat` | Phase 10 — exe-ext in Temp | HIGH | `DeleteFile` |
+| `Downloads\Scythe_TEST_DELETEME.cmd` | Phase 10 — exe-ext in Downloads | POSSIBLE | `DeleteFile` |
+| `HKCU:\…\Run\Scythe_TEST_DELETEME` | Phase 20 — Run-key data matches `Temp` | CRITICAL | `DeleteReg` |
+| `…\Content.Outlook\SCYTHETEST\invoice_…DELETEME.bat` | Phase 74.5 — attach-ext in Outlook cache | HIGH | `Quarantine` |
+| Scheduled task `\Scythe_TEST_DELETEME` (disabled) | Phase 29 — action matches `cmd` | CRITICAL | `RunCmd` |
 
 ```powershell
 # Create
-$b = "@echo off`r`nREM ZEROBREACH TEST TRIPWIRE - SAFE TO DELETE"
-Set-Content "$env:TEMP\ZeroBreach_TEST_DELETEME.bat" $b -Encoding ASCII
-Set-Content "$env:USERPROFILE\Downloads\ZeroBreach_TEST_DELETEME.cmd" $b -Encoding ASCII
-New-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name ZeroBreach_TEST_DELETEME `
-  -Value '"%TEMP%\ZeroBreach_TEST_DELETEME_noexec.exe" --zerobreach-test' -PropertyType String -Force
-$c = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\INetCache\Content.Outlook\ZBTEST'
+$b = "@echo off`r`nREM SCYTHE TEST TRIPWIRE - SAFE TO DELETE"
+Set-Content "$env:TEMP\Scythe_TEST_DELETEME.bat" $b -Encoding ASCII
+Set-Content "$env:USERPROFILE\Downloads\Scythe_TEST_DELETEME.cmd" $b -Encoding ASCII
+New-ItemProperty 'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Run' -Name Scythe_TEST_DELETEME `
+  -Value '"%TEMP%\Scythe_TEST_DELETEME_noexec.exe" --scythe-test' -PropertyType String -Force
+$c = Join-Path $env:LOCALAPPDATA 'Microsoft\Windows\INetCache\Content.Outlook\SCYTHETEST'
 New-Item -ItemType Directory $c -Force | Out-Null
-Set-Content (Join-Path $c 'invoice_ZeroBreach_TEST_DELETEME.bat') $b -Encoding ASCII
+Set-Content (Join-Path $c 'invoice_Scythe_TEST_DELETEME.bat') $b -Encoding ASCII
 $s = New-ScheduledTaskSettingsSet; $s.Enabled = $false
-Register-ScheduledTask ZeroBreach_TEST_DELETEME -Force -Settings $s `
-  -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument '/c rem ZeroBreach_TEST_DELETEME benign no-op')
+Register-ScheduledTask Scythe_TEST_DELETEME -Force -Settings $s `
+  -Action (New-ScheduledTaskAction -Execute cmd.exe -Argument '/c rem Scythe_TEST_DELETEME benign no-op')
 
 # Cleanup
-del "$env:TEMP\ZeroBreach_TEST_DELETEME.bat","$env:USERPROFILE\Downloads\ZeroBreach_TEST_DELETEME.cmd" 2>$null
-reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v ZeroBreach_TEST_DELETEME /f 2>$null
-Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\INetCache\Content.Outlook\ZBTEST" -Recurse -Force 2>$null
-Unregister-ScheduledTask ZeroBreach_TEST_DELETEME -Confirm:$false 2>$null
+del "$env:TEMP\Scythe_TEST_DELETEME.bat","$env:USERPROFILE\Downloads\Scythe_TEST_DELETEME.cmd" 2>$null
+reg delete "HKCU\SOFTWARE\Microsoft\Windows\CurrentVersion\Run" /v Scythe_TEST_DELETEME /f 2>$null
+Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\INetCache\Content.Outlook\SCYTHETEST" -Recurse -Force 2>$null
+Unregister-ScheduledTask Scythe_TEST_DELETEME -Confirm:$false 2>$null
 ```
 
 ## Known Gotchas
@@ -778,8 +810,16 @@ integrity gate, and the native C# engine (10 scanners / 63 checks).
 6. **Wire up `lib/`** (BLUEPRINT.md §10 item 6). The copy-in is **done** (2026-08-26): YARA +
    Sigma rule engines, PE + container parsers, a Windows path normaliser, a signature/rule
    linter, an IOC feed normaliser and two diff/baseline engines are in `lib/`, in the solution,
-   1,664 tests green. **Nothing in `ZeroBreach.*` references them yet.** Item 5 (detection
+   1,664 tests green. **Nothing in `Scythe.*` references them yet.** Item 5 (detection
    parity) should be built on top of this, not run as a separate track. Start with the linter
    against `data/detection_signatures.json` — but read the `fp_allowlists` note below first.
+
+7. **The offline artifact layer — 37 projects, not yet written.** The work package lives at
+   `~/Downloads/claude/scythe-work/` (sanitized, standalone, `Scythe.*` throughout); readers over
+   documented on-disk formats that replace "ask Windows for it" with "read the format", so the
+   layer is developable and testable off Windows. **`docs/MERGE_ARTIFACT_LAYER.md` is the
+   receiving end** — what is coming, where it lands, what to check, and the rules for editing the
+   package from this side. Read it before touching that folder. It sits under item 6 and feeds
+   item 5.
 
 `docs/_history/NEXT_STEPS.md` and `UPGRADE_PLAN.md` are historical context, not live plans.

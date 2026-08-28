@@ -1,5 +1,5 @@
 # Extract BOTH guard copies from the shipped source and test them side by side.
-$src=(Resolve-Path 'ZeroBreach-Server.ps1').Path
+$src=(Resolve-Path 'Scythe-Server.ps1').Path
 $t=$null;$e=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($src,[ref]$t,[ref]$e)
 $want='ConvertTo-GuardPath','Test-DestructiveRunCmd','Test-ProtectedTarget'

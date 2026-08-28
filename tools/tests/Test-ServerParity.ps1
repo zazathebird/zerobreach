@@ -11,12 +11,12 @@
 
     Tables covered now (extraction fully implemented):
 
-      1. ZeroBreach-Server.ps1   $MODE_PHASES hashtable                (root)
+      1. Scythe-Server.ps1   $MODE_PHASES hashtable                (root)
       2. _python/server.py       MODE_PHASES dict                      (root)
-      3. ZeroBreach-V23.ps1      $PhasePlan switch, Max= per mode      (root)
-      4. tools/New-ScanReport.ps1        $script:ZbModeCeiling         (this repo, always real)
-      5. tools/Get-PhaseTimingReport.ps1 $script:ZbModeCeiling         (this repo, always real)
-      6. tools/New-CoverageMatrix.ps1    $script:ZbModeCeiling         (this repo, always real)
+      3. Scythe-V23.ps1      $PhasePlan switch, Max= per mode      (root)
+      4. tools/New-ScanReport.ps1        $script:ScytheModeCeiling         (this repo, always real)
+      5. tools/Get-PhaseTimingReport.ps1 $script:ScytheModeCeiling         (this repo, always real)
+      6. tools/New-CoverageMatrix.ps1    $script:ScytheModeCeiling         (this repo, always real)
 
     4–6 are new copies introduced by the G1/G3/G6 tools (the run record and the engine source
     only carry the mode string); this test exists so all copies are proven to agree.
@@ -27,7 +27,7 @@
       - the mode whitelist in each server
       - the severity tag table in each server (including the padded [OK ] form)
       - the category bucket table in each server
-    Each has a disabled entry in $ZbPendingShapes below; enabling one without configuring it
+    Each has a disabled entry in $ScythePendingShapes below; enabling one without configuring it
     fails the run rather than passing vacuously.
 
     Without -Root, the three root declarations are exercised against generated fixtures that
@@ -35,14 +35,14 @@
     and asserts the mismatch is caught. With -Root, they run read-only against the real tree.
 
 .PARAMETER Root
-    Project root holding ZeroBreach-Server.ps1, _python/server.py and ZeroBreach-V23.ps1.
+    Project root holding Scythe-Server.ps1, _python/server.py and Scythe-V23.ps1.
     Omit to run against generated fixtures (development mode).
 
 .EXAMPLE
     pwsh tools/tests/Test-ServerParity.ps1                 # fixture mode, self-proving
 
 .EXAMPLE
-    powershell -File tools\tests\Test-ServerParity.ps1 -Root C:\src\zerobreach
+    powershell -File tools\tests\Test-ServerParity.ps1 -Root C:\src\scythe
 #>
 [CmdletBinding()]
 param(
@@ -51,19 +51,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$script:ZbPass = 0
-$script:ZbFail = 0
-$script:ZbFailures = @()
+$script:ScythePass = 0
+$script:ScytheFail = 0
+$script:ScytheFailures = @()
 
-function Assert-ZbTrue {
+function Assert-ScytheTrue {
     param([bool]$Condition, [string]$Name)
     if ($Condition) {
-        $script:ZbPass = $script:ZbPass + 1
+        $script:ScythePass = $script:ScythePass + 1
         Write-Host ('  ok    ' + $Name)
     }
     else {
-        $script:ZbFail = $script:ZbFail + 1
-        $script:ZbFailures += $Name
+        $script:ScytheFail = $script:ScytheFail + 1
+        $script:ScytheFailures += $Name
         Write-Host ('  FAIL  ' + $Name)
     }
 }
@@ -73,11 +73,11 @@ function Assert-ZbTrue {
 # a failure, never a silent skip.
 # --------------------------------------------------------------------------------------------
 
-$ZbPendingShapes = @(
+$ScythePendingShapes = @(
     @{ Name = 'front-end ceiling default'; Enabled = $false
        Need = 'file path + the declaration line(s), e.g. a JS object literal in gui/templates/index.html' },
     @{ Name = 'mode whitelist (PowerShell server)'; Enabled = $false
-       Need = 'variable name + shape of the whitelist in ZeroBreach-Server.ps1' },
+       Need = 'variable name + shape of the whitelist in Scythe-Server.ps1' },
     @{ Name = 'mode whitelist (Python server)'; Enabled = $false
        Need = 'variable name + shape of the whitelist in _python/server.py' },
     @{ Name = 'severity tag tables (both servers, incl. padded [OK ] form)'; Enabled = $false
@@ -90,7 +90,7 @@ $ZbPendingShapes = @(
 # Extractors — pull each table out of its source at runtime
 # --------------------------------------------------------------------------------------------
 
-function Get-ZbAst {
+function Get-ScytheAst {
     param([string]$FilePath)
     $tokens = $null
     $parseErrors = $null
@@ -101,10 +101,10 @@ function Get-ZbAst {
     return $ast
 }
 
-function Get-ZbHashtableTable {
+function Get-ScytheHashtableTable {
     # Extract @{ MODE = <int>; ... } assigned to a given variable name (any scope prefix).
     param([string]$FilePath, [string]$VariableName)
-    $ast = Get-ZbAst -FilePath $FilePath
+    $ast = Get-ScytheAst -FilePath $FilePath
     $assignments = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.AssignmentStatementAst] }, $true)
     foreach ($assignment in $assignments) {
         $leftName = ($assignment.Left.Extent.Text -replace '^\$(script:|global:|local:)?', '')
@@ -125,7 +125,7 @@ function Get-ZbHashtableTable {
     return @{}
 }
 
-function Get-ZbPythonDictTable {
+function Get-ScythePythonDictTable {
     # Targeted regex for MODE_PHASES = {"QUICK": 30, ...} in the parked Python server.
     param([string]$FilePath, [string]$VariableName)
     $text = Get-Content -LiteralPath $FilePath -Raw -Encoding UTF8
@@ -138,11 +138,11 @@ function Get-ZbPythonDictTable {
     return $result
 }
 
-function Get-ZbPhasePlanTable {
+function Get-ScythePhasePlanTable {
     # The engine declares the ceiling as a switch on the scan mode, one branch per mode, with
     # the ceiling in Max=. The default branch is not a mode and is skipped.
     param([string]$FilePath)
-    $ast = Get-ZbAst -FilePath $FilePath
+    $ast = Get-ScytheAst -FilePath $FilePath
     $switches = $ast.FindAll({ param($node) $node -is [System.Management.Automation.Language.SwitchStatementAst] }, $true)
     foreach ($switchAst in $switches) {
         if ($switchAst.Condition.Extent.Text -notmatch 'ScanMode') { continue }
@@ -168,7 +168,7 @@ function Get-ZbPhasePlanTable {
 # Comparison — every table must be loaded and non-empty before it may agree with anything
 # --------------------------------------------------------------------------------------------
 
-function Compare-ZbCeilingTables {
+function Compare-ScytheCeilingTables {
     # Returns a list of human-readable mismatch strings; empty means full parity.
     param($NamedTables)
     $problems = @()
@@ -210,7 +210,7 @@ $fixtureMode = [string]::IsNullOrWhiteSpace($Root)
 $tempDir = $null
 
 if ($fixtureMode) {
-    $tempDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('zbtest_parity_' + $PID)
+    $tempDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('scythetest_parity_' + $PID)
     New-Item -ItemType Directory -Path (Join-Path -Path $tempDir -ChildPath '_python') -Force | Out-Null
     $utf8 = New-Object System.Text.UTF8Encoding($false)
 
@@ -237,9 +237,9 @@ $PhasePlan = switch ($global:ScanMode) {
     default    { @{ Min=1; Max=80;  Label='Fallback' } }
 }
 '@
-    [System.IO.File]::WriteAllText((Join-Path -Path $tempDir -ChildPath 'ZeroBreach-Server.ps1'), $serverFixture, $utf8)
+    [System.IO.File]::WriteAllText((Join-Path -Path $tempDir -ChildPath 'Scythe-Server.ps1'), $serverFixture, $utf8)
     [System.IO.File]::WriteAllText((Join-Path -Path (Join-Path -Path $tempDir -ChildPath '_python') -ChildPath 'server.py'), $pythonFixture, $utf8)
-    [System.IO.File]::WriteAllText((Join-Path -Path $tempDir -ChildPath 'ZeroBreach-V23.ps1'), $engineFixture, $utf8)
+    [System.IO.File]::WriteAllText((Join-Path -Path $tempDir -ChildPath 'Scythe-V23.ps1'), $engineFixture, $utf8)
     $Root = $tempDir
     Write-Host 'MODE: fixtures (give -Root <project root> to run against the real tree)'
 }
@@ -247,9 +247,9 @@ else {
     Write-Host ('MODE: real tree at ' + $Root + ' (read-only)')
 }
 
-$serverPath = Join-Path -Path $Root -ChildPath 'ZeroBreach-Server.ps1'
+$serverPath = Join-Path -Path $Root -ChildPath 'Scythe-Server.ps1'
 $pythonPath = Join-Path -Path (Join-Path -Path $Root -ChildPath '_python') -ChildPath 'server.py'
-$enginePath = Join-Path -Path $Root -ChildPath 'ZeroBreach-V23.ps1'
+$enginePath = Join-Path -Path $Root -ChildPath 'Scythe-V23.ps1'
 
 # --------------------------------------------------------------------------------------------
 # Assertion 1: every declaration of the ceiling table agrees
@@ -257,19 +257,19 @@ $enginePath = Join-Path -Path $Root -ChildPath 'ZeroBreach-V23.ps1'
 
 Write-Host 'ceiling parity'
 $tables = @(
-    @{ Name = 'ZeroBreach-Server.ps1 $MODE_PHASES'; Table = (Get-ZbHashtableTable -FilePath $serverPath -VariableName 'MODE_PHASES') },
-    @{ Name = '_python/server.py MODE_PHASES'; Table = (Get-ZbPythonDictTable -FilePath $pythonPath -VariableName 'MODE_PHASES') },
-    @{ Name = 'ZeroBreach-V23.ps1 $PhasePlan Max='; Table = (Get-ZbPhasePlanTable -FilePath $enginePath) },
-    @{ Name = 'tools/New-ScanReport.ps1 ZbModeCeiling'; Table = (Get-ZbHashtableTable -FilePath (Join-Path -Path $toolsDir -ChildPath 'New-ScanReport.ps1') -VariableName 'ZbModeCeiling') },
-    @{ Name = 'tools/Get-PhaseTimingReport.ps1 ZbModeCeiling'; Table = (Get-ZbHashtableTable -FilePath (Join-Path -Path $toolsDir -ChildPath 'Get-PhaseTimingReport.ps1') -VariableName 'ZbModeCeiling') },
-    @{ Name = 'tools/New-CoverageMatrix.ps1 ZbModeCeiling'; Table = (Get-ZbHashtableTable -FilePath (Join-Path -Path $toolsDir -ChildPath 'New-CoverageMatrix.ps1') -VariableName 'ZbModeCeiling') }
+    @{ Name = 'Scythe-Server.ps1 $MODE_PHASES'; Table = (Get-ScytheHashtableTable -FilePath $serverPath -VariableName 'MODE_PHASES') },
+    @{ Name = '_python/server.py MODE_PHASES'; Table = (Get-ScythePythonDictTable -FilePath $pythonPath -VariableName 'MODE_PHASES') },
+    @{ Name = 'Scythe-V23.ps1 $PhasePlan Max='; Table = (Get-ScythePhasePlanTable -FilePath $enginePath) },
+    @{ Name = 'tools/New-ScanReport.ps1 ScytheModeCeiling'; Table = (Get-ScytheHashtableTable -FilePath (Join-Path -Path $toolsDir -ChildPath 'New-ScanReport.ps1') -VariableName 'ScytheModeCeiling') },
+    @{ Name = 'tools/Get-PhaseTimingReport.ps1 ScytheModeCeiling'; Table = (Get-ScytheHashtableTable -FilePath (Join-Path -Path $toolsDir -ChildPath 'Get-PhaseTimingReport.ps1') -VariableName 'ScytheModeCeiling') },
+    @{ Name = 'tools/New-CoverageMatrix.ps1 ScytheModeCeiling'; Table = (Get-ScytheHashtableTable -FilePath (Join-Path -Path $toolsDir -ChildPath 'New-CoverageMatrix.ps1') -VariableName 'ScytheModeCeiling') }
 )
 
 foreach ($entry in $tables) {
-    Assert-ZbTrue ($entry.Table.Count -gt 0) ('table loaded and non-empty: ' + $entry.Name)
+    Assert-ScytheTrue ($entry.Table.Count -gt 0) ('table loaded and non-empty: ' + $entry.Name)
 }
-$problems = @(Compare-ZbCeilingTables -NamedTables $tables)
-Assert-ZbTrue ($problems.Count -eq 0) 'every declaration of the mode ceiling table agrees'
+$problems = @(Compare-ScytheCeilingTables -NamedTables $tables)
+Assert-ScytheTrue ($problems.Count -eq 0) 'every declaration of the mode ceiling table agrees'
 foreach ($p in $problems) { Write-Host ('        mismatch: ' + $p) }
 
 # --------------------------------------------------------------------------------------------
@@ -278,7 +278,7 @@ foreach ($p in $problems) { Write-Host ('        mismatch: ' + $p) }
 # --------------------------------------------------------------------------------------------
 
 Write-Host 'self-proof (fail-on-revert against scratch copies)'
-$proofDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('zbtest_parity_proof_' + $PID)
+$proofDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('scythetest_parity_proof_' + $PID)
 New-Item -ItemType Directory -Path $proofDir -Force | Out-Null
 $utf8proof = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path -Path $proofDir -ChildPath 'good.ps1'), '$MODE_PHASES = @{ QUICK=30; HUNT=162 }', $utf8proof)
@@ -286,23 +286,23 @@ $utf8proof = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText((Join-Path -Path $proofDir -ChildPath 'missing.ps1'), '$MODE_PHASES = @{ QUICK=30 }', $utf8proof)
 [System.IO.File]::WriteAllText((Join-Path -Path $proofDir -ChildPath 'unrelated.ps1'), '$SOMETHING_ELSE = @{ A=1 }', $utf8proof)
 
-$goodTable = Get-ZbHashtableTable -FilePath (Join-Path -Path $proofDir -ChildPath 'good.ps1') -VariableName 'MODE_PHASES'
-$driftTable = Get-ZbHashtableTable -FilePath (Join-Path -Path $proofDir -ChildPath 'drifted.ps1') -VariableName 'MODE_PHASES'
-$missingTable = Get-ZbHashtableTable -FilePath (Join-Path -Path $proofDir -ChildPath 'missing.ps1') -VariableName 'MODE_PHASES'
-$absentTable = Get-ZbHashtableTable -FilePath (Join-Path -Path $proofDir -ChildPath 'unrelated.ps1') -VariableName 'MODE_PHASES'
+$goodTable = Get-ScytheHashtableTable -FilePath (Join-Path -Path $proofDir -ChildPath 'good.ps1') -VariableName 'MODE_PHASES'
+$driftTable = Get-ScytheHashtableTable -FilePath (Join-Path -Path $proofDir -ChildPath 'drifted.ps1') -VariableName 'MODE_PHASES'
+$missingTable = Get-ScytheHashtableTable -FilePath (Join-Path -Path $proofDir -ChildPath 'missing.ps1') -VariableName 'MODE_PHASES'
+$absentTable = Get-ScytheHashtableTable -FilePath (Join-Path -Path $proofDir -ChildPath 'unrelated.ps1') -VariableName 'MODE_PHASES'
 
-$driftProblems = @(Compare-ZbCeilingTables -NamedTables @(
+$driftProblems = @(Compare-ScytheCeilingTables -NamedTables @(
         @{ Name = 'good'; Table = $goodTable }, @{ Name = 'drifted'; Table = $driftTable }))
-Assert-ZbTrue ($driftProblems.Count -gt 0) 'a one-unit ceiling drift is caught'
-Assert-ZbTrue ((@($driftProblems) -join ' ').Contains('HUNT')) 'the drift report names the disagreeing mode'
+Assert-ScytheTrue ($driftProblems.Count -gt 0) 'a one-unit ceiling drift is caught'
+Assert-ScytheTrue ((@($driftProblems) -join ' ').Contains('HUNT')) 'the drift report names the disagreeing mode'
 
-$missingProblems = @(Compare-ZbCeilingTables -NamedTables @(
+$missingProblems = @(Compare-ScytheCeilingTables -NamedTables @(
         @{ Name = 'good'; Table = $goodTable }, @{ Name = 'missing'; Table = $missingTable }))
-Assert-ZbTrue ($missingProblems.Count -gt 0) 'a mode missing from one table is caught'
+Assert-ScytheTrue ($missingProblems.Count -gt 0) 'a mode missing from one table is caught'
 
-$absentProblems = @(Compare-ZbCeilingTables -NamedTables @(
+$absentProblems = @(Compare-ScytheCeilingTables -NamedTables @(
         @{ Name = 'good'; Table = $goodTable }, @{ Name = 'absent'; Table = $absentTable }))
-Assert-ZbTrue ($absentProblems.Count -gt 0) 'an unloaded (empty) table fails instead of agreeing vacuously'
+Assert-ScytheTrue ($absentProblems.Count -gt 0) 'an unloaded (empty) table fails instead of agreeing vacuously'
 
 Remove-Item -Path $proofDir -Recurse -Force -ErrorAction SilentlyContinue
 if ($fixtureMode -and $tempDir) { Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue }
@@ -313,9 +313,9 @@ if ($fixtureMode -and $tempDir) { Remove-Item -Path $tempDir -Recurse -Force -Er
 
 Write-Host ''
 Write-Host 'PENDING (owner input needed — see HANDOFF_FABLE.md G5 entry):'
-foreach ($shape in $ZbPendingShapes) {
+foreach ($shape in $ScythePendingShapes) {
     if ($shape.Enabled) {
-        Assert-ZbTrue $false ('pending shape enabled but not implemented: ' + $shape.Name)
+        Assert-ScytheTrue $false ('pending shape enabled but not implemented: ' + $shape.Name)
     }
     else {
         Write-Host ('  todo  ' + $shape.Name + ' — needs: ' + $shape.Need)
@@ -327,10 +327,10 @@ foreach ($shape in $ZbPendingShapes) {
 # --------------------------------------------------------------------------------------------
 
 Write-Host ''
-Write-Host ('{0} passed, {1} failed, {2} pending shapes' -f $script:ZbPass, $script:ZbFail, @($ZbPendingShapes | Where-Object { -not $_.Enabled }).Count)
-if ($script:ZbFail -gt 0) {
+Write-Host ('{0} passed, {1} failed, {2} pending shapes' -f $script:ScythePass, $script:ScytheFail, @($ScythePendingShapes | Where-Object { -not $_.Enabled }).Count)
+if ($script:ScytheFail -gt 0) {
     Write-Host 'Failed assertions:'
-    foreach ($f in $script:ZbFailures) { Write-Host ('  - ' + $f) }
+    foreach ($f in $script:ScytheFailures) { Write-Host ('  - ' + $f) }
     exit 1
 }
 exit 0

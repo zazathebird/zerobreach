@@ -1,6 +1,6 @@
-# ZeroBreach Test Lab — Build & Test Guide
+# Scythe Test Lab — Build & Test Guide
 
-**Purpose:** a physically isolated lab that exercises every feature of ZeroBreach, and specifically
+**Purpose:** a physically isolated lab that exercises every feature of Scythe, and specifically
 proves or kills the findings in `docs/_history/AUDIT_2026-08-18_INDEPENDENT.md` that static analysis could not
 settle.
 
@@ -67,10 +67,10 @@ Your "Homer Simpson" instinct is exactly right, and worth doing properly:
 
 - Local accounts only. **Never** a Microsoft account, never Entra/AD-joined to anything real.
 - Fake everything: name, org, email, timezone if you like. No real client names anywhere — this
-  matters because ZeroBreach writes hostnames and usernames into `reports/`.
+  matters because Scythe writes hostnames and usernames into `reports/`.
 - **No credential reuse.** Not a variation of a real password. Assume anything typed on VICTIM-1
   is in an attacker's hands.
-- No cloud sign-ins, no OneDrive, no browser profile sync. ZeroBreach scans `AppData` and browser
+- No cloud sign-ins, no OneDrive, no browser profile sync. Scythe scans `AppData` and browser
   paths; you don't want real tokens there.
 
 ---
@@ -103,7 +103,7 @@ Install before imaging, so the baseline is representative:
 
 ## 5. Test matrix
 
-Each test names the audit finding it settles. Record: what you did, what ZeroBreach reported,
+Each test names the audit finding it settles. Record: what you did, what Scythe reported,
 what actually happened on disk.
 
 ### Tier 0 — Inert tripwires (start here)
@@ -165,7 +165,7 @@ apostrophe and a benign payload:
 
 ```powershell
 $q = [char]39
-$name = "ZBTEST${q};Write-Host 'INJECTION-FIRED';#"
+$name = "SCYTHETEST${q};Write-Host 'INJECTION-FIRED';#"
 $a = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-nop -c exit'
 $s = New-ScheduledTaskSettingsSet; $s.Enabled = $false
 Register-ScheduledTask -TaskName $name -Action $a -Settings $s -Force
@@ -196,8 +196,8 @@ in the audit** — verify it, because it means "clean" is unreliable.
 **2.5 — H6 junction following.** Create a directory junction and point it at a folder with
 throwaway files, flag it, and remediate with `DeleteFile`:
 ```powershell
-mkdir C:\ZBTEST\real; "canary" | Out-File C:\ZBTEST\real\canary.txt
-cmd /c mklink /J C:\ZBTEST\link C:\ZBTEST\real
+mkdir C:\SCYTHETEST\real; "canary" | Out-File C:\SCYTHETEST\real\canary.txt
+cmd /c mklink /J C:\SCYTHETEST\link C:\SCYTHETEST\real
 ```
 **Pass:** only the junction is removed, `canary.txt` survives.
 **Fail:** `canary.txt` is gone — `Remove-Item -Recurse` traversed the reparse point.
@@ -207,7 +207,7 @@ cmd /c mklink /J C:\ZBTEST\link C:\ZBTEST\real
 file (open it in an app) and remediate it.
 **Expected:** the fallback throws, logs `-> ERROR:`, and the file is never queued.
 
-**2.7 — C1 CSRF.** From the operator machine, with ZeroBreach running on VICTIM-1, open a local
+**2.7 — C1 CSRF.** From the operator machine, with Scythe running on VICTIM-1, open a local
 HTML file containing a cross-origin `fetch()` to `http://localhost:<port>/api/sysinfo` — run it in
 the **victim's own browser** to model the real attack. If it returns JSON readable by the page, the
 wildcard-CORS chain is confirmed. Then check whether `POST /api/remediate` is reachable the same way.

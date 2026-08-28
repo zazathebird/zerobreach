@@ -9,7 +9,7 @@ A reference `yara` 4.5.5 CLI was installed during development and the engine is
 **differentially tested against it**: string-match offsets, full-rule verdicts, and every
 ambiguous modifier corner below marked "pinned against reference" was decided by running
 the real binary, not from memory. The differential tests live in
-`ZeroBreach.Rules.Tests/Yara/DifferentialTests.cs` and `CorpusValidationTests.cs`
+`Scythe.Rules.Tests/Yara/DifferentialTests.cs` and `CorpusValidationTests.cs`
 (`DifferentialVerdictTests`); they run automatically when a `yara` binary is present at
 `/usr/bin/yara` or `/usr/local/bin/yara` and pass vacuously otherwise — **install yara on
 CI so they bite**.
@@ -23,7 +23,7 @@ condition parser with the reference operator table), hex-string sub-parser, and 
 cross-file structural validator. Output is a typed AST plus a full diagnostic list —
 parsing recovers at rule boundaries so one broken rule does not hide the next problem.
 
-**Files** (relative to `ZeroBreach.Rules/`):
+**Files** (relative to `Scythe.Rules/`):
 - `Common/OperationState.cs`, `Common/ScanBudget.cs` (shared BLUEPRINT §2/§3 types)
 - `Yara/Parsing/Diagnostic.cs` — severities, stable `DiagnosticCode` enum, `SourceLocation`
 - `Yara/Parsing/YaraToken.cs`, `Yara/Parsing/YaraLexer.cs`
@@ -31,7 +31,7 @@ parsing recovers at rule boundaries so one broken rule does not hide the next pr
 - `Yara/Parsing/Ast.cs` — all AST records
 - `Yara/Parsing/YaraParser.cs`
 - `Yara/Parsing/YaraValidator.cs`
-Tests: `ZeroBreach.Rules.Tests/Yara/ParserTests.cs`.
+Tests: `Scythe.Rules.Tests/Yara/ParserTests.cs`.
 
 **Judgement calls.**
 - *Text-string escapes*: exactly `\t \n \r \" \\ \xNN`. `\r` is a superset of very old
@@ -80,7 +80,7 @@ no backtracking engine anywhere.
 **Files**: `Yara/Matching/RegexAst.cs`, `RegexParser.cs`, `NfaProgram.cs` (builder +
 min/max-length + first-byte-set + anchoredness analysis), `PikeVm.cs`,
 `LiteralVariants.cs`, `AhoCorasick.cs`, `CompiledStringSet.cs`, `StringScanner.cs`.
-Tests: `ZeroBreach.Rules.Tests/Yara/MatcherTests.cs`, `DifferentialTests.cs`.
+Tests: `Scythe.Rules.Tests/Yara/MatcherTests.cs`, `DifferentialTests.cs`.
 
 **The one deliberate divergence from reference YARA — owner-confirmed.**
 BLUEPRINT §4.3 says `#s` counts **non-overlapping** matches; reference YARA counts one
@@ -142,7 +142,7 @@ distinct in-band `undefined` value (reference semantics). Every operator from BL
 §4.2, `for`/`of` in all forms, integer readers, rule references.
 
 **Files**: `Yara/Evaluation/YaraValue.cs`, `EvaluationContext.cs`, `ConditionEvaluator.cs`.
-Tests: `ZeroBreach.Rules.Tests/Yara/EvaluatorTests.cs`.
+Tests: `Scythe.Rules.Tests/Yara/EvaluatorTests.cs`.
 
 **The load-bearing rule — incompleteness never becomes a confident answer.**
 `undefined` (out-of-range read, missing index, overflow, division by zero) is *semantic*
@@ -193,7 +193,7 @@ never take down the host process); the compiled set is immutable and shared free
 threads; scans allocate per-call state only.
 
 **Files**: `Yara/CompiledRuleSet.cs`, `Yara/YaraCompiler.cs`, `Yara/YaraScanner.cs`.
-Tests: `ZeroBreach.Rules.Tests/Yara/ScannerApiTests.cs`, `CorpusValidationTests.cs`.
+Tests: `Scythe.Rules.Tests/Yara/ScannerApiTests.cs`, `CorpusValidationTests.cs`.
 
 **Guarantees, each with a test:**
 - Failed compile ⇒ `Rules == null`. A malformed file can never become a rule set that
@@ -233,11 +233,11 @@ This corpus is synthetic. **The owner's first job on merge** is validating again
 public rule sets. Exact command (on a machine with the repos cloned):
 ```
 git clone --depth 1 https://github.com/Neo23x0/signature-base
-dotnet test ZeroBreach.Rules.Tests --filter FullyQualifiedName~Corpus \
-  -e ZB_EXTERNAL_CORPUS_DIR=$PWD/signature-base/yara
+dotnet test Scythe.Rules.Tests --filter FullyQualifiedName~Corpus \
+  -e SCYTHE_EXTERNAL_CORPUS_DIR=$PWD/signature-base/yara
 ```
 (the env-var hook is *not yet implemented* — either add a corpus-directory test reading
-`ZB_EXTERNAL_CORPUS_DIR`, or simpler: run a small console harness that calls
+`SCYTHE_EXTERNAL_CORPUS_DIR`, or simpler: run a small console harness that calls
 `YaraCompiler.Compile` over every `.yar` in the directory and reports the
 compiled/diagnostic/unsupported-module counts. The API is two calls; the harness is ~30
 lines. Expect module-using rules (`pe`, `math`, `elf`) to be reported Incomplete — that
@@ -265,7 +265,7 @@ semantics). Assertion-by-assertion mutation of the whole suite is the gap, and a
 
 **Wanted outside my scope**: (1) the host should pass `entrypoint` from its PE parser
 (B1) when scanning PE files; (2) CI should install the `yara` package so the
-differential suites run; (3) a shared `ZeroBreach.Core` for the BLUEPRINT §2/§3 types
+differential suites run; (3) a shared `Scythe.Core` for the BLUEPRINT §2/§3 types
 instead of one copy per project — the integration rules forbade a new shared project, so
 each project defines its own.
 
@@ -276,10 +276,10 @@ each project defines its own.
 ## A5 — Sigma rule engine
 
 **Status: complete.** `dotnet build fable-work-2.sln`: 13 projects, 0 errors, 0 warnings.
-`dotnet test ZeroBreach.Rules.Tests`: **429/429 green** (307 pre-existing YARA + 122 new
+`dotnet test Scythe.Rules.Tests`: **429/429 green** (307 pre-existing YARA + 122 new
 Sigma), zero warnings, on Linux/.NET 8. Reference `yara` 4.5.5 was present at
 `/usr/bin/yara` during the run, so the YARA differential suites were live, not vacuous.
-Finishing A5 also resolved the build break that had been blocking `ZeroBreach.Rules`
+Finishing A5 also resolved the build break that had been blocking `Scythe.Rules`
 (`CompiledSigmaRule` was referenced by the half-finished `SigmaTypes.cs` but not defined).
 
 ### What was built
@@ -305,14 +305,14 @@ results (`Ok` / `Incomplete` / `Failed`).
 
 ### New/changed files
 
-New, `ZeroBreach.Rules/Sigma/`:
+New, `Scythe.Rules/Sigma/`:
 - `SigmaMatchers.cs` — `TriState`, glob/regex/cidr/null value matchers, windash fold
 - `SigmaDetection.cs` — evaluation context, field tests, detection items
 - `SigmaCondition.cs` — condition AST + recursive-descent parser
 - `SigmaCompiler.cs` — public compile entry point, modifier validation, transforms
 - `CompiledSigmaRule.cs` — the public rule object + `Evaluate`
 
-New, `ZeroBreach.Rules.Tests/Sigma/`:
+New, `Scythe.Rules.Tests/Sigma/`:
 - `SigmaTestHelpers.cs`, `SigmaMatchTests.cs`, `SigmaConditionTests.cs`,
   `SigmaBudgetTests.cs`, `SigmaCompileTests.cs` — 122 tests
 
@@ -323,7 +323,7 @@ Edited (pre-existing A5 files, inside scope):
   as a value. Nothing else in the inherited YAML layer was changed.
 - `SigmaTypes.cs` — untouched.
 
-Nothing outside `ZeroBreach.Rules/Sigma/**` and `ZeroBreach.Rules.Tests/Sigma/**` was
+Nothing outside `Scythe.Rules/Sigma/**` and `Scythe.Rules.Tests/Sigma/**` was
 created or modified. YARA sources untouched.
 
 ### Budgets and tri-state discipline
@@ -439,32 +439,32 @@ restore → `cmp` byte-identical (no git; this folder is not a repo). All restor
 
 ### Wanted outside scope
 
-Nothing needed changing outside `ZeroBreach.Rules`. Two notes for the owner:
+Nothing needed changing outside `Scythe.Rules`. Two notes for the owner:
 - This fragment should be merged into `HANDOFF_FABLE2.md` at the package-level merge
   step (per `CONTINUE.md` §5/§7), alongside the other task fragments.
-- C2 (rule linter) shares `ZeroBreach.Rules` and can now proceed — A5 no longer blocks
+- C2 (rule linter) shares `Scythe.Rules` and can now proceed — A5 no longer blocks
   the project from compiling.
 
 ---
 
 ## B1 — PE structure parser
 
-**Status: complete.** `dotnet build` / `dotnet test` on `ZeroBreach.Formats.Tests` green on
+**Status: complete.** `dotnet build` / `dotnet test` on `Scythe.Formats.Tests` green on
 Linux: **66/66 tests, zero warnings** (warnings-as-errors global). Built/tested in isolation
-from the solution because the unrelated A5 Sigma break still blocks `ZeroBreach.Rules`.
+from the solution because the unrelated A5 Sigma break still blocks `Scythe.Rules`.
 
 **Build-state note (shared-project churn):** while B1 was finishing, the concurrent B2 agent
-was already writing `ZeroBreach.Formats/Containers/*` into this shared project; as of this
+was already writing `Scythe.Formats/Containers/*` into this shared project; as of this
 handoff its in-progress `Containers/OleTypes.cs` fails to compile (CS9032 ×3), which breaks
-any full build of `ZeroBreach.Formats`. That code is B2's and was deliberately left
+any full build of `Scythe.Formats`. That code is B2's and was deliberately left
 untouched. B1's own sources were re-verified green after that churn appeared, via an
-isolated copy containing exactly `Directory.Build.props` + `ZeroBreach.Formats/{Common,Pe}`
-+ `ZeroBreach.Formats.Tests`: 66/66, zero warnings. Once B2 finishes its files, the shared
+isolated copy containing exactly `Directory.Build.props` + `Scythe.Formats/{Common,Pe}`
++ `Scythe.Formats.Tests`: 66/66, zero warnings. Once B2 finishes its files, the shared
 project should build whole; nothing in B1 depends on `Containers/`.
 
 ### What was built
 
-`ZeroBreach.Formats.Pe.PeParser` — static PE32/PE32+ parser over a byte buffer, per
+`Scythe.Formats.Pe.PeParser` — static PE32/PE32+ parser over a byte buffer, per
 BLUEPRINT §6 and `tasks/B1_pe_parser.md`. The type declarations left by the previous agent
 (`PeImage`, `PeMetrics`, `PeParseResult`, `PeParserLimits`, `Common/OperationState`,
 `Common/ScanBudget`) were kept exactly as found and implemented against; **no pre-existing
@@ -481,15 +481,15 @@ callback count. No verdict properties — facts only.
 
 ### Exact new-file list
 
-- `ZeroBreach.Formats/Pe/PeParser.cs` (parser session, RVA mapper, entropy)
-- `ZeroBreach.Formats.Tests/PeFixtureBuilder.cs` (byte-level PE builder; all fixtures authored in test code)
-- `ZeroBreach.Formats.Tests/TestSupport.cs` (default-budget helper, canonical result dumper)
-- `ZeroBreach.Formats.Tests/PeHeaderTests.cs`
-- `ZeroBreach.Formats.Tests/PeImportExportTests.cs`
-- `ZeroBreach.Formats.Tests/PeResourceAndExtrasTests.cs`
-- `ZeroBreach.Formats.Tests/PeMetricsTests.cs`
-- `ZeroBreach.Formats.Tests/PeHostileTests.cs`
-- `ZeroBreach.Formats.Tests/PeBudgetTests.cs`
+- `Scythe.Formats/Pe/PeParser.cs` (parser session, RVA mapper, entropy)
+- `Scythe.Formats.Tests/PeFixtureBuilder.cs` (byte-level PE builder; all fixtures authored in test code)
+- `Scythe.Formats.Tests/TestSupport.cs` (default-budget helper, canonical result dumper)
+- `Scythe.Formats.Tests/PeHeaderTests.cs`
+- `Scythe.Formats.Tests/PeImportExportTests.cs`
+- `Scythe.Formats.Tests/PeResourceAndExtrasTests.cs`
+- `Scythe.Formats.Tests/PeMetricsTests.cs`
+- `Scythe.Formats.Tests/PeHostileTests.cs`
+- `Scythe.Formats.Tests/PeBudgetTests.cs`
 
 ### Mutation (fail-on-revert) checks
 
@@ -577,20 +577,20 @@ callback count. No verdict properties — facts only.
 ### Wanted outside this task's scope (findings, not changes)
 
 - None in `Common/` — `OperationState`/`ScanBudget` were reused as-is; B2 can share them
-  unchanged. No file outside `ZeroBreach.Formats(.Tests)` was touched.
+  unchanged. No file outside `Scythe.Formats(.Tests)` was touched.
 
 ---
 
 ## B2 — Container reader (ZIP / OLE / OOXML)
 
-**Status: complete.** `dotnet build` / `dotnet test` on `ZeroBreach.Formats.Tests` green on
+**Status: complete.** `dotnet build` / `dotnet test` on `Scythe.Formats.Tests` green on
 Linux: **135/135 tests (66 B1 + 69 B2), zero warnings** (warnings-as-errors global). B1's
 tests were run and pass alongside; nothing under `Pe/`, `Common/`, or B1's test files was
 touched. `Common/OperationState` and `Common/ScanBudget` are reused, not recreated.
 
 ### What was built
 
-`ZeroBreach.Formats.Containers` — stream-based readers per BLUEPRINT §7 and
+`Scythe.Formats.Containers` — stream-based readers per BLUEPRINT §7 and
 `tasks/B2_containers.md`. Nothing is ever written to disk; input is a byte buffer, output is
 structure plus bytes on request. No verdicts: traversal names, lying headers, encrypted
 entries and macro parts are *surfaced*, never judged.
@@ -622,7 +622,7 @@ entries and macro parts are *surfaced*, never judged.
 
 ### Exact new-file list
 
-Sources (`ZeroBreach.Formats/Containers/`):
+Sources (`Scythe.Formats/Containers/`):
 - `ContainerLimits.cs`
 - `ExpansionGuard.cs`
 - `Crc32.cs`
@@ -634,7 +634,7 @@ Sources (`ZeroBreach.Formats/Containers/`):
 - `OoxmlReader.cs`
 - `ContainerWalker.cs`
 
-Tests (`ZeroBreach.Formats.Tests/Containers/`, namespace `ZeroBreach.Formats.Tests.Containers`):
+Tests (`Scythe.Formats.Tests/Containers/`, namespace `Scythe.Formats.Tests.Containers`):
 - `ZipFixtureBuilder.cs` (hand-written ZIP bytes with per-field lying overrides)
 - `ZipReaderTests.cs` (13)
 - `ZipHostileTests.cs` (19, incl. 7 traversal theory cases)
@@ -722,7 +722,7 @@ Budget canaries as required: known 8 MiB→~8 KiB deflate bomb stopped by the ra
 - **Real-world archives**: only self-authored fixtures were used, per the work-package
   rules. Verify on the owner's machine against real `.docm`/`.xlsm`/`.doc` files and zips
   produced by Info-ZIP/7-Zip/Windows Explorer:
-  `dotnet test ZeroBreach.Formats.Tests` plus an ad-hoc harness feeding
+  `dotnet test Scythe.Formats.Tests` plus an ad-hoc harness feeding
   `ContainerWalker.Walk` a directory of real samples.
 - **CFB version 4 (4096-byte sectors)**: the code path exists (shift 12, offset formula
   shared) but the fixture builder is v3-only, so v4 is untested. A real v4 file (rare;
@@ -746,9 +746,9 @@ Budget canaries as required: known 8 MiB→~8 KiB deflate bomb stopped by the ra
 
 ---
 
-## C1 — Windows path normalisation library (`ZeroBreach.Paths`)
+## C1 — Windows path normalisation library (`Scythe.Paths`)
 
-**Status: complete.** `dotnet test ZeroBreach.Paths.Tests/ZeroBreach.Paths.Tests.csproj` —
+**Status: complete.** `dotnet test Scythe.Paths.Tests/Scythe.Paths.Tests.csproj` —
 **418 passed, 0 failed, 0 warnings** on Linux, .NET SDK 8.0.424. Built against fixtures only;
 no file-system access anywhere in the library (verified by construction: no `System.IO` usage,
 no process environment, no current directory).
@@ -783,13 +783,13 @@ structurally false off the `Ok` state.
 
 ### 2. Exact file list (all new; nothing outside these two directories was touched)
 
-`ZeroBreach.Paths/`:
+`Scythe.Paths/`:
 - Pre-existing from the first partial agent (kept as-is, one comment-level contract honoured
   throughout): `CharacterSets.cs`, `NormalizedPath.cs`, `OperationState.cs`, `PathFlags.cs`,
-  `PathKind.cs`, `PathLimits.cs`, `PathRootSpace.cs`, `PathTransformation.cs`, `ZeroBreach.Paths.csproj`
+  `PathKind.cs`, `PathLimits.cs`, `PathRootSpace.cs`, `PathTransformation.cs`, `Scythe.Paths.csproj`
 - New this session: **`PathNormalizer.cs`**, **`PathContainment.cs`**, **`ContainmentResult.cs`**
 
-`ZeroBreach.Paths.Tests/` (all new this session except the csproj):
+`Scythe.Paths.Tests/` (all new this session except the csproj):
 - **`NormalizationCoreTests.cs`** — separators, dots, dup separators, trailing dot/space rules,
   case, audit trail (order + snapshot chaining), never-Incomplete
 - **`RootFormTests.cs`** — every root syntax, kind/space/root assignments, cross-form canonical equality
@@ -908,7 +908,7 @@ the session scratchpad (`mutate.py`); final pristine run re-verified green after
   **the host guard must resolve reparse points/8.3 on-machine before trusting `Ok/Outside`**.
   This is the single most important integration note.
 
-### 6. Wishes outside `ZeroBreach.Paths` (findings, not licences)
+### 6. Wishes outside `Scythe.Paths` (findings, not licences)
 
 - The host should **log `NormalizedPath.Transformations`** whenever the guard refuses — that is
   the "normalised from X to Y" line the brief asks for, already computed.
@@ -923,7 +923,7 @@ the session scratchpad (`mutate.py`); final pristine run re-verified green after
 ```bash
 export PATH="$HOME/.dotnet:$PATH"; export DOTNET_CLI_TELEMETRY_OPTOUT=1
 cd /home/user/Downloads/claude/fable-work-2
-dotnet test ZeroBreach.Paths.Tests/ZeroBreach.Paths.Tests.csproj   # 418 passed, 0 warnings
+dotnet test Scythe.Paths.Tests/Scythe.Paths.Tests.csproj   # 418 passed, 0 warnings
 ```
 
 ---
@@ -931,14 +931,14 @@ dotnet test ZeroBreach.Paths.Tests/ZeroBreach.Paths.Tests.csproj   # 418 passed,
 ## C2 — Signature and rule linter
 
 **Status: complete.** `dotnet build fable-work-2.sln` 13 projects, 0 warnings;
-`dotnet test ZeroBreach.Rules.Tests` **529/529 green** (307 YARA + 122 Sigma pre-existing,
+`dotnet test Scythe.Rules.Tests` **529/529 green** (307 YARA + 122 Sigma pre-existing,
 **100 new Linting tests**), with `/usr/bin/yara` 4.5.5 present so the differential suites
 were not vacuous. Nothing outside `Linting/` was created or edited.
 
 ### What was built
 
 A linter for the host's BLUEPRINT §9 JSON rule content (named indicator sets +
-`fp_allowlists`), namespace `ZeroBreach.Rules.Linting`, as a library plus an in-library
+`fp_allowlists`), namespace `Scythe.Rules.Linting`, as a library plus an in-library
 CI entry point. Every §9 defect class has its own stable `LintCode`, a severity, and a
 message naming the file, key, entry and line/column:
 
@@ -967,13 +967,13 @@ threshold (Error+; `--fail-on-warning` includes warnings) / 2 did-not-complete;
 
 ### Exact new-file list
 
-Sources (`ZeroBreach.Rules/Linting/`): `LintDiagnostics.cs`, `LintOptions.cs`,
+Sources (`Scythe.Rules/Linting/`): `LintDiagnostics.cs`, `LintOptions.cs`,
 `LintResult.cs`, `LintReport.cs`, `LintTool.cs`, `RuleFileModel.cs`, `RuleFileLinter.cs`,
 `AllowlistCanaries.cs`, `CollisionCorpus.cs`, `BacktrackingProbe.cs`,
 `Json/JsonSource.cs`, `Json/JsonSourceParser.cs`, `Patterns/PatternAst.cs`,
 `Patterns/PatternParser.cs`, `Patterns/PatternInsight.cs`.
 
-Tests (`ZeroBreach.Rules.Tests/Linting/`): `LintTestHelpers.cs`,
+Tests (`Scythe.Rules.Tests/Linting/`): `LintTestHelpers.cs`,
 `JsonSourceParserTests.cs`, `SchemaAndReferenceTests.cs`, `RegexDiagnosticTests.cs`,
 `AllowlistSafetyTests.cs`, `IndicatorQualityTests.cs`, `BacktrackingBudgetTests.cs`,
 `LintToolTests.cs`, `DeterminismTests.cs`.
@@ -1050,23 +1050,23 @@ all verified to blow a 150 ms budget against the bait battery.
 
 ### Wanted outside `Linting/` (findings, not licences)
 
-1. **A real console project** (`ZeroBreach.Rules.LintCli`) so CI gets a binary:
+1. **A real console project** (`Scythe.Rules.LintCli`) so CI gets a binary:
    `public static int Main(string[] args) => LintTool.Run(args, Console.Out, Console.Error);`
    Not created — the integration rules forbid new projects/`.sln` edits from a task.
-2. The shared `ZeroBreach.Core` point from the A4 handoff stands: this task reused
-   `OperationState`/`BudgetDefaults` from `ZeroBreach.Rules.Common` (same project, so no
+2. The shared `Scythe.Core` point from the A4 handoff stands: this task reused
+   `OperationState`/`BudgetDefaults` from `Scythe.Rules.Common` (same project, so no
    duplication here), but the Json/Patterns mini-parsers could serve other tracks too.
 3. CI should run the linter (`--fail-on-warning` recommended once the existing content is
    clean) and keep `yara` installed for the A-track differential suites.
 
 ---
 
-## D1 — IOC feed normaliser (`ZeroBreach.Intel`)
+## D1 — IOC feed normaliser (`Scythe.Intel`)
 
 **Status: complete.** 143 tests green, zero warnings, `net8.0`, no packages beyond xUnit
 (JSON via `System.Text.Json`, XML via `System.Xml` — both in-box BCL).
 
-Run: `dotnet test ZeroBreach.Intel.Tests/ZeroBreach.Intel.Tests.csproj`
+Run: `dotnet test Scythe.Intel.Tests/Scythe.Intel.Tests.csproj`
 (the solution-wide build is still broken by the unrelated half-finished A5 Sigma work).
 
 This task was resumed twice: once from the pre-reboot state (model/defanger/validator on
@@ -1102,25 +1102,25 @@ The four feed readers, the normalising pipeline, and the full test suite:
 New files:
 
 ```
-ZeroBreach.Intel/IngestBudget.cs
-ZeroBreach.Intel/PlainTextReader.cs
-ZeroBreach.Intel/StixPatternParser.cs
-ZeroBreach.Intel/StixReader.cs
-ZeroBreach.Intel/MispReader.cs
-ZeroBreach.Intel/OpenIocReader.cs
-ZeroBreach.Intel/FeedNormalizer.cs
-ZeroBreach.Intel.Tests/TestData.cs
-ZeroBreach.Intel.Tests/DefangerTests.cs
-ZeroBreach.Intel.Tests/ValidatorTests.cs
-ZeroBreach.Intel.Tests/StixFeedTests.cs
-ZeroBreach.Intel.Tests/MispFeedTests.cs
-ZeroBreach.Intel.Tests/OpenIocFeedTests.cs
-ZeroBreach.Intel.Tests/PlainTextFeedTests.cs
-ZeroBreach.Intel.Tests/PipelineTests.cs
+Scythe.Intel/IngestBudget.cs
+Scythe.Intel/PlainTextReader.cs
+Scythe.Intel/StixPatternParser.cs
+Scythe.Intel/StixReader.cs
+Scythe.Intel/MispReader.cs
+Scythe.Intel/OpenIocReader.cs
+Scythe.Intel/FeedNormalizer.cs
+Scythe.Intel.Tests/TestData.cs
+Scythe.Intel.Tests/DefangerTests.cs
+Scythe.Intel.Tests/ValidatorTests.cs
+Scythe.Intel.Tests/StixFeedTests.cs
+Scythe.Intel.Tests/MispFeedTests.cs
+Scythe.Intel.Tests/OpenIocFeedTests.cs
+Scythe.Intel.Tests/PlainTextFeedTests.cs
+Scythe.Intel.Tests/PipelineTests.cs
 ```
 
-Modified (own project only): `ZeroBreach.Intel/ZeroBreach.Intel.csproj` — added
-`InternalsVisibleTo ZeroBreach.Intel.Tests` so the validator/defanger can be unit-tested
+Modified (own project only): `Scythe.Intel/Scythe.Intel.csproj` — added
+`InternalsVisibleTo Scythe.Intel.Tests` so the validator/defanger can be unit-tested
 directly; everything else is tested through the public `FeedNormalizer` surface.
 
 ### The XXE / DOCTYPE gate
@@ -1216,7 +1216,7 @@ asserts `Incomplete` + reason; M7 shows it trips when enforcement is removed.
   mappings; the rejection report is the discovery mechanism.
 - Wall-clock deadline behaviour under real load (tests only pin the enforcement logic).
 
-### Wanted outside `ZeroBreach.Intel/` (findings, not done)
+### Wanted outside `Scythe.Intel/` (findings, not done)
 
 - Nothing required. Two nits for the merge owner: `FeedResult.TruncatedCount`'s doc
   comment ties it to the cap; deadline-unprocessed work is reported via `Message` — if a
@@ -1226,7 +1226,7 @@ asserts `Incomplete` + reason; M7 shows it trips when enforcement is removed.
 
 ---
 
-## D2 — Baseline diff engine (`ZeroBreach.Diff`)
+## D2 — Baseline diff engine (`Scythe.Diff`)
 
 ### D2 — Baseline diff engine
 
@@ -1243,24 +1243,24 @@ and independent of input order. Neither input is ever mutated; a refused diff ca
 partial output of any kind.
 
 **Files** (all new):
-- `ZeroBreach.Diff/ZeroBreach.Diff.csproj`
-- `ZeroBreach.Diff/RunRecord.cs` — `RunRecord`, `Finding`, `FindingSeverity`,
+- `Scythe.Diff/Scythe.Diff.csproj`
+- `Scythe.Diff/RunRecord.cs` — `RunRecord`, `Finding`, `FindingSeverity`,
   `CheckResult`, `CheckStatus` (the input model)
-- `ZeroBreach.Diff/DiffResult.cs` — `DiffResult`, `ChangedFinding`, `FieldChange`,
+- `Scythe.Diff/DiffResult.cs` — `DiffResult`, `ChangedFinding`, `FieldChange`,
   `CoverageDelta`, `CoverageChangeKind`, `OperationState` (the output model)
-- `ZeroBreach.Diff/DiffOptions.cs` — `MaxBaselineAge` knob
-- `ZeroBreach.Diff/BaselineDiff.cs` — the engine
-- `ZeroBreach.Diff.Tests/ZeroBreach.Diff.Tests.csproj`
-- `ZeroBreach.Diff.Tests/TestData.cs` — fixture builders + a canonical deep renderer
+- `Scythe.Diff/DiffOptions.cs` — `MaxBaselineAge` knob
+- `Scythe.Diff/BaselineDiff.cs` — the engine
+- `Scythe.Diff.Tests/Scythe.Diff.Tests.csproj`
+- `Scythe.Diff.Tests/TestData.cs` — fixture builders + a canonical deep renderer
   (walks every value in stored order; used both for determinism byte-comparisons and to
   prove non-mutation including element order)
-- `ZeroBreach.Diff.Tests/FindingDeltaTests.cs` (10 tests)
-- `ZeroBreach.Diff.Tests/CoverageDeltaTests.cs` (6 tests)
-- `ZeroBreach.Diff.Tests/ComparabilityTests.cs` (9 tests)
-- `ZeroBreach.Diff.Tests/DeterminismTests.cs` (6 tests)
+- `Scythe.Diff.Tests/FindingDeltaTests.cs` (10 tests)
+- `Scythe.Diff.Tests/CoverageDeltaTests.cs` (6 tests)
+- `Scythe.Diff.Tests/ComparabilityTests.cs` (9 tests)
+- `Scythe.Diff.Tests/DeterminismTests.cs` (6 tests)
 
 **Build/test:** 31/31 green on Linux, zero warnings (`dotnet test
-ZeroBreach.Diff.Tests/ZeroBreach.Diff.Tests.csproj`), re-verified 2026-08-26. Every test
+Scythe.Diff.Tests/Scythe.Diff.Tests.csproj`), re-verified 2026-08-26. Every test
 in the brief's minimum list is present, plus duplicate-id rejection, clock skew,
 null-vs-empty property bags, failed-diff non-mutation, and a 5000-findings-a-side
 performance guard.
@@ -1377,7 +1377,7 @@ highest-stakes guards. A `dotnet stryker` run is the way to close the remainder 
 **Wanted outside my scope** (findings, not licences):
 - The same as A4's third point, now with a fourth copy: `OperationState` is re-declared
   per project because the integration rules forbid a shared project. A future
-  `ZeroBreach.Core` should own the BLUEPRINT §2 types; note D2's copy documents that
+  `Scythe.Core` should own the BLUEPRINT §2 types; note D2's copy documents that
   `Incomplete` is unused here, which a shared type's doc comment could not say — a small
   per-project remarks section would be needed.
 - The host should always record a `Reason` on non-`Completed` checks; the coverage-delta
@@ -1390,11 +1390,11 @@ highest-stakes guards. A `dotnet stryker` run is the way to close the remainder 
 
 ---
 
-## D3 — Configuration baseline evaluator (`ZeroBreach.Baseline`)
+## D3 — Configuration baseline evaluator (`Scythe.Baseline`)
 
-Status: **complete.** `dotnet test ZeroBreach.Baseline.Tests/ZeroBreach.Baseline.Tests.csproj`
+Status: **complete.** `dotnet test Scythe.Baseline.Tests/Scythe.Baseline.Tests.csproj`
 — **118/118 green, zero warnings** (warnings-as-errors on), net8.0 on Linux, no packages
-beyond xUnit. Do not verify via the solution file: the A5 Sigma break in `ZeroBreach.Rules`
+beyond xUnit. Do not verify via the solution file: the A5 Sigma break in `Scythe.Rules`
 still fails `fable-work-2.sln` and is unrelated to this task.
 
 This task was resumed after a crash: the library (9 files, ~1300 lines) was already on disk
@@ -1431,17 +1431,17 @@ access, no mutation of either input, deterministic output in table order.
 
 ### Exact file list
 
-Library (`ZeroBreach.Baseline/`) — written pre-crash, kept; one addition marked:
+Library (`Scythe.Baseline/`) — written pre-crash, kept; one addition marked:
 
-- `ZeroBreach.Baseline.csproj`
+- `Scythe.Baseline.csproj`
 - `AbsenceRule.cs`, `Checks.cs`, `Comparison.cs`, `Observations.cs`, `Results.cs`,
   `SettingValue.cs`, `BaselineEvaluator.cs`, `CheckTableValidator.cs`
 - `CheckTableJsonLoader.cs` — **modified in resume**: added rejection of an empty
   `checks` array (~6 lines). Everything else untouched.
 
-Tests (`ZeroBreach.Baseline.Tests/`) — all written in the resume session except the csproj:
+Tests (`Scythe.Baseline.Tests/`) — all written in the resume session except the csproj:
 
-- `ZeroBreach.Baseline.Tests.csproj` (pre-existing)
+- `Scythe.Baseline.Tests.csproj` (pre-existing)
 - `GlobalUsings.cs`, `TestData.cs`
 - `EvaluatorCoreTests.cs` (10), `ComparisonTests.cs` (13), `AbsenceRuleTests.cs` (7),
   `MultiInstanceTests.cs` (9 incl. theory rows), `ApplicabilityTests.cs` (6),
@@ -1557,7 +1557,7 @@ so every counted mutation is a genuine behaviour change caught by an assertion.
 
 ### Wanted outside this project (findings, not licences)
 
-- Nothing edited outside `ZeroBreach.Baseline*/`. One wish: the shared tri-state enum
+- Nothing edited outside `Scythe.Baseline*/`. One wish: the shared tri-state enum
   (`Ok/Incomplete/Failed`) is now declared per-project across the package (`EvaluationState`
-  here, `OperationState` in Intel/Paths/Formats). A single shared `ZeroBreach.Common` type
+  here, `OperationState` in Intel/Paths/Formats). A single shared `Scythe.Common` type
   would remove the drift risk at merge time — owner's call.

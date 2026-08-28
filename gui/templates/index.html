@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ZeroBreach V23 — Kraken Console</title>
+<title>Scythe V23 — Kraken Console</title>
 <script>
   /* ── BOOT WATCHDOG (inline, dependency-free) ──────────────────────────────
      Guards the blank/grey-screen-on-launch race: right after the UAC elevation
@@ -11,18 +11,18 @@
      first server response arrives partial), clearing the boot overlay to an empty
      grey #app. A manual reload always fixed it — this automates that reload.
      Runs BEFORE every external script so it works even if the bundle itself fails
-     to load. app.js sets window.__ZB_BOOTED = true on a successful init; if that
+     to load. app.js sets window.__SCYTHE_BOOTED = true on a successful init; if that
      never happens within the timeout we reload once (sessionStorage-capped so it
      can never loop). */
   (function () {
-    window.__ZB_BOOTED = false;
+    window.__SCYTHE_BOOTED = false;
     window.addEventListener('load', function () {
       setTimeout(function () {
-        if (window.__ZB_BOOTED) return;
+        if (window.__SCYTHE_BOOTED) return;
         try {
-          var n = parseInt(sessionStorage.getItem('zb_boot_retry') || '0', 10);
+          var n = parseInt(sessionStorage.getItem('scythe_boot_retry') || '0', 10);
           if (n >= 2) { return; } // give up after 2 tries — never loop forever
-          sessionStorage.setItem('zb_boot_retry', String(n + 1));
+          sessionStorage.setItem('scythe_boot_retry', String(n + 1));
         } catch (e) { /* sessionStorage blocked — fall through to a single reload */ }
         location.reload();
       }, 9000);
@@ -78,7 +78,7 @@
         </svg>
       </div>
       <div id="logo-text">
-        <span class="logo-name">ZEROBREACH</span>
+        <span class="logo-name">SCYTHE</span>
         <span class="logo-version">V23</span>
       </div>
     </div>

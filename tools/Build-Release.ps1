@@ -1,5 +1,5 @@
 ﻿# ══════════════════════════════════════════════════════════════════════════════
-#  ZeroBreach — Build-Release.ps1
+#  Scythe — Build-Release.ps1
 #  Packages a clean, portable runtime zip you can copy/download/transfer to any
 #  Windows 10/11 box and run with Launch-GUI.bat. Runtime files only — no reports,
 #  no dev docs, no parked Python server, no work-rig folders.
@@ -10,8 +10,8 @@
 #      … -IncludePython            # also pack the parked _python/ server
 #      … -SkipValidation           # pack without the parse/JSON gate (not recommended)
 #
-#  Output:  dist\ZeroBreach-V23_<yyyyMMdd_HHmmss>.zip  +  .sha256 sidecar
-#  The zip extracts to a single ZeroBreach\ folder. Runs on PS 5.1+ (uses
+#  Output:  dist\Scythe-V23_<yyyyMMdd_HHmmss>.zip  +  .sha256 sidecar
+#  The zip extracts to a single Scythe\ folder. Runs on PS 5.1+ (uses
 #  System.IO.Compression, no external tools).
 # ══════════════════════════════════════════════════════════════════════════════
 param(
@@ -30,8 +30,8 @@ Write-Host "`n[Build-Release] Project root: $root"
 # ── Manifest: what a runtime copy needs ─────────────────────────────────────────
 $requiredFiles = @(
     'Launch-GUI.bat'
-    'ZeroBreach-Server.ps1'
-    'ZeroBreach-V23.ps1'
+    'Scythe-Server.ps1'
+    'Scythe-V23.ps1'
     'README.md'
     'engine\Phases-0.ps1'
     'engine\Phases-1.ps1'
@@ -147,9 +147,9 @@ if (-not $SkipValidation) {
     Write-Host "[Build-Release] Validation OK (parse + BOM on $($psFiles.Count) scripts, JSON checked)"
 }
 
-# ── Stage into a temp folder (single ZeroBreach\ folder inside the zip) ─────────
-$stage = Join-Path ([System.IO.Path]::GetTempPath()) "ZeroBreach_release_$stamp"
-$stageRoot = Join-Path $stage 'ZeroBreach'
+# ── Stage into a temp folder (single Scythe\ folder inside the zip) ─────────
+$stage = Join-Path ([System.IO.Path]::GetTempPath()) "Scythe_release_$stamp"
+$stageRoot = Join-Path $stage 'Scythe'
 New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
 
 foreach ($rel in ($requiredFiles + ($optionalFiles | Where-Object { Test-Path (Join-Path $root $_) }))) {
@@ -180,7 +180,7 @@ New-Item -ItemType Directory -Path (Join-Path $stageRoot 'reports') -Force | Out
 
 # ── Zip it ───────────────────────────────────────────────────────────────────────
 if (-not (Test-Path $OutDir)) { New-Item -ItemType Directory -Path $OutDir -Force | Out-Null }
-$zipPath = Join-Path $OutDir "ZeroBreach-V23_$stamp.zip"
+$zipPath = Join-Path $OutDir "Scythe-V23_$stamp.zip"
 if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -202,5 +202,5 @@ Write-Host @'
 
     Deploy: copy the zip to the target box (or USB) →
             right-click the zip → Properties → Unblock (clears SmartScreen/MotW) →
-            Extract All → open ZeroBreach\ → double-click Launch-GUI.bat → approve UAC.
+            Extract All → open Scythe\ → double-click Launch-GUI.bat → approve UAC.
 '@

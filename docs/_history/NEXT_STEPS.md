@@ -1,4 +1,4 @@
-# ZeroBreach — Next Steps (post-/clear handoff)
+# Scythe — Next Steps (post-/clear handoff)
 
 > ### ⚠ SUPERSEDED 2026-07-02 — the prioritized roadmap now lives in **`BLUEPRINT.md` §7**
 > This file is kept as historical context (session logs + the original phase plans). For
@@ -7,7 +7,7 @@
 
 > ### ▶ START HERE — next session (updated 2026-07-01, session 4: engine split + WS2 port DONE)
 > **BIG ARCHITECTURE CHANGE this session — read the 2026-07-01 CHANGELOG entry first.** The engine is
-> no longer a monolith: `ZeroBreach-V23.ps1` is now a thin loader that dot-sources `engine/Phases-1/2/3
+> no longer a monolith: `Scythe-V23.ps1` is now a thin loader that dot-sources `engine/Phases-1/2/3
 > .ps1` + `Summary.ps1` + `FixMode.ps1`. We adopted the work-rig branch's split architecture but rebuilt
 > it on `main`'s live-validated engine (FP rounds 1-5 + safety guard intact), merged the WS1/WS2
 > detection research into `data/*.json`, and ported 6 new/upgraded detections (Phases 55.5, 53, 62, 66,
@@ -28,7 +28,7 @@
 > COMPLETE through round 5; last full re-grade `KrakenBaseline_20260628_152000.json` = 52
 > auto-destructive, 0 system-damage FixParams.
 >
-> **Remaining WS work still on the work-rig branch** (nested `zerobreach/` folder, gitignored): WS3
+> **Remaining WS work still on the work-rig branch** (nested `scythe/` folder, gitignored): WS3
 > false-positive tuning of the new WS2 detections, WS5 broader MITRE tagging, WS6 remediation/STEALTH
 > wiring. A known quality gap the fork flagged: the ACL `AccessControl.ObjectSecurity` TypeData
 > collision (2 benign RECOVERED ERRORs/run) may degrade `Get-AuthenticodeSignature` to a no-op —
@@ -37,7 +37,7 @@
 > Profiling (per-phase `⏱ took X.Xs` timing) is DONE and live — see the 2026-06-22 session log below.
 
 > **Read this first after a context clear.** It is the work plan for the PowerShell
-> build of ZeroBreach. Written 2026-06-06. Companion to `CLAUDE.md`.
+> build of Scythe. Written 2026-06-06. Companion to `CLAUDE.md`.
 >
 > **Status 2026-06-06:** Phases 0 & 1 below are DONE in code, and the AMSI/Defender block that
 > made scans "do nothing" is FIXED (signatures moved to `data/detection_signatures.json`; engine
@@ -76,7 +76,7 @@ Root cause of phases "taking forever" / hanging the web UI: unbounded `Get-Child
 over `$env:USERPROFILE`/`LOCALAPPDATA`/`APPDATA` (browser caches, Teams, OneDrive, node_modules →
 100k+ files), plus per-pattern×per-root loops walking the same tree 20–48× per phase.
 
-**Fix (all in `ZeroBreach-V23.ps1`, parse-clean + unit-tested):**
+**Fix (all in `Scythe-V23.ps1`, parse-clean + unit-tested):**
 - New **`Get-ScanFiles`** helper (~`V23:660`): manual prunable walk with a hard file cap
   (`$global:SCAN_MAX_FILES`=20000) + wall-clock deadline (`$global:SCAN_DEADLINE_S`=20s) so no phase
   runs away; prunes cache dirs (`$global:SCAN_PRUNE_DIRS`); skips reparse points + OneDrive cloud
@@ -103,7 +103,7 @@ WSH stays opt-in. All Phase 74.7 fixes remain opt-in `RunCmd`. See CLAUDE.md "Pr
 
 **DONE this session** (all parse-clean, BOM intact, verified engine runs past AMSI):
 - **AMSI fix** (see `CLAUDE.md` + `amsi-blocks-engine` memory): signatures moved to
-  `data/detection_signatures.json`, loaded by `Get-Sig` (~`ZeroBreach-V23.ps1:639`).
+  `data/detection_signatures.json`, loaded by `Get-Sig` (~`Scythe-V23.ps1:639`).
 - **Output overhaul** — the GUI was slow and full of garbage "random character" lines:
   - New `$global:NONINTERACTIVE` (true when `-Auto`, GUI, or stdout redirected — any GUI run),
     set near `V23:143`.
@@ -160,8 +160,8 @@ afterwards. Full details in `CLAUDE.md` → "GUI Feature Layer". Summary:
 ## Scope rule (hard constraint from the user)
 
 **Work on the PowerShell files ONLY** for now:
-- `ZeroBreach-Server.ps1` (HttpListener web server + SSE)
-- `ZeroBreach-V23.ps1` (107-phase scan engine)
+- `Scythe-Server.ps1` (HttpListener web server + SSE)
+- `Scythe-V23.ps1` (107-phase scan engine)
 - `Launch-GUI.bat` (entry point)
 - `gui/` (HTML/CSS/JS frontend — shared, fine to edit)
 
@@ -185,14 +185,14 @@ has been corrected.)
 (`[Parser]::ParseFile` → 0 errors). Next session starts on **Phase 1 (USB portability)**.
 
 What was changed:
-- **Bug #1** — `ZeroBreach-V23.ps1:1811` VSS prompt now guarded
+- **Bug #1** — `Scythe-V23.ps1:1811` VSS prompt now guarded
   (`if ($Auto -or $global:GUI_MODE -or $global:STEALTH_MODE) { $vssChoice="no" }`).
   Added an `if ($Auto) { ...; exit 0 }` early-exit right after the STEALTH JSON exit
   (~`:3654`), so in auto mode the engine writes reports and exits **before** any fix-mode
   prompt — covers the old 3657/3673/3677/4178/4202/4374/4384 prompts in one guard. The
   shell-kill ReadKey (`:472`) was already `-Auto`-gated at `:891`. Entry menus already gated
   at `:713`.
-- **Bonus (blocker found while parse-checking):** `ZeroBreach-V23.ps1:1445` had `"...\$sm:..."`
+- **Bonus (blocker found while parse-checking):** `Scythe-V23.ps1:1445` had `"...\$sm:..."`
   which PS parsed as a scoped variable ref — a hard parse error that stopped the **whole
   engine** from loading. Fixed to `${sm}`. (If a scan "did nothing," this may have been why,
   alongside Bug #1.)
@@ -200,7 +200,7 @@ What was changed:
   `Running`). Abort route (`:553`) already kills the child and clears the flag — reliable
   recovery. Frontend `app.js:284` now surfaces a non-OK `/api/scan/start` (resets
   `STATE.scanning`, shows `● ERROR`) instead of hanging on `● SCANNING`.
-- **Bug #2b** — `ZeroBreach-Server.ps1` SSE loop now rewinds `$idx` to 0 when `EventLog.Count`
+- **Bug #2b** — `Scythe-Server.ps1` SSE loop now rewinds `$idx` to 0 when `EventLog.Count`
   shrinks (log cleared for a new scan), so already-open tabs keep streaming on re-run.
 
 **Not yet done:** the live acceptance test (run `Launch-GUI.bat` on a real machine and watch a
@@ -217,13 +217,13 @@ Two bugs, both root-caused. Fixed in this order.
 `-Auto`, but several `Read-Host`/`ReadKey` calls **inside the scan body are not gated**. The
 first one hit is the Volume Shadow Copy prompt in Phase 43:
 
-- `ZeroBreach-V23.ps1:1818` — `$vssChoice = (Read-Host).Trim().ToLower()` inside
+- `Scythe-V23.ps1:1818` — `$vssChoice = (Read-Host).Trim().ToLower()` inside
   `if ($shadowCount -gt 0)` (true on virtually every real machine). The child process has no
   console stdin (`UseShellExecute=$false`, `CreateNoWindow=$true` in the server), so
   `Read-Host` blocks forever. No more lines stream, `scan_complete` never fires → UI shows
   "nothing happened."
 
-**Other unguarded prompts (same fix needed):** `ZeroBreach-V23.ps1:3657` (ReadKey when
+**Other unguarded prompts (same fix needed):** `Scythe-V23.ps1:3657` (ReadKey when
 findingCount -eq 0), `:3673` (fix-mode entry), `:4178`, `:4374` (fix-mode selection).
 
 **Fix:** guard every in-body prompt with `-Auto`/GUI mode and default to the **safe,
@@ -249,7 +249,7 @@ the five found so far.
 Two independent causes, both downstream of Bug #1:
 
 **2a. `Running` flag never resets.** Set true in the scan runspace
-(`ZeroBreach-Server.ps1:324`), reset only in the `finally` (`:440`) which runs only when the
+(`Scythe-Server.ps1:324`), reset only in the `finally` (`:440`) which runs only when the
 reader loop exits — which never happens while the child is blocked. `/api/scan/start`
 (`:533`) then rejects the re-run with HTTP 400 `{"error":"scan already running"}`, and
 `app.js:284-288` ignores the status (only `.catch()`es network errors) after already
@@ -265,7 +265,7 @@ switching to the scanning view → "● SCANNING" forever.
   ```
 
 **2b. SSE goes silent for already-open tabs after a re-run.** Each scan calls
-`$ScanState.EventLog.Clear()` (`ZeroBreach-Server.ps1:328`), but the SSE loop's local `$idx`
+`$ScanState.EventLog.Clear()` (`Scythe-Server.ps1:328`), but the SSE loop's local `$idx`
 (~`:240`) only increases and is never reset when the log shrinks → `while ($idx -lt $count)`
 never fires again. Fix:
 ```powershell
@@ -290,11 +290,11 @@ PS files parse clean (`[Parser]::ParseFile` → 0 errors).
 
 | Pri | Issue | Where | Status |
 |---|---|---|---|
-| HIGH | `ZeroBreach-V23.ps1` saved without UTF-8 BOM | V23 file header | ✅ V23 now has UTF-8 BOM (`EF BB BF`) |
-| HIGH | Reports default to Desktop, not the USB | `ZeroBreach-V23.ps1:165-169` | ✅ `$OUT_ROOT` = `-OutDir` if passed, else `Join-Path $PSScriptRoot 'reports'` |
+| HIGH | `Scythe-V23.ps1` saved without UTF-8 BOM | V23 file header | ✅ V23 now has UTF-8 BOM (`EF BB BF`) |
+| HIGH | Reports default to Desktop, not the USB | `Scythe-V23.ps1:165-169` | ✅ `$OUT_ROOT` = `-OutDir` if passed, else `Join-Path $PSScriptRoot 'reports'` |
 | HIGH | UAC re-elevation fails on paths with spaces | `Launch-GUI.bat:8` | ✅ `%~f0` quoted, `-ArgumentList` array form |
-| MED | `HttpListener` URL ACL on locked-down machines | `ZeroBreach-Server.ps1:599` | ✅ `netsh http add urlacl` fallback then retry |
-| MED | `reports/` dir creation failure silent | `ZeroBreach-Server.ps1:41-46` | ✅ checks + prints FATAL and exits |
+| MED | `HttpListener` URL ACL on locked-down machines | `Scythe-Server.ps1:599` | ✅ `netsh http add urlacl` fallback then retry |
+| MED | `reports/` dir creation failure silent | `Scythe-Server.ps1:41-46` | ✅ checks + prints FATAL and exits |
 | MED | JSON encoding cross-machine parse risk | `Server.ps1:457-467`; `V23.ps1:3479-3484` | ✅ **UTF-8 *no-BOM*** via `[IO.File]::WriteAllText` + `UTF8Encoding($false)` — see note below |
 | LOW | UAC elevation drops CWD to System32 | `-Verb RunAs` paths | ✅ Server `Set-Location $PSScriptRoot` (:37); V23 unaffected — all its paths are absolute (`$PSScriptRoot`/`$env:TEMP`/`$OUT_ROOT`) |
 
@@ -321,7 +321,7 @@ reaches Phase 107, `scan_complete` fires, JSON lands in `reports/`, and a clean 
 ## PHASE 2 — Feature parity: bring ALL Python features into the PowerShell tool
 
 **Answer to "are the Python features applicable to the PS tool?": yes — effectively 100%.**
-Both servers are thin wrappers around the *same* `ZeroBreach-V23.ps1` engine serving the
+Both servers are thin wrappers around the *same* `Scythe-V23.ps1` engine serving the
 *same* `gui/` frontend. Anything `_python/server.py` does is doable natively in PowerShell;
 the only Python-specific pieces have direct .NET/PS equivalents:
 
@@ -337,7 +337,7 @@ the only Python-specific pieces have direct .NET/PS equivalents:
 | STEALTH JSON output parsing | not handled in either server yet | TODO (both) |
 
 **Action:** diff the route/event list in `_python/README_CLAUDE_CODE.md` against
-`ZeroBreach-Server.ps1` and implement any missing endpoint **in PowerShell**. Use the Python
+`Scythe-Server.ps1` and implement any missing endpoint **in PowerShell**. Use the Python
 file as a *spec only* — do not run or build it. Target list (from the README): `/api/sysinfo`,
 `/api/scan/state`, `/api/findings`, `/api/reports`, `/api/reports/<file>`, plus the
 `scan_state` / `scan_complete` / `sync` events.
@@ -374,9 +374,9 @@ project they've invested heavily in and prefer (its options/controls). Plan:
 ---
 
 ## Quick reference — confirmed file:line anchors
-- Scan-blocking `Read-Host`: `ZeroBreach-V23.ps1:1818` (+ 3657, 3673, 4178, 4374)
-- Reports→Desktop default: `ZeroBreach-V23.ps1:166`
-- `Running` set/reset: `ZeroBreach-Server.ps1:324` / `:440`; start gate `:533`; abort `:552-557`
-- SSE idx loop / EventLog.Clear: `ZeroBreach-Server.ps1:~240` / `:328`
+- Scan-blocking `Read-Host`: `Scythe-V23.ps1:1818` (+ 3657, 3673, 4178, 4374)
+- Reports→Desktop default: `Scythe-V23.ps1:166`
+- `Running` set/reset: `Scythe-Server.ps1:324` / `:440`; start gate `:533`; abort `:552-557`
+- SSE idx loop / EventLog.Clear: `Scythe-Server.ps1:~240` / `:328`
 - Frontend SSE client: `gui/static/js/app.js:95`; start-scan fetch `:284-288`
 - UAC re-elevation (batch): `Launch-GUI.bat:8`

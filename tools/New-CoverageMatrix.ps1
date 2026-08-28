@@ -81,7 +81,7 @@
     tools\New-CoverageMatrix.ps1 -Root engine -SignaturePath data\signatures.json
 
 .EXAMPLE
-    tools\New-CoverageMatrix.ps1 -Root engine, ZeroBreach-V23.ps1 -PhaseHeaderCommand Write-Phase
+    tools\New-CoverageMatrix.ps1 -Root engine, Scythe-V23.ps1 -PhaseHeaderCommand Write-Phase
 #>
 [CmdletBinding()]
 param(
@@ -120,19 +120,19 @@ $ErrorActionPreference = 'Stop'
 # Phase ceiling per mode (another copy of the mirrored table — see HANDOFF_FABLE.md; the G5
 # parity test reads this file so all copies are proven to agree). Needed because "skipped in
 # QUICK" and "phases per mode" are properties of the ceilings and the source carries only flags.
-$script:ZbModeCeiling = @{ QUICK = 30; FULL = 80; DEEP = 133; PARANOID = 133; STEALTH = 133; HUNT = 162 }
+$script:ScytheModeCeiling = @{ QUICK = 30; FULL = 80; DEEP = 133; PARANOID = 133; STEALTH = 133; HUNT = 162 }
 
 # Display order for severities (BLUEPRINT §3.3). Unknown labels keep their row, after the known
 # ones; 'dynamic' (an expression the parser cannot evaluate) sorts last.
-$script:ZbSeverityRank = @{ CRITICAL = 0; HIGH = 1; POSSIBLE = 2; INFO = 3 }
+$script:ScytheSeverityRank = @{ CRITICAL = 0; HIGH = 1; POSSIBLE = 2; INFO = 3 }
 
-$script:ZbInv = [System.Globalization.CultureInfo]::InvariantCulture
+$script:ScytheInv = [System.Globalization.CultureInfo]::InvariantCulture
 
 # --------------------------------------------------------------------------------------------
 # Small helpers
 # --------------------------------------------------------------------------------------------
 
-function Stop-ZbFatal {
+function Stop-ScytheFatal {
     # Hard failure with a reliable exit code. Write-Error under an EAP of Stop throws before
     # `exit 2` can run, turning every documented exit-2 path into a 1 — so fatal text goes
     # straight to the error line instead of the error stream.
@@ -141,7 +141,7 @@ function Stop-ZbFatal {
     exit 2
 }
 
-function Get-ZbSortedStrings {
+function Get-ScytheSortedStrings {
     # Ordinal sort — Sort-Object is culture-sensitive and its 5.1 stability is undocumented,
     # and this file promises byte-identical output.
     param([string[]]$Values)
@@ -151,7 +151,7 @@ function Get-ZbSortedStrings {
     return , $arr
 }
 
-function Resolve-ZbArgumentText {
+function Resolve-ScytheArgumentText {
     # A literal argument's text, or $null when the argument is an expression the matrix must
     # record as dynamic rather than drop (BLUEPRINT §7).
     param($Ast)
@@ -164,12 +164,12 @@ function Resolve-ZbArgumentText {
         return $null
     }
     if ($Ast -is [System.Management.Automation.Language.ConstantExpressionAst]) {
-        return [System.Convert]::ToString($Ast.Value, $script:ZbInv)
+        return [System.Convert]::ToString($Ast.Value, $script:ScytheInv)
     }
     return $null
 }
 
-function Get-ZbNamedArguments {
+function Get-ScytheNamedArguments {
     # Named parameters of a call as name → literal text ($null = present but dynamic).
     # Call sites use named parameters (BLUEPRINT §7); bare positional arguments are ignored.
     param($Command)
@@ -182,12 +182,12 @@ function Get-ZbNamedArguments {
             $name = $el.ParameterName
             if ($null -ne $el.Argument) {
                 # -Name:value form
-                $named[$name] = Resolve-ZbArgumentText -Ast $el.Argument
+                $named[$name] = Resolve-ScytheArgumentText -Ast $el.Argument
                 $idx = $idx + 1
             }
             elseif (($idx + 1) -lt $elements.Count -and
                     -not ($elements[$idx + 1] -is [System.Management.Automation.Language.CommandParameterAst])) {
-                $named[$name] = Resolve-ZbArgumentText -Ast $elements[$idx + 1]
+                $named[$name] = Resolve-ScytheArgumentText -Ast $elements[$idx + 1]
                 $idx = $idx + 2
             }
             else {
@@ -203,18 +203,18 @@ function Get-ZbNamedArguments {
     return $named
 }
 
-function Format-ZbPhaseKey {
+function Format-ScythePhaseKey {
     # Canonical phase key from a header argument: first number in the text, decimal kept
     # ("74.5"), integer-valued normalised ("47.0" → "47"). $null when there is no number.
     param([string]$Text)
     if ([string]::IsNullOrEmpty($Text)) { return $null }
     $m = [regex]::Match($Text, '(\d+(?:\.\d+)?)')
     if (-not $m.Success) { return $null }
-    $num = [double]::Parse($m.Groups[1].Value, $script:ZbInv)
-    return $num.ToString('0.###', $script:ZbInv)
+    $num = [double]::Parse($m.Groups[1].Value, $script:ScytheInv)
+    return $num.ToString('0.###', $script:ScytheInv)
 }
 
-function Get-ZbPlanMembers {
+function Get-ScythePlanMembers {
     # Distinct plan-flag names referenced inside an expression ($PhasePlan.Deep → 'Deep').
     param($Ast, [string]$VariableName)
     $found = @{}
@@ -231,10 +231,10 @@ function Get-ZbPlanMembers {
         if ($bare -eq $VariableName) { $found[[string]$n.Member.Value] = $true }
     }
     $names = @($found.Keys | ForEach-Object { [string]$_ })
-    return , (Get-ZbSortedStrings -Values $names)
+    return , (Get-ScytheSortedStrings -Values $names)
 }
 
-function Get-ZbModeGate {
+function Get-ScytheModeGate {
     # The nearest enclosing `if` clause whose condition tests a plan flag, walking outward
     # from the call. A clause on anything else ("if ($found)") is skipped, an `else` body is
     # not credited with the condition it escaped, and no gate at all returns $null — the
@@ -246,7 +246,7 @@ function Get-ZbModeGate {
         if ($node -is [System.Management.Automation.Language.IfStatementAst]) {
             foreach ($clause in $node.Clauses) {
                 if ([object]::ReferenceEquals($clause.Item2, $child)) {
-                    $flags = Get-ZbPlanMembers -Ast $clause.Item1 -VariableName $VariableName
+                    $flags = Get-ScythePlanMembers -Ast $clause.Item1 -VariableName $VariableName
                     if (@($flags).Count -gt 0) { return (@($flags) -join '+') }
                 }
             }
@@ -262,7 +262,7 @@ function Get-ZbModeGate {
 # PowerShell versions; the matrix is a file people diff, so the bytes are produced here.
 # --------------------------------------------------------------------------------------------
 
-function ConvertTo-ZbJsonString {
+function ConvertTo-ScytheJsonString {
     param([string]$Text)
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('"')
@@ -273,29 +273,29 @@ function ConvertTo-ZbJsonString {
         elseif ($ch -eq "`n") { [void]$sb.Append('\n') }
         elseif ($ch -eq "`r") { [void]$sb.Append('\r') }
         elseif ($ch -eq "`t") { [void]$sb.Append('\t') }
-        elseif ($code -lt 32) { [void]$sb.Append('\u' + $code.ToString('x4', $script:ZbInv)) }
+        elseif ($code -lt 32) { [void]$sb.Append('\u' + $code.ToString('x4', $script:ScytheInv)) }
         else { [void]$sb.Append($ch) }
     }
     [void]$sb.Append('"')
     return $sb.ToString()
 }
 
-function ConvertTo-ZbJson {
+function ConvertTo-ScytheJson {
     param($Value, [int]$Indent = 0)
     $pad = ' ' * $Indent
     $padIn = ' ' * ($Indent + 2)
     if ($null -eq $Value) { return 'null' }
     if ($Value -is [bool]) { if ($Value) { return 'true' } return 'false' }
     if ($Value -is [int] -or $Value -is [long] -or $Value -is [double] -or $Value -is [decimal]) {
-        return [System.Convert]::ToString($Value, $script:ZbInv)
+        return [System.Convert]::ToString($Value, $script:ScytheInv)
     }
-    if ($Value -is [string]) { return (ConvertTo-ZbJsonString -Text $Value) }
+    if ($Value -is [string]) { return (ConvertTo-ScytheJsonString -Text $Value) }
     if ($Value -is [System.Collections.IDictionary]) {
         if ($Value.Count -eq 0) { return '{}' }
         $parts = @()
         foreach ($k in $Value.Keys) {
-            $parts += ($padIn + (ConvertTo-ZbJsonString -Text ([string]$k)) + ': ' +
-                (ConvertTo-ZbJson -Value $Value[$k] -Indent ($Indent + 2)))
+            $parts += ($padIn + (ConvertTo-ScytheJsonString -Text ([string]$k)) + ': ' +
+                (ConvertTo-ScytheJson -Value $Value[$k] -Indent ($Indent + 2)))
         }
         return ('{' + "`n" + ($parts -join (",`n")) + "`n" + $pad + '}')
     }
@@ -304,11 +304,11 @@ function ConvertTo-ZbJson {
         if ($items.Count -eq 0) { return '[]' }
         $parts = @()
         foreach ($it in $items) {
-            $parts += ($padIn + (ConvertTo-ZbJson -Value $it -Indent ($Indent + 2)))
+            $parts += ($padIn + (ConvertTo-ScytheJson -Value $it -Indent ($Indent + 2)))
         }
         return ('[' + "`n" + ($parts -join (",`n")) + "`n" + $pad + ']')
     }
-    return (ConvertTo-ZbJsonString -Text ([string]$Value))
+    return (ConvertTo-ScytheJsonString -Text ([string]$Value))
 }
 
 # --------------------------------------------------------------------------------------------
@@ -318,7 +318,7 @@ function ConvertTo-ZbJson {
 $moduleFiles = @()
 foreach ($entry in $Root) {
     if (-not (Test-Path -LiteralPath $entry)) {
-        Stop-ZbFatal -Message ('-Root entry not found: ' + $entry)
+        Stop-ScytheFatal -Message ('-Root entry not found: ' + $entry)
     }
     $resolved = (Resolve-Path -LiteralPath $entry).Path
     if (Test-Path -LiteralPath $resolved -PathType Container) {
@@ -331,9 +331,9 @@ foreach ($entry in $Root) {
 }
 # Plain assignment on purpose: the sort helpers return ,$array, and @( ) around such a call
 # nests the array instead of unwrapping it (BLUEPRINT §8.5). Same at every helper call below.
-$moduleFiles = Get-ZbSortedStrings -Values @($moduleFiles | Select-Object -Unique)
+$moduleFiles = Get-ScytheSortedStrings -Values @($moduleFiles | Select-Object -Unique)
 if ($moduleFiles.Count -eq 0) {
-    Stop-ZbFatal -Message ('No .ps1 files under -Root (' + ($Root -join ', ') + '). Nothing to scan.')
+    Stop-ScytheFatal -Message ('No .ps1 files under -Root (' + ($Root -join ', ') + '). Nothing to scan.')
 }
 
 # Module display name: leaf file name, with the parent directory prepended only on a leaf
@@ -392,9 +392,9 @@ foreach ($filePath in $moduleFiles) {
     $moduleName = $moduleNameOf[$filePath]
     $fileEntries = @()
     foreach ($hdr in $headers) {
-        $named = Get-ZbNamedArguments -Command $hdr
+        $named = Get-ScytheNamedArguments -Command $hdr
         $phaseKey = $null
-        if ($named.ContainsKey($PhaseParameter)) { $phaseKey = Format-ZbPhaseKey -Text $named[$PhaseParameter] }
+        if ($named.ContainsKey($PhaseParameter)) { $phaseKey = Format-ScythePhaseKey -Text $named[$PhaseParameter] }
         if ($null -eq $phaseKey) {
             $headerProblems += ($moduleName + ':' + $hdr.Extent.StartLineNumber +
                 ' header has no literal -' + $PhaseParameter + ' number')
@@ -406,13 +406,13 @@ foreach ($filePath in $moduleFiles) {
         if ($named.ContainsKey($CategoryParameter) -and $null -ne $named[$CategoryParameter]) { $category = $named[$CategoryParameter] }
         $fileEntries += New-Object PSObject -Property @{
             Key           = $phaseKey
-            KeyNumber     = [double]::Parse($phaseKey, $script:ZbInv)
+            KeyNumber     = [double]::Parse($phaseKey, $script:ScytheInv)
             Title         = $title
             Category      = $category
             Module        = $moduleName
             Line          = [int]$hdr.Extent.StartLineNumber
             Offset        = [int]$hdr.Extent.StartOffset
-            Gate          = (Get-ZbModeGate -Command $hdr -VariableName $PlanVariable)
+            Gate          = (Get-ScytheModeGate -Command $hdr -VariableName $PlanVariable)
             Severities    = @{}
             FixActions    = @{}
             SignatureKeys = @{}
@@ -428,7 +428,7 @@ foreach ($filePath in $moduleFiles) {
         foreach ($fe in $fileEntries) { if ($fe.Offset -lt $call.Extent.StartOffset) { $owner = $fe } }
         if ($null -eq $owner) { $unattributedFindings = $unattributedFindings + 1; continue }
         $owner.FindingCalls = $owner.FindingCalls + 1
-        $named = Get-ZbNamedArguments -Command $call
+        $named = Get-ScytheNamedArguments -Command $call
         if ($named.ContainsKey('Severity')) {
             $sev = $named['Severity']
             if ($null -eq $sev) { $sev = 'dynamic' }
@@ -442,7 +442,7 @@ foreach ($filePath in $moduleFiles) {
     }
 
     foreach ($call in $sigCalls) {
-        $named = Get-ZbNamedArguments -Command $call
+        $named = Get-ScytheNamedArguments -Command $call
         $key = $null
         if ($named.ContainsKey($SignatureKeyParameter)) { $key = $named[$SignatureKeyParameter] }
         if ($null -eq $key) { $dynamicSignatureReads = $dynamicSignatureReads + 1; continue }
@@ -456,7 +456,7 @@ foreach ($filePath in $moduleFiles) {
 }
 
 if ($phaseEntries.Count -eq 0) {
-    Stop-ZbFatal -Message ('No ' + $PhaseHeaderCommand + ' calls found under -Root (' + ($Root -join ', ') +
+    Stop-ScytheFatal -Message ('No ' + $PhaseHeaderCommand + ' calls found under -Root (' + ($Root -join ', ') +
         '). Wrong root, or the header command has another name — pass it with -PhaseHeaderCommand. ' +
         'Refusing to write an empty matrix.')
 }
@@ -472,8 +472,8 @@ if ($phaseEntries.Count -eq 0) {
 $sortKeys = @()
 for ($i = 0; $i -lt $phaseEntries.Count; $i = $i + 1) {
     $pe = $phaseEntries[$i]
-    $sortKeys += ($pe.KeyNumber.ToString('000000.000', $script:ZbInv) + '|' + $pe.Module + '|' + $pe.Title + '|' +
-        $pe.Line.ToString('000000', $script:ZbInv) + '|' + $i.ToString('000000', $script:ZbInv))
+    $sortKeys += ($pe.KeyNumber.ToString('000000.000', $script:ScytheInv) + '|' + $pe.Module + '|' + $pe.Title + '|' +
+        $pe.Line.ToString('000000', $script:ScytheInv) + '|' + $i.ToString('000000', $script:ScytheInv))
 }
 $sortKeys = [string[]]$sortKeys
 [System.Array]::Sort($sortKeys, [System.StringComparer]::Ordinal)
@@ -483,22 +483,22 @@ foreach ($sk in $sortKeys) {
 }
 $phaseEntries = $sortedEntries
 
-function Get-ZbRankedSeverities {
+function Get-ScytheRankedSeverities {
     param([hashtable]$Set)
     $keys = @()
     foreach ($k in $Set.Keys) {
         $rank = 90
-        if ($script:ZbSeverityRank.ContainsKey($k)) { $rank = [int]$script:ZbSeverityRank[$k] }
+        if ($script:ScytheSeverityRank.ContainsKey($k)) { $rank = [int]$script:ScytheSeverityRank[$k] }
         if ($k -eq 'dynamic') { $rank = 99 }
-        $keys += ($rank.ToString('00', $script:ZbInv) + '|' + $k)
+        $keys += ($rank.ToString('00', $script:ScytheInv) + '|' + $k)
     }
-    $keys = Get-ZbSortedStrings -Values $keys
+    $keys = Get-ScytheSortedStrings -Values $keys
     $out = @()
     foreach ($k in $keys) { $out += @($k -split '\|', 2)[1] }
     return , $out
 }
 
-$quickCeiling = [double]$script:ZbModeCeiling['QUICK']
+$quickCeiling = [double]$script:ScytheModeCeiling['QUICK']
 $phaseList = @()
 $ungated = @()
 $keySeen = @{}
@@ -512,9 +512,9 @@ foreach ($pe in $phaseEntries) {
         category         = $pe.Category
         module           = $pe.Module
         mode_gate        = $pe.Gate
-        severities       = (Get-ZbRankedSeverities -Set $pe.Severities)
-        fix_actions      = (Get-ZbSortedStrings -Values @($pe.FixActions.Keys | ForEach-Object { [string]$_ }))
-        signature_keys   = (Get-ZbSortedStrings -Values @($pe.SignatureKeys.Keys | ForEach-Object { [string]$_ }))
+        severities       = (Get-ScytheRankedSeverities -Set $pe.Severities)
+        fix_actions      = (Get-ScytheSortedStrings -Values @($pe.FixActions.Keys | ForEach-Object { [string]$_ }))
+        signature_keys   = (Get-ScytheSortedStrings -Values @($pe.SignatureKeys.Keys | ForEach-Object { [string]$_ }))
         finding_calls    = [int]$pe.FindingCalls
         skipped_in_quick = ($pe.KeyNumber -gt $quickCeiling)
     }
@@ -523,22 +523,22 @@ foreach ($pe in $phaseEntries) {
 
 # Per-module / per-mode / per-gate / per-fix-action counts.
 $perModule = [ordered]@{}
-foreach ($m in (Get-ZbSortedStrings -Values @($phaseEntries | ForEach-Object { $_.Module } | Select-Object -Unique))) {
+foreach ($m in (Get-ScytheSortedStrings -Values @($phaseEntries | ForEach-Object { $_.Module } | Select-Object -Unique))) {
     $perModule[$m] = @($phaseEntries | Where-Object { $_.Module -eq $m }).Count
 }
 $perMode = [ordered]@{}
-foreach ($mode in (Get-ZbSortedStrings -Values @($script:ZbModeCeiling.Keys | ForEach-Object { [string]$_ }))) {
-    $ceiling = [double]$script:ZbModeCeiling[$mode]
+foreach ($mode in (Get-ScytheSortedStrings -Values @($script:ScytheModeCeiling.Keys | ForEach-Object { [string]$_ }))) {
+    $ceiling = [double]$script:ScytheModeCeiling[$mode]
     $perMode[$mode] = @($phaseEntries | Where-Object { $_.KeyNumber -le $ceiling }).Count
 }
 $perGate = [ordered]@{}
-foreach ($g in (Get-ZbSortedStrings -Values @($phaseEntries | Where-Object { $null -ne $_.Gate } | ForEach-Object { $_.Gate } | Select-Object -Unique))) {
+foreach ($g in (Get-ScytheSortedStrings -Values @($phaseEntries | Where-Object { $null -ne $_.Gate } | ForEach-Object { $_.Gate } | Select-Object -Unique))) {
     $perGate[$g] = @($phaseEntries | Where-Object { $_.Gate -eq $g }).Count
 }
 $perFix = [ordered]@{}
 $allFixNames = @{}
 foreach ($pe in $phaseEntries) { foreach ($fx in $pe.FixActions.Keys) { $allFixNames[[string]$fx] = $true } }
-foreach ($fx in (Get-ZbSortedStrings -Values @($allFixNames.Keys | ForEach-Object { [string]$_ }))) {
+foreach ($fx in (Get-ScytheSortedStrings -Values @($allFixNames.Keys | ForEach-Object { [string]$_ }))) {
     $perFix[$fx] = @($phaseEntries | Where-Object { $_.FixActions.ContainsKey($fx) }).Count
 }
 
@@ -550,7 +550,7 @@ $missingKeys = $null
 $unreadKeys = $null
 if (-not [string]::IsNullOrEmpty($SignaturePath)) {
     if (-not (Test-Path -LiteralPath $SignaturePath)) {
-        Stop-ZbFatal -Message ('-SignaturePath not found: ' + $SignaturePath)
+        Stop-ScytheFatal -Message ('-SignaturePath not found: ' + $SignaturePath)
     }
     $signatureFileName = [System.IO.Path]::GetFileName($SignaturePath)
     $sigJson = Get-Content -LiteralPath $SignaturePath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -564,20 +564,20 @@ if (-not [string]::IsNullOrEmpty($SignaturePath)) {
     foreach ($k in @($presentKeys.Keys | ForEach-Object { [string]$_ })) {
         if (-not $allSignatureReads.ContainsKey($k)) { $unreadKeys += $k }
     }
-    $missingKeys = Get-ZbSortedStrings -Values $missingKeys
-    $unreadKeys = Get-ZbSortedStrings -Values $unreadKeys
+    $missingKeys = Get-ScytheSortedStrings -Values $missingKeys
+    $unreadKeys = Get-ScytheSortedStrings -Values $unreadKeys
 }
 
 # Numeric sort for the small key lists too.
-function Get-ZbNumericKeySort {
+function Get-ScytheNumericKeySort {
     param([string[]]$Keys)
     $arr = @($Keys)
     if ($arr.Count -le 1) { return , $arr }
     # Same single-array sort technique as the phase list, for the same reason.
     $nums = @()
     for ($i = 0; $i -lt $arr.Count; $i = $i + 1) {
-        $nums += (([double]::Parse($arr[$i], $script:ZbInv)).ToString('000000.000', $script:ZbInv) + '|' +
-            $i.ToString('000000', $script:ZbInv))
+        $nums += (([double]::Parse($arr[$i], $script:ScytheInv)).ToString('000000.000', $script:ScytheInv) + '|' +
+            $i.ToString('000000', $script:ScytheInv))
     }
     $nums = [string[]]$nums
     [System.Array]::Sort($nums, [System.StringComparer]::Ordinal)
@@ -585,8 +585,8 @@ function Get-ZbNumericKeySort {
     foreach ($n in $nums) { $out += $arr[[int]@($n -split '\|')[-1]] }
     return , $out
 }
-$ungated = Get-ZbNumericKeySort -Keys @($ungated | Select-Object -Unique)
-$duplicates = Get-ZbNumericKeySort -Keys @($duplicateKeys.Keys | ForEach-Object { [string]$_ })
+$ungated = Get-ScytheNumericKeySort -Keys @($ungated | Select-Object -Unique)
+$duplicates = Get-ScytheNumericKeySort -Keys @($duplicateKeys.Keys | ForEach-Object { [string]$_ })
 
 if ([string]::IsNullOrEmpty($GeneratedFrom)) {
     $GeneratedFrom = 'unknown'
@@ -600,7 +600,7 @@ if ([string]::IsNullOrEmpty($GeneratedFrom)) {
 }
 
 $matrix = [ordered]@{
-    schema         = 'zerobreach-coverage-matrix/1'
+    schema         = 'scythe-coverage-matrix/1'
     generated_from = $GeneratedFrom
     scan           = [ordered]@{
         phase_header_command     = $PhaseHeaderCommand
@@ -608,7 +608,7 @@ $matrix = [ordered]@{
         signature_lookup_command = $SignatureLookupCommand
         plan_variable            = $PlanVariable
         signature_file           = $signatureFileName
-        modules                  = (Get-ZbSortedStrings -Values @($moduleNameOf.Values | ForEach-Object { [string]$_ } | Select-Object -Unique))
+        modules                  = (Get-ScytheSortedStrings -Values @($moduleNameOf.Values | ForEach-Object { [string]$_ } | Select-Object -Unique))
     }
     phases         = $phaseList
     summary        = [ordered]@{
@@ -619,7 +619,7 @@ $matrix = [ordered]@{
         phases_per_fix_action            = $perFix
         ungated_phases                   = $ungated
         duplicate_phases                 = $duplicates
-        headers_unparsed                 = (Get-ZbSortedStrings -Values $headerProblems)
+        headers_unparsed                 = (Get-ScytheSortedStrings -Values $headerProblems)
         unattributed_finding_calls       = [int]$unattributedFindings
         dynamic_signature_reads          = [int]$dynamicSignatureReads
         signature_keys_missing_from_file = $missingKeys
@@ -636,11 +636,11 @@ if ([string]::IsNullOrEmpty($OutPath)) {
     $OutPath = Join-Path -Path (Join-Path -Path $projectRoot -ChildPath 'data') -ChildPath 'coverage_matrix.generated.json'
 }
 if ([System.IO.Path]::GetFileName($OutPath) -eq 'coverage_matrix.json') {
-    Stop-ZbFatal -Message ('Refusing to write coverage_matrix.json — that is the promoted file the main session ' +
+    Stop-ScytheFatal -Message ('Refusing to write coverage_matrix.json — that is the promoted file the main session ' +
         'diffs against. Write coverage_matrix.generated.json and promote by diff.')
 }
 
-$json = (ConvertTo-ZbJson -Value $matrix -Indent 0) + "`n"
+$json = (ConvertTo-ScytheJson -Value $matrix -Indent 0) + "`n"
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $outDir = [System.IO.Path]::GetDirectoryName($OutPath)
 if (-not [string]::IsNullOrEmpty($outDir) -and -not (Test-Path -LiteralPath $outDir)) {

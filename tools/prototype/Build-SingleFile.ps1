@@ -35,7 +35,7 @@
     The tree to package. Never written to.
 
 .PARAMETER OutPath
-    The zip to produce. Default: ZeroBreach-Standalone.zip in the current directory.
+    The zip to produce. Default: Scythe-Standalone.zip in the current directory.
 
 .PARAMETER StageDir
     Where files are staged. Default: a temp directory, removed after the build unless
@@ -45,13 +45,13 @@
     Leave the staged directory in place (the contract test inspects it).
 
 .PARAMETER ProjectRootVariable
-    Name of the project-root global (the path choke point). Default ZbRoot.
+    Name of the project-root global (the path choke point). Default ScytheRoot.
 
 .PARAMETER LauncherFile
 .PARAMETER ServerFile
 .PARAMETER EngineFile
     Entry-point file names at the root of the tree. Defaults Launch-GUI.bat,
-    ZeroBreach-Server.ps1, ZeroBreach-V23.ps1.
+    Scythe-Server.ps1, Scythe-V23.ps1.
 
 .PARAMETER EncodingPattern
     Regex that recognises the console-encoding declaration. Default matches
@@ -61,10 +61,10 @@
     Also emit the manifest object.
 
 .EXAMPLE
-    tools\prototype\Build-SingleFile.ps1 -Root . -OutPath dist\ZeroBreach-Standalone.zip
+    tools\prototype\Build-SingleFile.ps1 -Root . -OutPath dist\Scythe-Standalone.zip
 
 .EXAMPLE
-    tools\prototype\Build-SingleFile.ps1 -Root C:\src\zerobreach -ProjectRootVariable KrakenRoot
+    tools\prototype\Build-SingleFile.ps1 -Root C:\src\scythe -ProjectRootVariable KrakenRoot
 #>
 [CmdletBinding()]
 param(
@@ -77,13 +77,13 @@ param(
 
     [switch]$KeepStage,
 
-    [string]$ProjectRootVariable = 'ZbRoot',
+    [string]$ProjectRootVariable = 'ScytheRoot',
 
     [string]$LauncherFile = 'Launch-GUI.bat',
 
-    [string]$ServerFile = 'ZeroBreach-Server.ps1',
+    [string]$ServerFile = 'Scythe-Server.ps1',
 
-    [string]$EngineFile = 'ZeroBreach-V23.ps1',
+    [string]$EngineFile = 'Scythe-V23.ps1',
 
     [string]$EncodingPattern = '(?i)OutputEncoding\s*=\s*[^\r\n]*UTF-?8',
 
@@ -92,7 +92,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Stop-ZbFatal {
+function Stop-ScytheFatal {
     # Fatal text straight to the error line so `exit 2` actually runs (Write-Error under an
     # EAP of Stop would throw first).
     param([string]$Message)
@@ -100,7 +100,7 @@ function Stop-ZbFatal {
     exit 2
 }
 
-function Get-ZbBareName {
+function Get-ScytheBareName {
     param($VariableExpression)
     return @(([string]$VariableExpression.VariablePath.UserPath) -split ':')[-1]
 }
@@ -111,19 +111,19 @@ function Get-ZbBareName {
 # everywhere else it is a latent packed-layout bug (study §2).
 # --------------------------------------------------------------------------------------------
 
-function Get-ZbScriptRootViolation {
+function Get-ScytheScriptRootViolation {
     param($Ast, [string]$RootVar, [string]$FileLabel)
     $bad = @()
     $vars = $Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)
     foreach ($v in @($vars)) {
-        $bare = Get-ZbBareName -VariableExpression $v
+        $bare = Get-ScytheBareName -VariableExpression $v
         if (@('PSScriptRoot', 'PSCommandPath', 'MyInvocation') -notcontains $bare) { continue }
         $allowed = $false
         $node = $v.Parent
         while ($null -ne $node) {
             if ($node -is [System.Management.Automation.Language.AssignmentStatementAst]) {
                 if ($node.Left -is [System.Management.Automation.Language.VariableExpressionAst]) {
-                    if ((Get-ZbBareName -VariableExpression $node.Left) -eq $RootVar) { $allowed = $true }
+                    if ((Get-ScytheBareName -VariableExpression $node.Left) -eq $RootVar) { $allowed = $true }
                 }
                 break
             }
@@ -143,7 +143,7 @@ function Get-ZbScriptRootViolation {
 # never restated.
 # --------------------------------------------------------------------------------------------
 
-function Get-ZbRootReference {
+function Get-ScytheRootReference {
     param($Ast, [string]$RootVar)
     $out = @()
     $cmds = $Ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)
@@ -153,7 +153,7 @@ function Get-ZbRootReference {
         $usesRoot = $false
         $vars = $c.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] }, $true)
         foreach ($v in @($vars)) {
-            if ((Get-ZbBareName -VariableExpression $v) -eq $RootVar) { $usesRoot = $true }
+            if ((Get-ScytheBareName -VariableExpression $v) -eq $RootVar) { $usesRoot = $true }
         }
         if (-not $usesRoot) { continue }
         $strs = $c.FindAll({ param($n) $n -is [System.Management.Automation.Language.StringConstantExpressionAst] }, $true)
@@ -171,22 +171,22 @@ function Get-ZbRootReference {
 # --------------------------------------------------------------------------------------------
 
 if (-not (Test-Path -LiteralPath $Root -PathType Container)) {
-    Stop-ZbFatal -Message ('-Root not found or not a directory: ' + $Root)
+    Stop-ScytheFatal -Message ('-Root not found or not a directory: ' + $Root)
 }
 $rootPath = (Resolve-Path -LiteralPath $Root).Path
 
 foreach ($required in @($LauncherFile, $ServerFile, $EngineFile)) {
     if (-not (Test-Path -LiteralPath (Join-Path -Path $rootPath -ChildPath $required))) {
-        Stop-ZbFatal -Message ('Entry file missing from the tree: ' + $required +
+        Stop-ScytheFatal -Message ('Entry file missing from the tree: ' + $required +
             ' (wrong -Root, or pass the real name via -LauncherFile / -ServerFile / -EngineFile)')
     }
 }
 
 if ([string]::IsNullOrEmpty($OutPath)) {
-    $OutPath = Join-Path -Path ((Get-Location).Path) -ChildPath 'ZeroBreach-Standalone.zip'
+    $OutPath = Join-Path -Path ((Get-Location).Path) -ChildPath 'Scythe-Standalone.zip'
 }
 if ([string]::IsNullOrEmpty($StageDir)) {
-    $StageDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('zbstage_' + $PID)
+    $StageDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('scythestage_' + $PID)
 }
 if (Test-Path -LiteralPath $StageDir) { Remove-Item -Path $StageDir -Recurse -Force }
 New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
@@ -251,7 +251,7 @@ foreach ($lr in $launcherRole) {
 
 # 1. Root-global discipline.
 foreach ($lr in $launcherRole) {
-    $found = Get-ZbScriptRootViolation -Ast $asts[$lr.Label] -RootVar $ProjectRootVariable -FileLabel $lr.Label
+    $found = Get-ScytheScriptRootViolation -Ast $asts[$lr.Label] -RootVar $ProjectRootVariable -FileLabel $lr.Label
     foreach ($v in @($found)) { $violations += ('path-resolution: ' + $v) }
 }
 
@@ -281,7 +281,7 @@ foreach ($df in $stagedData) {
 # created at runtime, not shipped.
 $refCount = @{}
 foreach ($lr in $launcherRole) {
-    $refs = Get-ZbRootReference -Ast $asts[$lr.Label] -RootVar $ProjectRootVariable
+    $refs = Get-ScytheRootReference -Ast $asts[$lr.Label] -RootVar $ProjectRootVariable
     $refCount[$lr.Label] = @($refs).Count
     foreach ($ref in @($refs)) {
         $norm = $ref.Replace('\', '/').TrimStart('./')

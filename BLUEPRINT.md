@@ -1,4 +1,4 @@
-# ZeroBreach "Kraken Console" — Product Blueprint
+# Scythe "Kraken Console" — Product Blueprint
 
 > **The definitive top-level map of what this tool is, how it fits together, and where it goes
 > next.** Rules live in `CLAUDE.md`; history lives in `CHANGELOG.md`; session state lives in
@@ -8,7 +8,7 @@
 ## 1. Mission
 
 A **single-operator Windows incident-response tool** for MSP techs. A technician arrives at a
-machine that is misbehaving, runs ZeroBreach, and gets:
+machine that is misbehaving, runs Scythe, and gets:
 
 1. **Detect** — indicators of compromise across the full malware taxonomy (RAT/C2, ransomware,
    rootkits, keyloggers, worms, miners, trojans, spyware, fileless/LOLBins, persistence,
@@ -25,12 +25,12 @@ clearly defensive interpretation.
 
 ## 2. Two engines, one product
 
-ZeroBreach ships **two independent implementations of the same tool**. This is deliberate and
+Scythe ships **two independent implementations of the same tool**. This is deliberate and
 permanent, not a migration artifact.
 
 | | Native engine — **primary** | PowerShell engine — **fallback** |
 |---|---|---|
-| Artifact | `zbscan`, one self-contained `win-x64` exe | `Launch-GUI.bat` + a folder of `.ps1` |
+| Artifact | `scythescan`, one self-contained `win-x64` exe | `Launch-GUI.bat` + a folder of `.ps1` |
 | Language | C# / .NET 8 | PowerShell 5.1 |
 | Runtime dependency | None (runtime bundled) | `powershell.exe`, present on every Windows |
 | Detection surface | 10 scanners / 63 checks | 162 phases |
@@ -42,7 +42,7 @@ permanent, not a migration artifact.
 The native exe is the goal: one file a technician downloads and runs, nothing to install.
 
 But the delivery problem is real and it is not about capability. From an EDR's point of view, a
-ZeroBreach run is: an elevated process enumerates running processes and loaded modules, reads
+Scythe run is: an elevated process enumerates running processes and loaded modules, reads
 autorun and service configuration across the registry, walks scheduled tasks and WMI
 subscriptions, reads event logs, hashes files in user-writable paths, and — in remediation —
 kills processes and deletes files. That is the canonical *security tool or malware, flip a coin*
@@ -76,7 +76,7 @@ PowerShell engine is far ahead on coverage and the native engine is ahead on arc
 | Safety model | Architectural read-only/destructive split, enforced by a source-grepping test | Three mirrored guard copies kept in sync by a test | Native is cleaner |
 | Coverage honesty | Every check ends `Completed` / `Inconclusive` / `Skipped`; exit `3` on gaps | Phase-level recovery traps; no per-check status | **PS should adopt** |
 | Finding identity | Deterministic `ComputeId(group, target, discriminator)` | Engine-assigned ids | **PS should adopt** |
-| WOW64 correctness | N/A — always 64-bit by construction | Explicit `Get-RegVal64` / `ZB_SYS32` handling required | Native wins by design |
+| WOW64 correctness | N/A — always 64-bit by construction | Explicit `Get-RegVal64` / `SCYTHE_SYS32` handling required | Native wins by design |
 | Operator GUI | None (CLI only) | Full browser console | **Native gap, low priority** |
 | Signature storage | Embedded resources + on-disk merge | On-disk `data/*.json` only | See §8 |
 
@@ -88,14 +88,14 @@ Closing the detection gap is the main body of work; the per-scanner roadmap is
 ### Native engine
 
 ```
-zbscan  (single self-contained win-x64 executable)
-   ├─ ZeroBreach.Cli          entry point, console output, interactive remediation/IOC/triage
-   ├─ ZeroBreach.Core         finding model, check ledger, budgets, profiles, signature DB,
+scythescan  (single self-contained win-x64 executable)
+   ├─ Scythe.Cli          entry point, console output, interactive remediation/IOC/triage
+   ├─ Scythe.Core         finding model, check ledger, budgets, profiles, signature DB,
    │                          reporting, triage/escalation. No destructive operation exists here.
-   ├─ ZeroBreach.Scanners     the 10 detection scanners, one file each, + signature JSON.
+   ├─ Scythe.Scanners     the 10 detection scanners, one file each, + signature JSON.
    │                          READ-ONLY by architecture.
-   ├─ ZeroBreach.Remediation  the ONLY module that mutates the machine. Small and auditable.
-   └─ ZeroBreach.Tests        xUnit, incl. ScannerReadOnlyAuditTests which greps Scanners/Core
+   ├─ Scythe.Remediation  the ONLY module that mutates the machine. Small and auditable.
+   └─ Scythe.Tests        xUnit, incl. ScannerReadOnlyAuditTests which greps Scanners/Core
                               sources and fails the build if a destructive API appears.
 ```
 
@@ -109,14 +109,14 @@ The ten scanners: `Persistence`, `C2`, `CredentialAccess`, `DefenseEvasion`, `Ro
 
 ```
 Launch-GUI.bat  (self-elevates → admin)
-   └─ ZeroBreach-Server.ps1          pure-PS HttpListener server, SSE at /api/events
+   └─ Scythe-Server.ps1          pure-PS HttpListener server, SSE at /api/events
         ├─ serves gui/  (index.html + css + js: sound→themes→fx→kraken→app)
-        ├─ scan runspace ── spawns ── powershell.exe ZeroBreach-V23.ps1 -Auto …
+        ├─ scan runspace ── spawns ── powershell.exe Scythe-V23.ps1 -Auto …
         │     stdout (UTF-8) ─→ parse loop ─→ SSE events ─→ browser
         ├─ remediation runspace ($script:REMEDIATE_SCRIPT — mirrors Invoke-FixMode)
         └─ reports/  (baseline JSON, HTML, console + SSE logs, quarantine vault)
 
-ZeroBreach-V23.ps1  = THIN LOADER  (params/elevation/globals/ALL helpers/banner/menus)
+Scythe-V23.ps1  = THIN LOADER  (params/elevation/globals/ALL helpers/banner/menus)
    └─ dot-sources, in order, into ONE scope:
         engine/Phases-0.ps1   PREFLIGHT — integrity + anti-blinding gate (every mode, no header)
         engine/Phases-1.ps1   phases 1-58    (incl. 55.5 BYOVD)          ┐ each module has its
@@ -273,11 +273,18 @@ modified.
 
 | Source | What | Status |
 |---|---|---|
-| `~/Downloads/engine1` | The five `ZeroBreach.*` C# projects, `docs/`, `INSTRUCTIONS_AI.md`, `_ENGINE_SPEC_FOR_REBUILD.md` | **Copied in** (session 16, committed `41e24d7`). Builds and tests green in this repo. |
-| `~/Downloads/claude/fable-work` | G-series deliverables: `New-ScanReport.ps1`, `Compare-ScanRuns.ps1`, `Get-PhaseTimingReport.ps1`, `New-CoverageMatrix.ps1`, `gui/viewer.html`, test harness; plus `HANDOFF_FABLE.md` and `PACKAGING_STUDY.md` | **Copied in** (session 16, committed `e8eea6c`; `viewer.js`/`viewer.css` were missed and landed in session 18). All 8 tasks (G1-G8) confirmed complete 2026-08-26: 355 assertions green under `pwsh` 7.4.6, every suite fail-on-revert proven. |
-| `zerobreach/fable-work` | F-series briefs (deferred): cloud/DevOps creds, lateral+AD+cred-dumping, rule engine, persistence surface, supply chain, LAN band, UEFI, packaging | **Already here — the only surviving copy.** Becomes the native scanner roadmap. |
-| `~/Downloads/claude/fable-work-2` | The library layer beneath the engine: YARA parser/matcher/conditions/scan-API (A1-A4), Sigma engine (A5), PE structure parser (B1), ZIP/OLE/OOXML container reader (B2), Windows path normaliser (C1), signature/rule linter (C2), IOC feed normaliser — STIX/MISP/OpenIOC (D1), baseline diff engine (D2), configuration baseline evaluator (D3) | **Copied in 2026-08-26** to `lib/`, wired into `ZeroBreach.sln`. All 12 tasks complete; independently re-verified here, not taken on trust: 1,374 tests, 0 failed, 0 skipped, 0 warnings, with `yara` 4.5.5 present so the differential suites ran live. Solution total **1,664 passed / 14 skipped**. Nothing in `ZeroBreach.*` references it yet — see §10 item 6. |
-| `~/Downloads/claude/fable-work-3` | The offline artifact layer and record production: Windows artifact readers (event log, registry hive, shell link, execution evidence), file-system metadata, embedded databases (SQLite, ESE), configuration/policy, storage + firmware inventory, image/package containers, message stores, analysis primitives, script structure, and the correlation/scoring/export/technique-map layer | **Specified 2026-08-26, not yet built.** 11 tracks / 30 tasks / 30 projects, all `net8.0` and Linux-testable. Replaces "ask Windows for it" with "read the documented on-disk format", which is what makes the whole layer developable off Windows. |
+| `~/Downloads/engine1` | The five `Scythe.*` C# projects, `docs/`, `INSTRUCTIONS_AI.md`, `_ENGINE_SPEC_FOR_REBUILD.md` | **Copied in** (session 16, committed `41e24d7`). Builds and tests green in this repo. |
+| `~/Downloads/claude/fable-completed/fable-work` | G-series deliverables: `New-ScanReport.ps1`, `Compare-ScanRuns.ps1`, `Get-PhaseTimingReport.ps1`, `New-CoverageMatrix.ps1`, `gui/viewer.html`, test harness; plus `HANDOFF_FABLE.md` and `PACKAGING_STUDY.md` | **Copied in** (session 16, committed `e8eea6c`; `viewer.js`/`viewer.css` were missed and landed in session 18). All 8 tasks (G1-G8) confirmed complete 2026-08-26: 355 assertions green under `pwsh` 7.4.6, every suite fail-on-revert proven. |
+| `scythe/fable-work` | F-series briefs (deferred): cloud/DevOps creds, lateral+AD+cred-dumping, rule engine, persistence surface, supply chain, LAN band, UEFI, packaging | **Already here — the only surviving copy.** Becomes the native scanner roadmap. |
+| `~/Downloads/claude/fable-completed/fable-work-2` | The library layer beneath the engine: YARA parser/matcher/conditions/scan-API (A1-A4), Sigma engine (A5), PE structure parser (B1), ZIP/OLE/OOXML container reader (B2), Windows path normaliser (C1), signature/rule linter (C2), IOC feed normaliser — STIX/MISP/OpenIOC (D1), baseline diff engine (D2), configuration baseline evaluator (D3) | **Copied in 2026-08-26** to `lib/`, wired into `Scythe.sln`. All 12 tasks complete; independently re-verified here, not taken on trust: 1,374 tests, 0 failed, 0 skipped, 0 warnings, with `yara` 4.5.5 present so the differential suites ran live. Solution total **1,664 passed / 14 skipped**. Nothing in `Scythe.*` references it yet — see §10 item 6. |
+| `~/Downloads/claude/fable-completed/fable-work-3` | The offline artifact layer and record production: Windows artifact readers (event log, registry hive, shell link, execution evidence), file-system metadata, embedded databases (SQLite, ESE), configuration/policy, storage + firmware inventory, image/package containers, message stores, analysis primitives, script structure, the correlation/scoring/export/technique-map layer, interchange/indicator-sharing output, the remaining content formats (process dumps, archives, compound documents, browser schemas), and a shared fixture kit | **Specified 2026-08-26, not yet built.** 14 tracks / 37 tasks / 37 projects, all `net8.0` and Linux-testable. Replaces "ask Windows for it" with "read the documented on-disk format", which is what makes the whole layer developable off Windows. |
+
+A package moves to `~/Downloads/claude/fable-completed/` once its output is merged here and
+verified — folder name unchanged, contents unedited, with a row added to that folder's
+`README.md`. `fable-work` and `fable-work-2` are there because they landed; `fable-work-3` is
+there because `~/Downloads/claude/scythe-work/` replaced it. **The live package is
+`~/Downloads/claude/scythe-work/`** — the rebuilt, sanitized form of the row above, and the one a
+safeguard-restricted assistant opens.
 
 All origin repos are **read-only to this project**. They are also the packages a
 safeguard-restricted assistant will work in, so their sanitized framing must not be disturbed.
@@ -313,12 +320,12 @@ mapping is a follow-on audit.
 ### Next
 6. **Wire up the `lib/` library layer.** ~~Copy it in~~ **done 2026-08-26** — six projects under
    `lib/`, in the solution, 1,664 tests green, shipped exe unchanged. What remains is the design
-   decision, not a port: how `ZeroBreach.Rules` (YARA + Sigma) plugs into `ZeroBreach.Core`'s
+   decision, not a port: how `Scythe.Rules` (YARA + Sigma) plugs into `Scythe.Core`'s
    `SignatureDb` and the 10 scanners. Replacing hand-written JSON signatures with rule-corpus
-   matching is the actual multiplier; having the library on disk is not. `ZeroBreach.Formats`
+   matching is the actual multiplier; having the library on disk is not. `Scythe.Formats`
    (PE, containers) is what a `ContentScan`-style scanner needs to look *inside* a file rather
    than only at it. Prerequisite for item 7, not parallel to it.
-   - **Start with the linter.** `ZeroBreach.Rules.Linting` independently re-implements five hard
+   - **Start with the linter.** `Scythe.Rules.Linting` independently re-implements five hard
      rules this repo learned the expensive way — the `Join-AllowRegex` universal-pattern canary
      set, the real-software-name collision corpus, the 150 ms backtracking budget, and the
      "allowlist must not swallow its own detection branch" check — and `LintTool` is already
@@ -365,5 +372,5 @@ mapping is a follow-on audit.
 | `lib/` | The merged library layer — `net8.0`, platform-neutral, Linux-testable. `lib/Directory.Build.props` documents why the directory boundary exists; do not change its target framework. |
 | `docs/_history/HANDOFF_FABLE2.md` | Every judgement call, file list and test count from the library-layer package, per task. Read before wiring any of `lib/` into the engine. |
 | `~/Downloads/claude/fable-work-2/` (outside this repo — §9) | The origin package for `lib/`. Kept as the sanitized standalone; its framing must not be disturbed. |
-| `~/Downloads/claude/fable-work-3/` (outside this repo — §9) | The **offline artifact layer** package: 11 tracks / 30 tasks, specified but not built. Self-contained `CLAUDE.md`/`README.md`/`BLUEPRINT.md`, and `tools/check_register.py` for auditing its own writing register. |
+| `~/Downloads/claude/fable-work-3/` (outside this repo — §9) | The **offline artifact layer** package: 14 tracks / 37 tasks, specified but not built. Self-contained `CLAUDE.md`/`README.md`/`BLUEPRINT.md` (assembled from `_bp_*.md` fragments by `tools/assemble_blueprint.py`), plus `tools/check_register.py` (writing register) and `tools/check_briefs.py` (structural consistency of README ↔ briefs ↔ integration protocol). |
 | `_python/README_CLAUDE_CODE.md` | Parked Python server spec. |

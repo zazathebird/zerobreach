@@ -1,11 +1,11 @@
-# INSTRUCTIONS_AI.md — ZeroBreach Scan Engine: architecture & detection catalog
+# INSTRUCTIONS_AI.md — Scythe Scan Engine: architecture & detection catalog
 
-**What this is:** the engineering reference for the **native (`zbscan`) engine as built** — the
+**What this is:** the engineering reference for the **native (`scythescan`) engine as built** — the
 C# / .NET 8 one. It describes the real architecture, the contracts a scanner codes against, where
 each safety rule is enforced, and what all 63 checks actually inspect.
 
 **This file does not cover the PowerShell engine.** The repo ships two maintained engines; the PS
-fallback (`ZeroBreach-V23.ps1` + `engine/*.ps1`, 162 phases) is documented in `CLAUDE.md` and
+fallback (`Scythe-V23.ps1` + `engine/*.ps1`, 162 phases) is documented in `CLAUDE.md` and
 `BLUEPRINT.md` §2. Nothing below applies to it.
 
 **Authority:** `_ENGINE_SPEC_FOR_REBUILD.md` is the contract. This file describes the
@@ -19,7 +19,7 @@ remote machine, never runs unattended remediation, and never executes anything i
 
 **Status:** all 10 phases, the §6 safety model, remediation, reporting, custom scans, operator
 tooling, and triage are implemented. 293 tests (279 pass, 14 skip off-Windows). Also present and
-not yet catalogued below: `Scanning/IScanLogger.cs`, `ZeroBreach.Cli/RunTranscript.cs`, the
+not yet catalogued below: `Scanning/IScanLogger.cs`, `Scythe.Cli/RunTranscript.cs`, the
 `--log <path>` run-transcript flag (`CliOptions.cs`), and the `RunTranscriptTests` suite.
 
 ---
@@ -29,8 +29,8 @@ not yet catalogued below: `Scanning/IScanLogger.cs`, `ZeroBreach.Cli/RunTranscri
 ### 1.1 Projects
 
 ```
-ZeroBreach.sln
-├── ZeroBreach.Core           model, contracts, budgets, profiles, signatures, reporting, triage
+Scythe.sln
+├── Scythe.Core           model, contracts, budgets, profiles, signatures, reporting, triage
 │   ├── Model/                Finding, Severity, FixAction, CheckStatus, MitreRef
 │   ├── Scanning/             IScanner, ScanContext, IFindingSink, FindingCollector,
 │   │                         EnumerationBudget, PhaseRunner, ScanDepth, ScanProfile, PhaseTiming
@@ -39,20 +39,20 @@ ZeroBreach.sln
 │   ├── Reporting/            ScanReport, ScanSummary, FindingJson, HtmlReport, Baseline
 │   ├── Triage/               SymptomMap, EscalationEngine, FollowUpPlan, symptoms.json
 │   └── Util/                 FileHasher
-├── ZeroBreach.Scanners       the 10 phase scanners + Signatures/<category>.json   [READ-ONLY]
-├── ZeroBreach.Remediation    ProtectedTargets, RemediationPlanner, ConfirmationGate,
-│                             RemediationExecutor, QuarantineVault, ActionLog, ZbPaths
-├── ZeroBreach.Cli            zbscan: Program, CliOptions, sessions (remediation / IOC / triage)
-└── ZeroBreach.Tests          xUnit
+├── Scythe.Scanners       the 10 phase scanners + Signatures/<category>.json   [READ-ONLY]
+├── Scythe.Remediation    ProtectedTargets, RemediationPlanner, ConfirmationGate,
+│                             RemediationExecutor, QuarantineVault, ActionLog, ScythePaths
+├── Scythe.Cli            scythescan: Program, CliOptions, sessions (remediation / IOC / triage)
+└── Scythe.Tests          xUnit
 ```
 
-All target `net8.0-windows`; `ZeroBreach.Cli` builds `zbscan` as `win-x64`.
+All target `net8.0-windows`; `Scythe.Cli` builds `scythescan` as `win-x64`.
 
 ### 1.2 The read-only / destructive split
 
-**This separation is architectural, not stylistic.** `ZeroBreach.Core` and
-`ZeroBreach.Scanners` contain no destructive operation at all — nothing in `ScanContext` exposes
-one. Every mutation of the machine lives in `ZeroBreach.Remediation`, which is small enough to
+**This separation is architectural, not stylistic.** `Scythe.Core` and
+`Scythe.Scanners` contain no destructive operation at all — nothing in `ScanContext` exposes
+one. Every mutation of the machine lives in `Scythe.Remediation`, which is small enough to
 audit against spec §6 in isolation without reading the (much larger) detection code.
 
 `ScannerReadOnlyAuditTests` enforces it: it greps the Scanners **and Core** sources for mutating
@@ -75,7 +75,7 @@ CliOptions.Parse → profile/triage resolution → SignatureDb.LoadEmbedded (+ r
        (escalation between phases when --adaptive)
   → FindingCollector holds findings + check statuses + phase timings
   → Baseline diff (if --baseline) → ScanReport (JSON / JSON.GZ / HTML) → summary → exit code
-  → if --interactive: RemediationSession (the only path into ZeroBreach.Remediation)
+  → if --interactive: RemediationSession (the only path into Scythe.Remediation)
 ```
 
 ---
@@ -84,7 +84,7 @@ CliOptions.Parse → profile/triage resolution → SignatureDb.LoadEmbedded (+ r
 
 ### 2.1 Finding (spec §5)
 
-`ZeroBreach.Core/Model/Finding.cs` — `Id`, `Severity`, `Description`, `Target`, `FixAction`,
+`Scythe.Core/Model/Finding.cs` — `Id`, `Severity`, `Description`, `Target`, `FixAction`,
 `FixParam`, `Mitre`, `Group`, plus `VendorTrusted` (§6.3 soft list badge), `HashConfirmed`
 (gates delete-vs-quarantine), and `Check` (the catalog id, e.g. `PERS-001`).
 
@@ -200,7 +200,7 @@ documentation or research **must** carry `"needsCorroboration": true`, which str
 its standalone contribution at `Possible`.
 
 Load errors (malformed JSON, bad regex, empty pattern) are collected in `LoadErrors` and
-surfaced rather than swallowed; `zbscan rules lint` exists to catch them before an engagement.
+surfaced rather than swallowed; `scythescan rules lint` exists to catch them before an engagement.
 
 ### 2.8 Escalation-derived findings
 
@@ -283,7 +283,7 @@ or removed mid-chain), `Truncated` (the log is shorter than the anchor, or gone 
 `Unverifiable` (no anchor, or a stale one — the links verify but completeness cannot be proven).
 The anchor is not a secret and can be deleted too; what it buys is that shortening the record now
 requires editing two files consistently, and that an unprovable chain is never reported as OK.
-`zbscan log verify` exits 0 / 2 / 3 accordingly — `Unverifiable` is a coverage gap, not a clean
+`scythescan log verify` exits 0 / 2 / 3 accordingly — `Unverifiable` is a coverage gap, not a clean
 result (§6.7). `QuarantineVault.VerifyAll()` is the companion: it
 re-hashes every vaulted file against the SHA-256 recorded at quarantine time, reporting `Ok`,
 `HashMismatch`, `FileMissing`, or `HashUnknown` — "couldn't be hashed at quarantine time" is
@@ -294,7 +294,7 @@ vault file points outside the vault root, so a tampered manifest cannot turn pur
 arbitrary-file delete, and it is gated behind the same typed `CONFIRM` and logged like any
 remediation.
 
-State lives under `%ProgramData%\ZeroBreach` (`ZbPaths`): `Vault\`, `action-log.jsonl`.
+State lives under `%ProgramData%\Scythe` (`ScythePaths`): `Vault\`, `action-log.jsonl`.
 
 ---
 
@@ -309,12 +309,12 @@ reads and small fixed file sets only).
 
 ### 4.2 Commands and flags
 
-`zbscan` subcommands: `scan` (default), `triage`, `categories`, `report show`, `rules lint`,
+`scythescan` subcommands: `scan` (default), `triage`, `categories`, `report show`, `rules lint`,
 `vault list|verify|restore|purge`, `log verify|show`, `help`. The authoritative flag list is
 `CliOptions.Usage`; operator-facing explanations live in `docs/`.
 
 Exit codes: **0** clean · **2** findings · **3** coverage gaps (inconclusive / skipped /
-unchecked) · **1** usage or operational error. `zbscan report show` mirrors them, so a saved
+unchecked) · **1** usage or operational error. `scythescan report show` mirrors them, so a saved
 STEALTH blob is consumable by a script exactly like a live run.
 
 ### 4.3 Custom scans, operator tooling, triage
@@ -721,10 +721,10 @@ The suites that matter most when changing behavior:
 - **A new check in an existing category** — add it to that scanner, add its indicators to that
   category's signature JSON, follow `docs/SCANNER_GUIDE.md`.
 - **A new category** — a new `IScanner` with the next phase number, its own signature file, and
-  its group name added to the category list in `CliOptions.Usage`. `zbscan categories` reads the
+  its group name added to the category list in `CliOptions.Usage`. `scythescan categories` reads the
   live scanner list, so it cannot drift.
 - **A new remediation capability** — this is the one change that needs the spec re-read first.
-  It must go in `ZeroBreach.Remediation`, pass `ProtectedTargets` immediately before acting,
+  It must go in `Scythe.Remediation`, pass `ProtectedTargets` immediately before acting,
   respect the severity gate and typed confirmation, prefer a reversible form, and append to the
   action log. If it cannot be made reversible, it is probably a display-only `RunCommand`.
 - **New operator features** — keep per-run safety decisions (`--load-hives`, `--interactive`,

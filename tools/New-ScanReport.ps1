@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Renders a finished ZeroBreach run record into one self-contained HTML report.
+    Renders a finished Scythe run record into one self-contained HTML report.
 
 .DESCRIPTION
     New-ScanReport.ps1 is a post-processing tool. It never runs during a scan: it reads a
@@ -77,20 +77,20 @@ $ErrorActionPreference = 'Stop'
 
 # Severity display order. Anything not in this map is kept, ranked below INFO, and shown under
 # its own label — never dropped (BLUEPRINT §3.3).
-$script:ZbSevRank = @{ CRITICAL = 0; HIGH = 1; POSSIBLE = 2; INFO = 3 }
-$script:ZbOtherRank = 4
+$script:ScytheSevRank = @{ CRITICAL = 0; HIGH = 1; POSSIBLE = 2; INFO = 3 }
+$script:ScytheOtherRank = 4
 
 # Phase ceiling per mode. NOTE: this is a copy of the table that already exists in four places
 # (BLUEPRINT §6). A fifth copy is unavoidable here because the run record carries only the mode
 # string — flagged in HANDOFF_FABLE.md so the owner can decide whether G5's parity test should
 # cover this file too. An unknown mode simply suppresses the ceiling commentary.
-$script:ZbModeCeiling = @{ QUICK = 30; FULL = 80; DEEP = 133; PARANOID = 133; STEALTH = 133; HUNT = 162 }
+$script:ScytheModeCeiling = @{ QUICK = 30; FULL = 80; DEEP = 133; PARANOID = 133; STEALTH = 133; HUNT = 162 }
 
 # --------------------------------------------------------------------------------------------
 # Small helpers
 # --------------------------------------------------------------------------------------------
 
-function Get-ZbProp {
+function Get-ScytheProp {
     # Missing keys in the run record are legal (BLUEPRINT §3) — read them without StrictMode
     # explosions and without inventing values.
     param($Object, [string]$Name, $Default)
@@ -100,28 +100,28 @@ function Get-ZbProp {
     return $Default
 }
 
-function Get-ZbFullPath {
+function Get-ScytheFullPath {
     param([string]$AnyPath)
     if ([System.IO.Path]::IsPathRooted($AnyPath)) { return $AnyPath }
     return (Join-Path -Path (Get-Location).Path -ChildPath $AnyPath)
 }
 
-function Get-ZbSevKey {
+function Get-ScytheSevKey {
     # Normalised severity bucket: one of the four known levels, or OTHER for anything new.
     param([string]$Severity)
     $sevText = ('' + $Severity).Trim().ToUpperInvariant()
-    if ($script:ZbSevRank.ContainsKey($sevText)) { return $sevText }
+    if ($script:ScytheSevRank.ContainsKey($sevText)) { return $sevText }
     return 'OTHER'
 }
 
-function Get-ZbSevRank {
+function Get-ScytheSevRank {
     param([string]$Severity)
-    $sevKey = Get-ZbSevKey -Severity $Severity
-    if ($sevKey -eq 'OTHER') { return $script:ZbOtherRank }
-    return $script:ZbSevRank[$sevKey]
+    $sevKey = Get-ScytheSevKey -Severity $Severity
+    if ($sevKey -eq 'OTHER') { return $script:ScytheOtherRank }
+    return $script:ScytheSevRank[$sevKey]
 }
 
-function ConvertTo-ZbHtml {
+function ConvertTo-ScytheHtml {
     # HTML-encode on the way into markup. Description/Target came off the scanned machine.
     param([string]$Text)
     if ($null -eq $Text) { return '' }
@@ -129,7 +129,7 @@ function ConvertTo-ZbHtml {
     return ($encoded -replace "'", '&#39;')
 }
 
-function Protect-ZbCsvCell {
+function Protect-ScytheCsvCell {
     # The one formula-injection guard: every CSV cell in this tool goes through here.
     # A leading = + - @ TAB or CR is neutralised with a leading apostrophe, because correct
     # CSV quoting alone does not stop a spreadsheet evaluating the cell.
@@ -145,7 +145,7 @@ function Protect-ZbCsvCell {
     return '"' + ($Value -replace '"', '""') + '"'
 }
 
-function Format-ZbDuration {
+function Format-ScytheDuration {
     param([double]$Seconds)
     if ($Seconds -le 0) { return 'not recorded' }
     $whole = [int][math]::Floor($Seconds)
@@ -155,13 +155,13 @@ function Format-ZbDuration {
     return ('{0:0.0}s' -f $Seconds)
 }
 
-function Format-ZbNumber {
+function Format-ScytheNumber {
     # Invariant culture so a comma-decimal locale cannot corrupt embedded values.
     param([double]$Value, [string]$Pattern = '0.0')
     return $Value.ToString($Pattern, [System.Globalization.CultureInfo]::InvariantCulture)
 }
 
-function Format-ZbTimestamp {
+function Format-ScytheTimestamp {
     # pwsh 7's ConvertFrom-Json turns ISO 8601 strings into [datetime]; Windows PowerShell 5.1
     # leaves them as strings. Normalise so the report shows the same thing on both runtimes,
     # and never a culture-dependent format.
@@ -175,23 +175,23 @@ function Format-ZbTimestamp {
     return ('' + $Value)
 }
 
-function Test-ZbGroupCap {
+function Test-ScytheGroupCap {
     param($Finding)
-    return (('' + (Get-ZbProp $Finding 'ID' '')) -like 'GROUPCAP_*')
+    return (('' + (Get-ScytheProp $Finding 'ID' '')) -like 'GROUPCAP_*')
 }
 
-function Get-ZbGroupLabel {
+function Get-ScytheGroupLabel {
     # Group defaults to the Phase value when the engine left it blank.
     param($Finding)
-    $label = '' + (Get-ZbProp $Finding 'Group' '')
-    if ([string]::IsNullOrWhiteSpace($label)) { $label = '' + (Get-ZbProp $Finding 'Phase' '') }
+    $label = '' + (Get-ScytheProp $Finding 'Group' '')
+    if ([string]::IsNullOrWhiteSpace($label)) { $label = '' + (Get-ScytheProp $Finding 'Phase' '') }
     if ([string]::IsNullOrWhiteSpace($label)) { $label = '(ungrouped)' }
     return $label
 }
 
-function Import-ZbRunRecord {
+function Import-ScytheRunRecord {
     param([string]$RecordPath, [string]$Label)
-    $full = Get-ZbFullPath -AnyPath $RecordPath
+    $full = Get-ScytheFullPath -AnyPath $RecordPath
     if (-not (Test-Path -LiteralPath $full)) {
         throw "$Label not found: $full"
     }
@@ -214,7 +214,7 @@ function Import-ZbRunRecord {
 # with the fractional key tried before the integer floor. First hit wins.
 # --------------------------------------------------------------------------------------------
 
-function Get-ZbPhaseKey {
+function Get-ScythePhaseKey {
     param([string]$Phase)
     if ([string]::IsNullOrEmpty($Phase)) { return $null }
     $m = [regex]::Match($Phase, '(\d+(?:\.\d+)?)')
@@ -222,12 +222,12 @@ function Get-ZbPhaseKey {
     return $null
 }
 
-function Resolve-ZbTechniques {
+function Resolve-ScytheTechniques {
     param($Finding, $Map)
     # 1. keyword_map — lowercase substring match against the finding's text. _comment keys are
     #    documentation, not data (BLUEPRINT §4).
-    $text = ('' + (Get-ZbProp $Finding 'Description' '')).ToLowerInvariant()
-    $keywordMap = Get-ZbProp $Map 'keyword_map' $null
+    $text = ('' + (Get-ScytheProp $Finding 'Description' '')).ToLowerInvariant()
+    $keywordMap = Get-ScytheProp $Map 'keyword_map' $null
     if ($null -ne $keywordMap) {
         foreach ($entry in $keywordMap.PSObject.Properties) {
             if ($entry.Name -like '_comment*') { continue }
@@ -235,15 +235,15 @@ function Resolve-ZbTechniques {
         }
     }
     # 2. threat_type_map — by the finding's ThreatType, an opaque string.
-    $threatType = '' + (Get-ZbProp $Finding 'ThreatType' '')
-    $ttMap = Get-ZbProp $Map 'threat_type_map' $null
+    $threatType = '' + (Get-ScytheProp $Finding 'ThreatType' '')
+    $ttMap = Get-ScytheProp $Map 'threat_type_map' $null
     if ($null -ne $ttMap -and $threatType.Length -gt 0) {
         $hit = $ttMap.PSObject.Properties[$threatType]
         if ($null -ne $hit) { return @($hit.Value) }
     }
     # 3. phase_map — fractional key first ("74.5"), then the integer floor ("74").
-    $phaseMap = Get-ZbProp $Map 'phase_map' $null
-    $phaseKey = Get-ZbPhaseKey -Phase ('' + (Get-ZbProp $Finding 'Phase' ''))
+    $phaseMap = Get-ScytheProp $Map 'phase_map' $null
+    $phaseKey = Get-ScythePhaseKey -Phase ('' + (Get-ScytheProp $Finding 'Phase' ''))
     if ($null -ne $phaseMap -and $null -ne $phaseKey) {
         $hit = $phaseMap.PSObject.Properties[$phaseKey]
         if ($null -ne $hit) { return @($hit.Value) }
@@ -256,19 +256,19 @@ function Resolve-ZbTechniques {
     return @()
 }
 
-function Resolve-ZbTactic {
+function Resolve-ScytheTactic {
     # A finding counts once in the rollup: the first resolved technique that exists in the
     # techniques table decides its tactic. techniques[].tactics holds display names, not TA ids
     # — they are used as-is, which is the direction that does NOT need the inversion trap.
     param($Finding, $Map)
     if ($null -eq $Map) { return $null }
-    $ids = @(Resolve-ZbTechniques -Finding $Finding -Map $Map)
-    $techniques = Get-ZbProp $Map 'techniques' $null
+    $ids = @(Resolve-ScytheTechniques -Finding $Finding -Map $Map)
+    $techniques = Get-ScytheProp $Map 'techniques' $null
     if ($null -eq $techniques) { return $null }
     foreach ($id in $ids) {
         $tech = $techniques.PSObject.Properties[('' + $id)]
         if ($null -ne $tech) {
-            $tacticNames = @(Get-ZbProp $tech.Value 'tactics' @())
+            $tacticNames = @(Get-ScytheProp $tech.Value 'tactics' @())
             if ($tacticNames.Count -gt 0) { return ('' + $tacticNames[0]) }
         }
     }
@@ -279,33 +279,33 @@ function Resolve-ZbTactic {
 # The report model: every number computed here, rendered later. -PassThru emits .Summary.
 # --------------------------------------------------------------------------------------------
 
-function New-ZbReportModel {
+function New-ScytheReportModel {
     param($Record, $Map, $Baseline, [string]$MapNotice)
 
-    $allFindings = @(Get-ZbProp $Record 'Findings' @())
-    $capRows = @($allFindings | Where-Object { Test-ZbGroupCap $_ })
-    $real = @($allFindings | Where-Object { -not (Test-ZbGroupCap $_) })
+    $allFindings = @(Get-ScytheProp $Record 'Findings' @())
+    $capRows = @($allFindings | Where-Object { Test-ScytheGroupCap $_ })
+    $real = @($allFindings | Where-Object { -not (Test-ScytheGroupCap $_) })
 
     # ---- severity counts (flood-cap markers excluded — they are metadata, not findings) ----
     $sevCounts = [ordered]@{ CRITICAL = 0; HIGH = 0; POSSIBLE = 0; INFO = 0; OTHER = 0 }
     foreach ($f in $real) {
-        $sevKey = Get-ZbSevKey -Severity (Get-ZbProp $f 'Severity' '')
+        $sevKey = Get-ScytheSevKey -Severity (Get-ScytheProp $f 'Severity' '')
         $sevCounts[$sevKey] = $sevCounts[$sevKey] + 1
     }
 
     # ---- groups, ordered the way an operator triages ----
-    $rankMap = $script:ZbSevRank
+    $rankMap = $script:ScytheSevRank
     $groupInfos = @()
-    foreach ($g in @($real | Group-Object -Property { Get-ZbGroupLabel $_ })) {
-        $members = @($g.Group | Sort-Object -Property @{ Expression = { Get-ZbSevRank (Get-ZbProp $_ 'Severity' '') } }, @{ Expression = { '' + (Get-ZbProp $_ 'ID' '') } })
+    foreach ($g in @($real | Group-Object -Property { Get-ScytheGroupLabel $_ })) {
+        $members = @($g.Group | Sort-Object -Property @{ Expression = { Get-ScytheSevRank (Get-ScytheProp $_ 'Severity' '') } }, @{ Expression = { '' + (Get-ScytheProp $_ 'ID' '') } })
         $worst = $members[0]
         $groupInfos += [pscustomobject]@{
             Label        = $g.Name
             Count        = $members.Count
-            WorstSevKey  = Get-ZbSevKey -Severity (Get-ZbProp $worst 'Severity' '')
-            WorstSevText = '' + (Get-ZbProp $worst 'Severity' '')
-            Rank         = Get-ZbSevRank -Severity (Get-ZbProp $worst 'Severity' '')
-            Example      = '' + (Get-ZbProp $worst 'Description' '')
+            WorstSevKey  = Get-ScytheSevKey -Severity (Get-ScytheProp $worst 'Severity' '')
+            WorstSevText = '' + (Get-ScytheProp $worst 'Severity' '')
+            Rank         = Get-ScytheSevRank -Severity (Get-ScytheProp $worst 'Severity' '')
+            Example      = '' + (Get-ScytheProp $worst 'Description' '')
             Findings     = $members
         }
     }
@@ -315,7 +315,7 @@ function New-ZbReportModel {
 
     # ---- tactic rollup: every tactic in the map file, plus an explicit unmapped row ----
     $rollup = [ordered]@{}
-    $tacticsTable = Get-ZbProp $Map 'tactics' $null
+    $tacticsTable = Get-ScytheProp $Map 'tactics' $null
     if ($null -ne $tacticsTable) {
         foreach ($tp in $tacticsTable.PSObject.Properties) {
             $rollup[('' + $tp.Value)] = [pscustomobject]@{ Tactic = ('' + $tp.Value); CRITICAL = 0; HIGH = 0; POSSIBLE = 0; INFO = 0; OTHER = 0; Total = 0 }
@@ -324,7 +324,7 @@ function New-ZbReportModel {
     $unmappedRow = [pscustomobject]@{ Tactic = 'Unmapped'; CRITICAL = 0; HIGH = 0; POSSIBLE = 0; INFO = 0; OTHER = 0; Total = 0 }
     $tacticById = @{}
     foreach ($f in $real) {
-        $tacticName = Resolve-ZbTactic -Finding $f -Map $Map
+        $tacticName = Resolve-ScytheTactic -Finding $f -Map $Map
         $row = $unmappedRow
         if ($null -ne $tacticName) {
             if (-not $rollup.Contains($tacticName)) {
@@ -332,9 +332,9 @@ function New-ZbReportModel {
                 $rollup[$tacticName] = [pscustomobject]@{ Tactic = $tacticName; CRITICAL = 0; HIGH = 0; POSSIBLE = 0; INFO = 0; OTHER = 0; Total = 0 }
             }
             $row = $rollup[$tacticName]
-            $tacticById[('' + (Get-ZbProp $f 'ID' ''))] = $tacticName
+            $tacticById[('' + (Get-ScytheProp $f 'ID' ''))] = $tacticName
         }
-        $sevKey = Get-ZbSevKey -Severity (Get-ZbProp $f 'Severity' '')
+        $sevKey = Get-ScytheSevKey -Severity (Get-ScytheProp $f 'Severity' '')
         $row.$sevKey = $row.$sevKey + 1
         $row.Total = $row.Total + 1
     }
@@ -342,9 +342,9 @@ function New-ZbReportModel {
 
     # ---- phase timings, slowest first; retried phases summed with a repeat count ----
     $timingAgg = [ordered]@{}
-    foreach ($t in @(Get-ZbProp $Record 'PhaseTimings' @())) {
-        $phaseName = '' + (Get-ZbProp $t 'Phase' '')
-        $secs = [double](Get-ZbProp $t 'Seconds' 0)
+    foreach ($t in @(Get-ScytheProp $Record 'PhaseTimings' @())) {
+        $phaseName = '' + (Get-ScytheProp $t 'Phase' '')
+        $secs = [double](Get-ScytheProp $t 'Seconds' 0)
         if (-not $timingAgg.Contains($phaseName)) {
             $timingAgg[$phaseName] = [pscustomobject]@{ Phase = $phaseName; Seconds = 0.0; Runs = 0 }
         }
@@ -356,21 +356,21 @@ function New-ZbReportModel {
     $wallClock = 0.0
     foreach ($t in $timings) { $wallClock = $wallClock + $t.Seconds }
 
-    $mode = ('' + (Get-ZbProp $Record 'Mode' '')).ToUpperInvariant()
+    $mode = ('' + (Get-ScytheProp $Record 'Mode' '')).ToUpperInvariant()
     $ceiling = $null
-    if ($script:ZbModeCeiling.ContainsKey($mode)) { $ceiling = $script:ZbModeCeiling[$mode] }
+    if ($script:ScytheModeCeiling.ContainsKey($mode)) { $ceiling = $script:ScytheModeCeiling[$mode] }
     $shortfall = 0
     if ($null -ne $ceiling -and $phaseCount -lt $ceiling) { $shortfall = $ceiling - $phaseCount }
 
     # ---- the engine's own tally, cross-checked against a count we compute ourselves ----
     $ownTally = @{}
     foreach ($f in $real) {
-        $tt = '' + (Get-ZbProp $f 'ThreatType' '')
+        $tt = '' + (Get-ScytheProp $f 'ThreatType' '')
         if (-not $ownTally.ContainsKey($tt)) { $ownTally[$tt] = 0 }
         $ownTally[$tt] = $ownTally[$tt] + 1
     }
     $tallyDiffs = @()
-    $recTally = Get-ZbProp $Record 'ThreatTally' $null
+    $recTally = Get-ScytheProp $Record 'ThreatTally' $null
     if ($null -ne $recTally) {
         foreach ($tp in $recTally.PSObject.Properties) {
             $mine = 0
@@ -389,42 +389,42 @@ function New-ZbReportModel {
     # ---- comparison, joined on ID (stable across runs); Timestamp is never a join key ----
     $comparison = $null
     if ($null -ne $Baseline) {
-        $baseReal = @(@(Get-ZbProp $Baseline 'Findings' @()) | Where-Object { -not (Test-ZbGroupCap $_) })
+        $baseReal = @(@(Get-ScytheProp $Baseline 'Findings' @()) | Where-Object { -not (Test-ScytheGroupCap $_) })
         $baseById = @{}
-        foreach ($f in $baseReal) { $baseById[('' + (Get-ZbProp $f 'ID' ''))] = $f }
+        foreach ($f in $baseReal) { $baseById[('' + (Get-ScytheProp $f 'ID' ''))] = $f }
         $currentIds = @{}
-        foreach ($f in $real) { $currentIds[('' + (Get-ZbProp $f 'ID' ''))] = $true }
-        $newFindings = @($real | Where-Object { -not $baseById.ContainsKey(('' + (Get-ZbProp $_ 'ID' ''))) })
-        $resolvedFindings = @($baseReal | Where-Object { -not $currentIds.ContainsKey(('' + (Get-ZbProp $_ 'ID' ''))) })
+        foreach ($f in $real) { $currentIds[('' + (Get-ScytheProp $f 'ID' ''))] = $true }
+        $newFindings = @($real | Where-Object { -not $baseById.ContainsKey(('' + (Get-ScytheProp $_ 'ID' ''))) })
+        $resolvedFindings = @($baseReal | Where-Object { -not $currentIds.ContainsKey(('' + (Get-ScytheProp $_ 'ID' ''))) })
         $persisting = $real.Count - $newFindings.Count
 
         $seriousNow = $sevCounts['CRITICAL'] + $sevCounts['HIGH']
         $seriousBase = 0
         foreach ($f in $baseReal) {
-            $sk = Get-ZbSevKey -Severity (Get-ZbProp $f 'Severity' '')
+            $sk = Get-ScytheSevKey -Severity (Get-ScytheProp $f 'Severity' '')
             if ($sk -eq 'CRITICAL' -or $sk -eq 'HIGH') { $seriousBase = $seriousBase + 1 }
         }
         $verdict = 'unchanged'
         if ($seriousNow -lt $seriousBase) { $verdict = 'improved' }
         elseif ($seriousNow -gt $seriousBase) { $verdict = 'worse' }
         else {
-            $riskNow = [int](Get-ZbProp $Record 'RiskScore' 0)
-            $riskBase = [int](Get-ZbProp $Baseline 'RiskScore' 0)
+            $riskNow = [int](Get-ScytheProp $Record 'RiskScore' 0)
+            $riskBase = [int](Get-ScytheProp $Baseline 'RiskScore' 0)
             if ($riskNow -lt $riskBase) { $verdict = 'improved' }
             elseif ($riskNow -gt $riskBase) { $verdict = 'worse' }
         }
         $comparison = [pscustomobject]@{
-            BaselineTimestamp = Format-ZbTimestamp -Value (Get-ZbProp $Baseline 'Timestamp' '')
+            BaselineTimestamp = Format-ScytheTimestamp -Value (Get-ScytheProp $Baseline 'Timestamp' '')
             NewCount          = $newFindings.Count
             ResolvedCount     = $resolvedFindings.Count
             PersistingCount   = $persisting
             SeriousNow        = $seriousNow
             SeriousBaseline   = $seriousBase
             Verdict           = $verdict
-            NewIds            = @($newFindings | ForEach-Object { '' + (Get-ZbProp $_ 'ID' '') })
-            ResolvedIds       = @($resolvedFindings | ForEach-Object { '' + (Get-ZbProp $_ 'ID' '') })
-            NewFindings       = @($newFindings | Sort-Object -Property @{ Expression = { Get-ZbSevRank (Get-ZbProp $_ 'Severity' '') } }, @{ Expression = { '' + (Get-ZbProp $_ 'ID' '') } })
-            ResolvedFindings  = @($resolvedFindings | Sort-Object -Property @{ Expression = { Get-ZbSevRank (Get-ZbProp $_ 'Severity' '') } }, @{ Expression = { '' + (Get-ZbProp $_ 'ID' '') } })
+            NewIds            = @($newFindings | ForEach-Object { '' + (Get-ScytheProp $_ 'ID' '') })
+            ResolvedIds       = @($resolvedFindings | ForEach-Object { '' + (Get-ScytheProp $_ 'ID' '') })
+            NewFindings       = @($newFindings | Sort-Object -Property @{ Expression = { Get-ScytheSevRank (Get-ScytheProp $_ 'Severity' '') } }, @{ Expression = { '' + (Get-ScytheProp $_ 'ID' '') } })
+            ResolvedFindings  = @($resolvedFindings | Sort-Object -Property @{ Expression = { Get-ScytheSevRank (Get-ScytheProp $_ 'Severity' '') } }, @{ Expression = { '' + (Get-ScytheProp $_ 'ID' '') } })
         }
     }
 
@@ -432,13 +432,13 @@ function New-ZbReportModel {
 
     $summary = [pscustomobject]@{
         Title             = ''
-        Host              = '' + (Get-ZbProp $Record 'Host' '')
-        User              = '' + (Get-ZbProp $Record 'User' '')
+        Host              = '' + (Get-ScytheProp $Record 'Host' '')
+        User              = '' + (Get-ScytheProp $Record 'User' '')
         Mode              = $mode
-        TimeWindow        = '' + (Get-ZbProp $Record 'TimeWindow' '')
-        RunTimestamp      = Format-ZbTimestamp -Value (Get-ZbProp $Record 'Timestamp' '')
-        RiskScore         = [int](Get-ZbProp $Record 'RiskScore' 0)
-        RiskLabel         = '' + (Get-ZbProp $Record 'RiskLabel' '')
+        TimeWindow        = '' + (Get-ScytheProp $Record 'TimeWindow' '')
+        RunTimestamp      = Format-ScytheTimestamp -Value (Get-ScytheProp $Record 'Timestamp' '')
+        RiskScore         = [int](Get-ScytheProp $Record 'RiskScore' 0)
+        RiskLabel         = '' + (Get-ScytheProp $Record 'RiskLabel' '')
         TotalFindings     = $real.Count
         GroupCapCount     = $capRows.Count
         SeverityCounts    = [pscustomobject]@{
@@ -457,8 +457,8 @@ function New-ZbReportModel {
         ModeCeiling       = $ceiling
         PhaseShortfall    = $shortfall
         WallClockSeconds  = [math]::Round($wallClock, 1)
-        RecoveredErrors   = @(Get-ZbProp $Record 'RecoveredErrors' @())
-        RecoveredErrorCount = @(Get-ZbProp $Record 'RecoveredErrors' @()).Count
+        RecoveredErrors   = @(Get-ScytheProp $Record 'RecoveredErrors' @())
+        RecoveredErrorCount = @(Get-ScytheProp $Record 'RecoveredErrors' @()).Count
         TallyAgrees       = ($tallyDiffs.Count -eq 0)
         TallyDifferences  = $tallyDiffs
         Comparison        = $comparison
@@ -484,7 +484,7 @@ function New-ZbReportModel {
 # Executive summary — prose, generated from the numbers. Five or six sentences.
 # --------------------------------------------------------------------------------------------
 
-function New-ZbExecutiveSummary {
+function New-ScytheExecutiveSummary {
     param($Summary)
     $s = $Summary
     $sentences = @()
@@ -548,16 +548,16 @@ function New-ZbExecutiveSummary {
 # and optionally written alongside the report.
 # --------------------------------------------------------------------------------------------
 
-function New-ZbFindingsCsv {
+function New-ScytheFindingsCsv {
     param($Findings)
     $cols = @('ID', 'Severity', 'Phase', 'Group', 'ThreatType', 'Description', 'Target', 'FixAction', 'FixParam', 'Timestamp')
     $lines = New-Object System.Collections.Generic.List[string]
-    $header = @($cols | ForEach-Object { Protect-ZbCsvCell -Value $_ }) -join ','
+    $header = @($cols | ForEach-Object { Protect-ScytheCsvCell -Value $_ }) -join ','
     $lines.Add($header)
     foreach ($f in $Findings) {
         $cells = @()
         foreach ($c in $cols) {
-            $cells += Protect-ZbCsvCell -Value ('' + (Get-ZbProp $f $c ''))
+            $cells += Protect-ScytheCsvCell -Value ('' + (Get-ScytheProp $f $c ''))
         }
         $lines.Add(($cells -join ','))
     }
@@ -568,15 +568,15 @@ function New-ZbFindingsCsv {
 # HTML
 # --------------------------------------------------------------------------------------------
 
-function Get-ZbSevBadge {
+function Get-ScytheSevBadge {
     param([string]$SevText)
-    $sevKey = Get-ZbSevKey -Severity $SevText
+    $sevKey = Get-ScytheSevKey -Severity $SevText
     $shown = $SevText
     if ([string]::IsNullOrWhiteSpace($shown)) { $shown = 'UNSET' }
-    return ('<span class="badge sev-{0}">{1}</span>' -f $sevKey.ToLowerInvariant(), (ConvertTo-ZbHtml $shown))
+    return ('<span class="badge sev-{0}">{1}</span>' -f $sevKey.ToLowerInvariant(), (ConvertTo-ScytheHtml $shown))
 }
 
-function New-ZbReportHtml {
+function New-ScytheReportHtml {
     param($Model, [string]$TitleText, [string]$CsvText, [string]$CsvName, [string]$SourceName)
 
     $s = $Model.Summary
@@ -587,24 +587,24 @@ function New-ZbReportHtml {
 
     # ---------- header ----------
     [void]$sb.Append('<header class="rpt-head">')
-    [void]$sb.Append('<h1>' + (ConvertTo-ZbHtml $heading) + '</h1>')
+    [void]$sb.Append('<h1>' + (ConvertTo-ScytheHtml $heading) + '</h1>')
     [void]$sb.Append('<div class="risk"><span class="risk-score">Risk score ' + $s.RiskScore + '</span>')
-    if ($s.RiskLabel) { [void]$sb.Append('<span class="risk-label">' + (ConvertTo-ZbHtml $s.RiskLabel) + '</span>') }
+    if ($s.RiskLabel) { [void]$sb.Append('<span class="risk-label">' + (ConvertTo-ScytheHtml $s.RiskLabel) + '</span>') }
     [void]$sb.Append('</div>')
     [void]$sb.Append('<dl class="meta">')
     $metaPairs = @(
         @('Machine', $s.Host), @('Run by', $s.User), @('Mode', $s.Mode),
         @('Time window', $s.TimeWindow), @('Run started', $s.RunTimestamp),
-        @('Scan duration', (Format-ZbDuration -Seconds $s.WallClockSeconds))
+        @('Scan duration', (Format-ScytheDuration -Seconds $s.WallClockSeconds))
     )
     foreach ($pair in $metaPairs) {
-        [void]$sb.Append('<div><dt>' + (ConvertTo-ZbHtml $pair[0]) + '</dt><dd>' + (ConvertTo-ZbHtml ('' + $pair[1])) + '</dd></div>')
+        [void]$sb.Append('<div><dt>' + (ConvertTo-ScytheHtml $pair[0]) + '</dt><dd>' + (ConvertTo-ScytheHtml ('' + $pair[1])) + '</dd></div>')
     }
     [void]$sb.Append('</dl></header>')
 
     # ---------- executive summary ----------
     [void]$sb.Append('<section><h2>Summary</h2>')
-    [void]$sb.Append('<p class="exec">' + (ConvertTo-ZbHtml $s.ExecutiveSummary) + '</p>')
+    [void]$sb.Append('<p class="exec">' + (ConvertTo-ScytheHtml $s.ExecutiveSummary) + '</p>')
     [void]$sb.Append('</section>')
 
     # ---------- what to do first ----------
@@ -622,10 +622,10 @@ function New-ZbReportHtml {
         $rowNum = 0
         foreach ($g in $Model.TopGroups) {
             $rowNum++
-            [void]$sb.Append('<tr><td>' + $rowNum + '</td><td>' + (ConvertTo-ZbHtml $g.Label) + '</td><td>' + (Get-ZbSevBadge $g.WorstSevText) + '</td><td class="num">' + $g.Count + '</td><td class="wrap">' + (ConvertTo-ZbHtml $g.Example) + '</td></tr>')
+            [void]$sb.Append('<tr><td>' + $rowNum + '</td><td>' + (ConvertTo-ScytheHtml $g.Label) + '</td><td>' + (Get-ScytheSevBadge $g.WorstSevText) + '</td><td class="num">' + $g.Count + '</td><td class="wrap">' + (ConvertTo-ScytheHtml $g.Example) + '</td></tr>')
         }
         [void]$sb.Append('</tbody></table>')
-        if (@($Model.Groups | Where-Object { $_.Rank -ne $script:ZbSevRank['INFO'] }).Count -gt 10) {
+        if (@($Model.Groups | Where-Object { $_.Rank -ne $script:ScytheSevRank['INFO'] }).Count -gt 10) {
             [void]$sb.Append('<p class="note">Top 10 groups shown; the full findings table below has every group.</p>')
         }
     }
@@ -634,14 +634,14 @@ function New-ZbReportHtml {
     # ---------- tactic rollup ----------
     [void]$sb.Append('<section><h2>Technique coverage by tactic</h2>')
     if (-not $s.MappingLoaded) {
-        [void]$sb.Append('<p class="warnbox">' + (ConvertTo-ZbHtml $s.MappingNotice) + ' Every finding below is shown as unmapped.</p>')
+        [void]$sb.Append('<p class="warnbox">' + (ConvertTo-ScytheHtml $s.MappingNotice) + ' Every finding below is shown as unmapped.</p>')
     }
     [void]$sb.Append('<table class="plain rollup"><thead><tr><th>Tactic</th><th>Critical</th><th>High</th><th>Possible</th><th>Info</th><th>Other</th><th>Total</th></tr></thead><tbody>')
     foreach ($row in $Model.Rollup) {
         $cls = ''
         if ($row.Total -eq 0) { $cls = ' class="empty"' }
         elseif ($row.Tactic -eq 'Unmapped') { $cls = ' class="unmapped"' }
-        [void]$sb.Append('<tr' + $cls + '><td>' + (ConvertTo-ZbHtml $row.Tactic) + '</td><td class="num">' + $row.CRITICAL + '</td><td class="num">' + $row.HIGH + '</td><td class="num">' + $row.POSSIBLE + '</td><td class="num">' + $row.INFO + '</td><td class="num">' + $row.OTHER + '</td><td class="num">' + $row.Total + '</td></tr>')
+        [void]$sb.Append('<tr' + $cls + '><td>' + (ConvertTo-ScytheHtml $row.Tactic) + '</td><td class="num">' + $row.CRITICAL + '</td><td class="num">' + $row.HIGH + '</td><td class="num">' + $row.POSSIBLE + '</td><td class="num">' + $row.INFO + '</td><td class="num">' + $row.OTHER + '</td><td class="num">' + $row.Total + '</td></tr>')
     }
     [void]$sb.Append('</tbody></table>')
     [void]$sb.Append('<p class="note">Empty rows are part of the story: those tactics were checked for and nothing was found. Findings no technique matches are counted in the Unmapped row so every total above reconciles with the summary.</p>')
@@ -656,12 +656,12 @@ function New-ZbReportHtml {
         if (@($Model.CapRows).Count -gt 0) {
             [void]$sb.Append('<div class="warnbox"><strong>Rows were suppressed at scan time.</strong> These groups hit the flood cap, so their counts here are floors, not totals:<ul>')
             foreach ($cap in $Model.CapRows) {
-                [void]$sb.Append('<li>' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $cap 'Description' (Get-ZbProp $cap 'ID' '')))) + '</li>')
+                [void]$sb.Append('<li>' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $cap 'Description' (Get-ScytheProp $cap 'ID' '')))) + '</li>')
             }
             [void]$sb.Append('</ul></div>')
         }
         [void]$sb.Append('<div class="controls">')
-        [void]$sb.Append('<input type="search" id="zb-search" placeholder="Filter groups (label or text)&hellip;" aria-label="Filter groups">')
+        [void]$sb.Append('<input type="search" id="scythe-search" placeholder="Filter groups (label or text)&hellip;" aria-label="Filter groups">')
         [void]$sb.Append('<span class="chips">')
         $chipDefs = @(
             @('CRITICAL', $s.SeverityCounts.CRITICAL), @('HIGH', $s.SeverityCounts.HIGH),
@@ -673,27 +673,27 @@ function New-ZbReportHtml {
         }
         [void]$sb.Append('</span>')
         [void]$sb.Append('<span class="orderer">Order groups by <button type="button" data-order="sev" class="on">severity</button><button type="button" data-order="size">size</button><button type="button" data-order="name">name</button></span>')
-        [void]$sb.Append('<button type="button" id="zb-expand">Expand all</button><button type="button" id="zb-collapse">Collapse all</button>')
-        [void]$sb.Append('<button type="button" id="zb-csv" title="Download every finding as CSV">Download CSV</button>')
+        [void]$sb.Append('<button type="button" id="scythe-expand">Expand all</button><button type="button" id="scythe-collapse">Collapse all</button>')
+        [void]$sb.Append('<button type="button" id="scythe-csv" title="Download every finding as CSV">Download CSV</button>')
         [void]$sb.Append('</div>')
 
-        [void]$sb.Append('<table class="plain" id="zb-findings"><thead><tr><th>Severity</th><th>ID</th><th>Phase</th><th>Description</th><th>Target</th><th>Suggested action</th></tr></thead>')
+        [void]$sb.Append('<table class="plain" id="scythe-findings"><thead><tr><th>Severity</th><th>ID</th><th>Phase</th><th>Description</th><th>Target</th><th>Suggested action</th></tr></thead>')
         foreach ($g in $Model.Groups) {
-            [void]$sb.Append('<tbody class="grp" data-rank="' + $g.Rank + '" data-count="' + $g.Count + '" data-label="' + (ConvertTo-ZbHtml $g.Label.ToLowerInvariant()) + '">')
-            [void]$sb.Append('<tr class="ghead"><td colspan="6"><span class="tri" aria-hidden="true"></span>' + (ConvertTo-ZbHtml $g.Label) + ' ' + (Get-ZbSevBadge $g.WorstSevText) + ' <span class="gcount">' + $g.Count + ' finding' + $(if ($g.Count -ne 1) { 's' } else { '' }) + '</span></td></tr>')
+            [void]$sb.Append('<tbody class="grp" data-rank="' + $g.Rank + '" data-count="' + $g.Count + '" data-label="' + (ConvertTo-ScytheHtml $g.Label.ToLowerInvariant()) + '">')
+            [void]$sb.Append('<tr class="ghead"><td colspan="6"><span class="tri" aria-hidden="true"></span>' + (ConvertTo-ScytheHtml $g.Label) + ' ' + (Get-ScytheSevBadge $g.WorstSevText) + ' <span class="gcount">' + $g.Count + ' finding' + $(if ($g.Count -ne 1) { 's' } else { '' }) + '</span></td></tr>')
             foreach ($f in $g.Findings) {
-                $sevText = '' + (Get-ZbProp $f 'Severity' '')
-                $sevKey = Get-ZbSevKey -Severity $sevText
-                $action = '' + (Get-ZbProp $f 'FixAction' '')
-                $fixParam = '' + (Get-ZbProp $f 'FixParam' '')
+                $sevText = '' + (Get-ScytheProp $f 'Severity' '')
+                $sevKey = Get-ScytheSevKey -Severity $sevText
+                $action = '' + (Get-ScytheProp $f 'FixAction' '')
+                $fixParam = '' + (Get-ScytheProp $f 'FixParam' '')
                 if ($fixParam) { $action = $action + ' (' + $fixParam + ')' }
                 [void]$sb.Append('<tr class="det" data-sev="' + $sevKey + '">')
-                [void]$sb.Append('<td>' + (Get-ZbSevBadge $sevText) + '</td>')
-                [void]$sb.Append('<td><code>' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'ID' ''))) + '</code></td>')
-                [void]$sb.Append('<td>' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'Phase' ''))) + '</td>')
-                [void]$sb.Append('<td class="wrap">' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'Description' ''))) + '</td>')
-                [void]$sb.Append('<td class="wrap"><code>' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'Target' ''))) + '</code></td>')
-                [void]$sb.Append('<td>' + (ConvertTo-ZbHtml $action) + '</td>')
+                [void]$sb.Append('<td>' + (Get-ScytheSevBadge $sevText) + '</td>')
+                [void]$sb.Append('<td><code>' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'ID' ''))) + '</code></td>')
+                [void]$sb.Append('<td>' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'Phase' ''))) + '</td>')
+                [void]$sb.Append('<td class="wrap">' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'Description' ''))) + '</td>')
+                [void]$sb.Append('<td class="wrap"><code>' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'Target' ''))) + '</code></td>')
+                [void]$sb.Append('<td>' + (ConvertTo-ScytheHtml $action) + '</td>')
                 [void]$sb.Append('</tr>')
             }
             [void]$sb.Append('</tbody>')
@@ -705,10 +705,10 @@ function New-ZbReportHtml {
     # ---------- run health ----------
     [void]$sb.Append('<section><h2>Run health</h2>')
     if ($s.PhaseShortfall -gt 0) {
-        [void]$sb.Append('<p class="warnbox">This ' + (ConvertTo-ZbHtml $s.Mode) + ' run reported timings for ' + $s.PhaseTimingCount + ' of ' + $s.ModeCeiling + ' planned checks. ' + $s.PhaseShortfall + ' checks have no timing entry — coverage may be incomplete.</p>')
+        [void]$sb.Append('<p class="warnbox">This ' + (ConvertTo-ScytheHtml $s.Mode) + ' run reported timings for ' + $s.PhaseTimingCount + ' of ' + $s.ModeCeiling + ' planned checks. ' + $s.PhaseShortfall + ' checks have no timing entry — coverage may be incomplete.</p>')
     }
     if (-not $s.TallyAgrees) {
-        [void]$sb.Append('<p class="warnbox">The record&#39;s own category tally disagrees with a count computed from the findings; the computed counts are used throughout this report. Differences: ' + (ConvertTo-ZbHtml ($s.TallyDifferences -join '; ')) + '</p>')
+        [void]$sb.Append('<p class="warnbox">The record&#39;s own category tally disagrees with a count computed from the findings; the computed counts are used throughout this report. Differences: ' + (ConvertTo-ScytheHtml ($s.TallyDifferences -join '; ')) + '</p>')
     }
     [void]$sb.Append('<h3>Recovered errors (' + $s.RecoveredErrorCount + ')</h3>')
     if ($s.RecoveredErrorCount -eq 0) {
@@ -717,7 +717,7 @@ function New-ZbReportHtml {
     else {
         [void]$sb.Append('<p class="note">The engine hit these faults and continued. The run completed, but treat the affected areas with suspicion.</p><ul class="errs">')
         foreach ($e in $s.RecoveredErrors) {
-            [void]$sb.Append('<li>' + (ConvertTo-ZbHtml ('' + $e)) + '</li>')
+            [void]$sb.Append('<li>' + (ConvertTo-ScytheHtml ('' + $e)) + '</li>')
         }
         [void]$sb.Append('</ul>')
     }
@@ -728,7 +728,7 @@ function New-ZbReportHtml {
     else {
         [void]$sb.Append('<div class="scrollbox"><table class="plain"><thead><tr><th>Check</th><th>Seconds</th><th>Runs</th></tr></thead><tbody>')
         foreach ($t in $Model.Timings) {
-            [void]$sb.Append('<tr><td class="wrap">' + (ConvertTo-ZbHtml $t.Phase) + '</td><td class="num">' + (Format-ZbNumber -Value $t.Seconds) + '</td><td class="num">' + $t.Runs + '</td></tr>')
+            [void]$sb.Append('<tr><td class="wrap">' + (ConvertTo-ScytheHtml $t.Phase) + '</td><td class="num">' + (Format-ScytheNumber -Value $t.Seconds) + '</td><td class="num">' + $t.Runs + '</td></tr>')
         }
         [void]$sb.Append('</tbody></table></div>')
     }
@@ -741,7 +741,7 @@ function New-ZbReportHtml {
         $verdictWord = 'is broadly unchanged'
         if ($c.Verdict -eq 'improved') { $verdictWord = 'has improved' }
         elseif ($c.Verdict -eq 'worse') { $verdictWord = 'has got worse' }
-        [void]$sb.Append('<p>Compared with the baseline of ' + (ConvertTo-ZbHtml $c.BaselineTimestamp) + ', this machine ' + $verdictWord + ': <strong>' + $c.NewCount + ' new</strong>, <strong>' + $c.ResolvedCount + ' resolved</strong>, ' + $c.PersistingCount + ' present in both runs. Critical-or-high findings moved from ' + $c.SeriousBaseline + ' to ' + $c.SeriousNow + '.</p>')
+        [void]$sb.Append('<p>Compared with the baseline of ' + (ConvertTo-ScytheHtml $c.BaselineTimestamp) + ', this machine ' + $verdictWord + ': <strong>' + $c.NewCount + ' new</strong>, <strong>' + $c.ResolvedCount + ' resolved</strong>, ' + $c.PersistingCount + ' present in both runs. Critical-or-high findings moved from ' + $c.SeriousBaseline + ' to ' + $c.SeriousNow + '.</p>')
         [void]$sb.Append('<h3>New in this run (' + $c.NewCount + ')</h3>')
         if ($c.NewCount -eq 0) {
             [void]$sb.Append('<p class="note">Nothing new appeared since the baseline.</p>')
@@ -749,7 +749,7 @@ function New-ZbReportHtml {
         else {
             [void]$sb.Append('<table class="plain"><thead><tr><th>Severity</th><th>ID</th><th>Description</th><th>Target</th></tr></thead><tbody>')
             foreach ($f in $c.NewFindings) {
-                [void]$sb.Append('<tr><td>' + (Get-ZbSevBadge ('' + (Get-ZbProp $f 'Severity' ''))) + '</td><td><code>' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'ID' ''))) + '</code></td><td class="wrap">' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'Description' ''))) + '</td><td class="wrap"><code>' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'Target' ''))) + '</code></td></tr>')
+                [void]$sb.Append('<tr><td>' + (Get-ScytheSevBadge ('' + (Get-ScytheProp $f 'Severity' ''))) + '</td><td><code>' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'ID' ''))) + '</code></td><td class="wrap">' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'Description' ''))) + '</td><td class="wrap"><code>' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'Target' ''))) + '</code></td></tr>')
             }
             [void]$sb.Append('</tbody></table>')
         }
@@ -760,14 +760,14 @@ function New-ZbReportHtml {
         else {
             [void]$sb.Append('<table class="plain"><thead><tr><th>Severity</th><th>ID</th><th>Was</th></tr></thead><tbody>')
             foreach ($f in $c.ResolvedFindings) {
-                [void]$sb.Append('<tr><td>' + (Get-ZbSevBadge ('' + (Get-ZbProp $f 'Severity' ''))) + '</td><td><code>' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'ID' ''))) + '</code></td><td class="wrap">' + (ConvertTo-ZbHtml ('' + (Get-ZbProp $f 'Description' ''))) + '</td></tr>')
+                [void]$sb.Append('<tr><td>' + (Get-ScytheSevBadge ('' + (Get-ScytheProp $f 'Severity' ''))) + '</td><td><code>' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'ID' ''))) + '</code></td><td class="wrap">' + (ConvertTo-ScytheHtml ('' + (Get-ScytheProp $f 'Description' ''))) + '</td></tr>')
             }
             [void]$sb.Append('</tbody></table>')
         }
         [void]$sb.Append('</section>')
     }
 
-    [void]$sb.Append('<footer class="rpt-foot">Generated ' + (ConvertTo-ZbHtml (Get-Date -Format 'yyyy-MM-dd HH:mm')) + ' from ' + (ConvertTo-ZbHtml $SourceName) + ' by New-ScanReport.ps1. This file is self-contained and makes no network requests.</footer>')
+    [void]$sb.Append('<footer class="rpt-foot">Generated ' + (ConvertTo-ScytheHtml (Get-Date -Format 'yyyy-MM-dd HH:mm')) + ' from ' + (ConvertTo-ScytheHtml $SourceName) + ' by New-ScanReport.ps1. This file is self-contained and makes no network requests.</footer>')
 
     $bodyHtml = $sb.ToString()
 
@@ -776,8 +776,8 @@ function New-ZbReportHtml {
     # once silently killed every interactive feature for months).
     $dataJson = (ConvertTo-Json -Compress -InputObject @{ csv = $CsvText; csvName = $CsvName }) -replace '</', '<\/'
 
-    $css = Get-ZbReportCss
-    $js = Get-ZbReportJs
+    $css = Get-ScytheReportCss
+    $js = Get-ScytheReportJs
     $docTitle = $TitleText
     if ([string]::IsNullOrWhiteSpace($docTitle)) { $docTitle = 'Audit report — ' + $s.Host }
 
@@ -787,15 +787,15 @@ function New-ZbReportHtml {
     # Belt and braces on the no-network rule: even a hostile Description cannot make this page
     # fetch a remote resource.
     [void]$doc.Append('<meta http-equiv="Content-Security-Policy" content="default-src ''none''; style-src ''unsafe-inline''; script-src ''unsafe-inline''; img-src data:">')
-    [void]$doc.Append('<title>' + (ConvertTo-ZbHtml $docTitle) + '</title>')
+    [void]$doc.Append('<title>' + (ConvertTo-ScytheHtml $docTitle) + '</title>')
     [void]$doc.Append('<style>' + $css + '</style></head><body><main>')
     [void]$doc.Append($bodyHtml)
-    [void]$doc.Append('</main><script type="application/json" id="zb-data">' + $dataJson + '</script>')
+    [void]$doc.Append('</main><script type="application/json" id="scythe-data">' + $dataJson + '</script>')
     [void]$doc.Append('<script>' + $js + '</script></body></html>')
     return $doc.ToString()
 }
 
-function Get-ZbReportCss {
+function Get-ScytheReportCss {
     return @'
 :root{
   --bg:#f5f6f8; --card:#ffffff; --fg:#1d2833; --muted:#5b6b7b; --line:#d8dee6;
@@ -883,14 +883,14 @@ footer.rpt-foot{color:var(--muted);font-size:.8rem;text-align:center;padding:0 1
 '@
 }
 
-function Get-ZbReportJs {
+function Get-ScytheReportJs {
     return @'
 (function () {
   'use strict';
-  var data = JSON.parse(document.getElementById('zb-data').textContent);
+  var data = JSON.parse(document.getElementById('scythe-data').textContent);
   var body = document.body;
   function qsa(sel, el) { return Array.prototype.slice.call((el || document).querySelectorAll(sel)); }
-  var table = document.getElementById('zb-findings');
+  var table = document.getElementById('scythe-findings');
   if (!table) { return; }  // empty run: nothing interactive except the page itself
   var groups = qsa('tbody.grp', table);
 
@@ -900,10 +900,10 @@ function Get-ZbReportJs {
       head.addEventListener('click', function () { g.classList.toggle('open'); });
     }
   });
-  document.getElementById('zb-expand').addEventListener('click', function () {
+  document.getElementById('scythe-expand').addEventListener('click', function () {
     groups.forEach(function (g) { g.classList.add('open'); });
   });
-  document.getElementById('zb-collapse').addEventListener('click', function () {
+  document.getElementById('scythe-collapse').addEventListener('click', function () {
     groups.forEach(function (g) { g.classList.remove('open'); });
   });
 
@@ -929,7 +929,7 @@ function Get-ZbReportJs {
     });
   });
 
-  var box = document.getElementById('zb-search');
+  var box = document.getElementById('scythe-search');
   var timer = null;
   box.addEventListener('input', function () {
     if (timer) { clearTimeout(timer); }
@@ -959,7 +959,7 @@ function Get-ZbReportJs {
     });
   });
 
-  var csvBtn = document.getElementById('zb-csv');
+  var csvBtn = document.getElementById('scythe-csv');
   if (csvBtn) {
     csvBtn.addEventListener('click', function () {
       var blob = new Blob([data.csv], { type: 'text/csv' });
@@ -981,8 +981,8 @@ function Get-ZbReportJs {
 # Main
 # --------------------------------------------------------------------------------------------
 
-$record = Import-ZbRunRecord -RecordPath $Path -Label 'Run record'
-$sourceFull = Get-ZbFullPath -AnyPath $Path
+$record = Import-ScytheRunRecord -RecordPath $Path -Label 'Run record'
+$sourceFull = Get-ScytheFullPath -AnyPath $Path
 
 # Resolve the technique map. Missing or broken → warn, keep going, mark everything unmapped.
 $map = $null
@@ -1009,27 +1009,27 @@ if ($null -eq $map) {
 
 $baseline = $null
 if (-not [string]::IsNullOrWhiteSpace($Compare)) {
-    $baseline = Import-ZbRunRecord -RecordPath $Compare -Label 'Baseline run record'
+    $baseline = Import-ScytheRunRecord -RecordPath $Compare -Label 'Baseline run record'
 }
 
-$model = New-ZbReportModel -Record $record -Map $map -Baseline $baseline -MapNotice $mapNotice
+$model = New-ScytheReportModel -Record $record -Map $map -Baseline $baseline -MapNotice $mapNotice
 $model.Summary.Title = $Title
-$model.Summary.ExecutiveSummary = New-ZbExecutiveSummary -Summary $model.Summary
+$model.Summary.ExecutiveSummary = New-ScytheExecutiveSummary -Summary $model.Summary
 
 # Output paths.
 if ([string]::IsNullOrWhiteSpace($OutFile)) {
     if ($sourceFull -match '\.json$') { $OutFile = $sourceFull -replace '\.json$', '_report.html' }
     else { $OutFile = $sourceFull + '_report.html' }
 }
-$outFull = Get-ZbFullPath -AnyPath $OutFile
+$outFull = Get-ScytheFullPath -AnyPath $OutFile
 $outDir = Split-Path -Path $outFull -Parent
 if ($outDir -and -not (Test-Path -LiteralPath $outDir)) {
     New-Item -ItemType Directory -Path $outDir -Force | Out-Null
 }
 $csvName = [System.IO.Path]::GetFileNameWithoutExtension($outFull) + '.csv'
 
-$csvText = New-ZbFindingsCsv -Findings $model.Real
-$html = New-ZbReportHtml -Model $model -TitleText $Title -CsvText $csvText -CsvName $csvName -SourceName (Split-Path -Path $sourceFull -Leaf)
+$csvText = New-ScytheFindingsCsv -Findings $model.Real
+$html = New-ScytheReportHtml -Model $model -TitleText $Title -CsvText $csvText -CsvName $csvName -SourceName (Split-Path -Path $sourceFull -Leaf)
 
 # Report and CSV are data files: UTF-8 without BOM (only .ps1 sources carry a BOM).
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

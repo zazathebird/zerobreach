@@ -18,7 +18,7 @@ param([switch]$SkipParse)
 $ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 Push-Location $root
-Write-Host "ZeroBreach security regression suite — root: $root" -ForegroundColor Cyan
+Write-Host "Scythe security regression suite — root: $root" -ForegroundColor Cyan
 
 $tests = @(
     @{ Name = 'Parse + BOM (12 shipped files)';        File = 'Test-ParseAndBom.ps1';       Skip = $SkipParse }
@@ -37,11 +37,11 @@ $tests = @(
     @{ Name = 'WS7 HUNT band 134-162 + preflight';    File = 'Test-Hunt-Band.ps1' }
     @{ Name = 'WS7 runtime correlation (executes 160-162)'; File = 'Test-Hunt-Correlation.ps1' }
 
-    # G-series operator tooling + the shared assertion library. These use tools/tests/lib/ZbAssert.ps1,
+    # G-series operator tooling + the shared assertion library. These use tools/tests/lib/ScytheAssert.ps1,
     # exit non-zero on failure and print an "N passed, M failed" summary, so they are judged on that
     # contract (Strict) rather than on the prose regex below -- their own assertion DESCRIPTIONS
-    # contain the word "fail" (e.g. "ZbTrue: false fails"), which the loose regex reads as a failure.
-    @{ Name = 'G   ZbAssert library self-test';       File = 'Test-ZbAssert.ps1';          Strict = $true }
+    # contain the word "fail" (e.g. "ScytheTrue: false fails"), which the loose regex reads as a failure.
+    @{ Name = 'G   ScytheAssert library self-test';       File = 'Test-ScytheAssert.ps1';          Strict = $true }
     @{ Name = 'G1  New-ScanReport renderer';          File = 'Test-ScanReport.ps1';        Strict = $true }
     @{ Name = 'G2  Compare-ScanRuns diff';            File = 'Test-CompareScanRuns.ps1';   Strict = $true }
     @{ Name = 'G3  phase timing vs budgets';          File = 'Test-PhaseTimingReport.ps1'; Strict = $true }

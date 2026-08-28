@@ -9,7 +9,7 @@
 
     What runs today (decision 2026-08-20 — ship documented scope, stub the rest visibly):
 
-      * The published contract is encoded once below ($ZbEventContract). This is the CONTRACT,
+      * The published contract is encoded once below ($ScytheEventContract). This is the CONTRACT,
         not an extraction target — the §6 table is the specification the sources must meet.
         (The prohibition on restating source tables applies to the mirrored ceiling numbers,
         which Test-ServerParity.ps1 extracts; a contract test needs its contract.)
@@ -27,7 +27,7 @@
       - which fields the front end reads off each event
       - the route list the front end calls, and the server's request-handler route table
       - the authenticated wrapper's name for /api/ calls
-    Each has a disabled entry in $ZbPendingExtractors; enabling one unimplemented fails the
+    Each has a disabled entry in $ScythePendingExtractors; enabling one unimplemented fails the
     run rather than passing vacuously.
 
 .PARAMETER Root
@@ -44,19 +44,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$script:ZbPass = 0
-$script:ZbFail = 0
-$script:ZbFailures = @()
+$script:ScythePass = 0
+$script:ScytheFail = 0
+$script:ScytheFailures = @()
 
-function Assert-ZbTrue {
+function Assert-ScytheTrue {
     param([bool]$Condition, [string]$Name)
     if ($Condition) {
-        $script:ZbPass = $script:ZbPass + 1
+        $script:ScythePass = $script:ScythePass + 1
         Write-Host ('  ok    ' + $Name)
     }
     else {
-        $script:ZbFail = $script:ZbFail + 1
-        $script:ZbFailures += $Name
+        $script:ScytheFail = $script:ScytheFail + 1
+        $script:ScytheFailures += $Name
         Write-Host ('  FAIL  ' + $Name)
     }
 }
@@ -65,7 +65,7 @@ function Assert-ZbTrue {
 # The published contract (BLUEPRINT §6). Fields are snake_case on purpose.
 # --------------------------------------------------------------------------------------------
 
-$ZbEventContract = [ordered]@{
+$ScytheEventContract = [ordered]@{
     log_line             = @('text', 'severity', 'phase', 'elapsed')
     finding              = @('id', 'line', 'severity', 'threat_type', 'phase', 'mitre', 'mitre_id', 'fix_action', 'target', 'timestamp')
     scan_state           = @('phase', 'phase_total', 'phase_name', 'section', 'elapsed', 'threat_counts', 'running')
@@ -75,9 +75,9 @@ $ZbEventContract = [ordered]@{
     sync                 = @()   # full state snapshot on connect/reconnect; shape not enumerated in §6
 }
 
-$ZbPendingExtractors = @(
+$ScythePendingExtractors = @(
     @{ Name = 'PowerShell server payload construction per event'; Enabled = $false
-       Need = 'the emit-call / hashtable shape used in ZeroBreach-Server.ps1 for one event (the rest follow the pattern)' },
+       Need = 'the emit-call / hashtable shape used in Scythe-Server.ps1 for one event (the rest follow the pattern)' },
     @{ Name = 'Python server payload construction per event'; Enabled = $false
        Need = 'the emit-call / dict shape used in _python/server.py for one event' },
     @{ Name = 'front-end event field reads'; Enabled = $false
@@ -92,7 +92,7 @@ $ZbPendingExtractors = @(
 # Machinery
 # --------------------------------------------------------------------------------------------
 
-function Compare-ZbFieldSets {
+function Compare-ScytheFieldSets {
     # Required: the fields a reader depends on. Available: the fields a payload carries.
     # Returns human-readable problem strings; empty means the contract holds.
     param([string]$Context, $Required, $Available)
@@ -120,17 +120,17 @@ function Compare-ZbFieldSets {
 # --------------------------------------------------------------------------------------------
 
 Write-Host 'contract sanity'
-Assert-ZbTrue (@($ZbEventContract.Keys).Count -ge 7) 'contract carries all seven documented events'
-Assert-ZbTrue ($ZbEventContract.Contains('scan_complete') -and $ZbEventContract.Contains('scan_failed')) 'scan_complete and scan_failed are distinct events (a failed run must never render clean)'
+Assert-ScytheTrue (@($ScytheEventContract.Keys).Count -ge 7) 'contract carries all seven documented events'
+Assert-ScytheTrue ($ScytheEventContract.Contains('scan_complete') -and $ScytheEventContract.Contains('scan_failed')) 'scan_complete and scan_failed are distinct events (a failed run must never render clean)'
 
 $badCase = @()
-foreach ($eventName in $ZbEventContract.Keys) {
-    foreach ($field in @($ZbEventContract[$eventName])) {
+foreach ($eventName in $ScytheEventContract.Keys) {
+    foreach ($field in @($ScytheEventContract[$eventName])) {
         if ($field -cmatch '[A-Z]') { $badCase += ($eventName + '.' + $field) }
     }
     if ($eventName -cmatch '[A-Z]') { $badCase += $eventName }
 }
-Assert-ZbTrue ($badCase.Count -eq 0) 'events and payload fields are snake_case (the run record is PascalCase; both are correct, do not unify)'
+Assert-ScytheTrue ($badCase.Count -eq 0) 'events and payload fields are snake_case (the run record is PascalCase; both are correct, do not unify)'
 
 # --------------------------------------------------------------------------------------------
 # Built-in fail-on-revert: the machinery must catch what it claims to catch
@@ -140,26 +140,26 @@ Write-Host 'self-proof (synthetic payload sets)'
 
 # A conforming synthetic server: every event carries at least the contract fields.
 $conforming = @{}
-foreach ($eventName in $ZbEventContract.Keys) {
-    $conforming[$eventName] = @($ZbEventContract[$eventName]) + @('extra_internal_field')
+foreach ($eventName in $ScytheEventContract.Keys) {
+    $conforming[$eventName] = @($ScytheEventContract[$eventName]) + @('extra_internal_field')
 }
 $cleanProblems = @()
-foreach ($eventName in $ZbEventContract.Keys) {
-    $cleanProblems += Compare-ZbFieldSets -Context ('conforming.' + $eventName) -Required $ZbEventContract[$eventName] -Available $conforming[$eventName]
+foreach ($eventName in $ScytheEventContract.Keys) {
+    $cleanProblems += Compare-ScytheFieldSets -Context ('conforming.' + $eventName) -Required $ScytheEventContract[$eventName] -Available $conforming[$eventName]
 }
-Assert-ZbTrue (@($cleanProblems).Count -eq 0) 'a conforming payload set passes (extra internal fields are allowed)'
+Assert-ScytheTrue (@($cleanProblems).Count -eq 0) 'a conforming payload set passes (extra internal fields are allowed)'
 
 # The revert case: scan_complete loses threat_counts — the browser banner logic goes blind.
 $broken = @($conforming['scan_complete'] | Where-Object { $_ -ne 'threat_counts' })
-$brokenProblems = @(Compare-ZbFieldSets -Context 'broken.scan_complete' -Required $ZbEventContract['scan_complete'] -Available $broken)
-Assert-ZbTrue (@($brokenProblems).Count -eq 1) 'a removed payload field is caught'
-Assert-ZbTrue ((@($brokenProblems) -join ' ').Contains('threat_counts')) 'the report names the missing field'
+$brokenProblems = @(Compare-ScytheFieldSets -Context 'broken.scan_complete' -Required $ScytheEventContract['scan_complete'] -Available $broken)
+Assert-ScytheTrue (@($brokenProblems).Count -eq 1) 'a removed payload field is caught'
+Assert-ScytheTrue ((@($brokenProblems) -join ' ').Contains('threat_counts')) 'the report names the missing field'
 
 # The vacuous case: an unloaded field set must fail loudly.
-$nullProblems = @(Compare-ZbFieldSets -Context 'unloaded.finding' -Required $ZbEventContract['finding'] -Available $null)
-Assert-ZbTrue (@($nullProblems).Count -gt 0) 'an unloaded field set fails instead of agreeing vacuously'
-$emptyProblems = @(Compare-ZbFieldSets -Context 'empty.finding' -Required $ZbEventContract['finding'] -Available @())
-Assert-ZbTrue (@($emptyProblems).Count -gt 0) 'an empty field set fails instead of agreeing vacuously'
+$nullProblems = @(Compare-ScytheFieldSets -Context 'unloaded.finding' -Required $ScytheEventContract['finding'] -Available $null)
+Assert-ScytheTrue (@($nullProblems).Count -gt 0) 'an unloaded field set fails instead of agreeing vacuously'
+$emptyProblems = @(Compare-ScytheFieldSets -Context 'empty.finding' -Required $ScytheEventContract['finding'] -Available @())
+Assert-ScytheTrue (@($emptyProblems).Count -gt 0) 'an empty field set fails instead of agreeing vacuously'
 
 # --------------------------------------------------------------------------------------------
 # Pending extractors
@@ -170,9 +170,9 @@ if (-not [string]::IsNullOrWhiteSpace($Root)) {
     Write-Host ('NOTE: -Root "' + $Root + '" recorded, but the source extractors below are not yet configured — nothing was read from the tree.')
 }
 Write-Host 'PENDING (owner input needed — see HANDOFF_FABLE.md G5 entry):'
-foreach ($extractor in $ZbPendingExtractors) {
+foreach ($extractor in $ScythePendingExtractors) {
     if ($extractor.Enabled) {
-        Assert-ZbTrue $false ('pending extractor enabled but not implemented: ' + $extractor.Name)
+        Assert-ScytheTrue $false ('pending extractor enabled but not implemented: ' + $extractor.Name)
     }
     else {
         Write-Host ('  todo  ' + $extractor.Name + ' — needs: ' + $extractor.Need)
@@ -184,10 +184,10 @@ foreach ($extractor in $ZbPendingExtractors) {
 # --------------------------------------------------------------------------------------------
 
 Write-Host ''
-Write-Host ('{0} passed, {1} failed, {2} pending extractors' -f $script:ZbPass, $script:ZbFail, @($ZbPendingExtractors | Where-Object { -not $_.Enabled }).Count)
-if ($script:ZbFail -gt 0) {
+Write-Host ('{0} passed, {1} failed, {2} pending extractors' -f $script:ScythePass, $script:ScytheFail, @($ScythePendingExtractors | Where-Object { -not $_.Enabled }).Count)
+if ($script:ScytheFail -gt 0) {
     Write-Host 'Failed assertions:'
-    foreach ($f in $script:ZbFailures) { Write-Host ('  - ' + $f) }
+    foreach ($f in $script:ScytheFailures) { Write-Host ('  - ' + $f) }
     exit 1
 }
 exit 0

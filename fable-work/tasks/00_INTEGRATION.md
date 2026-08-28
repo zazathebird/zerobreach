@@ -15,8 +15,8 @@ session applies it in one commit when nobody else is holding the file.
 ### Files that are never yours
 
 ```
-ZeroBreach-V23.ps1          the loader
-ZeroBreach-Server.ps1       the server
+Scythe-V23.ps1          the loader
+Scythe-Server.ps1       the server
 engine/*.ps1                the scan modules
 data/detection_signatures.json
 gui/templates/index.html

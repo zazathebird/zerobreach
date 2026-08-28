@@ -24,7 +24,7 @@ tools/tests/fixtures/run_small.json
 tools/tests/fixtures/run_large.json
 ```
 
-`run_large.json` (1,200 findings) is generated deterministically by `New-ZbLargeRunFixture`
+`run_large.json` (1,200 findings) is generated deterministically by `New-ScytheLargeRunFixture`
 inside the test file, which regenerates it if it is ever deleted. The technique-map fixture and
 the comparison baseline are derived into a temp directory at test run time, so the shipped file
 list stays exactly the four above.
@@ -34,7 +34,7 @@ list stays exactly the four above.
 - INFO findings are shown but collapsed, and excluded from "What to do first".
 - Neutral, unbranded look; `-Title` carries the client name.
 - CSV is delivered both ways: a download button in the report **and** an optional `-Csv`
-  sidecar switch; both use the same text built by the one guard helper (`Protect-ZbCsvCell`).
+  sidecar switch; both use the same text built by the one guard helper (`Protect-ScytheCsvCell`).
 - A missing/unreadable `data/mitre_mapping.json` warns and renders everything as Unmapped
   with a visible notice, rather than failing the report.
 
@@ -82,7 +82,7 @@ Then diff the `-PassThru` severity counts against the engine's own HTML report f
   read this file's table too, so all five copies are proven to agree.
 - BLUEPRINT §4 says keyword_map matches "the finding's text". I match against `Description`
   only (not `Target`). If the product matches on more than that, say so and I will adjust —
-  it is one function (`Resolve-ZbTechniques`).
+  it is one function (`Resolve-ScytheTechniques`).
 - Rollup attribution: a finding that resolves to several techniques/tactics is counted **once**,
   under the first technique's first tactic — required so rollup totals reconcile with the
   summary counts (test 2). If the product wants multi-tactic counting instead, the reconcile
@@ -244,7 +244,7 @@ tools/tests/Test-ViewerAssets.ps1
   a note, not a patch: *add the three files above to the staged file list* (I could not open
   the file to give line numbers — the list the brief mentions is the place).
 - **Theme tokens: self-contained.** BLUEPRINT does not name `main.css`'s tokens and the parent
-  tree is off-limits, so `viewer.css` defines its own `--zb-*` tokens (complete light + dark
+  tree is off-limits, so `viewer.css` defines its own `--scythe-*` tokens (complete light + dark
   palettes) and `viewer.html` links `main.css` first so the product theme wins wherever it
   defines the same names. Reconciling is a token-mapping pass at the top of `viewer.css`, one
   look at `main.css` required.
@@ -291,10 +291,10 @@ tools/tests/Test-ViewerAssets.ps1
 ### What was built
 
 `tools/tests/Test-ServerParity.ps1` extracts the mode→ceiling table from **five** declarations
-at runtime and compares them: `$MODE_PHASES` in `ZeroBreach-Server.ps1` (PowerShell AST),
+at runtime and compares them: `$MODE_PHASES` in `Scythe-Server.ps1` (PowerShell AST),
 `MODE_PHASES` in `_python/server.py` (targeted regex), the engine's `$PhasePlan` switch `Max=`
 values (AST, default branch skipped), and the two copies the G1/G3 tools introduced
-(`$script:ZbModeCeiling` in `New-ScanReport.ps1` and `Get-PhaseTimingReport.ps1` — always read
+(`$script:ScytheModeCeiling` in `New-ScanReport.ps1` and `Get-PhaseTimingReport.ps1` — always read
 from the real files). Nothing is restated in the test body; every table is asserted non-empty
 before it may agree (the vacuous-pass trap). Without `-Root` the three root declarations run
 against generated fixtures reproducing the BLUEPRINT §6 syntax; `-Root <path>` aims at the
@@ -309,7 +309,7 @@ checks the contract-level rules that are checkable today (seven events; `scan_co
 
 BLUEPRINT §6 documents three ceiling declarations and the event field lists, but **not** these
 five shapes, and the parent tree is off-limits, so they are pending config blocks
-(`$ZbPendingShapes` / `$ZbPendingExtractors`) that print `todo` lines on every run — and
+(`$ScythePendingShapes` / `$ScythePendingExtractors`) that print `todo` lines on every run — and
 **enabling one without implementing it fails the run** rather than passing vacuously:
 
 1. the front-end ceiling default (file + declaration syntax),
@@ -335,7 +335,7 @@ set passes, a removed `threat_counts` is caught by name, unloaded/empty sets fai
 ### The command the owner runs against the real tree
 
 ```powershell
-powershell -File tools\tests\Test-ServerParity.ps1 -Root C:\path\to\zerobreach
+powershell -File tools\tests\Test-ServerParity.ps1 -Root C:\path\to\scythe
 powershell -File tools\tests\Test-EventContract.ps1        # extractors pending; runs its self-proof
 ```
 
@@ -418,7 +418,7 @@ they are command-line arguments, no code change needed.**
   assertion prints — detected, but not by name (same class as G1's `missing-map-fatal`).
 - `tools/tests/Test-ServerParity.ps1` (my own G5 deliverable, updated — not a violation of
   the new-files rule, which protects the parent project's files) now reads this tool's
-  `$script:ZbModeCeiling` as declaration #6; drifting HUNT to 161 in the real file makes
+  `$script:ScytheModeCeiling` as declaration #6; drifting HUNT to 161 in the real file makes
   parity fail naming the mode and every declaration's value; restored, all green.
 
 ### Needs a Windows box
@@ -438,14 +438,14 @@ tools\New-CoverageMatrix.ps1 -Root engine -SignaturePath data\<signature file> `
 ```
 
 Add the entry script (and any other file holding phases) to `-Root` as a second entry, e.g.
-`-Root engine, ZeroBreach-V23.ps1`. Then diff `data\coverage_matrix.generated.json` against
+`-Root engine, Scythe-V23.ps1`. Then diff `data\coverage_matrix.generated.json` against
 `data\coverage_matrix.json` and promote. Sanity checks for the first run: `phase_count`
 against the HUNT ceiling's reachable set, `ungated_phases` (should be empty — anything listed
 is an engine finding), `headers_unparsed`, and both orphan-key lists.
 
 ### Findings
 
-- **Sixth copy of the mode→ceiling table** (`$script:ZbModeCeiling`) — required because
+- **Sixth copy of the mode→ceiling table** (`$script:ScytheModeCeiling`) — required because
   "skipped in QUICK" and "phases per mode" are ceiling properties and the source only carries
   flags. Registered in the G5 parity test, proven above.
 - The matrix records mode **gates as flag names** (`Deep`, `Quick+Full`), not mode names —
@@ -462,15 +462,15 @@ is an engine finding), `headers_unparsed`, and both orphan-key lists.
 
 ### What was built
 
-`tools/tests/lib/ZbAssert.ps1` — dot-sourced assertion library. Helpers: `Assert-ZbTrue`,
-`Assert-ZbFalse`, `Assert-ZbEqual`, `Assert-ZbContains`, `Assert-ZbMatch`, `Assert-ZbThrows`,
-`Set-ZbSection`, plus `Get-ZbResults` (snapshot), `Reset-ZbResults`, `Export-ZbResults`
-(JSON, the machine-readable hand-off) and `Complete-ZbTestRun` (summary + exit code). Every
+`tools/tests/lib/ScytheAssert.ps1` — dot-sourced assertion library. Helpers: `Assert-ScytheTrue`,
+`Assert-ScytheFalse`, `Assert-ScytheEqual`, `Assert-ScytheContains`, `Assert-ScytheMatch`, `Assert-ScytheThrows`,
+`Set-ScytheSection`, plus `Get-ScytheResults` (snapshot), `Reset-ScytheResults`, `Export-ScytheResults`
+(JSON, the machine-readable hand-off) and `Complete-ScytheTestRun` (summary + exit code). Every
 helper records name / section / outcome / expected / actual / file / line into a collection;
 the console line is rendered from the record. Three outcomes: `pass`, `fail`, and **`empty`**
 — input never loaded (`$null`, or empty string where a value was required). `empty` is a
-failure with its own name, never a skip: `Assert-ZbEqual '' ''` is `empty` (the `'' -eq ''`
-failed-to-load trap), `Assert-ZbMatch` with an empty pattern is `empty` (`-match ''` is
+failure with its own name, never a skip: `Assert-ScytheEqual '' ''` is `empty` (the `'' -eq ''`
+failed-to-load trap), `Assert-ScytheMatch` with an empty pattern is `empty` (`-match ''` is
 true). Failures always carry the actual value (truncated at 500 chars).
 
 `tools/tests/New-TestReport.ps1` — consumes one or more exported result files, emits JUnit
@@ -483,16 +483,16 @@ zero records** — a suite that recorded nothing must never gate as green.
 Typical run, once a suite is migrated:
 
 ```powershell
-pwsh tools/tests/Test-Something.ps1          # ends with Complete-ZbTestRun -ExportPath r.json
+pwsh tools/tests/Test-Something.ps1          # ends with Complete-ScytheTestRun -ExportPath r.json
 pwsh tools/tests/New-TestReport.ps1 -Path r.json      # junit + html + gate
 ```
 
 ### New files
 
 ```
-tools/tests/lib/ZbAssert.ps1
+tools/tests/lib/ScytheAssert.ps1
 tools/tests/New-TestReport.ps1
-tools/tests/Test-ZbAssert.ps1
+tools/tests/Test-ScytheAssert.ps1
 ```
 
 ### Verified from Linux
@@ -513,10 +513,10 @@ tools/tests/Test-ZbAssert.ps1
 
 ### Needs a Windows box
 
-- `powershell -File tools\tests\Test-ZbAssert.ps1` under 5.1 (exit 0 = pass). Everything is
+- `powershell -File tools\tests\Test-ScytheAssert.ps1` under 5.1 (exit 0 = pass). Everything is
   pure logic + `System.Xml`; the specific 5.1 risks worth an eye: `Get-PSCallStack` frame
   shapes (source-location capture) and `ConvertTo-Json -InputObject` array behaviour in
-  `Export-ZbResults`.
+  `Export-ScytheResults`.
 
 ### Migration note (mechanical, LATER, one commit — existing test files not touched now)
 
@@ -525,20 +525,20 @@ Per the brief, no existing test file was edited. Each of the in-package suites
 `Test-ServerParity`, `Test-EventContract`, `Test-CoverageMatrix`) — and the parent-tree
 suites — gets the same four changes:
 
-1. Delete the local state block (`$script:ZbPass/ZbFail/ZbFailures`) and the local
-   `Assert-ZbTrue`/`Assert-ZbEqual` definitions; add
-   `. (Join-Path $PSScriptRoot 'lib/ZbAssert.ps1')` after `$ErrorActionPreference = 'Stop'`.
+1. Delete the local state block (`$script:ScythePass/ScytheFail/ScytheFailures`) and the local
+   `Assert-ScytheTrue`/`Assert-ScytheEqual` definitions; add
+   `. (Join-Path $PSScriptRoot 'lib/ScytheAssert.ps1')` after `$ErrorActionPreference = 'Stop'`.
 2. Call sites keep working unchanged: parameter names and order match the incumbent pattern
-   (`Assert-ZbTrue -Condition ... -Name ...`; `Assert-ZbEqual $Expected $Actual $Name`).
-3. Replace bare `Write-Host '<section>'` headers with `Set-ZbSection '<section>'`.
+   (`Assert-ScytheTrue -Condition ... -Name ...`; `Assert-ScytheEqual $Expected $Actual $Name`).
+3. Replace bare `Write-Host '<section>'` headers with `Set-ScytheSection '<section>'`.
 4. Replace the hand-rolled trailer (count line, failure list, `exit`) with
-   `Complete-ZbTestRun -ExportPath "$PSScriptRoot\results\<name>.json"` (or no export).
+   `Complete-ScytheTestRun -ExportPath "$PSScriptRoot\results\<name>.json"` (or no export).
 
 **One semantic review per file before the swap:** the library returns `empty` (a failure)
 where the local helpers passed, but only when the *actual* is `$null` or an empty **string**.
-The suite's many `Assert-ZbEqual 0 <count>` sites are safe — an integer 0 stringifies to
-`'0'`, which is not empty. What must be rephrased (as `Assert-ZbTrue ($x -eq '') ...` or a
-count check) is any call whose correct actual is `''` or `$null`. Grep for `Assert-ZbEqual ''`
+The suite's many `Assert-ScytheEqual 0 <count>` sites are safe — an integer 0 stringifies to
+`'0'`, which is not empty. What must be rephrased (as `Assert-ScytheTrue ($x -eq '') ...` or a
+count check) is any call whose correct actual is `''` or `$null`. Grep for `Assert-ScytheEqual ''`
 first; the seven in-package suites have zero such sites (checked 2026-08-20), so the swap is
 expected to be clean here — the parent-tree suites need the same grep. Where a property can
 legitimately be null-or-value, the new `empty` outcome is the desired behaviour: it surfaces
@@ -594,7 +594,7 @@ tools/tests/Test-PackagingContract.ps1
 ### Undocumented names — parameters, not guesses
 
 The project-root global's name, the entry-file names, and the exact encoding-declaration
-syntax are not in BLUEPRINT.md. All are parameters (`-ProjectRootVariable` default `ZbRoot`,
+syntax are not in BLUEPRINT.md. All are parameters (`-ProjectRootVariable` default `ScytheRoot`,
 `-LauncherFile`/`-ServerFile`/`-EngineFile` defaulting to the documented file names,
 `-EncodingPattern` matching `...OutputEncoding = ...UTF8...` forms). **Owner: supply the
 real root-global name** (and the encoding pattern if the real declaration differs) —
@@ -621,7 +621,7 @@ and not in `%TEMP%` (including when started from `System32` via Run-as-administr
 manifest audit, and the signing step once a certificate exists. The two commands:
 
 ```powershell
-tools\prototype\Build-SingleFile.ps1 -Root . -ProjectRootVariable <real name> -OutPath dist\ZeroBreach-Standalone.zip
+tools\prototype\Build-SingleFile.ps1 -Root . -ProjectRootVariable <real name> -OutPath dist\Scythe-Standalone.zip
 powershell -File tools\tests\Test-PackagingContract.ps1 -Root <tree> -ProjectRootVariable <real name>
 ```
 

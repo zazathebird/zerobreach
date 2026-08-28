@@ -39,26 +39,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$script:ZbPass = 0
-$script:ZbFail = 0
-$script:ZbFailures = @()
+$script:ScythePass = 0
+$script:ScytheFail = 0
+$script:ScytheFailures = @()
 
-function Assert-ZbTrue {
+function Assert-ScytheTrue {
     param([bool]$Condition, [string]$Name)
     if ($Condition) {
-        $script:ZbPass = $script:ZbPass + 1
+        $script:ScythePass = $script:ScythePass + 1
         Write-Host ('  ok    ' + $Name)
     }
     else {
-        $script:ZbFail = $script:ZbFail + 1
-        $script:ZbFailures += $Name
+        $script:ScytheFail = $script:ScytheFail + 1
+        $script:ScytheFailures += $Name
         Write-Host ('  FAIL  ' + $Name)
     }
 }
 
-function Assert-ZbEqual {
+function Assert-ScytheEqual {
     param($Expected, $Actual, [string]$Name)
-    Assert-ZbTrue -Condition (('' + $Expected) -eq ('' + $Actual)) -Name ($Name + " (expected '$Expected', got '$Actual')")
+    Assert-ScytheTrue -Condition (('' + $Expected) -eq ('' + $Actual)) -Name ($Name + " (expected '$Expected', got '$Actual')")
 }
 
 $here = $PSScriptRoot
@@ -68,7 +68,7 @@ if ([string]::IsNullOrEmpty($ToolPath)) {
 }
 $shippedMatrix = Join-Path -Path (Join-Path -Path $projectRoot -ChildPath 'data') -ChildPath 'coverage_matrix.generated.json'
 
-$tempDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('zbtest_coverage_' + $PID)
+$tempDir = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath ('scythetest_coverage_' + $PID)
 $fxDir = Join-Path -Path $tempDir -ChildPath 'modules'
 $varDir = Join-Path -Path $tempDir -ChildPath 'variant'
 New-Item -ItemType Directory -Path $fxDir -Force | Out-Null
@@ -214,20 +214,20 @@ $sigPath = Join-Path -Path $fxDir -ChildPath 'signatures.json'
 Write-Host 'canonical fixture run'
 $out1 = Join-Path -Path $tempDir -ChildPath 'matrix1.json'
 & $ToolPath -Root $fxDir -SignaturePath $sigPath -OutPath $out1 -GeneratedFrom 'fixture-demo' 6>$null | Out-Null
-Assert-ZbEqual 0 ([int]$LASTEXITCODE) 'fixture run exits zero'
-Assert-ZbTrue (Test-Path -LiteralPath $out1) 'matrix file written'
+Assert-ScytheEqual 0 ([int]$LASTEXITCODE) 'fixture run exits zero'
+Assert-ScytheTrue (Test-Path -LiteralPath $out1) 'matrix file written'
 $mx = Get-Content -LiteralPath $out1 -Raw -Encoding UTF8 | ConvertFrom-Json
-Assert-ZbEqual 'fixture-demo' $mx.generated_from 'provenance pinned by -GeneratedFrom'
+Assert-ScytheEqual 'fixture-demo' $mx.generated_from 'provenance pinned by -GeneratedFrom'
 
 # 1. Exact phase set, in numeric order (the join asserts membership AND order at once).
 $phaseKeys = @($mx.phases | ForEach-Object { $_.phase })
-Assert-ZbEqual '1|2|9.5|12|41|74.5|140' ($phaseKeys -join '|') 'exact phase set in numeric order'
+Assert-ScytheEqual '1|2|9.5|12|41|74.5|140' ($phaseKeys -join '|') 'exact phase set in numeric order'
 
 # 2. Fractional phases keep decimals and sort numerically, not lexically.
-Assert-ZbTrue ($phaseKeys -contains '74.5') 'fractional phase 74.5 keeps its decimal'
-Assert-ZbTrue (-not ($phaseKeys -contains '74')) 'fractional phase is not floored to 74'
-Assert-ZbTrue (([array]::IndexOf($phaseKeys, '9.5')) -lt ([array]::IndexOf($phaseKeys, '12'))) 'numeric order: 9.5 before 12 (lexical inverts this)'
-Assert-ZbTrue (([array]::IndexOf($phaseKeys, '2')) -lt ([array]::IndexOf($phaseKeys, '140'))) 'numeric order: 2 before 140 (lexical inverts this)'
+Assert-ScytheTrue ($phaseKeys -contains '74.5') 'fractional phase 74.5 keeps its decimal'
+Assert-ScytheTrue (-not ($phaseKeys -contains '74')) 'fractional phase is not floored to 74'
+Assert-ScytheTrue (([array]::IndexOf($phaseKeys, '9.5')) -lt ([array]::IndexOf($phaseKeys, '12'))) 'numeric order: 9.5 before 12 (lexical inverts this)'
+Assert-ScytheTrue (([array]::IndexOf($phaseKeys, '2')) -lt ([array]::IndexOf($phaseKeys, '140'))) 'numeric order: 2 before 140 (lexical inverts this)'
 
 # 3. Mode gates: named per phase; an undetectable gate is null and reported, never defaulted.
 $p1 = @($mx.phases | Where-Object { $_.phase -eq '1' })[0]
@@ -237,44 +237,44 @@ $p12 = @($mx.phases | Where-Object { $_.phase -eq '12' })[0]
 $p41 = @($mx.phases | Where-Object { $_.phase -eq '41' })[0]
 $p745 = @($mx.phases | Where-Object { $_.phase -eq '74.5' })[0]
 $p140 = @($mx.phases | Where-Object { $_.phase -eq '140' })[0]
-Assert-ZbEqual 'Quick' $p1.mode_gate 'phase 1 gated on the Quick flag'
-Assert-ZbEqual 'Full' $p95.mode_gate 'phase 9.5 gated on the Full flag'
-Assert-ZbEqual 'Deep' $p41.mode_gate 'phase 41 gated on the Deep flag'
-Assert-ZbEqual 'Hunt' $p140.mode_gate 'phase 140 gated on the Hunt flag'
-Assert-ZbTrue ($null -eq $p12.mode_gate) 'ungated phase carries mode_gate null, not a default'
-Assert-ZbTrue (@($mx.summary.ungated_phases) -contains '12') 'ungated phase is reported in the summary'
-Assert-ZbEqual 1 @($mx.summary.ungated_phases).Count 'only the genuinely ungated phase is listed'
+Assert-ScytheEqual 'Quick' $p1.mode_gate 'phase 1 gated on the Quick flag'
+Assert-ScytheEqual 'Full' $p95.mode_gate 'phase 9.5 gated on the Full flag'
+Assert-ScytheEqual 'Deep' $p41.mode_gate 'phase 41 gated on the Deep flag'
+Assert-ScytheEqual 'Hunt' $p140.mode_gate 'phase 140 gated on the Hunt flag'
+Assert-ScytheTrue ($null -eq $p12.mode_gate) 'ungated phase carries mode_gate null, not a default'
+Assert-ScytheTrue (@($mx.summary.ungated_phases) -contains '12') 'ungated phase is reported in the summary'
+Assert-ScytheEqual 1 @($mx.summary.ungated_phases).Count 'only the genuinely ungated phase is listed'
 
 # Severities: rank order (POSSIBLE before INFO — alphabetical inverts that), dynamic kept.
-Assert-ZbEqual 'HIGH|INFO' (@($p2.severities) -join '|') 'several severities on one phase, in rank order'
-Assert-ZbEqual 'POSSIBLE|INFO' (@($p12.severities) -join '|') 'severities sorted by rank, not alphabetically'
-Assert-ZbEqual 'CRITICAL|dynamic' (@($p41.severities) -join '|') 'an expression severity is recorded as dynamic, not dropped'
+Assert-ScytheEqual 'HIGH|INFO' (@($p2.severities) -join '|') 'several severities on one phase, in rank order'
+Assert-ScytheEqual 'POSSIBLE|INFO' (@($p12.severities) -join '|') 'severities sorted by rank, not alphabetically'
+Assert-ScytheEqual 'CRITICAL|dynamic' (@($p41.severities) -join '|') 'an expression severity is recorded as dynamic, not dropped'
 
 # 5. Destructive fix actions are captured as such.
-Assert-ZbTrue (@($p41.fix_actions) -contains 'QuarantineFile') 'destructive fix action captured (QuarantineFile)'
-Assert-ZbTrue (@($p140.fix_actions) -contains 'KillProcess') 'destructive fix action captured (KillProcess)'
-Assert-ZbEqual 1 ([int]$mx.summary.phases_per_fix_action.QuarantineFile) 'per-fix-action summary counts the quarantining phase'
+Assert-ScytheTrue (@($p41.fix_actions) -contains 'QuarantineFile') 'destructive fix action captured (QuarantineFile)'
+Assert-ScytheTrue (@($p140.fix_actions) -contains 'KillProcess') 'destructive fix action captured (KillProcess)'
+Assert-ScytheEqual 1 ([int]$mx.summary.phases_per_fix_action.QuarantineFile) 'per-fix-action summary counts the quarantining phase'
 
 # Signature reads per phase, and the backtick-continued call landed on its phase.
-Assert-ZbEqual 'driver_blocklist' (@($p41.signature_keys) -join '|') 'signature key read is attributed to its phase'
-Assert-ZbEqual 'ghost_key|lolbins' (@($p745.signature_keys) -join '|') 'several signature keys on one phase'
-Assert-ZbEqual 2 ([int]$p2.finding_calls) 'backtick-continued call inside if/foreach is counted'
+Assert-ScytheEqual 'driver_blocklist' (@($p41.signature_keys) -join '|') 'signature key read is attributed to its phase'
+Assert-ScytheEqual 'ghost_key|lolbins' (@($p745.signature_keys) -join '|') 'several signature keys on one phase'
+Assert-ScytheEqual 2 ([int]$p2.finding_calls) 'backtick-continued call inside if/foreach is counted'
 
 # 6. Orphan keys, both directions.
-Assert-ZbEqual 'ghost_key' (@($mx.summary.signature_keys_missing_from_file) -join '|') 'key read but missing from the file is flagged (a bug)'
-Assert-ZbEqual 'dead_weight' (@($mx.summary.signature_keys_unread) -join '|') 'key present but read by nothing is flagged (dead weight)'
+Assert-ScytheEqual 'ghost_key' (@($mx.summary.signature_keys_missing_from_file) -join '|') 'key read but missing from the file is flagged (a bug)'
+Assert-ScytheEqual 'dead_weight' (@($mx.summary.signature_keys_unread) -join '|') 'key present but read by nothing is flagged (dead weight)'
 
 # Preflight output above any header is counted, not attributed to a phase.
-Assert-ZbEqual 1 ([int]$mx.summary.unattributed_finding_calls) 'preflight finding call is counted as unattributed'
+Assert-ScytheEqual 1 ([int]$mx.summary.unattributed_finding_calls) 'preflight finding call is counted as unattributed'
 
 # QUICK skip flag and per-mode counts (ceilings 30/80/133/162).
-Assert-ZbTrue ($p41.skipped_in_quick) 'phase 41 marked skipped in QUICK'
-Assert-ZbTrue (-not $p2.skipped_in_quick) 'phase 2 not marked skipped in QUICK'
-Assert-ZbEqual 4 ([int]$mx.summary.phases_per_mode.QUICK) 'QUICK reaches four fixture phases'
-Assert-ZbEqual 6 ([int]$mx.summary.phases_per_mode.FULL) 'FULL reaches six fixture phases'
-Assert-ZbEqual 7 ([int]$mx.summary.phases_per_mode.HUNT) 'HUNT reaches all seven fixture phases'
-Assert-ZbEqual 3 ([int]$mx.summary.phases_per_module.'Module-Core.ps1') 'per-module count'
-Assert-ZbEqual 'Module-Core.ps1|Module-Deep.ps1|Module-Hunt.ps1' (@($mx.scan.modules) -join '|') 'scanned module list recorded'
+Assert-ScytheTrue ($p41.skipped_in_quick) 'phase 41 marked skipped in QUICK'
+Assert-ScytheTrue (-not $p2.skipped_in_quick) 'phase 2 not marked skipped in QUICK'
+Assert-ScytheEqual 4 ([int]$mx.summary.phases_per_mode.QUICK) 'QUICK reaches four fixture phases'
+Assert-ScytheEqual 6 ([int]$mx.summary.phases_per_mode.FULL) 'FULL reaches six fixture phases'
+Assert-ScytheEqual 7 ([int]$mx.summary.phases_per_mode.HUNT) 'HUNT reaches all seven fixture phases'
+Assert-ScytheEqual 3 ([int]$mx.summary.phases_per_module.'Module-Core.ps1') 'per-module count'
+Assert-ScytheEqual 'Module-Core.ps1|Module-Deep.ps1|Module-Hunt.ps1' (@($mx.scan.modules) -join '|') 'scanned module list recorded'
 
 # --------------------------------------------------------------------------------------------
 # 4. Determinism: same input, byte-identical file — and the shipped file IS the tool output
@@ -285,22 +285,22 @@ $out2 = Join-Path -Path $tempDir -ChildPath 'matrix2.json'
 & $ToolPath -Root $fxDir -SignaturePath $sigPath -OutPath $out2 -GeneratedFrom 'fixture-demo' 6>$null | Out-Null
 $hash1 = (Get-FileHash -LiteralPath $out1 -Algorithm SHA256).Hash
 $hash2 = (Get-FileHash -LiteralPath $out2 -Algorithm SHA256).Hash
-Assert-ZbEqual $hash1 $hash2 'running twice produces byte-identical output'
+Assert-ScytheEqual $hash1 $hash2 'running twice produces byte-identical output'
 
 if ($UpdateShippedMatrix) {
     Copy-Item -LiteralPath $out1 -Destination $shippedMatrix -Force
     Write-Host ('  (rewrote ' + $shippedMatrix + ')')
 }
-Assert-ZbTrue (Test-Path -LiteralPath $shippedMatrix) 'data/coverage_matrix.generated.json ships with the tool'
+Assert-ScytheTrue (Test-Path -LiteralPath $shippedMatrix) 'data/coverage_matrix.generated.json ships with the tool'
 $hashShipped = (Get-FileHash -LiteralPath $shippedMatrix -Algorithm SHA256).Hash
-Assert-ZbEqual $hash1 $hashShipped 'shipped matrix is byte-identical to a fresh fixture run'
+Assert-ScytheEqual $hash1 $hashShipped 'shipped matrix is byte-identical to a fresh fixture run'
 
 # Without -SignaturePath the orphan lists are null — "not checked" must not read as "clean".
 $out3 = Join-Path -Path $tempDir -ChildPath 'matrix3.json'
 & $ToolPath -Root $fxDir -OutPath $out3 -GeneratedFrom 'fixture-demo' 6>$null | Out-Null
 $mx3 = Get-Content -LiteralPath $out3 -Raw -Encoding UTF8 | ConvertFrom-Json
-Assert-ZbTrue ($null -eq $mx3.summary.signature_keys_missing_from_file) 'no signature file: missing-keys list is null, not empty'
-Assert-ZbTrue ($null -eq $mx3.summary.signature_keys_unread) 'no signature file: unread-keys list is null, not empty'
+Assert-ScytheTrue ($null -eq $mx3.summary.signature_keys_missing_from_file) 'no signature file: missing-keys list is null, not empty'
+Assert-ScytheTrue ($null -eq $mx3.summary.signature_keys_unread) 'no signature file: unread-keys list is null, not empty'
 
 # --------------------------------------------------------------------------------------------
 # Variant fixtures: gate walking, duplicates, dynamic key, dynamic header
@@ -311,17 +311,17 @@ $outV = Join-Path -Path $tempDir -ChildPath 'matrixV.json'
 & $ToolPath -Root $varDir -OutPath $outV -GeneratedFrom 'fixture-demo' 6>$null | Out-Null
 $mv = Get-Content -LiteralPath $outV -Raw -Encoding UTF8 | ConvertFrom-Json
 $vKeys = @($mv.phases | ForEach-Object { $_.phase })
-Assert-ZbEqual '2|10|50|50|60' ($vKeys -join '|') 'variant phase set (duplicate 50 listed twice)'
-Assert-ZbEqual '2|10' (@($mv.summary.ungated_phases) -join '|') 'ungated list numerically sorted (lexical gives 10 before 2)'
+Assert-ScytheEqual '2|10|50|50|60' ($vKeys -join '|') 'variant phase set (duplicate 50 listed twice)'
+Assert-ScytheEqual '2|10' (@($mv.summary.ungated_phases) -join '|') 'ungated list numerically sorted (lexical gives 10 before 2)'
 $v50 = @($mv.phases | Where-Object { $_.phase -eq '50' })
-Assert-ZbEqual 'Variant-A.ps1' $v50[0].module 'duplicate phases ordered by module'
-Assert-ZbEqual 'Deep' $v50[0].mode_gate 'a non-plan if between phase and gate is skipped, not treated as the gate'
+Assert-ScytheEqual 'Variant-A.ps1' $v50[0].module 'duplicate phases ordered by module'
+Assert-ScytheEqual 'Deep' $v50[0].mode_gate 'a non-plan if between phase and gate is skipped, not treated as the gate'
 $v60 = @($mv.phases | Where-Object { $_.phase -eq '60' })[0]
-Assert-ZbEqual 'Deep+Hunt' $v60.mode_gate 'an or-gate records every plan flag in the condition'
-Assert-ZbEqual '50' (@($mv.summary.duplicate_phases) -join '|') 'duplicate phase number reported'
-Assert-ZbEqual 1 ([int]$mv.summary.dynamic_signature_reads) 'expression signature key counted as dynamic, not recorded as a literal'
-Assert-ZbEqual 1 @($mv.summary.headers_unparsed).Count 'header with an expression phase number is reported'
-Assert-ZbTrue (('' + @($mv.summary.headers_unparsed)[0]) -like 'Variant-B.ps1:*') 'the unparsed header names its module and line'
+Assert-ScytheEqual 'Deep+Hunt' $v60.mode_gate 'an or-gate records every plan flag in the condition'
+Assert-ScytheEqual '50' (@($mv.summary.duplicate_phases) -join '|') 'duplicate phase number reported'
+Assert-ScytheEqual 1 ([int]$mv.summary.dynamic_signature_reads) 'expression signature key counted as dynamic, not recorded as a literal'
+Assert-ScytheEqual 1 @($mv.summary.headers_unparsed).Count 'header with an expression phase number is reported'
+Assert-ScytheTrue (('' + @($mv.summary.headers_unparsed)[0]) -like 'Variant-B.ps1:*') 'the unparsed header names its module and line'
 
 # --------------------------------------------------------------------------------------------
 # Hard failures: never an empty matrix, never the promoted filename
@@ -330,12 +330,12 @@ Assert-ZbTrue (('' + @($mv.summary.headers_unparsed)[0]) -like 'Variant-B.ps1:*'
 Write-Host 'hard failures (two refusal messages below are expected)'
 $noFile = Join-Path -Path $tempDir -ChildPath 'should_not_exist.json'
 & $ToolPath -Root $fxDir -PhaseHeaderCommand 'No-Such-Command' -OutPath $noFile 6>$null | Out-Null
-Assert-ZbEqual 2 ([int]$LASTEXITCODE) 'zero phase headers is a hard error, exit 2'
-Assert-ZbTrue (-not (Test-Path -LiteralPath $noFile)) 'zero phase headers writes no file'
+Assert-ScytheEqual 2 ([int]$LASTEXITCODE) 'zero phase headers is a hard error, exit 2'
+Assert-ScytheTrue (-not (Test-Path -LiteralPath $noFile)) 'zero phase headers writes no file'
 $promoted = Join-Path -Path $tempDir -ChildPath 'coverage_matrix.json'
 & $ToolPath -Root $fxDir -OutPath $promoted 6>$null | Out-Null
-Assert-ZbEqual 2 ([int]$LASTEXITCODE) 'refuses the promoted filename coverage_matrix.json, exit 2'
-Assert-ZbTrue (-not (Test-Path -LiteralPath $promoted)) 'the promoted filename is never written'
+Assert-ScytheEqual 2 ([int]$LASTEXITCODE) 'refuses the promoted filename coverage_matrix.json, exit 2'
+Assert-ScytheTrue (-not (Test-Path -LiteralPath $promoted)) 'the promoted filename is never written'
 
 # --------------------------------------------------------------------------------------------
 # Result
@@ -343,10 +343,10 @@ Assert-ZbTrue (-not (Test-Path -LiteralPath $promoted)) 'the promoted filename i
 
 Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host ''
-Write-Host ('{0} passed, {1} failed' -f $script:ZbPass, $script:ZbFail)
-if ($script:ZbFail -gt 0) {
+Write-Host ('{0} passed, {1} failed' -f $script:ScythePass, $script:ScytheFail)
+if ($script:ScytheFail -gt 0) {
     Write-Host 'Failed assertions:'
-    foreach ($f in $script:ZbFailures) { Write-Host ('  - ' + $f) }
+    foreach ($f in $script:ScytheFailures) { Write-Host ('  - ' + $f) }
     exit 1
 }
 exit 0

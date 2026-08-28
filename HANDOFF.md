@@ -1,8 +1,156 @@
 # HANDOFF
 
-## Session 2026-08-26 — progress review: both Fable packages confirmed complete
+## Session 2026-08-27 — project renamed to Scythe; the artifact-layer package rebuilt standalone
 
 **Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`. **Nothing is committed** — 396 changed paths sit in the
+working tree, including the `BLUEPRINT.md` / `HANDOFF.md` edits that were already uncommitted
+from the previous session. Full detail of both pieces of work is the top entry of `CHANGELOG.md`.
+
+Everything is verified green from a clean tree:
+
+| Check | Result |
+|---|---|
+| `dotnet build Scythe.sln` | 18 projects, 0 errors, 0 warnings |
+| `dotnet test Scythe.sln` | **1,664 passed, 0 failed, 14 skipped** — matches the pre-rename baseline exactly |
+| `pwsh tools/tests/Run-SecurityTests.ps1` | all suites pass, including three-copy guard equivalence (35 vectors) |
+| `scythe-work/tools/check_briefs.py` | exit 0 — 14 tracks, 37 briefs, 37 projects, 12 edges |
+| `register-audit/check_register.py scythe-work` | exit 1 on the same 30 known-benign occurrences in 4 documents (expected state) |
+
+`dotnet` is at `~/.dotnet` (not on `PATH`); `pwsh` 7.4.6 is at `~/powershell/pwsh` (also not on
+`PATH`). Export both.
+
+### 1. The rename
+
+`ZeroBreach` → `Scythe` everywhere, including the short `zb`/`ZB`/`Zb` identifier stems. The
+durable rules are now a section in `CLAUDE.md` ("The project was renamed to Scythe on
+2026-08-27"). The two that matter most:
+
+- **The old name survives in exactly five places** — that `CLAUDE.md` section, one line in
+  `Scythe-V23.ps1`, `docs/MERGE_ARTIFACT_LAYER.md`, the dated history in `CHANGELOG.md` and this
+  file, and `_archive/`. Anything else is a regression.
+- **The one line in the loader is deliberate.** `-Schedule` unregisters a leftover
+  `ZeroBreach_V22_Scheduled` task before registering `Scythe_V22_Scheduled`, so a machine
+  scheduled before the rename ends up with one nightly scan rather than two. Do not "clean it up".
+
+Pre-rename tree copied whole to `~/Downloads/claude/zerobreach-backup-prerename/` (583 MB).
+Delete it once the rename has been exercised on Windows.
+
+Two review passes over the diff caught seven places the substitution got wrong — a vendored GSAP
+symbol, the `.gitignore` rules pointing into `_archive/` (335 MB un-ignored), a PE fixture section
+name past the 8-byte field, a half-renamed magic-value pair, the scanner's own quarantine
+self-exclusion, the Phase-2 self-filter, and one glued CSS keyframe. All fixed; the full list with
+reasoning is in `CHANGELOG.md`. **One is accepted rather than fixed:** the on-disk data root moved
+from `%ProgramData%\ZeroBreach` to `%ProgramData%\Scythe`, so a machine that ran the old build
+needs that directory renamed by hand before its first new run or its vault and action log are
+orphaned.
+
+**`gui/static/js/vendor/` and `gui/static/css/fonts/` must be excluded from any future sweep** —
+all 29 files are re-verified byte-identical to upstream and have to stay that way.
+
+### 2. The offline-artifact work package
+
+`~/Downloads/claude/fable-work-3/` was tripping Fable on **volume** — a 19.5 KB README and a
+648 KB assembled `BLUEPRINT.md`, not vocabulary; its register audit was clean on that same
+content. It is untouched and kept as the archive. The live package is
+`~/Downloads/claude/scythe-work/`: entry points cut to 7.6 KB + 6.1 KB, the assembled reference
+deleted in favour of `reference/` split one file per section (69 files, largest 39 KB), every
+pointer out of the folder removed, and the register word list moved out to
+`~/Downloads/claude/register-audit/`. It is a git repo at a clean baseline commit.
+
+**`docs/MERGE_ARTIFACT_LAYER.md` is the receiving end and is written to be read cold** — the
+37-project table, the landing procedure (names already match, so it is a copy plus two
+`dotnet sln add` lines), the four things the package's definition of done cannot check, and the
+decisions this repo has to make on arrival (`Scythe.Common`, the compound-file adapter, Track K's
+overlap with phases 160-162).
+
+### Next steps, in order
+
+1. **Windows validation of the rename.** Everything above was verified on Linux. `Launch-GUI.bat`
+   → elevation → server → browser has not been exercised since the filenames changed, and
+   `tools\tests\Verify-OnWindows.ps1` from an elevated 5.1 prompt is the other half of the suite.
+   That run also covers the `-Schedule` path, which is the only code that changed behaviour rather
+   than names.
+2. **Rebuild the single-file executable from scratch** and confirm it is `scythescan`, not the old
+   name, in the publish output and in `tools/Build-Release.ps1`'s required-file list. The user has
+   asked for a ground-up build.
+3. Commit. 396 paths, git has tracked the renames as renames.
+4. Everything on the pre-existing roadmap is unchanged — `BLUEPRINT.md` §10, `CLAUDE.md`
+   Outstanding Work. Item 7 there is new: the artifact layer package.
+
+### Not done this session
+
+No engine detection logic changed. No FP tuning. The 116-162 span still has never met the PS 5.1
+parser or a live registry, and the extended and HUNT bands still ship `FixAction "Info"`
+throughout pending a live FP round.
+
+---
+
+## Session 2026-08-26 (later) — `fable-work-3` audited, drift fixed, package tooling completed
+
+**Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`. **No engine code was touched.** This session audited the
+third Fable package for completeness and closed the gaps found. `dotnet` is still not on PATH
+here (it is at `~/.dotnet`), so nothing in `fable-work-3` was built — it is a specification
+package with no code in it yet, so there was nothing to build.
+
+### `fable-work-3` is complete and now self-checking
+
+`~/Downloads/claude/fable-work-3/` — **14 tracks, 37 tasks, 37 projects**, not the 11/30/30 this
+repo's `BLUEPRINT.md` claimed. Tracks U (interchange and indicator-sharing output), V (process
+dumps, archives, compound documents, browser schemas) and W (a shared fixture-construction kit)
+were added after the first pass and the count was never updated. Verified in full: every brief is
+linked from the README and every link resolves, every brief carries the standard sections
+(`Why this exists` / `Scope` / `Tests` / `Open questions`), all 37 project names are unique, and
+`BLUEPRINT.md` re-assembles byte-identical from its 17 `_bp_*.md` fragments (11,698 lines,
+sections 1-17).
+
+**Three things were wrong or missing, all now fixed:**
+
+1. **`tasks/00_INTEGRATION.md` disagreed with the README's dependency graph.** It said "three
+   edges are expected and fine — `E4 → E2`, `H1 → S1`, `T1 → J1`" while the README's graph listed
+   **eight** hard edges plus three soft hand-offs, and the two documents classified `T1 → J1`
+   differently (a project reference in one, a hand-off in the other). A session reading the
+   integration protocol would have taken `Q1 → P1` for an unexpected dependency. The full
+   eight-edge list and the three hand-offs are now in both places.
+2. **No `Directory.Build.props`.** `CLAUDE.md` and the README both demand `net8.0` (never
+   `net8.0-windows`) and zero warnings, and nothing enforced either — 37 `.csproj` files would
+   each have restated them. Added, matching `fable-work-2`'s, plus `Deterministic` and
+   `InvariantGlobalization` because several tasks compare serialised output byte-for-byte.
+3. **No `HANDOFF_FABLE3.md`.** Both earlier packages have one and the README's definition of done
+   requires an entry in it. Seeded with the entry template and the append-don't-rewrite rule,
+   since several sessions work this package in parallel.
+
+**New: `tools/check_briefs.py`** — the structural counterpart to the existing
+`tools/check_register.py`. Six checks: briefs ↔ README links both ways, stated track/task counts,
+one unique project per task matching `00_INTEGRATION`'s list, the dependency graph identical in
+both documents, required sections per brief, and no `_bp_*.md` fragment the assembler would leave
+out. Exits 0 today; **any output from it is a real defect**, unlike the register checker. All six
+checks were proven to bite by injecting the matching fault (dropped edge, unlinked brief,
+duplicate project, orphan fragment, missing section) — the drift in item 1 is exactly what it
+would have caught.
+
+`tools/check_register.py` still reports its 30 known-benign occurrences in 4 documents and that
+remains the expected state — SQLite and VHDX "payload" are field names from the format
+specifications, and the one `C2` is the UTF-8 lead-byte range `C2`–`DF` in a decoding table.
+**Do not sanitise those**; renaming them leaves the document disagreeing with the spec a reader
+has open beside it.
+
+### Next step for this package
+
+Nothing blocks Fable starting it. Order is unchanged: **Track Q first** (`Q1` time, `Q2` text,
+`Q3` identity — everything depends on them), then K, M, N, P, R, S or U, which the README records
+as the tracks that opened cleanly on the first attempt.
+
+---
+
+## Session 2026-08-26 — progress review: both Fable packages confirmed complete
 
 ### State
 
@@ -28,12 +176,12 @@ Its `HANDOFF_FABLE2.md` shows all 12 tasks (A1-A5 YARA/Sigma, B1-B2 PE/container
 path-normaliser/linter, D1-D3 IOC-normaliser/baseline-diff/config-baseline) marked **complete**,
 each with its own green test run. D2's entry carries a **2026-08-26** re-verification note
 (31/31), so this package was touched again today, not left stale since session 18. Per-project
-totals: `ZeroBreach.Rules.Tests` 529/529 (307 YARA + 122 Sigma + 100 Linting), `ZeroBreach.
-Formats.Tests` 135/135 (66 PE + 69 containers), `ZeroBreach.Paths.Tests` 418/418,
-`ZeroBreach.Intel.Tests` 143/143, `ZeroBreach.Diff.Tests` 31/31, `ZeroBreach.Baseline.Tests`
+totals: `Scythe.Rules.Tests` 529/529 (307 YARA + 122 Sigma + 100 Linting), `Scythe.
+Formats.Tests` 135/135 (66 PE + 69 containers), `Scythe.Paths.Tests` 418/418,
+`Scythe.Intel.Tests` 143/143, `Scythe.Diff.Tests` 31/31, `Scythe.Baseline.Tests`
 118/118 — **1,374 tests total**, all zero-warning, all net8.0 on Linux, no packages beyond
 xUnit. A5's entry records that finishing it "resolved the build break that had been blocking
-`ZeroBreach.Rules`" (a missing `CompiledSigmaRule` type) — earlier entries in the same file
+`Scythe.Rules`" (a missing `CompiledSigmaRule` type) — earlier entries in the same file
 (B1, D1, D3) still describe that break as live because they were written chronologically
 before A5 finished; the file is organized by task id, not by session order, so read status
 lines as of the latest-dated note per task, not top-to-bottom.
@@ -42,8 +190,8 @@ lines as of the latest-dated note per task, not top-to-bottom.
 built" note (session 17/18) described the package as in-progress with a suggested task order.
 It is now finished. `BLUEPRINT.md` §9 gained a migration-status row for it and §10 gained a new
 roadmap item (6, renumbering the old 6-10 to 7-11): copy the six projects into this repo's
-solution, then — the actual work, not the mechanical part — decide how `ZeroBreach.Rules`
-(YARA/Sigma) plugs into `SignatureDb` and the 10 scanners, and how `ZeroBreach.Formats`
+solution, then — the actual work, not the mechanical part — decide how `Scythe.Rules`
+(YARA/Sigma) plugs into `SignatureDb` and the 10 scanners, and how `Scythe.Formats`
 (PE/containers) feeds a look-inside-the-file scanner. Detection-parity work (old item 6, now 7)
 is now explicitly sequenced *after* this, since several F-series briefs map cleanly onto a
 library-layer track (YARA/Sigma → new signature source, PE/containers → content inspection,
@@ -65,7 +213,7 @@ passing vacuously.
 ### The copy-in is done — `lib/` now holds the library layer
 
 BLUEPRINT.md §10 item 6, the mechanical half. Six library projects plus their six test projects
-are under a new top-level **`lib/`**, added to `ZeroBreach.sln`.
+are under a new top-level **`lib/`**, added to `Scythe.sln`.
 
 **`lib/` exists because the target framework is a real boundary.** The engine projects are
 `net8.0-windows`; every project in this layer is **`net8.0`** and must stay that way — that is
@@ -78,18 +226,18 @@ working — do not fix it by changing the target framework.**
 
 | | Before | After |
 |---|---|---|
-| `dotnet build ZeroBreach.sln` | 6 projects | **18 projects**, 0 errors, 0 warnings |
-| `dotnet test ZeroBreach.sln` | 290 / 14 skipped | **1,664 passed / 14 skipped / 0 failed** |
+| `dotnet build Scythe.sln` | 6 projects | **18 projects**, 0 errors, 0 warnings |
+| `dotnet test Scythe.sln` | 290 / 14 skipped | **1,664 passed / 14 skipped / 0 failed** |
 
-`ZeroBreach.Cli` still references only Core/Scanners/Remediation — **the shipped exe is
+`Scythe.Cli` still references only Core/Scanners/Remediation — **the shipped exe is
 unchanged**. `docs/_history/HANDOFF_FABLE2.md` copied in alongside `HANDOFF_FABLE.md`.
 
 ### Next step, and it is a design decision not a port
 
-Wiring `ZeroBreach.Rules` into `SignatureDb` and the 10 scanners. The obvious first move, from
+Wiring `Scythe.Rules` into `SignatureDb` and the 10 scanners. The obvious first move, from
 reading the merged code:
 
-**`ZeroBreach.Rules.Linting` independently re-implements five of this repo's own hard rules.**
+**`Scythe.Rules.Linting` independently re-implements five of this repo's own hard rules.**
 `AllowlistCanaries` = the `Join-AllowRegex` universal-pattern canary set. `CollisionCorpus` = the
 "no entry may collide with a real software name" rule the `houdini`/SideFX bug produced.
 `BacktrackingProbe` = the 150 ms ReDoS budget. `LintSwallowedDetections` = the "an allowlist must
@@ -108,7 +256,7 @@ unpatched deliberately.
 ### Not verified this session
 
 - No Windows run. Everything above is Linux.
-- The `lib/` layer is on disk and building; **nothing in `ZeroBreach.*` references it yet**, so
+- The `lib/` layer is on disk and building; **nothing in `Scythe.*` references it yet**, so
   it has not been exercised against real product data — only against its own fixtures.
 
 ---
@@ -187,7 +335,7 @@ enumeration testing and **not** fine for the Tier-3 live-sample work in `TEST_LA
 
 Fable is **actively working** in `~/Downloads/claude/fable-work-2/`. This session added there, and
 nothing else: `tasks/D3_config_baseline.md` + a README row. Fable has since scaffolded all six
-projects incl. `ZeroBreach.Baseline`, so D3 was picked up.
+projects incl. `Scythe.Baseline`, so D3 was picked up.
 
 **D3 = configuration baseline evaluator** — the pure comparator half of 153-156. Check table +
 observed values → Compliant / NonCompliant / NotApplicable / Undetermined. Populating the table
@@ -197,7 +345,7 @@ now in 153-156.
 **Three known defects in that package, agreed but NOT yet applied** (held back to avoid colliding
 with Fable's live run):
 1. `BLUEPRINT.md` has no §13 for D3 — every other brief cites a section; D3 says there isn't one.
-2. `00_INTEGRATION.md` "Projects owned by this package" omits `ZeroBreach.Baseline`, then says
+2. `00_INTEGRATION.md` "Projects owned by this package" omits `Scythe.Baseline`, then says
    "Nothing else is yours" — a contradiction sitting in front of the project Fable just created.
 3. No `.gitignore`, and 12 `obj/`/`bin/` dirs already exist. This package merges into this repo,
    where that trap has fired before (session 17: 356 files of compiler output nearly staged).
@@ -222,12 +370,12 @@ registry hive parser (pairs with D3 — produces observed values from a collecte
 
 ### What this repo is now
 
-`~/Downloads/claude/zerobreach` is **the** build repo. Two engines, both maintained:
+`~/Downloads/claude/scythe` is **the** build repo. Two engines, both maintained:
 
-- **Native (primary)** — `ZeroBreach.*` C# projects, `net8.0-windows`, self-contained
+- **Native (primary)** — `Scythe.*` C# projects, `net8.0-windows`, self-contained
   single-file `win-x64` exe. 10 scanners / 63 checks. **Builds green here: 279 passed,
   14 skipped, 0 failed.**
-- **PowerShell (fallback)** — `ZeroBreach-V23.ps1` + `engine/*.ps1` + server + GUI. 162 phases.
+- **PowerShell (fallback)** — `Scythe-V23.ps1` + `engine/*.ps1` + server + GUI. 162 phases.
   Exists because an unsigned PE gets quarantined at client sites while `powershell.exe` is a
   signed Microsoft host running inspectable script. See `BLUEPRINT.md` §2.
 
@@ -244,7 +392,7 @@ Both are Fable-safe sanitized packages. Their framing must not be disturbed.
 
 ### Done this session
 
-- Copied in: five `ZeroBreach.*` projects, `.sln`, `Directory.Build.props`,
+- Copied in: five `Scythe.*` projects, `.sln`, `Directory.Build.props`,
   `INSTRUCTIONS_AI.md`, `_ENGINE_SPEC_FOR_REBUILD.md`, `docs/*`; fable-work G-series
   deliverables into `tools/`, `gui/viewer.html`, `data/*.json`.
 - `README.md` + `BLUEPRINT.md` rewritten for dual-engine. `CLAUDE.md` updated: dual-engine
@@ -257,7 +405,7 @@ Both are Fable-safe sanitized packages. Their framing must not be disturbed.
 
 ### Deliberately NOT done
 
-- **`zerobreach/fable-work` not deleted.** The F-series briefs there are the ONLY surviving
+- **`scythe/fable-work` not deleted.** The F-series briefs there are the ONLY surviving
   copy — the extracted project the owner thought existed does not exist anywhere on this
   machine.
 - **Operator-facing detection taxonomy not renamed.** ~335 instances of `-ThreatType`/`-Group`/
@@ -308,7 +456,7 @@ Open it as its own project. Order: A1→A2→A3→A4 strictly sequential, then a
 The main gap is detection breadth in the native engine — 63 checks vs 162 PS phases. That work
 is mine; Fable cannot touch it.
 
-`--log` is **done** (session 18) — `zbscan --mode DEEP --log run.txt` tees the console into a
+`--log` is **done** (session 18) — `scythescan --mode DEEP --log run.txt` tees the console into a
 plain-text transcript beside the reports. Still open: `HANDOFF`/`TEST_LAB_GUIDE` need dual-engine
 updates; superseding headers still needed on `docs/_history/*`.
 
@@ -319,7 +467,7 @@ M93p Tiny, Haswell i5, 16GB, 256GB SSD. **Bare metal, not VMs.** Win11 via Rufus
 annotate: no HVCI (no MBEC on Haswell), no Credential Guard, TPM 1.2 not 2.0 — affects the
 credential-access and boot-integrity scanners only, ~8 of 10 representative. Win10 22H2 second
 pass. Buy 2–3 spare SSDs, swap-as-snapshot. Defender ON, tamper protection off, exclusion for
-the sample folder only — **never exclude the ZeroBreach exe, that is the thing under test.**
+the sample folder only — **never exclude the Scythe exe, that is the thing under test.**
 Unmanaged switch, no uplink.
 
 **Lab test #1, before any malware:** publish the real single-file exe, deliver it to the clean
@@ -369,7 +517,7 @@ opens it as its own project.
 >   so widening one entry to `.*` used to blind every phase downstream while the scan still
 >   printed `[OK ]`. Universal / uncompilable / backtracking patterns are now dropped
 >   (fail-closed) and reported CRITICAL by Phase 0.
-> - **WOW64 truth**: `$global:ZB_IS_WOW64`, `$global:ZB_SYS32`, `Get-RegVal64` /
+> - **WOW64 truth**: `$global:SCYTHE_IS_WOW64`, `$global:SCYTHE_SYS32`, `Get-RegVal64` /
 >   `Get-RegNames64` / `Get-RegSubKeys64`. There was **one** WOW64-aware line in the entire tree
 >   before this.
 > - **`engine/Phases-5.ps1` — NEW, phases 134-145**: cross-view rootkit detection, anti-forensics,
@@ -440,10 +588,10 @@ opens it as its own project.
 > - **`data/detection_signatures.json` — 62 → 171 keys**, +283 family IOCs, 0 orphans.
 >   20 entries were REMOVED in a rule-#1 review before commit (e.g. `houdini` would have
 >   auto-killed SideFX Houdini; `.cylance` collides with Cylance EDR artifacts).
-> - **`ZeroBreach-V23.ps1`** — signature wiring, `$PhasePlan.Extended`, dot-source of
+> - **`Scythe-V23.ps1`** — signature wiring, `$PhasePlan.Extended`, dot-source of
 >   Phases-4, and the **WS4 Authenticode memo** (`$global:AUTHSIG_CACHE`);
 >   `Get-SignatureVerdict` no longer calls `Get-AuthenticodeSignature` raw.
-> - **`ZeroBreach-Server.ps1` + `_python/server.py`** — phase totals → 133 (the Python
+> - **`Scythe-Server.ps1` + `_python/server.py`** — phase totals → 133 (the Python
 >   mirror was stale at 107). **`tools/Build-Release.ps1`** — stages Phases-4 (it keeps a
 >   FIXED file list; a missing module ships a release that dies on startup).
 > - **`data/mitre_mapping.json`** — +26 techniques, +18 phase entries, 0 dangling refs.
@@ -470,7 +618,7 @@ opens it as its own project.
 >    is `FixAction Info`, so nothing can be auto-acted-on while you tune;
 > 5. wall-clock. The band adds file walks and signature checks; the WS4 memo should offset
 >    some of that but its benefit is **unmeasured on real hardware**. Run with
->    `ZB_CACHE_DEBUG=1` to see the three `[CACHE]` lines at the end.
+>    `SCYTHE_CACHE_DEBUG=1` to see the three `[CACHE]` lines at the end.
 >
 > ### Honest verification status
 > Everything ran on **Linux under pwsh 7.4.6** (binary in a scratchpad, not the repo).
@@ -493,7 +641,7 @@ opens it as its own project.
 > available, so it deliberately covers only what does not need Windows.
 >
 > **What changed (working tree — NOT yet committed):**
-> - `ZeroBreach-Server.ps1` + `_python/server.py` — §5.1: the engine's bracket tag is now
+> - `Scythe-Server.ps1` + `_python/server.py` — §5.1: the engine's bracket tag is now
 >   authoritative for log severity (`$SEV_TAG` / `SEVERITY_TAGS`), prose keywords are a fallback
 >   for untagged lines only. A clean scan no longer paints its own `[HUNT]`/`[OK ]` banners red.
 > - `engine/Phases-2.ps1` — §5.3: miner-task heuristic no longer matches bare `coin` (Coinbase,
@@ -625,7 +773,7 @@ opens it as its own project.
 >    If something is blocked, the browser console names the directive — the CSP is one string in
 >    `$script:SECURITY_HEADERS`.
 > 3. Run a QUICK scan; confirm phases advance and `scan_complete` still fires normally.
-> 4. Force a failure (rename `ZeroBreach-V23.ps1` briefly) and confirm you get the red
+> 4. Force a failure (rename `Scythe-V23.ps1` briefly) and confirm you get the red
 >    **"SCAN DID NOT COMPLETE — THIS IS NOT A CLEAN RESULT"** panel, not a green all-clear.
 > 5. Use the tripwires in CLAUDE.md to exercise remediation end-to-end, and check the new
 >    `reports/KrakenSnapshot_<stamp>/Restore.cmd` is generated and imports cleanly.
@@ -654,7 +802,7 @@ opens it as its own project.
 > TimeScoped cutoff constant). Hardened 3 latent cache hazards anyway: (1) deadline-truncated
 > walks are NOT cached anymore (load-dependent partial sets no longer poison later identical
 > calls; MaxFiles-capped walks still cache — deterministic); (2) cache writes gated on the
-> `ZB_NOCACHE` kill-switch (A/B runs truly cache-free; switch is PRESENCE-based — any value,
+> `SCYTHE_NOCACHE` kill-switch (A/B runs truly cache-free; switch is PRESENCE-based — any value,
 > even "0", disables); (3) cache key keeps caller root ORDER (truncation makes order decide
 > which files make the cut — guards future call sites, zero hits lost today). **Also closed the
 > PuTTY-suite gap:** pscp/psftp/pageant added to `tunneling_tools` + `tunneling_tools_dualuse`
@@ -671,7 +819,7 @@ opens it as its own project.
 >
 > **WS4 (partial) — `Get-ScanFiles` per-scan enumeration memo (DONE, validated live):** the 18
 > call sites re-walked the filesystem with zero caching. Added a full-param-tuple memo
-> (`$global:SCAN_FILE_CACHE`, `ZB_NOCACHE` env kill-switch, `ZB_CACHE_DEBUG` stats line). A/B on
+> (`$global:SCAN_FILE_CACHE`, `SCYTHE_NOCACHE` env kill-switch, `SCYTHE_CACHE_DEBUG` stats line). A/B on
 > live 5.1 DEEP `-Hours 1`: **18/41 walks served from cache, DEEP ~21% faster (503s→397s),
 > CRITICAL 5=5 / HIGH 8=8 identical** cache-on vs -off (auto-destructive set unchanged; the small
 > POSSIBLE/INFO delta is time-window drift, not a cache bug). **True phase parallelism ruled out**
@@ -838,7 +986,7 @@ opens it as its own project.
 
 > **THIS SESSION shipped a major architecture change** — read the 2026-07-01 `CHANGELOG.md` entry and
 > CLAUDE.md's new "Engine is split" rules before touching the engine. The monolith
-> `ZeroBreach-V23.ps1` is now a thin loader dot-sourcing `engine/Phases-1/2/3.ps1` + `Summary.ps1` +
+> `Scythe-V23.ps1` is now a thin loader dot-sourcing `engine/Phases-1/2/3.ps1` + `Summary.ps1` +
 > `FixMode.ps1`. We took the work-rig branch's split architecture (it was the better long-term
 > approach — multiple detection agents can now edit separate modules) but rebuilt it on `main`'s
 > live-validated engine and its FP tuning, then merged the WS1/WS2 detection data and ported 6
@@ -873,7 +1021,7 @@ opens it as its own project.
 > Re-checked all prep before handing off for the browser run:
 > - **All 5 `_DELETEME` tripwires still present** (TEMP `.bat`, Downloads `.cmd`, HKCU Run value,
 >   Outlook-cache `.bat`, disabled scheduled task) — no need to re-lay.
-> - **`ZeroBreach-Server.ps1` parse-clean on PS 5.1.26100 AND 7.6.3**, UTF-8 BOM intact.
+> - **`Scythe-Server.ps1` parse-clean on PS 5.1.26100 AND 7.6.3**, UTF-8 BOM intact.
 > - **`app.js` `node --check` clean.**
 > - Git: **1 local commit ahead of origin — `f198420` (docs-only:** CLAUDE.md/CHANGELOG
 >   consolidation, no code). User said **push later** — safe to push anytime, no code impact.
@@ -889,7 +1037,7 @@ display cadence**: the visible phase counter/progress bar updates only on `scan_
 emits <12 lines, so several phases pass between emits and the counter jumps (e.g. 94→97) — the fast
 phases *look* skipped. Many phases genuinely ran in 0–0.3s on this box.
 
-Two server-only changes committed (`c0477ae`, engine `ZeroBreach-V23.ps1` untouched; parse-clean PS
+Two server-only changes committed (`c0477ae`, engine `Scythe-V23.ps1` untouched; parse-clean PS
 5.1 + 7, all 3 here-strings, BOM intact):
 1. **Phase-skip display fix** — also emit `scan_state` immediately whenever the phase number changes
    (in the scan-runspace parse loop, next to the `$PREX.Match` at `~:669`), in addition to the `%12`
@@ -908,7 +1056,7 @@ TEMP execs + tripwires, P20/P29/P74.5 `_DELETEME` tripwires, P41/42/46 hardening
 shadows`/`/remove:g` FixParams — round 5 holds at full scope. **NOT pushed** (commit is local on main;
 push when convenient).
 
-Latest engine work: **FP-tune round 5** (2026-06-28). Engine `ZeroBreach-V23.ps1` touched ONLY for
+Latest engine work: **FP-tune round 5** (2026-06-28). Engine `Scythe-V23.ps1` touched ONLY for
 FP severity/FixAction tuning — no scan-logic/coverage regression. See CLAUDE.md → "Round 5".
 **Round 5 COMMITTED + PUSHED** as `b59a3e4` (2026-06-28) — parse-clean PS 5.1 (5.1.26100) + 7.6.3,
 BOM intact. **Live `-Hours 0` re-grade DONE** (`KrakenBaseline_20260628_143641`, auto-destructive 52,
@@ -937,7 +1085,7 @@ run, so a fresh `-Hours 0` re-grade would show ~53.
 
 ### Residual all-time auto-destructive (~53) — breakdown for the next session
 - **By-design (leave):** ~34 **Phase-10 TEMP executables** (the user's own dev/analysis scripts +
-  Claude scratchpad + `zb-vfx-profile` browser-temp + the `_DELETEME` tripwires — round-4 ruled
+  Claude scratchpad + `scythe-vfx-profile` browser-temp + the `_DELETEME` tripwires — round-4 ruled
   "TEMP-exe = HIGH is intentional"); P20/P29/P74.5 `_DELETEME` tripwires; P41/P42/P46 security-posture
   hardening; AnyDesk/Ollama startup `.lnk` (P31, dual-use — worth surfacing); Logitech-via-rundll32
   + `OneDC_Updater` non-MS task (correct to surface).
@@ -965,7 +1113,7 @@ run, so a fresh `-Hours 0` re-grade would show ~53.
 
 **Prep already done (2026-06-28, this session):** all 5 benign `_DELETEME` tripwires are freshly
 laid down on the box (TEMP `.bat`, Downloads `.cmd`, HKCU Run value, Outlook-cache `.bat`, disabled
-scheduled task — verified present); `ZeroBreach-Server.ps1` parses clean PS 5.1 (5.1.26100) + 7.6.3,
+scheduled task — verified present); `Scythe-Server.ps1` parses clean PS 5.1 (5.1.26100) + 7.6.3,
 BOM intact; `app.js` `node --check` clean. So the launch is ready — nothing else to set up.
 
 **Split (decided with user — saves tokens, no loss to debugging):**
@@ -981,7 +1129,7 @@ BOM intact; `app.js` `node --check` clean. So the launch is ready — nothing el
 **User runbook (what to click + what to capture):**
 1. `Launch-GUI.bat` as admin (self-elevates; pure-PS server, no Python). Browser auto-opens.
    - If blank/grey screen: it self-heals (reloads ≤2×). If it stays blank, capture
-     `zerobreach_launch_error.log` (project root) + browser console.
+     `scythe_launch_error.log` (project root) + browser console.
 2. Config → **DEEP**, **All time** → start scan. Wait for `scan_complete`.
 3. **FINDINGS view** — confirm: MITRE badges render (clickable `.item-mitre`); the `🛡 PROTECTED`
    items show a green/shield badge and their checkbox is **disabled** (can't tick); vendor items show
@@ -1006,7 +1154,7 @@ test tripwires" (cleanup block there too).
 ## (historical) Round 4 and earlier
 
 Everything below was committed to **`main`** and **PUSHED** to origin. Round 4 (`65782ce`):
-Engine `ZeroBreach-V23.ps1` was touched ONLY for FP severity/allowlist tuning + one PS-5.1
+Engine `Scythe-V23.ps1` was touched ONLY for FP severity/allowlist tuning + one PS-5.1
 runtime-bug fix — no scan-logic/coverage regression.
 
 ## Round 4 (2026-06-26) — VALIDATED ON FRESH LIVE RUNS (the big one)
@@ -1027,8 +1175,8 @@ Highlights (full table in CLAUDE.md → "Round 4"):
 ### Residual 75 auto-destructive — triaged (NOT floods; your call on further tuning)
 After round 4 the remaining destructive set is a low-count tail. Reviewed the live `_025617` report:
 - **By-design / tripwires (leave):** P10 TEMP executables (×38 — incl. your own dev scripts
-  `zbparse.ps1`/`transpile-check.js`/etc.; TEMP-exe=HIGH is intentional), the
-  `ZeroBreach_TEST_DELETEME` Run-key/task/Outlook tripwires (P20/P29/P74.5), security-posture items
+  `scytheparse.ps1`/`transpile-check.js`/etc.; TEMP-exe=HIGH is intentional), the
+  `Scythe_TEST_DELETEME` Run-key/task/Outlook tripwires (P20/P29/P74.5), security-posture items
   (P41 RunAsPPL, P46 LmCompat, P42 Guest), AnyDesk/Ollama startup `.lnk` (P31 — dual-use, worth surfacing).
 - **Minor 1-off FPs — judgment calls I deliberately did NOT auto-tune while you were AFK** (each trades
   detection coverage, so they want your sign-off):
@@ -1056,7 +1204,7 @@ the trusted-vendor allowlist (Datto/CentraStage/Kaseya), and most recently **Cin
 toggles + boot self-heal** (`b8a13de` — opt-in per-effect switches over the theme system; blank
 /grey-screen-on-launch auto-reload; FX audit back to PASS 13/13). See CLAUDE.md → "Cinematic FX
 toggles + boot self-heal".
-The scan engine `ZeroBreach-V23.ps1` is deliberately untouched. See CLAUDE.md → "Feature wiring
+The scan engine `Scythe-V23.ps1` is deliberately untouched. See CLAUDE.md → "Feature wiring
 completed 2026-06-23", "Remediation safety guard", and "Remediation test tripwires".
 
 ### Context: the live scan that drove the safety work
@@ -1116,15 +1264,15 @@ un-tickable and that blocked count shows if you force one). Tripwires: see CLAUD
 
 ## Validation commands
 ```
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File /tmp/zbparse.ps1 -F "<abs>\ZeroBreach-Server.ps1"   # ParseFile -> errors
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File /tmp/zbvalidate.ps1 -File "<abs>\ZeroBreach-Server.ps1" # extract @'...'@ here-strings, ParseInput each
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File /tmp/scytheparse.ps1 -F "<abs>\Scythe-Server.ps1"   # ParseFile -> errors
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File /tmp/scythevalidate.ps1 -File "<abs>\Scythe-Server.ps1" # extract @'...'@ here-strings, ParseInput each
 node --check gui/static/js/app.js
-node tools/check-visuals.mjs   # FX audit, expect PASS 13/13 (kill stray zb-vfx-profile browser first)
+node tools/check-visuals.mjs   # FX audit, expect PASS 13/13 (kill stray scythe-vfx-profile browser first)
 ```
-(zbparse.ps1/zbvalidate.ps1 are trivial to re-create — see their one-line jobs above.)
+(scytheparse.ps1/scythevalidate.ps1 are trivial to re-create — see their one-line jobs above.)
 
 Newest engine report analyzed: `reports/KrakenBaseline_20260623_135347.json`.
-Test tripwires (still on the machine, named `ZeroBreach_TEST_DELETEME`): recreate/cleanup in CLAUDE.md.
+Test tripwires (still on the machine, named `Scythe_TEST_DELETEME`): recreate/cleanup in CLAUDE.md.
 
 </details>
 

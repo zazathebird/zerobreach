@@ -1,9 +1,9 @@
 ﻿# Load all THREE copies of the system-damage guard and assert they agree on every
-# vector: the main thread (ZeroBreach-Server.ps1), the runspace mirror (inside the
-# $script:REMEDIATE_SCRIPT here-string), and the engine copy (ZeroBreach-V23.ps1,
+# vector: the main thread (Scythe-Server.ps1), the runspace mirror (inside the
+# $script:REMEDIATE_SCRIPT here-string), and the engine copy (Scythe-V23.ps1,
 # used by the interactive Invoke-FixMode — added 2026-08-19). CLAUDE.md requires all
 # three stay in sync; this is the check for that.
-$src=(Resolve-Path 'ZeroBreach-Server.ps1').Path
+$src=(Resolve-Path 'Scythe-Server.ps1').Path
 $t=$null;$e=$null
 $ast=[System.Management.Automation.Language.Parser]::ParseFile($src,[ref]$t,[ref]$e)
 
@@ -34,7 +34,7 @@ foreach($vn in @('$RUNCMD_DESTRUCTIVE_R','$RUNCMD_MUTATING_R','$KILL_CRITICAL_NA
   . ([scriptblock]::Create($ra[0].Extent.Text))
 }
 # --- engine copy (loader), used by Invoke-FixMode ---
-$east=[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'ZeroBreach-V23.ps1').Path,[ref]$null,[ref]$null)
+$east=[System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path 'Scythe-V23.ps1').Path,[ref]$null,[ref]$null)
 foreach($f in $east.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
     @('ConvertTo-EGuardPath','Test-EDestructiveRunCmd','Test-EProtected') -contains $n.Name},$true)){
   . ([scriptblock]::Create($f.Extent.Text))
@@ -70,7 +70,7 @@ $vectors=@(
  @('DeleteReg','HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe|Debugger'),
  @('DeleteReg','HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe|SomethingElse'),
  @('DeleteRegKey','HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\sethc.exe'),
- @('KillProcess','4321|evil|63080000'), @('KillProcess','4321|lsass|63080000'), @('KillProcess','4321|zerobreach|63080000')
+ @('KillProcess','4321|evil|63080000'), @('KillProcess','4321|lsass|63080000'), @('KillProcess','4321|scythe|63080000')
 )
 $pass=0;$fail=0
 foreach($v in $vectors){

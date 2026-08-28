@@ -1,5 +1,5 @@
 {
-  "schema": "zerobreach-coverage-matrix/1",
+  "schema": "scythe-coverage-matrix/1",
   "generated_from": "fixture-demo",
   "scan": {
     "phase_header_command": "Write-PhaseHeader",

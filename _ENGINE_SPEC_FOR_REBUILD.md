@@ -1,15 +1,15 @@
-# ZeroBreach Scan Engine — Build Spec
+# Scythe Scan Engine — Build Spec
 
 > **Status: this is the contract for the NATIVE engine, and it has been implemented.** The engine
-> described below exists as the C# / .NET 8 `zbscan` in this repository — all 10 phases, the §6
+> described below exists as the C# / .NET 8 `scythescan` in this repository — all 10 phases, the §6
 > safety model, remediation, reporting, and operator tooling. §8 permitted a compiled language
 > provided the destructive remediation logic stays in a separate auditable module; it does
-> (`ZeroBreach.Remediation`). This document is kept **unchanged as the normative requirements
+> (`Scythe.Remediation`). This document is kept **unchanged as the normative requirements
 > source** — read it for *why* a rule exists. For the architecture as built and the catalog of
 > what each check inspects, see `INSTRUCTIONS_AI.md`.
 >
 > **Scope note (2026-08-22):** the repo ships **two maintained engines** — this native one, and
-> the PowerShell fallback (`ZeroBreach-V23.ps1` + `engine/*.ps1`, 162 phases). This spec governs
+> the PowerShell fallback (`Scythe-V23.ps1` + `engine/*.ps1`, 162 phases). This spec governs
 > the native engine only; its mode table below (QUICK/FULL/DEEP/STEALTH) does not describe the PS
 > engine, which additionally has `-Mode HUNT` (phases 134-162). **`BLUEPRINT.md` §2 is the
 > top-level map of both** — start there, not here. The V23 engine referenced as an ancestor in
@@ -36,7 +36,7 @@ clearly-defensive interpretation described in §6 — that section is the actual
 not an afterthought.
 
 This is a spec for a **standalone Windows malware-detection / incident-response scan engine**,
-extracted from an existing working project (ZeroBreach V23 "Kraken Console"). It describes the
+extracted from an existing working project (Scythe V23 "Kraken Console"). It describes the
 engine only — no GUI, no HTTP server, no native shell. The goal is a self-contained script (or
 small set of scripts) that a technician can run on a Windows machine to sweep it for signs of
 compromise and report findings, with a clear, conservative safety model around any remediation.

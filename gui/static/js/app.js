@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ZEROBREACH V23 — KRAKEN CONSOLE FRONTEND JS
+   SCYTHE V23 — KRAKEN CONSOLE FRONTEND JS
    Transport: native EventSource (SSE) + fetch — no Socket.IO dependency
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -15,18 +15,18 @@
    boot watchdog in index.html reloads on a slow start), then stripped from the
    visible URL so it can't leak through a screenshot or a copy-pasted link.
    sessionStorage is per-tab and dies with it, which matches the token's lifetime. */
-const ZB_TOKEN = (function () {
+const SCYTHE_TOKEN = (function () {
   try {
     const fromUrl = new URLSearchParams(window.location.search).get('t');
     if (fromUrl) {
-      sessionStorage.setItem('zb_token', fromUrl);
+      sessionStorage.setItem('scythe_token', fromUrl);
       try {
         const clean = window.location.pathname + window.location.hash;
         window.history.replaceState(null, '', clean);
       } catch (e) { /* replaceState unavailable — harmless, token just stays visible */ }
       return fromUrl;
     }
-    return sessionStorage.getItem('zb_token') || '';
+    return sessionStorage.getItem('scythe_token') || '';
   } catch (e) {
     return '';
   }
@@ -34,18 +34,18 @@ const ZB_TOKEN = (function () {
 
 /* Append the launch token to an API path. Every /api/* URL in this file goes
    through here — if you add a new endpoint call, wrap it too or it will 401. */
-function zbApi(url) {
-  if (!ZB_TOKEN) return url;
-  return url + (url.indexOf('?') === -1 ? '?' : '&') + 't=' + encodeURIComponent(ZB_TOKEN);
+function scytheApi(url) {
+  if (!SCYTHE_TOKEN) return url;
+  return url + (url.indexOf('?') === -1 ? '?' : '&') + 't=' + encodeURIComponent(SCYTHE_TOKEN);
 }
 
 /* A tokenless load is a dead console — every API call will 401. Say so loudly and
    in plain language instead of leaving the operator staring at an empty grey UI. */
-function zbTokenGuard() {
-  if (ZB_TOKEN) return true;
-  if (document.getElementById('zb-token-error')) return false;
+function scytheTokenGuard() {
+  if (SCYTHE_TOKEN) return true;
+  if (document.getElementById('scythe-token-error')) return false;
   const box = document.createElement('div');
-  box.id = 'zb-token-error';
+  box.id = 'scythe-token-error';
   box.setAttribute('role', 'alert');
   box.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;' +
     'justify-content:center;background:rgba(4,6,12,.96);backdrop-filter:blur(4px);' +
@@ -56,7 +56,7 @@ function zbTokenGuard() {
       '<div style="color:#cfd6e4;font-size:13px;line-height:1.7;">' +
         'This console was opened without its per-launch security token, so the ' +
         'scan API will refuse every request.<br><br>' +
-        'Go back to the <b style="color:#39ff9a;">ZeroBreach server window</b> and open the ' +
+        'Go back to the <b style="color:#39ff9a;">Scythe server window</b> and open the ' +
         'full URL it printed &mdash; the one ending in <code style="color:#39ff9a;">?t=&hellip;</code>' +
         '<br><br><span style="color:#6b7280;">A new token is minted every launch, so an old ' +
         'bookmark or a copied link will not work.</span>' +
@@ -147,21 +147,21 @@ function finishBoot() {
     if (window.gsap) gsap.from('#app', { opacity: 0, duration: 0.4 });
     try {
       initApp();
-      window.__ZB_BOOTED = true;                       // tell the inline watchdog we made it
+      window.__SCYTHE_BOOTED = true;                       // tell the inline watchdog we made it
       // Tokenless load = every API call 401s. Warn AFTER initApp so the UI is up
-      // behind the notice, and after __ZB_BOOTED so the watchdog stops reloading
+      // behind the notice, and after __SCYTHE_BOOTED so the watchdog stops reloading
       // (a missing token is not something a reload can fix).
-      zbTokenGuard();
-      try { sessionStorage.removeItem('zb_boot_retry'); } catch (e) {}
+      scytheTokenGuard();
+      try { sessionStorage.removeItem('scythe_boot_retry'); } catch (e) {}
     } catch (err) {
       // initApp blew up (a sibling script lost the launch race, etc.). Rather than
       // leave a blank/grey console, self-heal with one immediate reload — capped via
       // the same sessionStorage key the inline watchdog uses so we never loop.
-      console.error('[ZeroBreach] init failed:', err);
+      console.error('[Scythe] init failed:', err);
       let n = 0;
-      try { n = parseInt(sessionStorage.getItem('zb_boot_retry') || '0', 10); } catch (e) {}
+      try { n = parseInt(sessionStorage.getItem('scythe_boot_retry') || '0', 10); } catch (e) {}
       if (n < 2) {
-        try { sessionStorage.setItem('zb_boot_retry', String(n + 1)); } catch (e) {}
+        try { sessionStorage.setItem('scythe_boot_retry', String(n + 1)); } catch (e) {}
         location.reload();
       }
     }
@@ -170,8 +170,8 @@ function finishBoot() {
 
 // ── App Init ──────────────────────────────────────────────────────────────────
 function initApp() {
-  ZBFX.init();
-  ZBThemes.restore();
+  ScytheFX.init();
+  ScytheThemes.restore();
   // Initialize the per-view FX layer for the default (launchpad) view so the very
   // first paint already has its signature decoration. switchView() only runs on
   // navigation, and the launchpad is shown statically via class="view active".
@@ -179,7 +179,7 @@ function initApp() {
   ensureCineFxLayers();
   applyCineFx();
   document.body.dataset.view = 'launchpad';
-  document.body.classList.toggle('fx-off', ZBFX.getIntensity() === 'off');
+  document.body.classList.toggle('fx-off', ScytheFX.getIntensity() === 'off');
   initSSE();
   initClock();
   initNav();
@@ -195,18 +195,18 @@ function initApp() {
   initCmdPalette();
   initAudioUnlock();
   restoreGodBadge();
-  ZBSound.play('boot');
+  ScytheSound.play('boot');
 }
 
 // First user gesture unlocks the AudioContext (browser autoplay policy)
 function initAudioUnlock() {
-  const unlock = () => { ZBSound.unlock(); document.removeEventListener('pointerdown', unlock); document.removeEventListener('keydown', unlock); };
+  const unlock = () => { ScytheSound.unlock(); document.removeEventListener('pointerdown', unlock); document.removeEventListener('keydown', unlock); };
   document.addEventListener('pointerdown', unlock);
   document.addEventListener('keydown', unlock);
 }
 
 function restoreGodBadge() {
-  if (ZBThemes.isGod() && !$('god-badge')) {
+  if (ScytheThemes.isGod() && !$('god-badge')) {
     const b = document.createElement('div');
     b.id = 'god-badge';
     b.textContent = '🐙 ABYSSAL';
@@ -216,7 +216,7 @@ function restoreGodBadge() {
 
 // ── Server-Sent Events ────────────────────────────────────────────────────────
 function initSSE() {
-  STATE.sse = new EventSource(zbApi('/api/events'));
+  STATE.sse = new EventSource(scytheApi('/api/events'));
 
   STATE.sse.onopen = () => setConnected(true);
 
@@ -339,7 +339,7 @@ function playThrottled(name, ms) {
   const now = Date.now();
   if (now - (SND_LAST[name] || 0) < ms) return;
   SND_LAST[name] = now;
-  ZBSound.play(name);
+  ScytheSound.play(name);
 }
 function playFindingSound(sev) {
   if (sev === 'CRITICAL') playThrottled('alert', 2000);
@@ -413,15 +413,15 @@ function switchView(viewId) {
   // Per-view signature overlay: a single pointer-events-none layer whose look is
   // driven entirely by CSS keyed on body[data-view] (see fx.css "PER-VIEW TREATMENTS").
   ensureViewFxLayer();
-  document.body.classList.toggle('fx-off', ZBFX.getIntensity() === 'off');
+  document.body.classList.toggle('fx-off', ScytheFX.getIntensity() === 'off');
   document.body.dataset.view = viewId;
-  ZBSound.play('tab');
+  ScytheSound.play('tab');
 
   // scramble-decrypt the view title on entry
   const title = document.querySelector(`#view-${viewId} .view-title`);
   if (title) {
     if (!title.dataset.text) title.dataset.text = title.textContent;
-    ZBFX.decrypt(title, title.dataset.text, 500);
+    ScytheFX.decrypt(title, title.dataset.text, 500);
   }
 
   if (viewId === 'report')      buildReport();
@@ -470,8 +470,8 @@ function initLaunchPad() {
   $('btn-initiate').addEventListener('click', startScan);
 
   $$('.mode-tile, .time-tile').forEach(t => {
-    t.addEventListener('click', () => ZBSound.play('click'));
-    t.addEventListener('mouseenter', () => ZBSound.play('hover'));
+    t.addEventListener('click', () => ScytheSound.play('click'));
+    t.addEventListener('mouseenter', () => ScytheSound.play('hover'));
   });
 }
 
@@ -496,7 +496,7 @@ function initProfiles() {
 }
 
 function loadProfiles(selectName) {
-  fetch(zbApi('/api/profiles'))
+  fetch(scytheApi('/api/profiles'))
     .then(r => r.json())
     .then(j => { SCAN_PROFILES = j.profiles || []; renderProfileOptions(selectName); })
     .catch(() => {});
@@ -517,7 +517,7 @@ function renderProfileOptions(selectName) {
 }
 
 function applyProfile(p) {
-  ZBSound.play('confirm');
+  ScytheSound.play('confirm');
   STATE.scanMode = p.mode;
   $$('.mode-tile').forEach(t => t.classList.toggle('active', t.dataset.mode === p.mode));
 
@@ -538,7 +538,7 @@ function applyProfile(p) {
 
 function saveProfile() {
   const name = $('profile-name').value.trim();
-  if (!name) { ZBSound.play('error'); $('profile-name').focus(); return; }
+  if (!name) { ScytheSound.play('error'); $('profile-name').focus(); return; }
   const profile = {
     name,
     mode:     STATE.scanMode,
@@ -546,7 +546,7 @@ function saveProfile() {
     ioc_file: $('ioc-path').value.trim(),
   };
   PROFILE_TOGGLES.forEach(([id, k]) => { profile[k] = $(id).checked; });
-  fetch(zbApi('/api/profiles'), {
+  fetch(scytheApi('/api/profiles'), {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ action: 'save', profile }),
@@ -554,20 +554,20 @@ function saveProfile() {
     .then(r => r.json().then(j => ({ ok: r.ok, j })))
     .then(({ ok, j }) => {
       if (!ok) throw new Error(j.error || 'save failed');
-      ZBSound.play('confirm');
+      ScytheSound.play('confirm');
       showToast(`Profile "${name}" saved`);
       SCAN_PROFILES = j.profiles || [];
       renderProfileOptions(name);
     })
-    .catch(e => { showToast(`Profile save failed: ${e.message}`); ZBSound.play('error'); });
+    .catch(e => { showToast(`Profile save failed: ${e.message}`); ScytheSound.play('error'); });
 }
 
 function deleteProfile() {
   const name = $('profile-select').value;
   const p = SCAN_PROFILES.find(x => x.name === name);
-  if (!p) { ZBSound.play('error'); return; }
-  if (p.builtin) { showToast('Built-in profiles cannot be deleted'); ZBSound.play('error'); return; }
-  fetch(zbApi('/api/profiles'), {
+  if (!p) { ScytheSound.play('error'); return; }
+  if (p.builtin) { showToast('Built-in profiles cannot be deleted'); ScytheSound.play('error'); return; }
+  fetch(scytheApi('/api/profiles'), {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ action: 'delete', name }),
@@ -575,13 +575,13 @@ function deleteProfile() {
     .then(r => r.json().then(j => ({ ok: r.ok, j })))
     .then(({ ok, j }) => {
       if (!ok) throw new Error(j.error || 'delete failed');
-      ZBSound.play('close');
+      ScytheSound.play('close');
       showToast(`Profile "${name}" deleted`);
       SCAN_PROFILES = j.profiles || [];
       renderProfileOptions();
       $('profile-name').value = '';
     })
-    .catch(e => { showToast(`Profile delete failed: ${e.message}`); ZBSound.play('error'); });
+    .catch(e => { showToast(`Profile delete failed: ${e.message}`); ScytheSound.play('error'); });
 }
 
 // ── Settings: theme grid, FX intensity, audio ────────────────────────────────
@@ -590,26 +590,26 @@ function initSettingsUI() {
   buildFxTiers();
   buildCineFxToggles();
   initAudioControls();
-  document.addEventListener('zb-god-unlocked', buildThemeGrid);
+  document.addEventListener('scythe-god-unlocked', buildThemeGrid);
 }
 
 function buildThemeGrid() {
   const grid = $('theme-grid');
   if (!grid) return;
   grid.innerHTML = '';
-  const cur = ZBThemes.current().id;
-  ZBThemes.visible().forEach(t => {
+  const cur = ScytheThemes.current().id;
+  ScytheThemes.visible().forEach(t => {
     const card = document.createElement('div');
     card.className = 'theme-card' + (t.id === cur ? ' active' : '') + (t.secret ? ' secret' : '');
     card.style.setProperty('--c', t.vars['--accent']);
     card.innerHTML = `<div class="theme-card-name">${t.name}</div><div class="theme-card-tag">${t.tagline}</div>`;
     card.addEventListener('click', () => {
-      ZBThemes.apply(t.id);
-      ZBSound.play('confirm');
+      ScytheThemes.apply(t.id);
+      ScytheSound.play('confirm');
       $$('#theme-grid .theme-card').forEach(c => c.classList.remove('active'));
       card.classList.add('active');
     });
-    card.addEventListener('mouseenter', () => ZBSound.play('hover'));
+    card.addEventListener('mouseenter', () => ScytheSound.play('hover'));
     grid.appendChild(card);
   });
 }
@@ -618,15 +618,15 @@ function buildFxTiers() {
   const row = $('fx-tier-row');
   if (!row) return;
   row.innerHTML = '';
-  Object.entries(ZBFX.INTENSITY).forEach(([id, tier]) => {
+  Object.entries(ScytheFX.INTENSITY).forEach(([id, tier]) => {
     const el = document.createElement('div');
-    el.className = 'fx-tier' + (ZBFX.getIntensity() === id ? ' active' : '');
+    el.className = 'fx-tier' + (ScytheFX.getIntensity() === id ? ' active' : '');
     el.textContent = tier.label;
     el.title = tier.desc;
     el.addEventListener('click', () => {
-      ZBFX.setIntensity(id);
+      ScytheFX.setIntensity(id);
       document.body.classList.toggle('fx-off', id === 'off');
-      ZBSound.play('click');
+      ScytheSound.play('click');
       $$('#fx-tier-row .fx-tier').forEach(t => t.classList.remove('active'));
       el.classList.add('active');
     });
@@ -635,8 +635,8 @@ function buildFxTiers() {
 }
 
 // ── Cinematic FX toggles (independent, opt-in, theme-aware) ───────────────────
-// Each effect layers OVER the theme system via a body.zbfx-<id> class; persisted
-// as localStorage zb_cfx_<id>. Overlay-type effects (layer: 'bg'|'fg') render
+// Each effect layers OVER the theme system via a body.scythefx-<id> class; persisted
+// as localStorage scythe_cfx_<id>. Overlay-type effects (layer: 'bg'|'fg') render
 // into #cine-fx-bg / #cine-fx-fg (built once by ensureCineFxLayers). Transform /
 // filter effects (no layer) are driven straight off the body class in CSS. See
 // fx.css "CINEMATIC FX TOGGLES". All default OFF — a clean console out of the box.
@@ -654,7 +654,7 @@ const CINE_FX = [
   { id: 'glitch',      label: 'Glitch Bursts',        desc: 'Brief data-corruption slices every few seconds (GPU)' },
 ];
 
-function cfxKey(id) { return 'zb_cfx_' + id; }
+function cfxKey(id) { return 'scythe_cfx_' + id; }
 function cfxEnabled(id) { return localStorage.getItem(cfxKey(id)) === '1'; }
 
 // Build the two persistent overlay containers (behind + above #app) once.
@@ -680,7 +680,7 @@ function ensureCineFxLayers() {
 
 // Apply all saved toggles to <body> (called on boot).
 function applyCineFx() {
-  CINE_FX.forEach(fx => document.body.classList.toggle('zbfx-' + fx.id, cfxEnabled(fx.id)));
+  CINE_FX.forEach(fx => document.body.classList.toggle('scythefx-' + fx.id, cfxEnabled(fx.id)));
 }
 
 // Render the Settings → CINEMATIC FX checkbox grid.
@@ -696,8 +696,8 @@ function buildCineFxToggles() {
     const cb = label.querySelector('input');
     cb.addEventListener('change', () => {
       localStorage.setItem(cfxKey(fx.id), cb.checked ? '1' : '0');
-      document.body.classList.toggle('zbfx-' + fx.id, cb.checked);
-      ZBSound.play(cb.checked ? 'confirm' : 'click');
+      document.body.classList.toggle('scythefx-' + fx.id, cb.checked);
+      ScytheSound.play(cb.checked ? 'confirm' : 'click');
     });
     wrap.appendChild(label);
   });
@@ -708,11 +708,11 @@ function initAudioControls() {
   const vol = $('snd-vol');
   const lbl = $('snd-vol-label');
   if (!cb) return;
-  cb.checked = !ZBSound.isMuted();
-  vol.value  = Math.round(ZBSound.getVolume() * 100);
+  cb.checked = !ScytheSound.isMuted();
+  vol.value  = Math.round(ScytheSound.getVolume() * 100);
   lbl.textContent = vol.value + '%';
-  cb.addEventListener('change', () => { ZBSound.setMuted(!cb.checked); if (cb.checked) ZBSound.play('on'); });
-  vol.addEventListener('input', () => { ZBSound.setVolume(vol.value / 100); lbl.textContent = vol.value + '%'; ZBSound.play('tick'); });
+  cb.addEventListener('change', () => { ScytheSound.setMuted(!cb.checked); if (cb.checked) ScytheSound.play('on'); });
+  vol.addEventListener('input', () => { ScytheSound.setVolume(vol.value / 100); lbl.textContent = vol.value + '%'; ScytheSound.play('tick'); });
 }
 
 // ── Command Palette (Ctrl+K) ─────────────────────────────────────────────────
@@ -734,16 +734,16 @@ function cmdActions() {
     { icon: '🚀', label: 'INITIATE SCAN',      hint: 'action', fn: () => startScan() },
     { icon: '■',  label: 'ABORT SCAN',         hint: 'action', fn: () => $('btn-abort').click() },
     { icon: '📋', label: 'EXPORT FINDINGS JSON', hint: 'action', fn: () => $('btn-export-findings').click() },
-    { icon: '🔇', label: ZBSound.isMuted() ? 'UNMUTE SOUND' : 'MUTE SOUND', hint: 'audio', fn: () => { ZBSound.setMuted(!ZBSound.isMuted()); initAudioControls(); } },
+    { icon: '🔇', label: ScytheSound.isMuted() ? 'UNMUTE SOUND' : 'MUTE SOUND', hint: 'audio', fn: () => { ScytheSound.setMuted(!ScytheSound.isMuted()); initAudioControls(); } },
   ];
-  ZBThemes.visible().forEach(t => acts.push({ icon: '🎨', label: 'THEME: ' + t.name, hint: 'theme', fn: () => { ZBThemes.apply(t.id); buildThemeGrid(); } }));
-  if (ZBThemes.isGod()) acts.push({ icon: '🐙', label: 'RELEASE THE KRAKEN (REPLAY)', hint: 'ritual', fn: () => ZBKraken.release() });
+  ScytheThemes.visible().forEach(t => acts.push({ icon: '🎨', label: 'THEME: ' + t.name, hint: 'theme', fn: () => { ScytheThemes.apply(t.id); buildThemeGrid(); } }));
+  if (ScytheThemes.isGod()) acts.push({ icon: '🐙', label: 'RELEASE THE KRAKEN (REPLAY)', hint: 'ritual', fn: () => ScytheKraken.release() });
   return acts;
 }
 
 function toggleCmdPalette() {
   if ($('cmd-palette')) { closeCmdPalette(); return; }
-  ZBSound.play('open');
+  ScytheSound.play('open');
   const wrap = document.createElement('div');
   wrap.id = 'cmd-palette';
   wrap.innerHTML = '<div id="cmd-box"><input id="cmd-input" placeholder="TYPE A COMMAND…" autocomplete="off"><div id="cmd-list"></div></div>';
@@ -766,7 +766,7 @@ function toggleCmdPalette() {
       list.appendChild(el);
     });
   }
-  function run(a) { closeCmdPalette(); ZBSound.play('confirm'); a.fn(); }
+  function run(a) { closeCmdPalette(); ScytheSound.play('confirm'); a.fn(); }
 
   input.addEventListener('input', () => { sel = 0; render(); });
   input.addEventListener('keydown', (e) => {
@@ -780,12 +780,12 @@ function toggleCmdPalette() {
 
 function closeCmdPalette() {
   const p = $('cmd-palette');
-  if (p) { p.remove(); ZBSound.play('close'); }
+  if (p) { p.remove(); ScytheSound.play('close'); }
 }
 
 function startScan() {
   if (STATE.scanning) return;
-  ZBSound.play('deploy');
+  ScytheSound.play('deploy');
 
   const flash = $('scan-flash');
   flash.style.opacity = '0.15';
@@ -826,7 +826,7 @@ function startScan() {
 
   switchView('scanmonitor');
 
-  fetch(zbApi('/api/scan/start'), {
+  fetch(scytheApi('/api/scan/start'), {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify(config),
@@ -849,8 +849,8 @@ function startScan() {
 // ── Scan Monitor ──────────────────────────────────────────────────────────────
 function initScanMonitor() {
   $('btn-abort').addEventListener('click', () => {
-    ZBSound.play('error');
-    fetch(zbApi('/api/scan/abort'), { method: 'POST' });
+    ScytheSound.play('error');
+    fetch(scytheApi('/api/scan/abort'), { method: 'POST' });
     STATE.scanning = false;
     $('btn-abort').disabled = true;
     $('sb-status').textContent = '● ABORTED';
@@ -989,7 +989,7 @@ function updateBadge() {
    status, no remediation unlock, and the reason + stderr shown verbatim so the
    operator can act on it (audit H2). */
 function onScanFailed(data) {
-  ZBSound.play('error');
+  ScytheSound.play('error');
   $('btn-abort').disabled    = true;
   $('sb-status').textContent = '● SCAN FAILED';
   $('sb-status').style.color = 'var(--threat-critical)';
@@ -1016,7 +1016,7 @@ function onScanFailed(data) {
     </div>
   `;
   $('modal-complete').classList.remove('hidden');
-  ZBSound.play('open');
+  ScytheSound.play('open');
 
   // Findings view stays reachable (partial results are still evidence), but the
   // remediation lock is left ON — nothing here is trustworthy enough to auto-act on.
@@ -1026,7 +1026,7 @@ function onScanFailed(data) {
 }
 
 function onScanComplete(data) {
-  ZBSound.play('complete');
+  ScytheSound.play('complete');
   $('btn-abort').disabled    = true;
   $('sb-status').textContent = '● COMPLETE';
   $('sb-status').style.color = 'var(--threat-clean)';
@@ -1043,11 +1043,11 @@ function onScanComplete(data) {
     <div style="margin-top:8px;font-size:10px;color:var(--text-dim)">Results saved: ${escapeHtml(data.results_path || 'N/A')}</div>
   `;
   $('modal-complete').classList.remove('hidden');
-  ZBSound.play('open');
+  ScytheSound.play('open');
   // animate the headline numbers
   const nums = $('modal-summary').querySelectorAll('.complete-stat-num');
-  if (nums[0]) ZBFX.countUp(nums[0], data.findings_count || 0, 900);
-  if (nums[1]) ZBFX.countUp(nums[1], total, 900);
+  if (nums[0]) ScytheFX.countUp(nums[0], data.findings_count || 0, 900);
+  if (nums[1]) ScytheFX.countUp(nums[1], total, 900);
 
   $('modal-btn-findings').onclick = () => { $('modal-complete').classList.add('hidden'); switchView('findings'); };
   $('modal-btn-report').onclick   = () => { $('modal-complete').classList.add('hidden'); switchView('report'); };
@@ -1060,7 +1060,7 @@ function onScanComplete(data) {
 
 // Replace the live SSE findings with the engine's authoritative report findings.
 function loadEngineFindings(name) {
-  fetch(zbApi('/api/report?name=' + encodeURIComponent(name)))
+  fetch(scytheApi('/api/report?name=' + encodeURIComponent(name)))
     .then(r => r.json())
     .then(list => {
       if (!Array.isArray(list)) return;
@@ -1088,8 +1088,8 @@ function updateCompleteModalCounts(total, notable) {
   const modal = $('modal-complete');
   if (!modal || modal.classList.contains('hidden')) return;
   const nums = $('modal-summary').querySelectorAll('.complete-stat-num');
-  if (nums[0]) ZBFX.countUp(nums[0], total, 700);
-  if (nums[1]) ZBFX.countUp(nums[1], notable, 700);
+  if (nums[0]) ScytheFX.countUp(nums[0], total, 700);
+  if (nums[1]) ScytheFX.countUp(nums[1], notable, 700);
 }
 
 function onRemediationComplete(data) {
@@ -1104,7 +1104,7 @@ function onRemediationComplete(data) {
   let msg = `Remediation complete — ${data.applied} applied, ${data.failed} failed, ${data.skipped} skipped`;
   if (blocked) msg += `; 🛡 ${blocked} BLOCKED (protected system resources)`;
   showToast(msg);
-  ZBSound.play('complete');
+  ScytheSound.play('complete');
 }
 
 // ── Findings Tree ─────────────────────────────────────────────────────────────
@@ -1141,7 +1141,7 @@ function initFindingsView() {
     const blob = new Blob([JSON.stringify(STATE.findings, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href     = URL.createObjectURL(blob);
-    a.download = `zerobreach_findings_${Date.now()}.json`;
+    a.download = `scythe_findings_${Date.now()}.json`;
     a.click();
   });
 }
@@ -1299,7 +1299,7 @@ function renderRemediationView() {
 
 // ── Danger confirm: destructive actions require typing the confirm word ──────
 function showDangerConfirm(word, message, onConfirm) {
-  ZBSound.play('danger');
+  ScytheSound.play('danger');
   const wrap = document.createElement('div');
   wrap.className = 'modal';
   wrap.id = 'modal-danger';
@@ -1320,11 +1320,11 @@ function showDangerConfirm(word, message, onConfirm) {
   input.addEventListener('input', () => {
     const ok = input.value.trim().toUpperCase() === word;
     go.disabled = !ok;
-    if (ok) ZBSound.play('lock');
+    if (ok) ScytheSound.play('lock');
   });
   input.addEventListener('keydown', e => { if (e.key === 'Enter' && !go.disabled) go.click(); e.stopPropagation(); });
-  go.onclick = () => { wrap.remove(); ZBSound.play('confirm'); onConfirm(); };
-  wrap.querySelector('#danger-cancel').onclick = () => { wrap.remove(); ZBSound.play('close'); };
+  go.onclick = () => { wrap.remove(); ScytheSound.play('confirm'); onConfirm(); };
+  wrap.querySelector('#danger-cancel').onclick = () => { wrap.remove(); ScytheSound.play('close'); };
   input.focus();
 }
 
@@ -1395,14 +1395,14 @@ function executeRemediation(findings) {
   // Real remediation requires the engine's rich report (carries FixAction/FixParam).
   if (!STATE.engineReport) {
     showToast('No engine report available — cannot remediate. Re-run the scan.');
-    ZBSound.play('alert');
+    ScytheSound.play('alert');
     return;
   }
   // SAFETY (belt-and-suspenders): never send protected findings — the server also refuses them.
   const ids = findings.filter(f => !f.protected).map(f => f.id);
   if (ids.length === 0) {
     showToast('Nothing to remediate — all selected items are protected system resources.');
-    ZBSound.play('alert');
+    ScytheSound.play('alert');
     return;
   }
   const btn = $('btn-execute');
@@ -1411,7 +1411,7 @@ function executeRemediation(findings) {
   STATE.remediating = true;
   $$('#action-queue .queue-item .queue-status').forEach(s => { s.textContent = '⏳'; });
 
-  fetch(zbApi('/api/remediate'), {
+  fetch(scytheApi('/api/remediate'), {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ report: STATE.engineReport, ids }),
@@ -1428,7 +1428,7 @@ function executeRemediation(findings) {
       btn.disabled = false;
       btn.textContent = '⚠ EXECUTE REMEDIATION';
       showToast('Remediation failed to start: ' + e.message);
-      ZBSound.play('alert');
+      ScytheSound.play('alert');
     });
 }
 
@@ -1446,7 +1446,7 @@ function initIocView() {
       tab.classList.add('active');
       STATE.iocTab = tab.dataset.tab;
       renderIocTable();
-      ZBSound.play('tab');
+      ScytheSound.play('tab');
     });
   });
 
@@ -1458,7 +1458,7 @@ function initIocView() {
 }
 
 function loadIoc() {
-  return fetch(zbApi('/api/ioc'))
+  return fetch(scytheApi('/api/ioc'))
     .then(r => r.json())
     .then(data => {
       STATE.ioc = Object.assign(emptyIoc(), data);
@@ -1481,7 +1481,7 @@ function renderIocTable() {
     list.forEach((val, i) => {
       const tr = document.createElement('tr');
       tr.innerHTML = `<td>${cat.slice(0, -1).toUpperCase()}</td><td class="ioc-val">${escapeHtml(String(val))}</td><td>${STATE.ioc._custom ? 'CUSTOM' : 'DEFAULT'}</td><td><button class="cyber-btn-sm ioc-del" data-i="${i}">✕</button></td>`;
-      tr.querySelector('.ioc-del').addEventListener('click', () => { STATE.ioc[cat].splice(i, 1); renderIocTable(); ZBSound.play('click'); });
+      tr.querySelector('.ioc-del').addEventListener('click', () => { STATE.ioc[cat].splice(i, 1); renderIocTable(); ScytheSound.play('click'); });
       tbody.appendChild(tr);
     });
   }
@@ -1499,7 +1499,7 @@ function addIocValue() {
   if (!STATE.ioc[cat].includes(val)) STATE.ioc[cat].push(val);
   input.value = '';
   renderIocTable();
-  ZBSound.play('confirm');
+  ScytheSound.play('confirm');
 }
 
 // Accepts either our JSON shape or the engine's prefixed/bare text format.
@@ -1542,7 +1542,7 @@ function importIocFile(e) {
     }
     renderIocTable();
     showToast(`Imported ${added} indicator(s) from ${file.name}`);
-    ZBSound.play('deploy');
+    ScytheSound.play('deploy');
   };
   reader.readAsText(file);
   e.target.value = '';
@@ -1572,7 +1572,7 @@ function saveIoc() {
   const payload = {};
   IOC_CATS.forEach(c => payload[c] = STATE.ioc[c] || []);
   $('btn-ioc-save').disabled = true;
-  fetch(zbApi('/api/ioc'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+  fetch(scytheApi('/api/ioc'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
     .then(r => r.json())
     .then(res => {
       if (res.error) throw new Error(res.error);
@@ -1586,16 +1586,16 @@ function saveIoc() {
       renderIocTable();
       if (res.rejected > 0) {
         showToast(`Saved ${res.count} IOCs — ${res.rejected} refused`);
-        console.warn('[ZeroBreach] IOC entries refused:\n  ' + (res.rejected_detail || []).join('\n  '));
+        console.warn('[Scythe] IOC entries refused:\n  ' + (res.rejected_detail || []).join('\n  '));
         renderIocRejects(res.rejected_detail || [], res.rejected);
-        ZBSound.play('alert');
+        ScytheSound.play('alert');
       } else {
         renderIocRejects([], 0);
         showToast(`Saved ${res.count} IOCs → scans will use this file`);
-        ZBSound.play('complete');
+        ScytheSound.play('complete');
       }
     })
-    .catch(e => { showToast(`IOC save failed: ${e.message}`); ZBSound.play('alert'); })
+    .catch(e => { showToast(`IOC save failed: ${e.message}`); ScytheSound.play('alert'); })
     .finally(() => { $('btn-ioc-save').disabled = false; });
 }
 
@@ -1606,7 +1606,7 @@ function buildReport() {
   const riskScore = Math.min(100, Math.round((total / Math.max(STATE.findings.length, 1)) * 60 + total * 2));
 
   drawRiskDial(riskScore);
-  ZBFX.countUp($('risk-score-label'), riskScore, 1100);
+  ScytheFX.countUp($('risk-score-label'), riskScore, 1100);
   drawRadarChart(counts);
 
   const cardsEl = $('report-cards');
@@ -1696,9 +1696,9 @@ function initMspListener() {
       STATE.mspBuffer += e.key.toLowerCase();
       if (STATE.mspBuffer.length > 10) STATE.mspBuffer = STATE.mspBuffer.slice(-10);
       $('msp-input-display').textContent = STATE.mspBuffer + '_';
-      if (STATE.mspBuffer.includes('kraken') && !ZBKraken.isRunning()) {
+      if (STATE.mspBuffer.includes('kraken') && !ScytheKraken.isRunning()) {
         STATE.mspBuffer = '';
-        ZBKraken.release();
+        ScytheKraken.release();
         return;
       }
       if (!STATE.mspMode && TRIGGERS.find(w => STATE.mspBuffer.includes(w))) {
@@ -1710,9 +1710,9 @@ function initMspListener() {
 
 function activateMspMode() {
   STATE.mspMode = true;
-  ZBThemes.apply('gannon-orange');
+  ScytheThemes.apply('gannon-orange');
   buildThemeGrid();
-  ZBSound.play('confirm');
+  ScytheSound.play('confirm');
   $('msp-badge').classList.remove('hidden');
 
   const flash = $('scan-flash');
@@ -1733,7 +1733,7 @@ function showWarnModal(message, onConfirm, onCancel) {
 
 // ── System Info & Vitals ──────────────────────────────────────────────────────
 function loadSysInfo() {
-  fetch(zbApi('/api/sysinfo')).then(r => r.json()).then(d => {
+  fetch(scytheApi('/api/sysinfo')).then(r => r.json()).then(d => {
     if (d.error) return;
     $('si-host').textContent = d.hostname || '—';
     $('si-user').textContent = d.username || '—';
@@ -1746,7 +1746,7 @@ function loadSysInfo() {
 
 function startVitalsPoller() {
   function poll() {
-    fetch(zbApi('/api/sysinfo')).then(r => r.json()).then(d => {
+    fetch(scytheApi('/api/sysinfo')).then(r => r.json()).then(d => {
       if (d.error) return;
       const cpuPct = d.cpu    || 0;
       const ramPct = d.ram_used || 0;
@@ -1761,7 +1761,7 @@ function startVitalsPoller() {
   setInterval(poll, 5000);
 }
 
-// (legacy particle background removed — superseded by the ZBFX layer in fx.js)
+// (legacy particle background removed — superseded by the ScytheFX layer in fx.js)
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // Audit M8: `'` was missing. Every sink today uses double-quoted attributes, so it
@@ -1776,14 +1776,14 @@ function escapeHtml(str) {
 
 // Transient bottom-right notification.
 function showToast(msg) {
-  let host = $('zb-toast-host');
+  let host = $('scythe-toast-host');
   if (!host) {
     host = document.createElement('div');
-    host.id = 'zb-toast-host';
+    host.id = 'scythe-toast-host';
     document.body.appendChild(host);
   }
   const t = document.createElement('div');
-  t.className = 'zb-toast';
+  t.className = 'scythe-toast';
   t.textContent = msg;
   host.appendChild(t);
   requestAnimationFrame(() => t.classList.add('show'));
@@ -1805,13 +1805,13 @@ function exportReport(format) {
     const blob = new Blob([JSON.stringify({ findings: STATE.findings, threatCounts: STATE.threatCounts }, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `zerobreach_report_${Date.now()}.json`;
+    a.download = `scythe_report_${Date.now()}.json`;
     a.click();
   } else if (format === 'html' || format === 'csv') {
     // Server renders from current scan state (includes MITRE tags) and streams a download.
-    ZBSound.play('click');
+    ScytheSound.play('click');
     const a = document.createElement('a');
-    a.href = zbApi(`/api/export/${format}`);
+    a.href = scytheApi(`/api/export/${format}`);
     a.download = '';
     document.body.appendChild(a);
     a.click();

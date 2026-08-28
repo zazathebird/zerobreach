@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════════════════════
-   ZEROBREACH — CINEMATIC VFX LAYER + TEXT EFFECTS (vanilla, no framework)
+   SCYTHE — CINEMATIC VFX LAYER + TEXT EFFECTS (vanilla, no framework)
    One full-viewport canvas runs a stack of renderers chosen by the active
    theme's vfx profile; CSS overlay divs handle scanlines/noise/CRT/vignette.
    Everything is gated by an intensity tier so old laptops stay smooth:
@@ -7,7 +7,7 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 'use strict';
 
-const ZBFX = (() => {
+const ScytheFX = (() => {
 
   // ── canvas renderer factories (ported from PirateLife fx layer) ──────────
   function makeRain(accent) {
@@ -441,7 +441,7 @@ const ZBFX = (() => {
   // ── state ─────────────────────────────────────────────────────────────────
   let canvas = null, ctx2d = null, rafId = 0, renderers = [], overlays = {};
   let theme = null;
-  let intensity = localStorage.getItem('zb_fx') || 'full';
+  let intensity = localStorage.getItem('scythe_fx') || 'full';
   if (!INTENSITY[intensity]) intensity = 'full';
 
   const OVERLAY_KEYS = ['aurora', 'grid', 'scanlines', 'crt', 'noise', 'vignette', 'alarm', 'flicker'];
@@ -527,7 +527,7 @@ const ZBFX = (() => {
   // Scramble-decrypt el's text into `text` over `duration` ms.
   function decrypt(el, text, duration = 600, onDone) {
     if (!el) return;
-    if (el._zbDecrypt) cancelAnimationFrame(el._zbDecrypt);
+    if (el._scytheDecrypt) cancelAnimationFrame(el._scytheDecrypt);
     let startTime = 0;
     const step = (ts) => {
       if (!startTime) startTime = ts;
@@ -539,34 +539,34 @@ const ZBFX = (() => {
         s += i < reveal ? text[i] : CRYPT[(Math.random() * CRYPT.length) | 0];
       }
       el.textContent = s;
-      if (p < 1) el._zbDecrypt = requestAnimationFrame(step);
-      else { el.textContent = text; el._zbDecrypt = 0; if (onDone) onDone(); }
+      if (p < 1) el._scytheDecrypt = requestAnimationFrame(step);
+      else { el.textContent = text; el._scytheDecrypt = 0; if (onDone) onDone(); }
     };
-    el._zbDecrypt = requestAnimationFrame(step);
+    el._scytheDecrypt = requestAnimationFrame(step);
   }
 
   // Animated count-up with cubic ease-out.
   function countUp(el, to, dur = 900, suffix = '') {
     if (!el) return;
-    if (el._zbCount) cancelAnimationFrame(el._zbCount);
+    if (el._scytheCount) cancelAnimationFrame(el._scytheCount);
     let start = 0;
     const step = (ts) => {
       if (!start) start = ts;
       const p = Math.min(1, (ts - start) / dur);
       const e = 1 - Math.pow(1 - p, 3);
       el.textContent = Math.round(to * e) + suffix;
-      if (p < 1) el._zbCount = requestAnimationFrame(step);
-      else el._zbCount = 0;
+      if (p < 1) el._scytheCount = requestAnimationFrame(step);
+      else el._scytheCount = 0;
     };
-    el._zbCount = requestAnimationFrame(step);
+    el._scytheCount = requestAnimationFrame(step);
   }
 
   // Brief whole-app shake (CSS class lives in fx.css).
   function shake(strength = 'med', dur = 400) {
     const app = document.getElementById('app');
     if (!app) return;
-    const cls = 'zb-shake-' + strength;
-    app.classList.remove('zb-shake-low', 'zb-shake-med', 'zb-shake-hard');
+    const cls = 'scythe-shake-' + strength;
+    app.classList.remove('scythe-shake-low', 'scythe-shake-med', 'scythe-shake-hard');
     void app.offsetWidth;
     app.classList.add(cls);
     setTimeout(() => app.classList.remove(cls), dur);
@@ -575,9 +575,9 @@ const ZBFX = (() => {
   return {
     INTENSITY, init,
     applyTheme(t) { theme = t; rebuild(); },
-    setIntensity(tier) { if (INTENSITY[tier]) { intensity = tier; localStorage.setItem('zb_fx', tier); rebuild(); } },
+    setIntensity(tier) { if (INTENSITY[tier]) { intensity = tier; localStorage.setItem('scythe_fx', tier); rebuild(); } },
     getIntensity() { return intensity; },
     decrypt, countUp, shake,
   };
 })();
-window.ZBFX = ZBFX;
+window.ScytheFX = ScytheFX;

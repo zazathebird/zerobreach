@@ -1,9 +1,9 @@
-# ZeroBreach — Adversarial Assessment (WS7 input)
+# Scythe — Adversarial Assessment (WS7 input)
 
 **Date:** 2026-08-19 · **Branch:** `security/audit-2026-08-18` · **Target:** engine at 133 phases
 **Authorization:** built at the request of the tool's author, who holds documented Anthropic CVP
 approval for this project. This document is detection engineering: every evasion below is paired
-with the detection that closes it, and the closures are specified as ZeroBreach phases in
+with the detection that closes it, and the closures are specified as Scythe phases in
 `WS7_WORK_ORDER.md`.
 
 **Method.** Five passes over the same engine, each from a different chair:
@@ -25,14 +25,14 @@ They are three structural ones, and they are the whole assessment:
 
 ---
 
-## Part 1 — Attacking ZeroBreach itself
+## Part 1 — Attacking Scythe itself
 
-I have SYSTEM. ZeroBreach lands on my box. Here is what I do, in the order I would do it.
+I have SYSTEM. Scythe lands on my box. Here is what I do, in the order I would do it.
 
 ### E1 · Poison the signature database — CRITICAL, trivial, currently undetectable
 
 `data/detection_signatures.json` is read at runtime by `Get-Sig` with **no integrity check of any
-kind** (`ZeroBreach-V23.ps1:959`). The file is plain JSON next to the engine.
+kind** (`Scythe-V23.ps1:959`). The file is plain JSON next to the engine.
 
 I do not delete detections — a missing key is conspicuous and `Join-AllowRegex` fails closed to
 `(?!)`. I go the other way and **widen the allowlists**, which fail *open* by design:
@@ -60,7 +60,7 @@ empty-alternation) regardless of manifest state, and report it. See WS7 Phase 0.
 There is **exactly one WOW64-aware line in the entire tree** (`engine/Phases-1.ps1:669`). Nothing
 checks `[Environment]::Is64BitProcess`.
 
-If ZeroBreach runs as a 32-bit process on x64 Windows, the OS silently lies to it:
+If Scythe runs as a 32-bit process on x64 Windows, the OS silently lies to it:
 `C:\Windows\System32` redirects to `SysWOW64`, and `HKLM\SOFTWARE` redirects to `Wow6432Node`. My
 payload in the *real* System32 and my *real* run keys are in the half of the machine the scanner
 cannot see. Phase 15 (System32 unsigned binary audit), Phase 109 (system binary integrity), Phase
@@ -126,7 +126,7 @@ PowerShell's `-LiteralPath` still bottoms out in Win32 path handling. Not reacha
 - **Reserved device names** (`CON`, `NUL`, `LPT1`) as path components via `\\?\`.
 - **>260-char paths** where the tool did not opt into long paths.
 - **RTLO / homoglyph filenames** — `invoice\u202Egpj.exe` renders as `invoicejpg.exe` in every UI
-  including ZeroBreach's own output. Cheap to detect, currently not detected.
+  including Scythe's own output. Cheap to detect, currently not detected.
 - **ADS on a directory** (`C:\Windows\Temp:payload`) — P17 scans file streams.
 - **Junction/reparse redirection** so the enumerated path and the executed path differ.
 
@@ -137,7 +137,7 @@ WS7 Phase 140.
 ### E6 · Kill or starve the scan
 
 The scan is `powershell.exe` with a predictable command line and, when scheduled, a **fixed task
-name (`ZeroBreach_V22_Scheduled`) at a fixed 02:00**. I can watch for it and sleep, or kill it. The
+name (`Scythe_V22_Scheduled`) at a fixed 02:00**. I can watch for it and sleep, or kill it. The
 engine's resilience trap guarantees it runs to completion — but a killed process produces no
 `scan_complete`, and the operator sees a failed scan and re-runs it, which I also survive.
 
@@ -374,7 +374,7 @@ machines (an EDR *is* a legitimate hooking rootkit by every signal in Phase 134)
 `KillProcess` on an EDR's hook would be auto-selected. The correct posture is Info, an allowlist for
 known-good EDR vendors, and an FP round on real hardware before anything becomes actionable.
 
-Second: the LAN band (153–156) is the only code in ZeroBreach that touches a machine other than the
+Second: the LAN band (153–156) is the only code in Scythe that touches a machine other than the
 one it runs on. It stays behind `-Mode HUNT` **and** an explicit `-ScanLan` switch, defaults off,
 never writes to a peer, and rate-limits — because an IR tool that portscans a client's production
 network unprompted is an incident of its own.

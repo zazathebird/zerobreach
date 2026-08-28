@@ -6,8 +6,8 @@ custom scans: pick categories inline, or save the whole definition as a reusable
 ## Inline category selection
 
 ```
-zbscan --mode FULL --only Persistence,C2,Ransomware
-zbscan --mode DEEP --skip EventLog,ContentScan
+scythescan --mode FULL --only Persistence,C2,Ransomware
+scythescan --mode DEEP --skip EventLog,ContentScan
 ```
 
 Valid categories (scanner group names): `Persistence`, `DefenseEvasion`, `C2`,
@@ -24,9 +24,9 @@ nothing but excluded categories exits 3 ("coverage gaps"), not 0 ("clean").
 Save the current command line as a profile, then reuse it:
 
 ```
-zbscan --mode FULL --since-hours 48 --only Persistence,C2 --ioc-file iocs.txt --save-profile dc-triage.json
-zbscan --profile dc-triage.json
-zbscan --profile dc-triage.json --mode DEEP     # typed flags override the profile
+scythescan --mode FULL --since-hours 48 --only Persistence,C2 --ioc-file iocs.txt --save-profile dc-triage.json
+scythescan --profile dc-triage.json
+scythescan --profile dc-triage.json --mode DEEP     # typed flags override the profile
 ```
 
 Profile shape (JSON; unknown properties are rejected so a misspelling can't silently

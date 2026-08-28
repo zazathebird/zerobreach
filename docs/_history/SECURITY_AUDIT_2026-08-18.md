@@ -1,6 +1,6 @@
-# ZeroBreach Security & Hygiene Audit — 2026-08-18
+# Scythe Security & Hygiene Audit — 2026-08-18
 
-**Scope:** Full read-only audit of the live PowerShell/HTML-JS ZeroBreach stack (engine, server, GUI)
+**Scope:** Full read-only audit of the live PowerShell/HTML-JS Scythe stack (engine, server, GUI)
 by 5 parallel independent reviewers, plus repo-hygiene triage. Triggered by an untracked
 `zerobreach-main/` folder dropped into the repo, believed to be a newer project version.
 
@@ -65,7 +65,7 @@ a dev-time assertion in `Add-Finding` that rejects a `RunCmd` FixParam with an u
 count as a regression guard.
 
 ### C2. Default checkbox state pre-selects POSSIBLE-severity findings for execution
-**File:** `ZeroBreach-V23.ps1:531` — `Add-Finding`: `Selected = ($Severity -ne "INFO")`
+**File:** `Scythe-V23.ps1:531` — `Add-Finding`: `Selected = ($Severity -ne "INFO")`
 
 CLAUDE.md states as a hard rule: "Only CRITICAL/HIGH + a destructive FixAction is auto-selected
 for remediation — POSSIBLE is shown but never auto-acted-on." The actual code pre-checks every
@@ -84,7 +84,7 @@ independently re-implements the correct CRIT/HIGH-only rule, or inherits this sa
 via a `finding.selected`-style field from the API.
 
 ### C3. `Get-FixClass` mislabels `KillProcess` and `RunCmd` as "SAFE"
-**File:** `ZeroBreach-V23.ps1:1176-1177` — `$safe = @('Info','RunCmd','KillProcess','Quarantine')`
+**File:** `Scythe-V23.ps1:1176-1177` — `$safe = @('Info','RunCmd','KillProcess','Quarantine')`
 
 `RunCmd` executes an attacker/detection-controlled string as a live scriptblock (see C1).
 `KillProcess` force-terminates a process on a POSSIBLE-confidence match with no unsaved-state
@@ -101,7 +101,7 @@ silently untagged either way. Suggests an intended stricter gate was never wired
 ## HIGH
 
 ### H1. Path traversal / arbitrary file read via `/static/` route
-**File:** `ZeroBreach-Server.ps1:1176-1180`
+**File:** `Scythe-Server.ps1:1176-1180`
 ```powershell
 '^/static/' {
     $rel = $path -replace '^/static/', ''
@@ -120,7 +120,7 @@ serving. Needs live testing to confirm whether HttpListener normalizes `..`/enco
 this is reachable — the missing containment check is a bug regardless of exact exploit mechanics.
 
 ### H2. Wildcard CORS + zero authentication on a file-delete/reg-delete/process-kill/RunCmd-capable API
-**File:** `ZeroBreach-Server.ps1` — `Write-JsonResponse` (line 175), `Send-StaticFile` (line 197),
+**File:** `Scythe-Server.ps1` — `Write-JsonResponse` (line 175), `Send-StaticFile` (line 197),
 SSE headers (line 506) all set `Access-Control-Allow-Origin: *`. Since the frontend is served
 same-origin by this same server, wildcard CORS serves no legitimate purpose — it only adds attack
 surface. Any other tab/page open in the operator's browser can `fetch()`/open an `EventSource` to
@@ -133,7 +133,7 @@ randomizing the port per launch helps somewhat (vs. the Python server's predicta
 `http://localhost:$Port` if there's an undocumented reason to keep them.
 
 ### H3. `KillProcess` remediation trusts a stale PID with no re-validation — PID-reuse can kill the wrong process
-**File:** `ZeroBreach-Server.ps1` — `Test-ProtectedTarget`/`Test-RProtected` (341-375, 1024-1035)
+**File:** `Scythe-Server.ps1` — `Test-ProtectedTarget`/`Test-RProtected` (341-375, 1024-1035)
 only regex-match the *description string* captured at scan time; the actual kill (1088-1097) calls
 `Get-Process -Id $procId` purely to log the name **after** already committing to killing that PID.
 If the original process exits between scan and remediation (plausible — scans take minutes,
@@ -144,7 +144,7 @@ re-resolve the live process's image path/name and compare against what the findi
 on mismatch.
 
 ### H4. Command-line injection into a UAC-elevated relaunch
-**File:** `ZeroBreach-V23.ps1:93-103` — `$argList` is built by string concatenation of `-IocFile`,
+**File:** `Scythe-V23.ps1:93-103` — `$argList` is built by string concatenation of `-IocFile`,
 `-Baseline`, `-OutDir` (no `ValidateSet`, no quote-stripping) into one command-line string, passed
 whole to `Start-Process powershell $argList -Verb RunAs`. Any of these three values containing an
 embedded `"` (e.g. an IOC-file path set via the IOC Manager web UI, `GET|POST /api/ioc`) can break
@@ -154,7 +154,7 @@ approved. `Mode`/`Schedule` are safe (constrained by `[ValidateSet(...)]`); `Ioc
 `OutDir` have no such constraint.
 
 ### H5. Same injection pattern, unattended, at SYSTEM level, in scheduled-task registration
-**File:** `ZeroBreach-V23.ps1:113-116` — `$argBase` concatenates `OutDir`, `SmtpTo`, `SmtpFrom`,
+**File:** `Scythe-V23.ps1:113-116` — `$argBase` concatenates `OutDir`, `SmtpTo`, `SmtpFrom`,
 `SmtpServer` the same way, fed to `New-ScheduledTaskAction -Execute "powershell.exe" -Argument
 $argBase`, registered with `-UserId "SYSTEM" -RunLevel Highest` (line 123). Worse than H4: this
 task fires unattended at 02:00 with no human approval step. If any of these four values is ever
@@ -181,7 +181,7 @@ actions (`DeleteFile`/`DeleteReg`/`KillProcess`); a `RunCmd` is an opaque script
 unconfirmed whether the protection layer parses `RunCmd` content for protected-path references
 before executing — if it doesn't, this finding (and others: Winlogon Shell/Userinit fixes at
 Phases-1.ps1:632/638, SAM/LSA hardening writes at 1148/1157/1281/1286) would execute even under the
-"hard block" promise. **Needs verification against `FixMode.ps1`/`ZeroBreach-Server.ps1`'s actual
+"hard block" promise. **Needs verification against `FixMode.ps1`/`Scythe-Server.ps1`'s actual
 `Test-ProtectedTarget` implementation** (both copies, per the sync-requirement CLAUDE.md already
 documents).
 
@@ -200,7 +200,7 @@ relative to the current engine, not just "lower priority" — flag for a decisio
 in parallel with the PS server going forward, or formally mark as unmaintained/archive it too.
 
 ### M2. IOC line-injection via unescaped newlines in the flat-text IOC file
-**File:** `ZeroBreach-Server.ps1:1278-1286` — hash/ip/domain/regex/file values are written straight
+**File:** `Scythe-Server.ps1:1278-1286` — hash/ip/domain/regex/file values are written straight
 into `custom_iocs.ioc` as `"$prefix:$value"` with no rejection of embedded `\r`/`\n`. An IOC field
 with an embedded newline (e.g. a "domain" value of `evil.com\nfile:C:\Windows\System32`) forges an
 extra, differently-typed IOC line the operator never intended. The JSON sidecar is unaffected
@@ -208,7 +208,7 @@ extra, differently-typed IOC line the operator never intended. The JSON sidecar 
 from each field before writing.
 
 ### M3. Race condition: concurrent scan/remediation starts
-**File:** `ZeroBreach-Server.ps1` — `/api/scan/start` (1390) and `/api/remediate` (1219-1220) both
+**File:** `Scythe-Server.ps1` — `/api/scan/start` (1390) and `/api/remediate` (1219-1220) both
 check-then-act on `$script:State.Running`/`.Remediating`, but the flag only flips `$true` **inside**
 the async runspace (697 for scan, 1037 for remediate), after `Start-Runspace` has already returned.
 Two rapid POSTs can both pass the check before either runspace sets the flag, launching concurrent
@@ -217,7 +217,7 @@ evidence during a real incident. **Fix:** set the flag synchronously on the main
 spawning the runspace.
 
 ### M4. Report-JSON has no integrity check before `RunCmd` execution
-**File:** `ZeroBreach-Server.ps1:1098-1103` — `[scriptblock]::Create("$($f.FixParam)")` invoked
+**File:** `Scythe-Server.ps1:1098-1103` — `[scriptblock]::Create("$($f.FixParam)")` invoked
 directly; comment claims FixParam is "generated by our own engine into the trusted report file,"
 but `reports/KrakenBaseline_*.json` has no signature/checksum. If the deployment folder is ever
 writable by a lower-privileged local process, a local attacker could plant/tamper a report, and the
@@ -226,7 +226,7 @@ FixParam content phases actually emit.
 
 ### M5. `FixMode.ps1` and `Summary.ps1` lack the module-level `trap` the other engine modules have
 Confirmed via grep: the only `trap { Write-RecoveredError $_; continue }` across the whole engine
-family outside Phases-1/2/3 is the loader's script-scope one (`ZeroBreach-V23.ps1:87`). Dot-source
+family outside Phases-1/2/3 is the loader's script-scope one (`Scythe-V23.ps1:87`). Dot-source
 order is `Phases-1 → Phases-2 → Phases-3 → Summary.ps1 → FixMode.ps1`. CLAUDE.md documents this
 exact bug class (Phase-16 ACL collision silently dropping phases 17-58) as the reason every module
 needs its own trap. Concrete scenario: an uncaught terminating error partway through `Summary.ps1`
@@ -282,7 +282,7 @@ is stale.
   `start=5000` (345-350) makes H2's cross-origin exposure trivially exploitable with no port
   guessing, if this server is ever run instead of the default. Strictly worse than the PS server's
   version of the same issue.
-- **L6.** `_python/server.py:34` — hardcoded Flask `SECRET_KEY = "zerobreach-kraken-2024"` committed
+- **L6.** `_python/server.py:34` — hardcoded Flask `SECRET_KEY = "scythe-kraken-2024"` committed
   in source. Not currently exploitable (nothing uses session/cookie auth), bad hygiene regardless.
 - **L7.** `_python/server.py:324-326` — `/api/reports/<filename>` has no extension/pattern
   allowlist (unlike the PS server's `^(KrakenBaseline_|audit_).*\.json$`); `send_from_directory`
@@ -302,11 +302,11 @@ is stale.
 - **L11.** `app.js:1533` — MSP/KRAKEN keystroke listener doesn't check `event.isTrusted`, so
   synthetic `KeyboardEvent`s can flip MSP mode or replay the cinematic. Cosmetic impact only
   (theme/sound/badge) — informational, not worth fixing unless it ever gates something real.
-- **L12.** `ZeroBreach-Server.ps1:1392-1399` (`/api/scan/start`) duplicates the terminating-error-safe
+- **L12.** `Scythe-Server.ps1:1392-1399` (`/api/scan/start`) duplicates the terminating-error-safe
   JSON parse pattern inline instead of calling the existing `Read-JsonBody` helper. Functionally
   equivalent as written, but it's the one call site not using the shared helper — consolidate for
   consistency.
-- **L13.** `Get-EngineReportFindings` (`ZeroBreach-Server.ps1:381`) doesn't bound response size when
+- **L13.** `Get-EngineReportFindings` (`Scythe-Server.ps1:381`) doesn't bound response size when
   serializing `$report.Findings` — a very large/tampered report could produce a large-response DoS.
   Low priority, ties into M4.
 

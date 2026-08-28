@@ -44,7 +44,7 @@ lists are actionable — the first is a bug, the second is dead weight.
 
 ## Constraints
 
-- **Read-only on `engine/` and `ZeroBreach-V23.ps1`.** Parse them, never write them.
+- **Read-only on `engine/` and `Scythe-V23.ps1`.** Parse them, never write them.
 - Must run on Linux under `pwsh` 7 while parsing files written for PowerShell 5.1. The AST
   parser handles this; the runtime would not.
 - Deterministic output: same input, byte-identical file. No timestamps inside the JSON body

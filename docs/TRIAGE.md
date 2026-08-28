@@ -1,6 +1,6 @@
 # Triage: symptom-driven scan creation + adaptive scanning
 
-`zbscan triage` turns a plain-language description of a sick machine into a custom scan —
+`scythescan triage` turns a plain-language description of a sick machine into a custom scan —
 and any scan can adapt mid-run to what it finds.
 
 ## Describing symptoms
@@ -8,9 +8,9 @@ and any scan can adapt mid-run to what it finds.
 Three ways in:
 
 ```
-zbscan triage --symptoms "ransom note on the desktop, files renamed .locked, Defender is off"
-zbscan triage --symptoms-file ticket-4711.txt
-zbscan triage                      # interactive symptom wizard (12 questions + free text)
+scythescan triage --symptoms "ransom note on the desktop, files renamed .locked, Defender is off"
+scythescan triage --symptoms-file ticket-4711.txt
+scythescan triage                      # interactive symptom wizard (12 questions + free text)
 ```
 
 The text is matched against a curated symptom database (`Triage/symptoms.json`, embedded —
@@ -33,7 +33,7 @@ it without a rebuild.
 
 ## Optional LLM assist (`--llm-assist`)
 
-With `ZB_GEMINI_API_KEY` set, the symptom text (and nothing else — never anything from the
+With `SCYTHE_GEMINI_API_KEY` set, the symptom text (and nothing else — never anything from the
 machine being scanned) is also sent to Google Gemini for a second opinion. Its reply is
 treated as untrusted text per spec §6.6:
 

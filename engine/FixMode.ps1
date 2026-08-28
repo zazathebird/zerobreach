@@ -1,7 +1,7 @@
 ﻿# NOTE - Detection vocabulary in this file is deliberate.
 # Terms like exfiltration, rootkit, keylogger, ransomware and credential dumping, and any
 # named malware families, are detection category labels, operator-facing report text, or
-# MITRE ATT&CK tactic names (a published standard). ZeroBreach is a defensive incident-
+# MITRE ATT&CK tactic names (a published standard). Scythe is a defensive incident-
 # response tool; these strings are what it reports, not what it does. See CLAUDE.md,
 # "The detection vocabulary is deliberate". Do not sanitise them.
 
@@ -67,11 +67,11 @@ try {
         $rc = @()
         $rc += '@echo off'
         # ASCII only in this file: ASCIIEncoding would turn an em-dash into '?'.
-        $rc += 'REM ZeroBreach registry rollback - generated ' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' on ' + $HOST_NAME
+        $rc += 'REM Scythe registry rollback - generated ' + (Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' on ' + $HOST_NAME
         $rc += 'REM Restores the registry keys captured BEFORE remediation ran.'
         $rc += 'REM Deleted FILES are not covered here (see the vault note below).'
         $rc += 'net session >nul 2>&1 || (echo Run this as Administrator. & pause & exit /b 1)'
-        $rc += 'echo Restoring ZeroBreach registry snapshot...'
+        $rc += 'echo Restoring Scythe registry snapshot...'
         foreach ($sf in $snapshotFiles) {
             $rc += ('reg import "%~dp0' + $sf + '" || echo FAILED: ' + $sf)
         }
@@ -83,7 +83,7 @@ try {
             (New-Object System.Text.ASCIIEncoding))
 
         $readme = @(
-            "ZEROBREACH ROLLBACK SNAPSHOT",
+            "SCYTHE ROLLBACK SNAPSHOT",
             "Created : $(Get-Date)",
             "Host    : $HOST_NAME",
             "",
@@ -117,7 +117,7 @@ try {
 # Attempt a real restore point, and say plainly whether it worked.
 try {
     Out-Typewriter "REQUESTING SYSTEM RESTORE POINT..." "ACT"
-    Checkpoint-Computer -Description "ZeroBreach pre-fix" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
+    Checkpoint-Computer -Description "Scythe pre-fix" -RestorePointType MODIFY_SETTINGS -ErrorAction Stop
     $restorePointOk = $true
     Out-Typewriter "  -> SYSTEM RESTORE POINT CREATED." "GOOD"
 } catch {
@@ -153,7 +153,7 @@ function Show-LiveScanDashboard {
     $monoXL = New-Object System.Drawing.Font("Consolas",14,[System.Drawing.FontStyle]::Bold)
 
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "ZeroBreach V22  ·  Project Kraken  ·  Gannon MSP"
+    $form.Text = "Scythe V22  ·  Project Kraken  ·  Gannon MSP"
     $form.Size = New-Object System.Drawing.Size(1340, 900)
     $form.MinimumSize = New-Object System.Drawing.Size(1100, 700)
     $form.StartPosition = "CenterScreen"
@@ -454,7 +454,7 @@ function Complete-LiveScanDashboard {
 # ── GUI Checkbox Menu (WinForms) — legacy post-scan version kept as fallback ──
 function Show-GUICheckboxMenu {
     $form = New-Object System.Windows.Forms.Form
-    $form.Text = "ZeroBreach V22 — Fix / Remediation Mode"
+    $form.Text = "Scythe V22 — Fix / Remediation Mode"
     $form.Size = New-Object System.Drawing.Size(980, 780)
     $form.StartPosition = "CenterScreen"
     $form.BackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
@@ -462,7 +462,7 @@ function Show-GUICheckboxMenu {
     $form.Font = New-Object System.Drawing.Font("Consolas", 9)
 
     $header = New-Object System.Windows.Forms.Label
-    $header.Text = "  ◈  ZEROBREACH V22 — REMEDIATION CONTROL PANEL"
+    $header.Text = "  ◈  SCYTHE V22 — REMEDIATION CONTROL PANEL"
     $header.AutoSize = $false; $header.Width = 960; $header.Height = 32
     $header.Location = New-Object System.Drawing.Point(0, 6)
     $header.ForeColor = if ($global:MSP_MODE) { [System.Drawing.Color]::FromArgb(255,102,0) } else { [System.Drawing.Color]::FromArgb(0,200,255) }
