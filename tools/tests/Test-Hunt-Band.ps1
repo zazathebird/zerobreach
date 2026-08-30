@@ -274,14 +274,16 @@ Write-Host "`n-- phases 147/157/158/159 (tasks F1/F4/F5/F7) --" -ForegroundColor
 $p6 = Get-Content (Join-Path $root 'engine/Phases-6.ps1') -Raw
 $p6ast = Get-Ast 'engine/Phases-6.ps1'
 
-foreach ($n in @(147,153,154,155,156,157,158,159)) {
+foreach ($n in @(146,147,153,154,155,156,157,158,159)) {
     Assert-True "Phase $n — header present in Phases-6" ($p6 -match ('Show-PhaseHeader "PHASE {0}"' -f $n))
 }
 # 146 and 148-152 are still the parallel work package; the module must not claim them.
-foreach ($n in @(146,148,149,150,151,152)) {
+foreach ($n in @(148,149,150,151,152)) {
     Assert-True "Phase $n — still a stub, no header emitted" (-not ($p6 -match ('Show-PhaseHeader "PHASE {0}"' -f $n)))
 }
 # Phases run in numeric order within a module. 147 must precede 153.
+Assert-True 'Phases-6 — 146 is emitted before 147' `
+    ($p6.IndexOf('Show-PhaseHeader "PHASE 146"') -lt $p6.IndexOf('Show-PhaseHeader "PHASE 147"'))
 Assert-True 'Phases-6 — 147 is emitted before 153' `
     ($p6.IndexOf('Show-PhaseHeader "PHASE 147"') -lt $p6.IndexOf('Show-PhaseHeader "PHASE 153"'))
 Assert-True 'Phases-6 — 157 is emitted after 156' `
@@ -328,23 +330,58 @@ Assert-True 'Phase 147 — does not put the matched secret in the description' `
 # Phase 157: every mechanism the brief names is actually reached.
 $mech = @{
     'COR_PROFILER'          = 'COR_PROFILER'
-    'Active Setup StubPath' = 'Active Setup\\Installed Components'
     'SilentProcessExit'     = 'SilentProcessExit'
     'WER ReflectDebugger'   = 'ReflectDebugger'
-    'Time Providers'        = 'W32Time\\TimeProviders'
-    'Print Monitors'        = 'Control\\Print\\Monitors'
-    'Netsh helper DLLs'     = 'SOFTWARE\\Microsoft\\Netsh'
-    'Winsock LSP'           = 'Protocol_Catalog9'
     'AutodialDLL'           = 'AutodialDLL'
     'ShellServiceObjectDelayLoad' = 'ShellServiceObjectDelayLoad'
     'SharedTaskScheduler'   = 'SharedTaskScheduler'
-    'SCRNSAVE.EXE'          = 'SCRNSAVE\.EXE'
     'RDP InitialProgram'    = 'InitialProgram'
     'Service trigger start' = 'TriggerInfo'
     'AppDomainManager sidecar' = 'appDomainManager'
 }
 foreach ($k in ($mech.Keys | Sort-Object)) {
     Assert-True "Phase 157 — covers $k" ($p6 -match $mech[$k])
+}
+# ...and these six are phase 126's, in engine/Phases-4.ps1 via extended_autostart_points.
+# Phase 126 runs whenever HUNT runs ($PhasePlan.Extended is true for HUNT), so covering them
+# here produced TWO findings with different IDs and different severities for one artifact —
+# which phase 160 then correlates on the shared target as though it were two independent
+# facts. Revert-proofed in both directions: re-adding one here fails, and so does losing it
+# from 126.
+$p4 = Get-Content (Join-Path $root 'engine/Phases-4.ps1') -Raw
+# Ownership is checked against the PARSED autostart points, not the raw JSON: in the file
+# every backslash is doubled, so a path-shaped regex silently matches nothing there and the
+# assertion would pass for the wrong reason.
+$eas126 = (@($sig.extended_autostart_points) | ForEach-Object { "$($_.key)|$($_.name)" }) -join "`n"
+# Duplication is checked against the CODE only. A comment that names the mechanism and says
+# phase 126 owns it is documentation, and stripping comments is what keeps this assertion
+# from firing on the note that explains it.
+$p6Code = (($p6 -split "`r?`n") | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
+$owned126 = @{
+    'Active Setup StubPath' = 'Active Setup\\Installed Components'
+    'Netsh helper DLLs'     = 'Microsoft\\Netsh'
+    'Print Monitors'        = 'Print\\Monitors'
+    'Time Providers'        = 'W32Time\\TimeProviders'
+    'SCRNSAVE.EXE'          = 'SCRNSAVE\.EXE'
+    'Winsock LSP catalogue' = 'Protocol_Catalog9'
+}
+foreach ($k in ($owned126.Keys | Sort-Object)) {
+    Assert-True "phase 126 still owns $k"          (($p4 -match $owned126[$k]) -or ($eas126 -match $owned126[$k]))
+    Assert-True "phase 157 does NOT duplicate $k"  (-not ($p6Code -match $owned126[$k]))
+}
+Assert-True 'Phase 157 — signature verification carries the SIG_AUDIT budget' `
+    ($p6 -match '(?s)function Test-ScytheUntrustedModule.*?SIG_AUDIT_MAX_FILES.*?SIG_AUDIT_DEADLINE_S')
+Assert-True 'Phase 157 — reports an incomplete signature pass' ($p6 -match 'PERS157_SIGBUDGET')
+Assert-True 'Phase 157 — COR_PROFILER ignores an explicitly disabled profiler' ($p6 -match '\[int\]\$enabled -eq 0')
+Assert-True 'Phase 157 — RDP InitialProgram is signature-gated' ($p6 -match 'Test-ScytheUntrustedModule \$initMod')
+Assert-True 'Phase 159 — tells a legacy-BIOS box apart from an unreadable check' `
+    (($p6 -match 'BOOT159_SB_UNREADABLE') -and ($p6 -match 'firmware_type'))
+Assert-True 'Phase 158 — repository discovery is memoised' ($p6 -match 'SCYTHE_REPO_ROOTS')
+# Out-Typewriter has NO 'OK' case: the line reaches the GUI with no [OK ] bracket tag and the
+# server falls back to prose classification — the §5.1 audit bug. 'GOOD' is the tag.
+foreach ($rel in @('engine/Phases-0.ps1','engine/Phases-5.ps1','engine/Phases-6.ps1','engine/Phases-7.ps1')) {
+    $src = Get-Content (Join-Path $root $rel) -Raw
+    Assert-True "$rel — no Out-Typewriter level 'OK' (use GOOD)" (-not ($src -match 'Out-Typewriter[^\r\n]*"OK"'))
 }
 # HKLM\SOFTWARE reads go through the 64-bit view or a 32-bit engine reads Wow6432Node.
 Assert-True 'Phase 157 — reads HKLM through the 64-bit helpers' `
@@ -363,7 +400,7 @@ $newBandKeys = @('cloud_cred_paths_raw','cloud_cred_never_read','cloud_cred_text
                  'cloud_cred_access_tools','cloud_cred_benign_paths',
                  'persist_dropper_extensions','persist_dropper_content_rules',
                  'persist_profiler_benign_names','persist_dll_benign_paths',
-                 'persist_stubpath_benign_values','persist_service_trigger_benign_names',
+                 'persist_service_trigger_benign_names',
                  'devtool_paths_raw','devtool_hook_rules','devtool_gitconfig_rules',
                  'devtool_vscode_startup_rules','devtool_registry_rules','devtool_benign_paths',
                  'esp_expected_paths','esp_boot_binaries','bcd_unsafe_flags','dbx_current_baseline')
@@ -385,7 +422,7 @@ foreach ($k in @('cloud_cred_paths_raw','cloud_cred_staging_dirs_raw','devtool_p
 }
 # Allowlists: compile, and none universal (the E1 blinding attack).
 $newAllowKeys = @('cloud_cred_benign_paths','persist_profiler_benign_names','persist_dll_benign_paths',
-                  'persist_stubpath_benign_values','persist_service_trigger_benign_names','devtool_benign_paths')
+                  'persist_service_trigger_benign_names','devtool_benign_paths')
 foreach ($k in $newAllowKeys) {
     $univ = 0; $nocomp = 0
     foreach ($pat in @($sig.$k)) {
@@ -409,11 +446,11 @@ foreach ($k in @('cloud_cred_never_read','cloud_cred_text_formats','cloud_cred_s
     }
     Assert-That "sig — '$k' all patterns compile" $nocomp 0
 }
-# StubPath is a command line the attacker fully controls, so every allowlist entry has to
-# pin the ENTIRE string — a prefix pattern lets malware self-allowlist by naming its
-# command after a Microsoft one (caught in review 2026-07-02).
-foreach ($pat in @($sig.persist_stubpath_benign_values)) {
-    Assert-True "sig — stubpath allowlist entry is fully anchored: $pat" `
+# The service NAME is attacker-controlled, so every trigger-allowlist entry pins the ENTIRE
+# string — a prefix pattern lets malware self-allowlist by naming its service after a Windows
+# one (the failure class caught in review 2026-07-02).
+foreach ($pat in @($sig.persist_service_trigger_benign_names)) {
+    Assert-True "sig — trigger allowlist entry is fully anchored: $pat" `
         ($pat -match '\^' -and $pat -match '\$$')
 }
 
@@ -506,6 +543,105 @@ Assert-True 'bcd_unsafe_flags covers disableelamdrivers' `
 Assert-True 'dbx baseline ships a MinBytes floor, not an exact size' `
     ($null -ne $sig.dbx_current_baseline.MinBytes -and [int]$sig.dbx_current_baseline.MinBytes -gt 0)
 Assert-True 'dbx baseline names the reference update' ("$($sig.dbx_current_baseline.ReferenceKb)" -match '^KB\d+$')
+
+# ── 15. RULE SETS RUN AGAINST REALISTIC CONTENT ──────────────────────────────
+# This section exists because four rules shipped on 2026-08-30 that could not fire, or fired
+# on every healthy machine, and §13 did not notice: it compile-checks pattern STRINGS and
+# greps them for a keyword. A pattern that compiles is not a pattern that works. CLAUDE.md
+# already says this for path-shaped rules ("a path-shaped rule cannot be exercised by the
+# Linux fixture tree"); it applies just as much to bcdedit- and ini-shaped ones.
+Write-Host "`n-- rule sets vs realistic content --" -ForegroundColor Cyan
+function Get-BandRuleHits { param($Rules, [string]$Text)
+    $out = @()
+    foreach ($r in @($Rules)) {
+        if (-not $r.Pattern) { continue }
+        if ($Text -match $r.Pattern) { $out += "$($r.Name)" }
+    }
+    return ,$out
+}
+
+# bcdedit pads the element name out to column 24 — the gap can be TWENTY spaces. The original
+# rules used \s{1,8}, so four of seven could never reach the value at all; and the value was
+# matched with [^\r\n], which let the engine backtrack INTO the padding where the negative
+# lookahead trivially succeeded, so BCD-CustomBootLoader fired on every healthy UEFI machine.
+$bcdHealthy = @"
+Windows Boot Loader
+-------------------
+identifier              {current}
+device                  partition=C:
+path                    \WINDOWS\system32\winload.efi
+description             Windows 10
+recoveryenabled         Yes
+integrityservices       Enable
+osdevice                partition=C:
+systemroot              \WINDOWS
+bootmenupolicy          Standard
+"@
+$bcdUnsafe = $bcdHealthy + @"
+
+disableelamdrivers      Yes
+flightsigning           Yes
+debug                   Yes
+bootdebug               Yes
+safeboot                Minimal
+integrityservices       Disable
+"@
+Assert-That 'bcd rules are SILENT on healthy bcdedit output' `
+    ((Get-BandRuleHits $sig.bcd_unsafe_flags $bcdHealthy).Count) 0
+foreach ($n in @('BCD-DisableElamDrivers','BCD-FlightSigning','BCD-IntegrityServicesDisabled',
+                 'BCD-KernelDebugEnabled','BCD-BootDebugEnabled','BCD-SafeBootConfigured')) {
+    Assert-True "bcd rule '$n' actually fires on real bcdedit padding" `
+        ((Get-BandRuleHits $sig.bcd_unsafe_flags $bcdUnsafe) -contains $n)
+}
+
+# core.fsmonitor = true is what Git for Windows 2.37+ and Scalar write themselves. It was a
+# HIGH finding telling the operator their git config was weaponised.
+$gitStock = "[core]`n`trepositoryformatversion = 0`n`tfsmonitor = true`n`tautocrlf = true`n`tbare = false`n"
+$gitLfs   = "[filter `"lfs`"]`n`tclean = git-lfs clean -- %f`n`tsmudge = git-lfs smudge -- %f`n"
+$gitEvil  = "[core]`n`tfsmonitor = C:\\Users\\dev\\AppData\\Local\\Temp\\hook.exe`n"
+Assert-That 'gitconfig rules are SILENT on a stock [core] block' `
+    ((Get-BandRuleHits $sig.devtool_gitconfig_rules $gitStock).Count) 0
+Assert-True 'gitconfig rules DO flag a command-valued fsmonitor' `
+    ((Get-BandRuleHits $sig.devtool_gitconfig_rules $gitEvil) -contains 'GitConfig-FsMonitorCommand')
+Assert-True 'gitconfig rules see a Git LFS filter (POSSIBLE, by design)' `
+    ((Get-BandRuleHits $sig.devtool_gitconfig_rules $gitLfs) -contains 'GitConfig-FilterProcess')
+
+# The NuGet rule matched any non-URL config value, e.g. value="Highest".
+$nugetStock = '<configuration><config><add key="dependencyVersion" value="Highest" /><add key="globalPackagesFolder" value="C:\packages" /></config><packageSources><add key="nuget.org" value="https://api.nuget.org/v3/index.json" /></packageSources></configuration>'
+$nugetEvil  = '<packageSources><add key="internal" value="https://pkgs.evil.example/v3/index.json" /></packageSources>'
+$npmStock   = "registry=https://registry.npmjs.org/`nsave-exact=true`n"
+$npmStock2  = "registry = https://registry.npmjs.org/`n"
+$npmEvil    = "registry=https://npm.evil.example/`n"
+Assert-That 'registry rules are SILENT on a stock NuGet.Config' `
+    ((Get-BandRuleHits $sig.devtool_registry_rules $nugetStock).Count) 0
+Assert-That 'registry rules are SILENT on a stock .npmrc (no spaces)' `
+    ((Get-BandRuleHits $sig.devtool_registry_rules $npmStock).Count) 0
+Assert-That 'registry rules are SILENT on a stock .npmrc (spaced)' `
+    ((Get-BandRuleHits $sig.devtool_registry_rules $npmStock2).Count) 0
+Assert-True 'registry rules DO flag a redirected NuGet feed' `
+    ((Get-BandRuleHits $sig.devtool_registry_rules $nugetEvil) -contains 'DevRegistry-NonDefaultNuGet')
+Assert-True 'registry rules DO flag a redirected npm registry' `
+    ((Get-BandRuleHits $sig.devtool_registry_rules $npmEvil) -contains 'DevRegistry-NonDefaultNpm')
+
+# Phase 147: the content rules must not fire on an ordinary config, and the PrivateKeyBlock
+# rule must no longer be reachable from an SSH key file — cloud_cred_text_formats used to
+# admit id_rsa, which made that rule tautological.
+$awsStock = "[default]`nregion = eu-west-2`noutput = json`n"
+$awsLive  = "[default]`naws_access_key_id = AKIAIOSFODNN7EXAMPLE`naws_secret_access_key = wJalrXUtnFEMIbKxxxxxxxxxxxxxxxxxxxxxxxxx`n"
+Assert-That 'cloud content rules are SILENT on a stock .aws/config' `
+    ((Get-BandRuleHits $sig.cloud_cred_content_rules $awsStock).Count) 0
+Assert-True 'cloud content rules DO flag an AWS key id shape' `
+    ((Get-BandRuleHits $sig.cloud_cred_content_rules $awsLive) -contains 'Cred-AwsAccessKeyId')
+Assert-True 'an SSH key file is no longer content-scanned (PrivateKeyBlock was tautological)' `
+    (-not (Test-BandNames $sig.cloud_cred_text_formats 'id_rsa'))
+
+# Phase 157 dropper rules against realistic shell-file content.
+$urlBenign = "[InternetShortcut]`nURL=https://intranet.example/portal`nIconIndex=0`n"
+$urlUnc    = "[InternetShortcut]`nURL=https://intranet.example/portal`nIconFile=\\10.0.0.9\share\a.ico`n"
+Assert-That 'dropper rules are SILENT on an ordinary .url shortcut' `
+    ((Get-BandRuleHits $sig.persist_dropper_content_rules $urlBenign).Count) 0
+Assert-True 'dropper rules DO flag a UNC IconFile (NTLM coercion)' `
+    ((Get-BandRuleHits $sig.persist_dropper_content_rules $urlUnc) -contains 'Dropper-UncIconFile')
 
 Write-Host "`n  $pass passed, $fail failed" -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if ($fail) { exit 1 }

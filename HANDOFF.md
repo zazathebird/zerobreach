@@ -1,8 +1,106 @@
 # HANDOFF
 
-## Session 2026-08-30 — engine phases 147, 157, 158 and 159 (tasks F1, F4, F5, F7)
+## Session 2026-08-30 (later) — phase 146, and the adversarial review of the morning's work
 
 **Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`. Phase 146 built; four false-positive rules fixed; phase
+157 de-duplicated against phase 126. `Test-Hunt-Band.ps1` 315 → 352 assertions, whole suite
+green, `dotnet test` 536 passing. Detail in `CHANGELOG.md`; the durable rules are in
+`CLAUDE.md` (three new sections: realistic-content rule testing, don't-duplicate-a-mechanism,
+and the `Out-Typewriter` level bug).
+
+**`engine/Phases-6.ps1` stubs remaining: 148-152 only** (task F2). 146 and 147 and 153-159 are
+built.
+
+### The F2 design is done and worth reading before you start 148-152
+
+A full design for phases 148-152 was produced this session but NOT implemented — it is the
+largest remaining piece and needed its own session. The important parts, so they are not lost:
+
+- **A large anti-duplication audit.** Roughly twenty sub-checks from the F2 brief are ALREADY
+  covered elsewhere and must be dropped or narrowed: PsExec binary names and the wmic/ADMIN$/
+  schtasks command-line rules are phase 133's `lateral_movement_artifacts`; bare 7045 and 4624
+  are phase 107's; golden-ticket 4769 and DCSync 4662 are phase 88's; `.dmp` presence and the
+  credential-dump tool names are phase 106's; WDigest and RunAsPPL are phase 41's;
+  `LmCompatibilityLevel` is already duplicated between phases 46 and 155 (do not add a third).
+- **Genuinely free ground:** events 4625, 4648, 4697, 4720, 4732, 4768, 4771, 4776, 5140, 5145,
+  8222; `WmiPrvSE`/`wsmprovhost` parentage; DCOM (`MMC20.Application`, `ShellWindows`) — zero
+  hits in the whole engine; `comsvcs.dll MiniDump`; hive and `ntds.dit` copies; `TrustedHosts`;
+  the WebClient/WebDAV coercion primitive; saved PuTTY/WinSCP/mRemoteNG sessions; RDP MRU.
+- **The wall-clock trap:** every existing event query in the engine filters time CLIENT-side.
+  Phase 88 runs an uncapped `Get-WinEvent` for 4769 and then filters with `Test-InScope` — on a
+  domain workstation with a large Security log that materialises hundreds of thousands of
+  records first. `StartTime` inside the `FilterHashtable` compiles to server-side XPath. New
+  phases must do that, memoise one pull per (log, id-set, window), and read fields positionally
+  from `.Properties` rather than `[xml]$_.ToXml()` per record.
+- **Recommended drops, on the same reasoning that made 159 not mount the ESP:** domain-wide
+  LDAP enumeration (the AS-REP / delegation / AdminSDHolder sweep is byte-for-byte the query
+  BloodHound issues, against the customer's directory — keep only this computer's OWN AD
+  object, `SizeLimit 1`, timeouts set); ADCS ESC8 (an HTTP request to a customer server);
+  VSS create/delete correlation (Datto's core product is backup — the pairing cannot separate
+  an attacker from the backup job; keep the shadow-path command-line rule instead); event 7036
+  in bulk; `reg load` of unloaded user hives; business-hours logon detection (an MSP does
+  maintenance at night by definition).
+
+### What could not be verified from Linux
+
+Everything from the morning's entry still stands, plus:
+
+1. **Phase 146's PE parser has never met a real PE.** It is the most testable thing in the band
+   though — a PE is a byte array, so a PowerShell port of `lib/Scythe.Formats.Tests/PeFixtureBuilder.cs`
+   could assert partial-result-never-exception at each truncation boundary on Linux. Worth
+   building before it meets Windows.
+2. **The entropy cost estimate (25-70 ms/file) is modelled, not measured.** If it comes back at
+   the pessimistic end, the lever is the Deflate-ratio pre-filter, not cutting the check.
+3. **`Get-Partition` AccessPaths on a real ESP**, the Winsock `PackedCatalogItem` decode, and
+   the phase-157 absent-vs-zero registry semantics — all still theory.
+
+### On `lib/`, from the architecture review
+
+- `lib/Scythe.Rules` YARA is **real and differentially verified against the yara CLI** (yara
+  4.5.5 is installed on this box, so those tests do bite here). It parses actual `.yar` source
+  and supports hex wildcards, jumps, all the modifiers, xor/base64, `filesize`, `uintNN`, N-of-M,
+  `for` loops, private/global rules. **The gap is modules** — `ImplementedModules` is empty, so
+  any rule importing `pe` is excluded at compile time (loudly, as `IncompleteRule`). Measure what
+  fraction of a real corpus that excludes before claiming the public ecosystem works.
+- **The `fp_allowlists` decision: teach the linter the flat convention; do NOT restructure the
+  JSON.** Running the real linter against the real file produces **788 findings**, and only ~135
+  are the nesting — the rest are type mismatches (structured rule arrays, `_comment` strings,
+  int lists) and 153 "regex does not compile" on entries that were never regexes (globs, `$env:`
+  paths, literal registry paths). Staged fix ≈3 days; stage 1 alone (~half a day) makes it
+  runnable. The naming convention is currently **100% accurate** — the 30 keys matching
+  `_benign_|_allow|^trusted_` are exactly the 30 consumed by `Join-AllowRegex`.
+- **F3's Part A should not invent a JSON rule format.** Author rules as `.yar`, have the native
+  engine consume them directly, and derive the PowerShell subset at build time with a
+  transpiler that FAILS THE BUILD on a construct the PS matcher cannot express. Loading the C#
+  assembly from PowerShell is not an option: `lib/` targets net8.0 and Windows PowerShell 5.1
+  is .NET Framework 4.8 — and an unsigned managed DLL reintroduces exactly the quarantine
+  failure the PowerShell fallback exists to survive.
+- **F3 Part B is largely already built in C#**: `lib/Scythe.Formats/Pe/PeMetrics.cs` computes
+  per-section entropy, W+X, zero-raw, overlay, TLS callbacks and entry-point anomalies, and
+  renders no verdict by design. Phase 146's PowerShell parser should be held against it as the
+  spec, with golden vectors from `PeFixtureBuilder`.
+
+### On skills (the survey)
+
+**Nothing in `anthropics/skills` is security-related** — 19 skills, all document/design/build
+tooling, and this session already has them loaded. The one collection worth anything is
+**`trailofbits/skills`** (6.9k stars, CC-BY-SA-4.0, Dan Guido as CODEOWNER, 83 substantive
+skills). `yara-authoring` and `variant-analysis` are the two that fit this project; install via
+`/plugin marketplace add trailofbits/skills`, **not** by copying files, because share-alike
+content should not land in a commercial product tree. Everything else surveyed was rejected —
+details and three third-party supply-chain findings are in the session notes. **Nothing was
+installed.**
+
+There is no public PowerShell, Sigma, EVTX or DFIR skill worth having: this repo's own
+`CLAUDE.md` is more specific and more correct than anything published.
+
+---
+
+## Session 2026-08-30 (earlier) — engine phases 147, 157, 158 and 159 (tasks F1, F4, F5, F7)
 
 ### State
 

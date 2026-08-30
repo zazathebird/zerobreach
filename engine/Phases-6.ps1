@@ -111,6 +111,10 @@ function Resolve-ScytheModulePath {
     return (Join-Path $global:SCYTHE_SYS32 $v)
 }
 
+$global:SCYTHE_P157_SIGSW      = $null
+$global:SCYTHE_P157_SIGSEEN    = 0
+$global:SCYTHE_P157_SIGSKIPPED = 0
+
 function Test-ScytheUntrustedModule {
     # True when the module at $Path is missing, unresolvable, or not validly signed.
     # The MECHANISM existing is usually normal — Windows and several vendors register
@@ -121,6 +125,19 @@ function Test-ScytheUntrustedModule {
     if ([string]::IsNullOrWhiteSpace($Path)) { return $true }
     if ($Path -match $PERSIST_DLL_BENIGN_RE) { return $false }
     if (-not (Test-Path -LiteralPath $Path)) { return $true }
+    # Authenticode is the most expensive operation in the engine and this phase reaches it
+    # from several branches over dozens of distinct modules. Carry the shared budget
+    # (CLAUDE.md: any loop calling Get-AuthSig MUST carry $global:SIG_AUDIT_*). Past the
+    # budget we return $false — "do not report" — because the alternative, treating an
+    # unverifiable module as untrusted, would emit a HIGH finding for every remaining
+    # mechanism the moment CRL/OCSP became unreachable.
+    if ($null -eq $global:SCYTHE_P157_SIGSW) { $global:SCYTHE_P157_SIGSW = [System.Diagnostics.Stopwatch]::StartNew() }
+    if ($global:SCYTHE_P157_SIGSEEN -ge $global:SIG_AUDIT_MAX_FILES -or
+        $global:SCYTHE_P157_SIGSW.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+        $global:SCYTHE_P157_SIGSKIPPED++
+        return $false
+    }
+    $global:SCYTHE_P157_SIGSEEN++
     $verdict = Get-SignatureVerdict $Path
     if ("$($verdict.Status)" -eq 'Valid') { return $false }
     return $true
@@ -133,17 +150,26 @@ function Get-ScytheRepoRoots {
     # node_modules and .venv, walking it blows the phase's wall-clock budget, and it finds
     # nothing the targeted roots do not. Capped so a machine with a very large number of
     # clones cannot stall the phase.
-    $names = @('source','source\repos','repos','git','Projects','projects','dev','src','code','work','Documents','Desktop','Downloads')
+    # Memoised: phase 158 asks three times (extensions, git configs, package registries) and
+    # the walk is the expensive part of the phase. The engine is audit-only under -Auto, so
+    # the filesystem is static for a run.
+    if ($null -ne $global:SCYTHE_REPO_ROOTS) { return ,$global:SCYTHE_REPO_ROOTS }
+    # Documents, Desktop and Downloads are deliberately NOT walked. On a managed endpoint
+    # they are commonly folder-redirected to a UNC share, which turns this into an SMB
+    # directory walk over the network - slow, and a surprise for the customer's file server.
+    # A developer's clones live in the source/repos/git/dev directories below.
+    $names = @('source','source\repos','repos','git','Projects','projects','dev','src','code','work')
     $found = New-Object System.Collections.Generic.List[string]
+    $walkSw = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($n in $names) {
-        if ($found.Count -ge 60) { break }
+        if ($found.Count -ge 60 -or $walkSw.Elapsed.TotalSeconds -ge 8) { break }
         $base = Join-Path $env:USERPROFILE $n
         if (-not (Test-Path -LiteralPath $base)) { continue }
         if (Test-Path -LiteralPath (Join-Path $base '.git')) { $found.Add($base) }
         $level1 = @()
         try { $level1 = @(Get-ChildItem -LiteralPath $base -Directory -ErrorAction Stop) } catch { $level1 = @() }
         foreach ($d1 in $level1) {
-            if ($found.Count -ge 60) { break }
+            if ($found.Count -ge 60 -or $walkSw.Elapsed.TotalSeconds -ge 8) { break }
             $p1 = "$($d1.FullName)"
             if ($p1 -match $DEVTOOL_BENIGN_RE) { continue }
             if (Test-Path -LiteralPath (Join-Path $p1 '.git')) { $found.Add($p1); continue }
@@ -157,7 +183,9 @@ function Get-ScytheRepoRoots {
             }
         }
     }
-    return ,($found.ToArray())
+    $walkSw.Stop()
+    $global:SCYTHE_REPO_ROOTS = $found.ToArray()
+    return ,$global:SCYTHE_REPO_ROOTS
 }
 
 function Get-ScytheEspRoot {
@@ -188,8 +216,671 @@ function Get-ScytheEspRoot {
     return ""
 }
 
+# ── PE structural parsing for phase 146 ──────────────────────────────────────
+# Pure .NET reads over a byte array. NO P/Invoke and NO Add-Type: declaring memory APIs or
+# compiling C# inline is the exact code shape AV heuristics flag, and an engine Defender
+# blocks at load detects nothing at all (CLAUDE.md, and Test-Hunt-Band asserts it).
+#
+# lib/Scythe.Formats/Pe/ is the specification these mirror. Keep the two in step; its
+# PeHostileTests enumerate the truncation cases these bounds exist for.
+#
+# A malformed PE is NORMAL INPUT here, not an error. Every function returns $null or a
+# partial result rather than throwing — a hostile file must never reach the resilience trap
+# and be reported as a RECOVERED ERROR.
+
+function Open-ScythePeStream {
+    # FileShare ReadWrite|Delete on purpose. [IO.File]::OpenRead requests FileShare.Read and
+    # therefore FAILS on a file another process currently holds open for write — which is
+    # precisely the live dropper this phase most wants to parse.
+    param([string]$Path)
+    try {
+        return (New-Object System.IO.FileStream($Path,
+            [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read,
+            ([System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)))
+    } catch { return $null }
+}
+
+function Read-ScytheRange {
+    # Exactly $Count bytes from $Offset, or $null. FileStream.Read may return short on any
+    # single call, so it loops until filled or EOF.
+    param([System.IO.FileStream]$Stream, [long]$Offset, [int]$Count)
+    if ($null -eq $Stream -or $Count -le 0 -or $Offset -lt 0 -or $Offset -ge $Stream.Length) { return $null }
+    if (($Offset + $Count) -gt $Stream.Length) { $Count = [int]($Stream.Length - $Offset) }
+    if ($Count -le 0) { return $null }
+    $buf = New-Object byte[] $Count
+    try {
+        [void]$Stream.Seek($Offset, [System.IO.SeekOrigin]::Begin)
+        $got = 0
+        while ($got -lt $Count) {
+            $n = $Stream.Read($buf, $got, $Count - $got)
+            if ($n -le 0) { break }
+            $got += $n
+        }
+        if ($got -lt $Count) { return $null }
+    } catch { return $null }
+    return $buf
+}
+
+function Get-ScytheU16 {
+    # Bounds-checked little-endian read. ToUInt16, never ToInt16 — a signed read of a high
+    # field returns a negative number, every later bounds check then passes trivially, and the
+    # parser reads from a nonsensical offset with no error anywhere.
+    param([byte[]]$B, [long]$Off)
+    if ($null -eq $B -or $Off -lt 0 -or ($Off + 2) -gt $B.Length) { return $null }
+    return [long][System.BitConverter]::ToUInt16($B, [int]$Off)
+}
+
+function Get-ScytheU32 {
+    # As above. Cast to [long] AT THE READ, not at the comparison: PS 5.1 promotes
+    # UInt32 arithmetic inconsistently, and forcing 64-bit signed here makes every downstream
+    # offset calculation behave.
+    param([byte[]]$B, [long]$Off)
+    if ($null -eq $B -or $Off -lt 0 -or ($Off + 4) -gt $B.Length) { return $null }
+    return [long][System.BitConverter]::ToUInt32($B, [int]$Off)
+}
+
+function Read-ScytheAsciiAt {
+    # NUL-terminated ASCII, length-capped. Uses [Array]::IndexOf — a native scan — rather than
+    # a PowerShell character loop, which is roughly 50x slower and would by itself turn a 4 ms
+    # import parse into a 200 ms one. Strips non-printables: an import or section name is
+    # attacker-authored and ends up in the operator's console and the client report.
+    param([byte[]]$B, [long]$Off, [int]$Max = 512)
+    if ($null -eq $B -or $Off -lt 0 -or $Off -ge $B.Length) { return "" }
+    $lim = [int][Math]::Min([long]$Max, ($B.Length - $Off))
+    if ($lim -le 0) { return "" }
+    $nul = [System.Array]::IndexOf($B, [byte]0, [int]$Off, $lim)
+    $len = if ($nul -lt 0) { $lim } else { $nul - [int]$Off }
+    if ($len -le 0) { return "" }
+    return (([System.Text.Encoding]::ASCII.GetString($B, [int]$Off, $len)) -replace '[^\x20-\x7E]', '')
+}
+
+function Get-ScytheByteEntropy {
+    # Shannon entropy (bits/byte, 0..8) over an ALREADY-READ buffer. Returns $null for an
+    # empty window, because 0.0 is a real answer — a run of one byte value — and conflating it
+    # with failure is what makes the loader's whole-file Get-FileEntropy unusable here.
+    #
+    # Deliberately NOT Get-FileEntropy: that one is path-based, always reads from offset 0,
+    # opens with FileShare.Read, and counts into a hashtable. An [int[]]256 indexed by the byte
+    # value is the same algorithm several times faster, and this phase runs it a few hundred
+    # times. Phase 52 depends on the loader's version; leave it alone.
+    param([byte[]]$Bytes, [int]$Offset = 0, [int]$Count = -1)
+    if ($null -eq $Bytes -or $Bytes.Length -eq 0) { return $null }
+    if ($Count -lt 0) { $Count = $Bytes.Length - $Offset }
+    if ($Offset -lt 0 -or $Count -le 0 -or ($Offset + $Count) -gt $Bytes.Length) { return $null }
+    $freq = New-Object int[] 256
+    $end  = $Offset + $Count
+    for ($i = $Offset; $i -lt $end; $i++) { $freq[$Bytes[$i]]++ }
+    $bits = 0.0
+    $total = [double]$Count
+    for ($v = 0; $v -lt 256; $v++) {
+        $c = $freq[$v]
+        if ($c -eq 0) { continue }
+        $p = $c / $total
+        $bits -= $p * [Math]::Log($p, 2)
+    }
+    return [Math]::Round($bits, 4)
+}
+
+function ConvertTo-ScytheFileOffset {
+    # File offset for a relative virtual address, or $null when the RVA maps to no byte in the
+    # file. Mirrors lib/Scythe.Formats/Pe RvaMapper.
+    #
+    # The containment test is against SizeOfRawData, NOT VirtualSize, and that is the whole
+    # point: an RVA inside VirtualSize but past SizeOfRawData is virtual-only and has no file
+    # byte. Mapping it anyway reads whatever happens to follow that section on disk, which is
+    # how a hand-crafted PE gets a static parser to report attacker-chosen bytes as imports.
+    param([long]$Rva, $Sections, [long]$SizeOfHeaders, [long]$FileLength)
+    if ($Rva -lt 0) { return $null }
+    if ($Rva -lt $SizeOfHeaders -and $Rva -lt $FileLength) { return $Rva }
+    foreach ($s in @($Sections)) {
+        $delta = $Rva - [long]$s.VirtualAddress
+        if ($delta -lt 0 -or $delta -ge [long]$s.SizeOfRawData) { continue }
+        $off = [long]$s.PointerToRawData + $delta
+        if ($off -ge 0 -and $off -lt $FileLength) { return $off }
+        return $null
+    }
+    return $null
+}
+
+function Read-ScythePeImage {
+    # Header, section table and overlay for one file. Returns $null when the file is not a PE
+    # at all, otherwise a result object whose Partial flag says whether anything was truncated.
+    # Never throws. Import parsing is a separate, more expensive pass (Read-ScythePeImports).
+    param([string]$Path, [long]$FileLength)
+    $peStream = $null
+    try {
+        $peStream = Open-ScythePeStream $Path
+        if ($null -eq $peStream) { return $null }
+
+        $hdr = Read-ScytheRange $peStream 0 ([int][Math]::Min($FileLength, 4096L))
+        if ($null -eq $hdr -or $hdr.Length -lt 64) { return $null }
+        if ((Get-ScytheU16 $hdr 0) -ne 0x5A4D) { return $null }          # no MZ: not a PE
+
+        $lfanew = Get-ScytheU32 $hdr 0x3C
+        # e_lfanew is a 32-bit attacker value. A real image keeps it under 0x400; refuse the
+        # absurd rather than growing the read unboundedly to reach it.
+        if ($null -eq $lfanew -or $lfanew -lt 4 -or $lfanew -gt 0x10000000) { return $null }
+        if (($lfanew + 4) -gt $FileLength) { return $null }
+        if (($lfanew + 512) -gt $hdr.Length) {
+            $bigger = Read-ScytheRange $peStream 0 ([int][Math]::Min($FileLength, 65536L))
+            if ($null -ne $bigger) { $hdr = $bigger }
+        }
+        if ((Get-ScytheU32 $hdr $lfanew) -ne 0x00004550) { return $null }  # no PE\0\0
+
+        $coff = $lfanew + 4
+        if (($coff + 20) -gt $hdr.Length) { return $null }
+        $nSections = Get-ScytheU16 $hdr ($coff + 2)
+        $timeStamp = Get-ScytheU32 $hdr ($coff + 4)
+        $sizeOfOpt = Get-ScytheU16 $hdr ($coff + 16)
+        if ($null -eq $nSections -or $null -eq $sizeOfOpt) { return $null }
+
+        $opt = $coff + 20
+        $magic = Get-ScytheU16 $hdr $opt
+        if ($magic -ne 0x10B -and $magic -ne 0x20B) { return $null }       # not PE32 / PE32+
+        $isPlus = ($magic -eq 0x20B)
+        $minOpt = if ($isPlus) { 112 } else { 96 }
+        if ($sizeOfOpt -lt $minOpt) { return $null }
+
+        $entryRva     = Get-ScytheU32 $hdr ($opt + 16)
+        $sizeOfHdrs   = Get-ScytheU32 $hdr ($opt + 60)
+        $ddBase       = $opt + $(if ($isPlus) { 112 } else { 96 })
+        $numRva       = Get-ScytheU32 $hdr ($opt + $(if ($isPlus) { 108 } else { 92 }))
+        if ($null -eq $numRva) { $numRva = 0 }
+        # Clamp to 16 AND to the room SizeOfOptionalHeader actually leaves: a malformed image
+        # declaring four billion directories would otherwise drive a four-billion-iteration loop.
+        $roomForDd = [long][Math]::Floor((($opt + $sizeOfOpt) - $ddBase) / 8)
+        if ($numRva -gt 16) { $numRva = 16 }
+        if ($numRva -gt $roomForDd) { $numRva = [long][Math]::Max(0, $roomForDd) }
+
+        $importRva = 0; $certOff = 0; $certSize = 0; $hasClr = $false
+        if ($numRva -ge 2) { $importRva = Get-ScytheU32 $hdr ($ddBase + 8) }
+        if ($numRva -ge 5) {
+            # DataDirectory[4] (Certificate) is the one entry in the whole format whose first
+            # field is a raw FILE OFFSET, not an RVA. Getting this wrong is what makes every
+            # signed binary on the machine look like it carries an overlay.
+            $certOff  = Get-ScytheU32 $hdr ($ddBase + 32)
+            $certSize = Get-ScytheU32 $hdr ($ddBase + 36)
+        }
+        if ($numRva -ge 15) {
+            $clrRva = Get-ScytheU32 $hdr ($ddBase + 112)
+            $hasClr = ($null -ne $clrRva -and $clrRva -gt 0)
+        }
+        if ($null -eq $importRva) { $importRva = 0 }
+        if ($null -eq $certOff)   { $certOff = 0 }
+        if ($null -eq $certSize)  { $certSize = 0 }
+
+        # The section table sits at opt + SizeOfOptionalHeader, NOT at a fixed offset. The
+        # loader uses the declared value, and malware sets it non-standard precisely to
+        # desynchronise naive parsers from the loader.
+        $secBase = $opt + $sizeOfOpt
+        $maxSec  = 96
+        if ($PE_SCORE -and $PE_SCORE.MaxSections) { $maxSec = [int]$PE_SCORE.MaxSections }
+        $partial = $false
+        if ($nSections -gt $maxSec) { $partial = $true }
+        $secCount = [int][Math]::Min([long]$nSections, [long]$maxSec)
+        $sections = New-Object System.Collections.Generic.List[object]
+        for ($i = 0; $i -lt $secCount; $i++) {
+            $e = $secBase + ($i * 40)
+            if (($e + 40) -gt $hdr.Length) { $partial = $true; break }
+            $nameBytes = New-Object byte[] 8
+            [System.Array]::Copy($hdr, [int]$e, $nameBytes, 0, 8)
+            $nul  = [System.Array]::IndexOf($nameBytes, [byte]0)
+            $nlen = if ($nul -lt 0) { 8 } else { $nul }
+            $sname = if ($nlen -le 0) { "" } else {
+                ([System.Text.Encoding]::ASCII.GetString($nameBytes, 0, $nlen)) -replace '[^\x20-\x7E]', ''
+            }
+            $sections.Add([pscustomobject]@{
+                Name             = $sname
+                VirtualSize      = [long](Get-ScytheU32 $hdr ($e + 8))
+                VirtualAddress   = [long](Get-ScytheU32 $hdr ($e + 12))
+                SizeOfRawData    = [long](Get-ScytheU32 $hdr ($e + 16))
+                PointerToRawData = [long](Get-ScytheU32 $hdr ($e + 20))
+                Characteristics  = [long](Get-ScytheU32 $hdr ($e + 36))
+            })
+        }
+
+        # Overlay: bytes past the end of everything the loader maps. Each candidate end is
+        # clamped to the real file length first, or a section that lies about SizeOfRawData
+        # produces a NEGATIVE overlay and a nonsense percentage in a client report.
+        $mappedEnd = [Math]::Min([long]$sizeOfHdrs, $FileLength)
+        foreach ($s in $sections) {
+            $end = [Math]::Min(($s.PointerToRawData + $s.SizeOfRawData), $FileLength)
+            if ($end -gt $mappedEnd) { $mappedEnd = $end }
+        }
+        $overlay = $FileLength - $mappedEnd
+        # Subtract the Authenticode certificate table. Without this every signed binary on the
+        # machine reports an overlay and the signal is pure noise.
+        if ($certSize -gt 0 -and $certOff -ge $mappedEnd) { $overlay = $overlay - $certSize }
+        if ($overlay -lt 0) { $overlay = 0 }
+
+        return [pscustomobject]@{
+            Path           = $Path
+            Length         = $FileLength
+            IsPlus         = $isPlus
+            TimeDateStamp  = [long]$timeStamp
+            EntryRva       = [long]$entryRva
+            SizeOfHeaders  = [long]$sizeOfHdrs
+            Sections       = $sections
+            ImportRva      = [long]$importRva
+            HasClr         = $hasClr
+            CertSize       = [long]$certSize
+            Overlay        = [long]$overlay
+            Partial        = $partial
+        }
+    } catch {
+        return $null
+    } finally {
+        if ($peStream) { try { $peStream.Dispose() } catch { } }
+    }
+}
+
+function Read-ScythePeImports {
+    # Import DLL count, function count and the set of imported function NAMES. Returns $null
+    # when the directory cannot be reached. Reads the containing section ONCE and walks it in
+    # memory — per-thunk seeks would be hundreds of syscalls per file.
+    #
+    # Every loop here is bounded twice: by a count cap and by a wall-clock deadline. An
+    # unterminated descriptor or thunk array in a crafted file is otherwise an unbounded loop,
+    # i.e. a denial of service against the scan itself.
+    param($Image, [int]$DeadlineMs = 250, [switch]$NamesOnly)
+    if ($null -eq $Image -or $Image.ImportRva -le 0) { return $null }
+    $peStream = $null
+    try {
+        $impOff = ConvertTo-ScytheFileOffset $Image.ImportRva $Image.Sections $Image.SizeOfHeaders $Image.Length
+        if ($null -eq $impOff) { return $null }
+        # $winSection, not $host — $Host is a PowerShell automatic variable and assigning to it
+        # is a runtime error (CLAUDE.md: never give a local the letters of a broader-scope name).
+        $winSection = $null
+        foreach ($s in @($Image.Sections)) {
+            if ($impOff -ge $s.PointerToRawData -and $impOff -lt ($s.PointerToRawData + $s.SizeOfRawData)) {
+                $winSection = $s; break
+            }
+        }
+        if ($null -eq $winSection) { return $null }
+
+        $peStream = Open-ScythePeStream $Image.Path
+        if ($null -eq $peStream) { return $null }
+        $winStart = [long]$winSection.PointerToRawData
+        $winLen   = [int][Math]::Min([long]$winSection.SizeOfRawData, 524288L)
+        $win      = Read-ScytheRange $peStream $winStart $winLen
+        if ($null -eq $win) { return $null }
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $dllCount = 0; $funcCount = 0; $truncated = $false
+        $names = New-Object System.Collections.Generic.HashSet[string]
+        $step  = if ($Image.IsPlus) { 8 } else { 4 }
+
+        for ($di = 0; $di -lt 256; $di++) {
+            if ($sw.Elapsed.TotalMilliseconds -gt $DeadlineMs) { $truncated = $true; break }
+            $d = ($impOff - $winStart) + ($di * 20)
+            if ($d -lt 0 -or ($d + 20) -gt $win.Length) { $truncated = $true; break }
+            $oft  = Get-ScytheU32 $win $d
+            $ts   = Get-ScytheU32 $win ($d + 4)
+            $fc   = Get-ScytheU32 $win ($d + 8)
+            $nRva = Get-ScytheU32 $win ($d + 12)
+            $ft   = Get-ScytheU32 $win ($d + 16)
+            if ($null -eq $oft) { $truncated = $true; break }
+            if ($oft -eq 0 -and $ts -eq 0 -and $fc -eq 0 -and $nRva -eq 0 -and $ft -eq 0) { break }
+            $dllCount++
+            # OriginalFirstThunk when present, else FirstThunk — the loader's own fallback for
+            # bound imports. Skipping it loses the imports of every bound system binary.
+            $thunkRva = if ($oft -gt 0) { $oft } else { $ft }
+            if ($thunkRva -le 0) { continue }
+            $thunkOff = ConvertTo-ScytheFileOffset $thunkRva $Image.Sections $Image.SizeOfHeaders $Image.Length
+            if ($null -eq $thunkOff) { continue }
+            for ($ti = 0; $ti -lt 4096; $ti++) {
+                if ($funcCount -ge 4096) { $truncated = $true; break }
+                if (($ti % 256) -eq 0 -and $sw.Elapsed.TotalMilliseconds -gt $DeadlineMs) { $truncated = $true; break }
+                $t = ($thunkOff - $winStart) + ($ti * $step)
+                if ($t -lt 0 -or ($t + $step) -gt $win.Length) { $truncated = $true; break }
+                $lo = Get-ScytheU32 $win $t
+                $hi = if ($Image.IsPlus) { Get-ScytheU32 $win ($t + 4) } else { 0 }
+                if ($null -eq $lo) { $truncated = $true; break }
+                if ($lo -eq 0 -and $hi -eq 0) { break }
+                $funcCount++
+                # PE32+ thunks are read as TWO UInt32s rather than one UInt64: the ordinal flag
+                # is bit 63, and [long] cannot hold 0x8000000000000000 without going negative.
+                $byOrdinal = if ($Image.IsPlus) { (($hi -band 0x80000000) -ne 0) } else { (($lo -band 0x80000000) -ne 0) }
+                if ($byOrdinal) { continue }
+                if (-not $NamesOnly) { continue }
+                $nameRva = if ($Image.IsPlus) { $lo } else { ($lo -band 0x7FFFFFFF) }
+                $nameOff = ConvertTo-ScytheFileOffset ($nameRva + 2) $Image.Sections $Image.SizeOfHeaders $Image.Length
+                if ($null -eq $nameOff) { continue }
+                $rel = $nameOff - $winStart
+                if ($rel -lt 0 -or $rel -ge $win.Length) { continue }
+                $fn = Read-ScytheAsciiAt $win $rel 512
+                if ($fn) { [void]$names.Add($fn) }
+            }
+            if ($funcCount -ge 4096) { $truncated = $true; break }
+        }
+        $sw.Stop()
+        return [pscustomobject]@{
+            DllCount  = $dllCount
+            FuncCount = $funcCount
+            Names     = $names
+            Truncated = $truncated
+        }
+    } catch {
+        return $null
+    } finally {
+        if ($peStream) { try { $peStream.Dispose() } catch { } }
+    }
+}
+
 if ($PhasePlan.Hunt) {
     trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
+
+    # ── PHASE 146: PE STRUCTURAL ANALYSIS ─────────────────────────────────────
+    # Every other file phase asks two questions — does the path match, and is it
+    # Authenticode-signed — and neither survives contact with a packed or novel sample.
+    # This one parses the binary.
+    #
+    # THE SEVERITY DISCIPLINE IS THE WHOLE DESIGN. Packing is not malicious: half of
+    # commercial software is packed, every installer looks like a dropper, and .NET
+    # obfuscators are a legitimate product category. So structural signals are scored, not
+    # reported. A lone high-entropy section scores 2 against a reporting floor of 7 — it
+    # cannot produce a finding at all, let alone a HIGH one. HIGH additionally requires
+    # independent CONTEXT (unsigned, transient path, recent) and three distinct structural
+    # signals, because a packed file trips entropy, packer name, zero-raw and W+X as one
+    # fact wearing four hats. A valid signature from a trusted signer caps the result at INFO.
+    #
+    # Cost is controlled by tiering, not by cutting checks: everything cheap runs on every
+    # candidate, entropy and import names run only on files that already scored something,
+    # and Authenticode — the most expensive operation in the engine — runs last and only on
+    # files with a real structural score, under the shared SIG_AUDIT budget.
+    Show-PhaseHeader "PHASE 146" "PE STRUCTURE, PACKING AND IMPORT-TABLE SHAPE" "MALWARE STRUCTURE"
+    Out-Typewriter "PARSING EXECUTABLES INSTEAD OF PATTERN-MATCHING THEIR NAMES..." "HUNT"
+
+    $peMinBytes  = 1024; $peMaxBytes = 104857600; $peMaxFiles = 400
+    $peDeadline  = 250;  $peWinBytes = 8192;      $peMaxEntSec = 4
+    if ($PE_SCORE) {
+        if ($PE_SCORE.MinFileBytes)       { $peMinBytes  = [long]$PE_SCORE.MinFileBytes }
+        if ($PE_SCORE.MaxFileBytes)       { $peMaxBytes  = [long]$PE_SCORE.MaxFileBytes }
+        if ($PE_SCORE.MaxFilesParsed)     { $peMaxFiles  = [int]$PE_SCORE.MaxFilesParsed }
+        if ($PE_SCORE.ParseDeadlineMs)    { $peDeadline  = [int]$PE_SCORE.ParseDeadlineMs }
+        if ($PE_SCORE.EntropyWindowBytes) { $peWinBytes  = [int]$PE_SCORE.EntropyWindowBytes }
+        if ($PE_SCORE.MaxEntropySections) { $peMaxEntSec = [int]$PE_SCORE.MaxEntropySections }
+    }
+
+    # Two walks, each with its own budget, so a browser-cache-heavy AppData cannot starve the
+    # roots where an unsigned PE is anomalous by location alone. Assigned then iterated —
+    # never piped: Get-ScanFiles returns ,$arr and a pipe delivers the whole array as ONE item.
+    $peHotRoots = @(@($PE_SCAN_ROOTS_HOT) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+    $peAppRoots = @(@($PE_SCAN_ROOTS_APP) | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+    $peFound = @()
+    if ($peHotRoots.Count -gt 0) { $peFound += @(Get-ScanFiles -Path $peHotRoots -MaxFiles 6000 -DeadlineSecs 12) }
+    if ($peAppRoots.Count -gt 0) { $peFound += @(Get-ScanFiles -Path $peAppRoots -MaxFiles 6000 -DeadlineSecs 12) }
+
+    $peCandidates = New-Object System.Collections.Generic.List[object]
+    foreach ($f in $peFound) {
+        $flen = [long]$f.Length
+        if ($flen -lt $peMinBytes -or $flen -gt $peMaxBytes) { continue }
+        $fpath = "$($f.FullName)"
+        if ($fpath -match $PE_PACKER_BENIGN_RE) { continue }
+        $fext = "$($f.Extension)".ToLower()
+        $isTransient = ($fpath -match $PE_TRANSIENT_RE)
+        if ($PE_EXTENSIONS -notcontains $fext) {
+            # A staged payload with a disguised name lives in the hot roots. Two bytes of
+            # evidence is cheap; anything else with an unknown extension is skipped.
+            if (-not $isTransient) { continue }
+            if ($PE_PROBE_EXTENSIONS -notcontains $fext) { continue }
+            $probeStream = Open-ScythePeStream $fpath
+            if ($null -eq $probeStream) { continue }
+            $probe = Read-ScytheRange $probeStream 0 2
+            try { $probeStream.Dispose() } catch { }
+            if ($null -eq $probe) { continue }
+            if ((Get-ScytheU16 $probe 0) -ne 0x5A4D) { continue }
+        }
+        $peCandidates.Add([pscustomobject]@{
+            Path = $fpath; Name = "$($f.Name)"; Length = $flen
+            Written = $f.LastWriteTime; Transient = $isTransient
+        })
+    }
+
+    # Prioritise before capping. A hard cap in directory order silently drops the interesting
+    # files on a machine with a large AppData; transient-first then newest-first does not.
+    $peOrdered = @(@($peCandidates) | Sort-Object -Property @{Expression = { -not $_.Transient }}, @{Expression = { $_.Written }; Descending = $true})
+    $peTargets = @($peOrdered | Select-Object -First $peMaxFiles)
+    $peDropped = $peOrdered.Count - $peTargets.Count
+
+    if ($peTargets.Count -eq 0) {
+        Out-Typewriter "  -> NO PE FILES FOUND IN THE SCANNED ROOTS." "GOOD"
+    } else {
+        Out-Typewriter "  -> PARSING $($peTargets.Count) PE FILE(S)..." "INFO"
+
+        # ── Tier 1: header, sections, overlay, import COUNTS. Every candidate. ──
+        $peParsed = New-Object System.Collections.Generic.List[object]
+        foreach ($cand in $peTargets) {
+            $img = Read-ScythePeImage -Path $cand.Path -FileLength $cand.Length
+            if ($null -eq $img) { continue }
+
+            $sig = New-Object System.Collections.Generic.List[string]
+            $sc = 0
+            foreach ($s in @($img.Sections)) {
+                if (Test-ScytheNameRule -Name $s.Name -Rules $PE_PACKER_SECTIONS) {
+                    if (-not $sig.Contains('S3')) { $sig.Add('S3'); $sc += 2 }
+                }
+                $zeroRawMin = 4096
+                if ($PE_SCORE -and $PE_SCORE.ZeroRawMinVirtual) { $zeroRawMin = [long]$PE_SCORE.ZeroRawMinVirtual }
+                if ($s.SizeOfRawData -eq 0 -and $s.VirtualSize -ge $zeroRawMin) {
+                    if (-not $sig.Contains('S4')) { $sig.Add('S4'); $sc += 2 }
+                }
+                if ((($s.Characteristics -band 0x20000000) -ne 0) -and (($s.Characteristics -band 0x80000000) -ne 0)) {
+                    if (-not $sig.Contains('S5')) { $sig.Add('S5'); $sc += 2 }
+                }
+            }
+            # Entry point outside every section, or inside a writable one. Strongly abnormal
+            # for a compiler-produced image and free to compute.
+            $epSection = $null
+            foreach ($s in @($img.Sections)) {
+                if ($img.EntryRva -ge $s.VirtualAddress -and $img.EntryRva -lt ($s.VirtualAddress + [Math]::Max($s.VirtualSize, $s.SizeOfRawData))) {
+                    $epSection = $s; break
+                }
+            }
+            if ($img.EntryRva -gt 0) {
+                if ($null -eq $epSection) { $sig.Add('S6'); $sc += 3 }
+                elseif (($epSection.Characteristics -band 0x80000000) -ne 0) { $sig.Add('S6'); $sc += 3 }
+            }
+            $imports = Read-ScythePeImports -Image $img -DeadlineMs $peDeadline
+            $lowImportMax = 5
+            if ($PE_SCORE -and $PE_SCORE.LowImportMax) { $lowImportMax = [int]$PE_SCORE.LowImportMax }
+            if ($null -eq $imports) {
+                if ($img.ImportRva -gt 0) { $sig.Add('S8'); $sc += 2 }
+            } elseif ((-not $img.HasClr) -and (-not $imports.Truncated) -and $imports.FuncCount -lt $lowImportMax) {
+                # The CLR gate is mandatory, not optional: every .NET assembly imports exactly
+                # one function (_CorExeMain from mscoree.dll), so without it this fires on
+                # hundreds of healthy files.
+                $sig.Add('S7'); $sc += 3
+            }
+            $ovMinBytes = 1048576; $ovMinRatio = 0.25
+            if ($PE_SCORE) {
+                if ($PE_SCORE.OverlayMinBytes) { $ovMinBytes = [long]$PE_SCORE.OverlayMinBytes }
+                if ($PE_SCORE.OverlayMinRatio) { $ovMinRatio = [double]$PE_SCORE.OverlayMinRatio }
+            }
+            if ($img.Overlay -ge $ovMinBytes -and $img.Length -gt 0 -and (($img.Overlay / [double]$img.Length) -ge $ovMinRatio)) {
+                $sig.Add('S10'); $sc += 1
+            }
+            if ($img.TimeDateStamp -eq 0) { $sig.Add('S11'); $sc += 1 }
+
+            $peParsed.Add([pscustomobject]@{
+                Cand = $cand; Image = $img; Imports = $imports
+                Signals = $sig; S = $sc; C = 0; CSig = (New-Object System.Collections.Generic.List[string])
+                Verdict = $null
+            })
+        }
+
+        # ── Tier 2: entropy and import NAMES, only where Tier 1 scored or the path is hot. ──
+        foreach ($p in $peParsed) {
+            if ($p.S -eq 0 -and -not $p.Cand.Transient) { continue }
+            $entStream = Open-ScythePeStream $p.Cand.Path
+            if ($null -ne $entStream) {
+                $entDone = 0
+                foreach ($s in @($p.Image.Sections)) {
+                    if ($entDone -ge $peMaxEntSec) { break }
+                    if ($s.SizeOfRawData -lt 4096) { continue }
+                    if ("$($s.Name)" -match '(?i)^\.rsrc$') { continue }   # PNGs and manifests: high by nature
+                    $isExec = (($s.Characteristics -band 0x20000000) -ne 0)
+                    $entDone++
+                    # Two windows, not one: a packer stub sits at the section start with the
+                    # payload after it, so a single leading window is the one arrangement that
+                    # can be fooled.
+                    $best = $null
+                    foreach ($frac in @(0.0, 0.5)) {
+                        $at = $s.PointerToRawData + [long]([Math]::Floor($s.SizeOfRawData * $frac))
+                        $buf = Read-ScytheRange $entStream $at ([int][Math]::Min([long]$peWinBytes, $s.SizeOfRawData))
+                        if ($null -eq $buf) { continue }
+                        $e = Get-ScytheByteEntropy -Bytes $buf
+                        if ($null -eq $e) { continue }
+                        if ($null -eq $best -or $e -gt $best) { $best = $e }
+                    }
+                    if ($null -eq $best) { continue }
+                    $thExec = 7.2; $thData = 7.5
+                    if ($PE_SCORE) {
+                        if ($PE_SCORE.EntropyExec) { $thExec = [double]$PE_SCORE.EntropyExec }
+                        if ($PE_SCORE.EntropyData) { $thData = [double]$PE_SCORE.EntropyData }
+                    }
+                    if ($isExec -and $best -ge $thExec) {
+                        if (-not $p.Signals.Contains('S1')) { $p.Signals.Add('S1'); $p.S = $p.S + 2 }
+                    } elseif ((-not $isExec) -and $best -ge $thData) {
+                        if (-not $p.Signals.Contains('S2')) { $p.Signals.Add('S2'); $p.S = $p.S + 1 }
+                    }
+                }
+                try { $entStream.Dispose() } catch { }
+            }
+            $named = Read-ScythePeImports -Image $p.Image -DeadlineMs $peDeadline -NamesOnly
+            if ($null -ne $named -and $named.Names.Count -gt 0) {
+                foreach ($triad in @($PE_IMPORT_TRIADS)) {
+                    if ($null -eq $triad) { continue }
+                    $allPresent = $true
+                    foreach ($fn in @($triad.All)) { if (-not $named.Names.Contains("$fn")) { $allPresent = $false; break } }
+                    if (-not $allPresent) { continue }
+                    if (-not $p.Signals.Contains('S9')) { $p.Signals.Add('S9'); $p.S = $p.S + 4 }
+                    $p | Add-Member -NotePropertyName TriadName -NotePropertyValue "$($triad.Name)" -Force
+                    break
+                }
+            }
+        }
+        $peCap = 12
+        foreach ($p in $peParsed) { if ($p.S -gt $peCap) { $p.S = $peCap } }
+
+        # ── Tier 3: Authenticode. Last, and only where a structural signal already fired. ──
+        # This is the most expensive operation in the engine — the chain build does online
+        # CRL/OCSP — so it carries the shared budget. Running it on all 400 would exhaust the
+        # 25s allowance after ~20 files and leave the rest unclassified.
+        $peSigSw = [System.Diagnostics.Stopwatch]::StartNew()
+        $peSigSeen = 0; $peSigBudgetHit = $false
+        foreach ($p in @(@($peParsed) | Where-Object { $_.S -ge 2 -or $_.Cand.Transient })) {
+            if ($peSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or $peSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) {
+                $peSigBudgetHit = $true; break
+            }
+            $peSigSeen++
+            $p.Verdict = Get-SignatureVerdict $p.Cand.Path
+        }
+        $peSigSw.Stop()
+        if ($peSigBudgetHit) {
+            Out-Typewriter "  -> SIGNATURE BUDGET REACHED AFTER $peSigSeen FILE(S) - PARTIAL PASS." "WARN"
+        }
+
+        # ── Context scoring and the findings. ──
+        $peReported = 0; $peSuppressed = 0
+        $thFloor = 7; $thPossible = 12; $thPossibleC = 3; $thHigh = 17; $thHighC = 6; $thHighSn = 3
+        if ($PE_SCORE) {
+            if ($PE_SCORE.ReportFloor)        { $thFloor     = [int]$PE_SCORE.ReportFloor }
+            if ($PE_SCORE.PossibleMin)        { $thPossible  = [int]$PE_SCORE.PossibleMin }
+            if ($PE_SCORE.PossibleMinContext) { $thPossibleC = [int]$PE_SCORE.PossibleMinContext }
+            if ($PE_SCORE.HighMin)            { $thHigh      = [int]$PE_SCORE.HighMin }
+            if ($PE_SCORE.HighMinContext)     { $thHighC     = [int]$PE_SCORE.HighMinContext }
+            if ($PE_SCORE.HighMinSignals)     { $thHighSn    = [int]$PE_SCORE.HighMinSignals }
+        }
+        foreach ($p in $peParsed) {
+            $cVal = 0
+            $verdict = $p.Verdict
+            $signerName = ''
+            $trustedValid = $false
+            if ($null -ne $verdict) {
+                $signerName = "$($verdict.Signer)"
+                $vStatus = "$($verdict.Status)"
+                if ($vStatus -eq 'Valid') {
+                    if ($verdict.Trusted -or $verdict.IsMs) { $trustedValid = $true }
+                } elseif ([string]::IsNullOrWhiteSpace($signerName)) {
+                    $p.CSig.Add('C1'); $cVal += 3          # no signature at all
+                } else {
+                    $p.CSig.Add('C2'); $cVal += 6          # asserts an identity that does not verify
+                }
+            }
+            if ($p.Cand.Transient) { $p.CSig.Add('C3'); $cVal += 3 }
+            if ($null -ne $global:TIME_LIMIT -and $p.Cand.Written -gt $global:TIME_LIMIT) { $p.CSig.Add('C4'); $cVal += 2 }
+            if ((Test-ScytheNameRule -Name $p.Cand.Name -Rules $PE_MASQUERADE_NAMES) -and (-not ($null -ne $verdict -and $verdict.IsMs))) {
+                $p.CSig.Add('C5'); $cVal += 3
+            }
+            $p.C = $cVal
+            $peTotal = $p.S + $p.C
+            $peSn = $p.Signals.Count
+
+            # Signed-but-invalid is a different claim from "this looks packed" — it is "this
+            # file asserts an identity and the assertion fails" — so it gets its own finding
+            # regardless of score. Highest-value, lowest-FP output of the phase.
+            if ($p.CSig.Contains('C2')) {
+                Out-Typewriter "  -> SIGNED BUT INVALID: $($p.Cand.Path)" "CRIT"
+                Add-Finding -ID "PE146_BADSIG_$([Math]::Abs("$($p.Cand.Path)".ToLower().GetHashCode()))" -Phase "PHASE 146" `
+                    -ThreatType "Subvert Trust Controls" -Severity $SEV_POSSIBLE `
+                    -Description "'$($p.Cand.Path)' carries an Authenticode signature naming '$signerName', and that signature does NOT verify (status: $($verdict.Status)). Nothing else in this scan distinguishes 'unsigned' from 'someone tried to look signed', and the second is far more interesting: an unsigned file is merely unattested, whereas this one makes a claim about its origin that fails checking. The benign causes are real and are the first thing to rule out: a truncated or partially-downloaded file, a binary patched by an installer or a licence tool after signing, and a certificate whose chain this machine cannot build because its trust store or network path is broken - which phases 36, 37 and 39 examine, and which is itself worth knowing. Check it directly: Get-AuthenticodeSignature '$($p.Cand.Path)' | Format-List Status, StatusMessage, SignerCertificate. If the status is HashMismatch the file was modified after it was signed, and the modification is the finding (MITRE T1553.002)." `
+                    -Target $p.Cand.Path -FixAction "Info" -Group "PE Structure"
+                $peReported++
+            }
+
+            if ($peTotal -lt $thFloor) { continue }
+            if ($trustedValid -and $peTotal -lt $thPossible) { $peSuppressed++; continue }
+
+            $peSev = $SEV_INFO
+            if ($peTotal -ge $thHigh -and $p.C -ge $thHighC -and $peSn -ge $thHighSn) { $peSev = $SEV_HIGH }
+            elseif ($peTotal -ge $thPossible -and $p.C -ge $thPossibleC) { $peSev = $SEV_POSSIBLE }
+            # A valid signature from a trusted signer caps the result at INFO whatever the
+            # score. Half of commercial software is packed and validly signed; reporting a
+            # Themida-protected signed vendor agent as anything higher is the fastest way to
+            # make an operator stop reading this phase. The accepted cost is stolen-certificate
+            # malware, which other phases cover.
+            if ($trustedValid) { $peSev = $SEV_INFO }
+
+            $what = @()
+            if ($p.Signals.Contains('S1')) { $what += 'a high-entropy executable section' }
+            if ($p.Signals.Contains('S2')) { $what += 'a high-entropy data section' }
+            if ($p.Signals.Contains('S3')) { $what += 'a known packer section name' }
+            if ($p.Signals.Contains('S4')) { $what += 'a section allocated with no file content' }
+            if ($p.Signals.Contains('S5')) { $what += 'a writable AND executable section' }
+            if ($p.Signals.Contains('S6')) { $what += 'an entry point outside any section or in a writable one' }
+            if ($p.Signals.Contains('S7')) { $what += 'fewer than five imported functions in a native binary' }
+            if ($p.Signals.Contains('S8')) { $what += 'an import directory that maps to no file data' }
+            if ($p.Signals.Contains('S9')) { $what += "the $($p.TriadName) import set" }
+            if ($p.Signals.Contains('S10')) { $what += 'a large appended overlay' }
+            if ($p.Signals.Contains('S11')) { $what += 'a zeroed build timestamp' }
+            $whatStr = if ($what.Count) { ($what -join '; ') } else { 'no structural anomaly' }
+            $ctx = @()
+            if ($p.CSig.Contains('C1')) { $ctx += 'it is unsigned' }
+            if ($p.CSig.Contains('C3')) { $ctx += 'it sits in a transient user-writable directory' }
+            if ($p.CSig.Contains('C4')) { $ctx += 'it was written inside the scan window' }
+            if ($p.CSig.Contains('C5')) { $ctx += 'it carries the name of a Windows system binary without a Microsoft signature' }
+            $ctxStr = if ($ctx.Count) { ($ctx -join ', and ') } else { 'nothing about its situation is unusual' }
+            $sigNote = if ($trustedValid) { " It is validly signed by '$signerName', which caps this finding at INFO however high the structural score: packing is a legitimate product category and a signed vendor binary that is packed is not a defect." } else { "" }
+
+            Out-Typewriter "  -> PE STRUCTURE SCORE $peTotal (S=$($p.S) C=$($p.C)): $($p.Cand.Path)" $(if ($peSev -eq $SEV_HIGH) { "CRIT" } else { "WARN" })
+            Add-Finding -ID "PE146_STRUCT_$([Math]::Abs("$($p.Cand.Path)".ToLower().GetHashCode()))" -Phase "PHASE 146" `
+                -ThreatType "Obfuscated Files or Information" -Severity $peSev `
+                -Description "'$($p.Cand.Path)' scored $peTotal on PE structural analysis (structure $($p.S), context $($p.C), $peSn distinct structural signals). Structure: $whatStr. Context: $ctxStr.$sigNote Read this as a WEIGHTED result, not a verdict: none of these signals is malicious on its own and this phase deliberately cannot report a file for a single one - packing in particular is normal, since half of commercial software is packed, every installer resembles a dropper, and .NET obfuscators are a product category people pay for. What raises a score is the COMBINATION of an unusual structure with an unusual situation. Next steps, in order: confirm what the file claims to be with Get-AuthenticodeSignature '$($p.Cand.Path)' | Format-List Status, SignerCertificate ; find out how it got there with Get-Item '$($p.Cand.Path)' | Format-List CreationTime, LastWriteTime, Length ; and submit the hash to your threat-intelligence provider rather than judging it from structure alone (MITRE T1027.002 for the packing signals, T1055 for the injection import set)." `
+                -Target $p.Cand.Path -FixAction "Info" -Group "PE Structure"
+            $peReported++
+        }
+
+        # Report what was VERIFIED, not only what failed — the band's own convention (phase 155).
+        Out-Typewriter "  -> $($peParsed.Count) PE FILE(S) PARSED, $peReported REPORTED, $peSuppressed SIGNED-AND-SUPPRESSED." "GOOD"
+        if ($peDropped -gt 0) {
+            Out-Typewriter "  -> $peDropped CANDIDATE(S) BEYOND THE $peMaxFiles-FILE CAP WERE NOT PARSED." "WARN"
+            Add-Finding -ID "PE146_CAPPED" -Phase "PHASE 146" `
+                -ThreatType "Coverage" -Severity $SEV_INFO `
+                -Description "Phase 146 found $($peOrdered.Count) candidate PE files and parsed the first $($peTargets.Count); $peDropped were not examined. The cap exists because parsing is bounded work and an unbounded scan is a scan that never finishes. Files are prioritised before the cap is applied - transient directories first, then most-recently-written - so the ones dropped are the least likely to matter, but this is reported rather than left silent because 'not examined' must never be read as 'clean'. If this machine is under active investigation, narrow the scan window with -Hours, or raise MaxFilesParsed in the pe_score_thresholds key." `
+                -Target "Phase146Coverage" -FixAction "Info" -Group "PE Structure"
+        }
+    }
 
     # ── PHASE 147: CLOUD IDENTITY AND DEVOPS CREDENTIAL EXPOSURE ──────────────
     # Coverage before this phase stopped at browser password stores, FileZilla, WinSCP
@@ -213,7 +904,7 @@ if ($PhasePlan.Hunt) {
     }
 
     if ($credPresent.Count -eq 0) {
-        Out-Typewriter "  -> NO CLOUD OR DEVOPS CREDENTIAL STORES FOUND." "OK"
+        Out-Typewriter "  -> NO CLOUD OR DEVOPS CREDENTIAL STORES FOUND." "GOOD"
     } else {
         Out-Typewriter "  -> $($credPresent.Count) CREDENTIAL STORE(S) PRESENT ON THIS HOST." "INFO"
         $credList = (@($credPresent) | ForEach-Object { Split-Path $_ -Leaf } | Sort-Object -Unique) -join ', '
@@ -233,7 +924,7 @@ if ($PhasePlan.Hunt) {
         if (-not (Test-ScytheNameRule -Name $leaf -Rules $CLOUD_CRED_TEXT_FORMATS)) { continue }
         $hit = Test-ContentRules -FilePath $cp -Rules $CLOUD_CRED_CONTENT_RULES -MaxBytes 1048576
         if (-not $hit.Hit) { continue }
-        $credSev = if ("$($hit.Severity)" -eq 'HIGH') { $SEV_HIGH } else { $SEV_POSSIBLE }
+        $credSev = switch ("$($hit.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
         Out-Typewriter "  -> PLAINTEXT SECRET MATERIAL IN: $cp ($($hit.Name))" "CRIT"
         Add-Finding -ID "CLOUD147_PLAIN_$([Math]::Abs($cp.ToLower().GetHashCode()))" -Phase "PHASE 147" `
             -ThreatType "Credential Access" -Severity $credSev `
@@ -313,7 +1004,7 @@ if ($PhasePlan.Hunt) {
             -Description "SMB server-side signing is not REQUIRED on this host (RequireSecuritySignature=$srvReq, EnableSecuritySignature=$srvEna). A server that only permits signing will still complete an unsigned session, and an unsigned SMB session can be relayed: an attacker who can coerce this machine — or any account on it — into authenticating elsewhere can forward that authentication to a third host and act as the user, without ever learning the password. Enabling signing is not sufficient; it must be required. Set it with: Set-SmbServerConfiguration -RequireSecuritySignature 1 -Force   (registry equivalent: HKLM\$srvParams\RequireSecuritySignature = 1). Set the client-side twin as well, under LanmanWorkstation. Expect a measurable throughput cost on large file transfers; that cost is the point of the control." `
             -Target "HKLM\$srvParams\RequireSecuritySignature" -FixAction "Info" -Group "Network Exposure"
     } else {
-        Out-Typewriter "  -> SMB SERVER SIGNING REQUIRED." "OK"
+        Out-Typewriter "  -> SMB SERVER SIGNING REQUIRED." "GOOD"
     }
 
     $wksReq = Get-RegVal64 -Hive LocalMachine -SubKey $wksParams -Name 'RequireSecuritySignature'
@@ -335,7 +1026,7 @@ if ($PhasePlan.Hunt) {
             -Description "AllowInsecureGuestAuth is enabled. Any host on the same network can open an SMB session to this machine as 'guest' with no credentials, enumerate the published share list, and read anything whose ACL grants Everyone or Guest. Guest sessions are additionally unsigned and unencrypted, so their contents can be modified in transit. Windows disables this by default; something set it. Disable with: Set-ItemProperty 'HKLM:\$wksParams' AllowInsecureGuestAuth 0   then confirm the Guest account itself is disabled (Get-LocalUser Guest)." `
             -Target "HKLM\$wksParams\AllowInsecureGuestAuth" -FixAction "Info" -Group "Network Exposure"
     } else {
-        Out-Typewriter "  -> INSECURE GUEST AUTH DISABLED." "OK"
+        Out-Typewriter "  -> INSECURE GUEST AUTH DISABLED." "GOOD"
     }
 
     # The local Guest account itself, independent of the SMB policy above.
@@ -351,7 +1042,7 @@ if ($PhasePlan.Hunt) {
             -Description "The built-in Guest account is ENABLED. Windows ships it disabled. Enabled, it is an unauthenticated foothold for share access and, on some configurations, for interactive logon. Disable with: Disable-LocalUser -Name Guest   and verify no share ACL still references it (phase 154 lists those)." `
             -Target "LocalUser\Guest" -FixAction "Info" -Group "Network Exposure"
     } elseif ($guestOn -eq $false) {
-        Out-Typewriter "  -> LOCAL GUEST ACCOUNT DISABLED." "OK"
+        Out-Typewriter "  -> LOCAL GUEST ACCOUNT DISABLED." "GOOD"
     }
 
     # Null-session (fully anonymous) access.
@@ -381,7 +1072,7 @@ if ($PhasePlan.Hunt) {
             -Description "SMB1 is enabled on this host. SMB1 cannot negotiate modern signing or encryption, is the transport several self-propagating families use to spread across a flat network, and has no remaining legitimate use outside specific legacy appliances. Disable with: Disable-WindowsOptionalFeature -Online -FeatureName SMB1Protocol -NoRestart   then reboot. If a legacy device genuinely requires it, isolate that device instead of keeping SMB1 on general workstations." `
             -Target "SMB1Protocol" -FixAction "Info" -Group "Network Exposure"
     } elseif ($smb1 -eq $false) {
-        Out-Typewriter "  -> SMB1 DISABLED." "OK"
+        Out-Typewriter "  -> SMB1 DISABLED." "GOOD"
     }
 
     # ── PHASE 154: SHARE INVENTORY AND SHARE-LEVEL ACL AUDIT ──────────────────
@@ -409,7 +1100,7 @@ if ($PhasePlan.Hunt) {
                 -Description "The share '$shName' publishes '$shPath' over the network. This is not a default Windows share, so it was created deliberately — confirm it is still required. A share rooted at a user profile directory, a drive root, or a directory containing credentials, backups or configuration is a direct data-exposure path and, if writable, a route to plant a startup or shortcut file that executes when a user logs in. Review with: Get-SmbShareAccess -Name '$shName'   and remove with: Remove-SmbShare -Name '$shName'" `
                 -Target "SmbShare\$shName" -FixAction "Info" -Group "Network Exposure"
         }
-        if ($nonDefault.Count -eq 0) { Out-Typewriter "  -> NO NON-DEFAULT SHARES PUBLISHED." "OK" }
+        if ($nonDefault.Count -eq 0) { Out-Typewriter "  -> NO NON-DEFAULT SHARES PUBLISHED." "GOOD" }
 
         # Share-level ACEs granting an anonymous or universal principal. This is the
         # ACL that actually decides whether the guest session of phase 153 can read.
@@ -457,7 +1148,7 @@ if ($PhasePlan.Hunt) {
             -Description "LLMNR is not disabled (EnableMulticast=$llmnr). When DNS resolution fails — a typo, a stale mapped drive, a decommissioned server name — this host broadcasts the name to the entire local segment and trusts whoever answers first. An attacker on the same segment answers every query, and the host then authenticates to them, handing over an NTLMv2 response that can be cracked offline or relayed onward immediately. This works against a host with every inbound port closed, because the host initiates it. Disable: HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\EnableMulticast = 0 (Group Policy: Computer Configuration > Administrative Templates > Network > DNS Client > Turn off multicast name resolution)." `
             -Target "HKLM\SOFTWARE\Policies\Microsoft\Windows NT\DNSClient\EnableMulticast" -FixAction "Info" -Group "Network Exposure"
     } else {
-        Out-Typewriter "  -> LLMNR DISABLED." "OK"
+        Out-Typewriter "  -> LLMNR DISABLED." "GOOD"
     }
 
     # NBT-NS, per interface. Option 2 = disabled. Anything else leaks the hostname
@@ -474,7 +1165,7 @@ if ($PhasePlan.Hunt) {
             -Description "NetBIOS over TCP/IP is not disabled on: $($nbtBad -join ', ') (NetbiosOptions 2 = disabled). NBT-NS is the second broadcast name-resolution channel and is poisoned exactly as LLMNR is, with the same outcome — a coerced NTLM authentication to an attacker on the segment. It additionally discloses this machine's name to any unauthenticated peer that asks. Set NetbiosOptions = 2 on every interface under HKLM\SYSTEM\CurrentControlSet\Services\NetBT\Parameters\Interfaces, or via the adapter's IPv4 > Advanced > WINS tab." `
             -Target "NetBT\Parameters\Interfaces" -FixAction "Info" -Group "Network Exposure"
     } else {
-        Out-Typewriter "  -> NetBIOS-over-TCP DISABLED ON ALL INTERFACES." "OK"
+        Out-Typewriter "  -> NetBIOS-over-TCP DISABLED ON ALL INTERFACES." "GOOD"
     }
 
     # mDNS — the third channel, and the one most often left on because it is newer
@@ -562,7 +1253,7 @@ if ($PhasePlan.Hunt) {
             -Target "DODownloadMode" -FixAction "Info" -Group "Network Exposure"
     }
 
-    Out-Typewriter "NETWORK-EXPOSURE BAND COMPLETE." "OK"
+    Out-Typewriter "NETWORK-EXPOSURE BAND COMPLETE." "GOOD"
 
     # ── PHASE 157: THE REMAINING PERSISTENCE SURFACE ──────────────────────────
     # The autostart coverage in phases 20-35 and 90-105 is genuinely good. These are the
@@ -591,9 +1282,16 @@ if ($PhasePlan.Hunt) {
             $dll     = Get-RegVal64 -Hive $ps.Hive -SubKey $ps.Key -Name 'COR_PROFILER_PATH'
             if ($null -eq $dll) { $dll = Get-RegVal64 -Hive $ps.Hive -SubKey $ps.Key -Name 'CORECLR_PROFILER_PATH' }
             if ($null -eq $enabled -and $null -eq $clsid -and $null -eq $dll) { continue }
+            # Explicitly DISABLED is not a finding. A profiler left behind by an uninstalled
+            # APM agent sets COR_ENABLE_PROFILING=0 and nothing loads; reporting that as HIGH
+            # is a false positive on every machine that ever had monitoring installed.
+            if ($null -ne $enabled -and [int]$enabled -eq 0) { continue }
+            # A CLSID with no path resolves to nothing, so the allowlist cannot apply and the
+            # finding would name an empty file. Report only what can be pointed at.
+            if ([string]::IsNullOrWhiteSpace("$dll")) { continue }
             $dllPath = Resolve-ScytheModulePath "$dll"
             if ($dllPath -and $dllPath -match $PERSIST_PROFILER_BENIGN_RE) {
-                Out-Typewriter "  -> .NET PROFILER SET BY A KNOWN APM AGENT: $dllPath" "OK"
+                Out-Typewriter "  -> .NET PROFILER SET BY A KNOWN APM AGENT: $dllPath" "GOOD"
                 continue
             }
             Out-Typewriter "  -> .NET PROFILER CONFIGURED IN $($ps.Label): $dllPath" "CRIT"
@@ -603,24 +1301,6 @@ if ($PhasePlan.Hunt) {
                 -Target "$($ps.Label)\COR_PROFILER" -FixAction "Info" -Group "Persistence Surface"
         }
     } catch { Write-Log "PHASE 157: COR_PROFILER check failed - $($_.Exception.Message)" }
-
-    # 2. Active Setup StubPath — runs once per user at first logon and survives a profile
-    #    reset, which is what makes it outlast the usual "delete the profile" response.
-    try {
-        $asRoot = 'SOFTWARE\Microsoft\Active Setup\Installed Components'
-        foreach ($comp in @(Get-RegSubKeys64 -Hive LocalMachine -SubKey $asRoot)) {
-            $stub = Get-RegVal64 -Hive LocalMachine -SubKey "$asRoot\$comp" -Name 'StubPath'
-            if ([string]::IsNullOrWhiteSpace("$stub")) { continue }
-            if ("$stub" -match $PERSIST_STUBPATH_BENIGN_RE) { continue }
-            $stubMod = Resolve-ScytheModulePath "$stub"
-            if (-not (Test-ScytheUntrustedModule $stubMod)) { continue }
-            Out-Typewriter "  -> ACTIVE SETUP STUBPATH: $comp -> $stub" "WARN"
-            Add-Finding -ID "PERS157_ACTIVESETUP_$([Math]::Abs("$comp".ToLower().GetHashCode()))" -Phase "PHASE 157" `
-                -ThreatType "Persistence" -Severity $SEV_POSSIBLE `
-                -Description "Active Setup component '$comp' has StubPath = '$stub', which does not resolve to a trusted-signed binary. Active Setup runs a StubPath ONCE per user account, at that user's first logon after the component's version stamp changes, in that user's own session. Two consequences make it worth checking: it fires for users who have never logged on to this machine yet, and it survives deleting and recreating a profile — the standard cleanup step for a user-scoped compromise. The benign case is ordinary and common: Windows itself and several Microsoft products use Active Setup for per-user first-run configuration, and third-party installers do too. Read the whole entry with: Get-ItemProperty 'HKLM:\$asRoot\$comp'   and check the ComponentID and Version values alongside StubPath. If it is not explained by an installed product, record the StubPath as evidence, then remove the value with: Remove-ItemProperty 'HKLM:\$asRoot\$comp' -Name StubPath" `
-                -Target "HKLM\$asRoot\$comp\StubPath" -FixAction "Info" -Group "Persistence Surface"
-        }
-    } catch { Write-Log "PHASE 157: Active Setup check failed - $($_.Exception.Message)" }
 
     # 3. SilentProcessExit MonitorProcess — persistence AND an LSASS-dumping primitive,
     #    because the monitor runs with the dying process's context available to it.
@@ -642,8 +1322,9 @@ if ($PhasePlan.Hunt) {
     try {
         $werSites = @(
             @{ Key = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting'; Name = 'ReflectDebugger' },
-            @{ Key = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\Hangs'; Name = 'Debugger' },
-            @{ Key = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\Hangs'; Name = 'ReflectDebugger' }
+            @{ Key = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\Hangs'; Name = 'Debugger' }
+            # Hangs\ReflectDebugger is deliberately absent: phase 126 covers exactly that
+            # value. The two sites above are the ones it does not.
         )
         foreach ($ws in $werSites) {
             $dbg = Get-RegVal64 -Hive LocalMachine -SubKey $ws.Key -Name $ws.Name
@@ -662,16 +1343,13 @@ if ($PhasePlan.Hunt) {
     #    registered modules, resolve each to a file, and report the ones that are not
     #    trusted-signed. The mechanism existing is normal; an unsigned DLL in it is not.
     try {
+        # Only the two sites phase 126 does NOT already cover. Its
+        # extended_autostart_points key walks Netsh, Print\Monitors, W32Time\TimeProviders,
+        # Active Setup, SCRNSAVE.EXE and the Winsock catalogue, and phase 126 runs whenever
+        # HUNT runs ($PhasePlan.Extended is true for HUNT) — so duplicating them here produced
+        # two findings with different IDs and different severities for one artifact, which
+        # phase 160 would then correlate on the shared target as if it were two facts.
         $dllSites = @(
-            @{ Key = 'SYSTEM\CurrentControlSet\Services\W32Time\TimeProviders'; Sub = $true;  Value = 'DllName';
-               What = 'a W32Time time provider'; Tag = 'TIMEPROV';
-               Why  = 'Time providers are loaded as SYSTEM inside the svchost hosting the Windows Time service, at boot, on a key nothing audits.' },
-            @{ Key = 'SYSTEM\CurrentControlSet\Control\Print\Monitors';         Sub = $true;  Value = 'Driver';
-               What = 'a print monitor'; Tag = 'PRINTMON';
-               Why  = 'Print monitors are loaded as SYSTEM by the spooler service, which runs by default and restarts itself. This is distinct from PrintNightmare (phase 96) — it is the registration path, not the driver-install vulnerability.' },
-            @{ Key = 'SOFTWARE\Microsoft\Netsh';                                Sub = $false; Value = '';
-               What = 'a netsh helper DLL'; Tag = 'NETSH';
-               Why  = 'A netsh helper is loaded into every netsh.exe run — including the ones administrators and management tooling perform routinely, and including several this scan itself would trigger on a differently-built tool.' },
             @{ Key = 'SOFTWARE\Microsoft\Windows\CurrentVersion\ShellServiceObjectDelayLoad'; Sub = $false; Value = '';
                What = 'a delay-loaded shell service object'; Tag = 'SSODL';
                Why  = 'These CLSIDs are loaded into explorer.exe at every logon, in the interactive user context.' },
@@ -724,44 +1402,18 @@ if ($PhasePlan.Hunt) {
                 -Description "AutodialDLL is set to '$autodial' rather than the stock '$stockAutodial'. Windows loads this DLL into any process that makes a WinINet call and finds no connection — which on a normal desktop means it is loaded into browsers, updaters, Office and most management agents, in their own context (MITRE T1546). It has no legitimate third-party use that this project has seen. Confirm the current value with: Get-ItemProperty 'HKLM:\$wsParams' -Name AutodialDLL   and restore it with: Set-ItemProperty 'HKLM:\$wsParams' -Name AutodialDLL -Value '$stockAutodial'. Preserve the replacement DLL as evidence first — it is the payload, and its signature and compile timestamp are what date the intrusion." `
                 -Target "HKLM\$wsParams\AutodialDLL" -FixAction "Info" -Group "Persistence Surface"
         }
-        $lspRoot = "$wsParams\Protocol_Catalog9\Catalog_Entries"
-        foreach ($lsp in @(Get-RegSubKeys64 -Hive LocalMachine -SubKey $lspRoot)) {
-            $pe = Get-RegVal64 -Hive LocalMachine -SubKey "$lspRoot\$lsp" -Name 'PackedCatalogItem'
-            if ($null -eq $pe) { continue }
-            # PackedCatalogItem is a binary blob whose first field is the provider DLL path
-            # as a null-terminated wide string. Decode only that leading path — no parsing
-            # of attacker-controlled structure beyond the first field.
-            $lspPath = ''
-            try {
-                $txt = [System.Text.Encoding]::Unicode.GetString([byte[]]$pe)
-                $nul = $txt.IndexOf([char]0)
-                $lspPath = if ($nul -gt 0) { $txt.Substring(0, $nul) } else { '' }
-            } catch { $lspPath = '' }
-            if ([string]::IsNullOrWhiteSpace($lspPath)) { continue }
-            $lspMod = Resolve-ScytheModulePath $lspPath
-            if (-not (Test-ScytheUntrustedModule $lspMod)) { continue }
-            Out-Typewriter "  -> UNTRUSTED WINSOCK LSP: $lspMod" "CRIT"
-            Add-Finding -ID "PERS157_LSP_$([Math]::Abs("$lspMod".ToLower().GetHashCode()))" -Phase "PHASE 157" `
-                -ThreatType "Persistence / Collection" -Severity $SEV_HIGH `
-                -Description "Winsock catalogue entry '$lsp' provides '$lspMod', which is missing or not trusted-signed. A layered service provider is loaded into EVERY process that opens a socket, and sits in the data path of that process's traffic — so it is simultaneously persistence, injection and a network tap that needs no driver and no hooking (MITRE T1546). Legitimate LSPs still exist (some VPN, DLP and parental-control products install them), which is why the signature verdict is the trigger rather than the entry's existence. Inventory the catalogue with: netsh winsock show catalog. If this entry is unexplained, reset the catalogue with: netsh winsock reset   then REBOOT — note that this removes every third-party LSP including legitimate ones, so record the catalogue output first, and expect VPN or filtering products to need reinstalling afterwards." `
-                -Target "HKLM\$lspRoot\$lsp" -FixAction "Info" -Group "Persistence Surface"
-        }
     } catch { Write-Log "PHASE 157: Winsock check failed - $($_.Exception.Message)" }
 
     # 10/11. Two single-value hijacks: the screen saver and the RDP initial program.
     try {
-        $scr = Get-RegVal64 -Hive CurrentUser -SubKey 'Control Panel\Desktop' -Name 'SCRNSAVE.EXE'
-        $scrMod = Resolve-ScytheModulePath "$scr"
-        if ("$scr" -and (Test-ScytheUntrustedModule $scrMod)) {
-            Out-Typewriter "  -> SCREEN SAVER BINARY IS UNTRUSTED: $scr" "WARN"
-            Add-Finding -ID "PERS157_SCRNSAVE" -Phase "PHASE 157" `
-                -ThreatType "Persistence" -Severity $SEV_POSSIBLE `
-                -Description "The screen saver is set to '$scr', which is missing or not trusted-signed. Windows executes this binary in the interactive user's session after the idle timeout — ancient, still functional, and absent from every modern autostart listing (MITRE T1546.002). It is a reliable trigger precisely because an idle workstation is when nobody is watching. Benign cases exist: corporate branded screen savers and some vendor lock screens are unsigned. Check the value with: Get-ItemProperty 'HKCU:\Control Panel\Desktop' | Select-Object SCRNSAVE.EXE, ScreenSaveActive, ScreenSaveTimeOut   and reset it by choosing a stock screen saver in Settings, or with: Set-ItemProperty 'HKCU:\Control Panel\Desktop' -Name 'SCRNSAVE.EXE' -Value 'scrnsave.scr'" `
-                -Target "HKCU\Control Panel\Desktop\SCRNSAVE.EXE" -FixAction "Info" -Group "Persistence Surface"
-        }
         $rdpKey = 'SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp'
         $initProg = Get-RegVal64 -Hive LocalMachine -SubKey $rdpKey -Name 'InitialProgram'
-        if (-not [string]::IsNullOrWhiteSpace("$initProg")) {
+        $initMod  = Resolve-ScytheModulePath "$initProg"
+        # Gated on the signature verdict like every other branch in this phase. Published-
+        # application and kiosk deployments set InitialProgram deliberately, and on an RDS
+        # session host an ungated check fires on every scan — which teaches operators to
+        # ignore the phase.
+        if ((-not [string]::IsNullOrWhiteSpace("$initProg")) -and (Test-ScytheUntrustedModule $initMod)) {
             Out-Typewriter "  -> RDP INITIALPROGRAM SET: $initProg" "CRIT"
             Add-Finding -ID "PERS157_RDPINIT" -Phase "PHASE 157" `
                 -ThreatType "Persistence" -Severity $SEV_HIGH `
@@ -789,8 +1441,16 @@ if ($PhasePlan.Hunt) {
                 -Description "Service '$svc' has Start=4 (Disabled) but carries $($trig.Count) TriggerInfo subkey(s). ImagePath: '$img'. A trigger-started service runs when its registered event occurs — a device arriving, an IP address appearing, a firewall port opening, an ETW event firing — regardless of what the Start value says, and the Services console displays it as Disabled the whole time. That is why this matters: 'I checked, the service is disabled' is a conclusion this configuration is specifically able to defeat. Windows itself ships several demand-start services in this shape and this phase allowlists the ones seen on stock and domain-managed builds, so treat this as a prompt to identify the service rather than as a detection. List the triggers with: sc.exe qtriggerinfo '$svc'   and inspect the image with: Get-AuthenticodeSignature '$img'. If the service is not recognised, delete the triggers with: sc.exe triggerinfo '$svc' delete   before deciding what to do with the service itself." `
                 -Target "HKLM\$svcRoot\$svc\TriggerInfo" -FixAction "Info" -Group "Persistence Surface"
         }
-        if ($trigCount -eq 0) { Out-Typewriter "  -> NO DISABLED-BUT-TRIGGERED SERVICES." "OK" }
+        if ($trigCount -eq 0) { Out-Typewriter "  -> NO DISABLED-BUT-TRIGGERED SERVICES." "GOOD" }
     } catch { Write-Log "PHASE 157: service trigger check failed - $($_.Exception.Message)" }
+
+    if ($global:SCYTHE_P157_SIGSKIPPED -gt 0) {
+        Out-Typewriter "  -> SIGNATURE BUDGET REACHED - $($global:SCYTHE_P157_SIGSKIPPED) MODULE(S) NOT VERIFIED." "WARN"
+        Add-Finding -ID "PERS157_SIGBUDGET" -Phase "PHASE 157" `
+            -ThreatType "Coverage" -Severity $SEV_INFO `
+            -Description "Phase 157 verified $($global:SCYTHE_P157_SIGSEEN) module signature(s) and then reached its budget, leaving $($global:SCYTHE_P157_SIGSKIPPED) module(s) UNVERIFIED. Those were not reported, so their absence from this report means 'not checked', not 'clean'. The budget exists because Authenticode verification builds the full certificate chain, which by default performs online revocation checks - on a machine whose network is slow, filtered, or (very much the point of this tool) actively tampered with, each call blocks for the timeout and an unbounded loop here would run for many minutes. If this machine is under active investigation, re-run the scan once name resolution and outbound HTTP are known good, or verify the remaining modules by hand from the persistence keys this phase enumerates." `
+            -Target "Phase157Coverage" -FixAction "Info" -Group "Persistence Surface"
+    }
 
     # 13. Shell file types that execute or coerce authentication when merely rendered.
     try {
@@ -888,7 +1548,7 @@ if ($PhasePlan.Hunt) {
                     }
                 }
                 if (-not $hookHit.Hit) { continue }
-                $extSev = if ("$($hookHit.Severity)" -eq 'HIGH') { $SEV_HIGH } else { $SEV_POSSIBLE }
+                $extSev = switch ("$($hookHit.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
                 $startNote = if ($startHit.Hit) { "It also activates at editor startup ($($startHit.Name)), so it runs whether or not the user opens a matching file." } else { "Its declared activation events are narrower than startup, so it runs only for matching files." }
                 Out-Typewriter "  -> EXTENSION MANIFEST MATCHES '$($hookHit.Name)': $($ed.Name)" "CRIT"
                 Add-Finding -ID "SUPPLY158_EXT_$([Math]::Abs("$($ed.FullName)".ToLower().GetHashCode()))" -Phase "PHASE 158" `
@@ -905,7 +1565,7 @@ if ($PhasePlan.Hunt) {
     try {
         $repoRoots = @(Get-ScytheRepoRoots)
         if ($repoRoots.Count -eq 0) {
-            Out-Typewriter "  -> NO LOCAL REPOSITORIES FOUND IN THE USUAL DEVELOPER DIRECTORIES." "OK"
+            Out-Typewriter "  -> NO LOCAL REPOSITORIES FOUND IN THE USUAL DEVELOPER DIRECTORIES." "GOOD"
         }
         foreach ($repo in $repoRoots) {
             # .vscode/tasks.json — opening the repository is enough to execute this.
@@ -914,7 +1574,7 @@ if ($PhasePlan.Hunt) {
                 $tStart = Test-ContentRules -FilePath $tasksJson -Rules $DEVTOOL_STARTUP_RULES -MaxBytes 262144
                 $tHook  = Test-ContentRules -FilePath $tasksJson -Rules $DEVTOOL_HOOK_RULES    -MaxBytes 262144
                 if ($tStart.Hit -or $tHook.Hit) {
-                    $tSev = if ($tHook.Hit -and "$($tHook.Severity)" -eq 'HIGH') { $SEV_HIGH } else { $SEV_POSSIBLE }
+                    $tSev = if ($tHook.Hit) { switch ("$($tHook.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } } } else { $SEV_POSSIBLE }
                     $tWhat = if ($tHook.Hit) { "$($tHook.Name)" } else { "$($tStart.Name)" }
                     Out-Typewriter "  -> REPOSITORY TASK RUNS ON OPEN: $tasksJson" "CRIT"
                     Add-Finding -ID "SUPPLY158_TASK_$([Math]::Abs($tasksJson.ToLower().GetHashCode()))" -Phase "PHASE 158" `
@@ -933,7 +1593,7 @@ if ($PhasePlan.Hunt) {
                     $hfPath = "$($hf.FullName)"
                     $hHit = Test-ContentRules -FilePath $hfPath -Rules $DEVTOOL_HOOK_RULES -MaxBytes 262144
                     if (-not $hHit.Hit) { continue }
-                    $hSev = if ("$($hHit.Severity)" -eq 'HIGH') { $SEV_HIGH } else { $SEV_POSSIBLE }
+                    $hSev = switch ("$($hHit.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
                     Out-Typewriter "  -> GIT HOOK MATCHES '$($hHit.Name)': $hfPath" "CRIT"
                     Add-Finding -ID "SUPPLY158_HOOK_$([Math]::Abs($hfPath.ToLower().GetHashCode()))" -Phase "PHASE 158" `
                         -ThreatType "Supply Chain / Execution" -Severity $hSev `
@@ -949,7 +1609,7 @@ if ($PhasePlan.Hunt) {
                 if ($pText -match '(?i)"(preinstall|postinstall|prepare)"\s{0,4}:') {
                     $pHit = Test-ScytheTextRules -Text $pText -Rules $DEVTOOL_HOOK_RULES
                     if ($null -ne $pHit) {
-                        $pSev = if ("$($pHit.Severity)" -eq 'HIGH') { $SEV_HIGH } else { $SEV_POSSIBLE }
+                        $pSev = switch ("$($pHit.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
                         Out-Typewriter "  -> INSTALL SCRIPT MATCHES '$($pHit.Name)': $pkgJson" "CRIT"
                         Add-Finding -ID "SUPPLY158_NPM_$([Math]::Abs($pkgJson.ToLower().GetHashCode()))" -Phase "PHASE 158" `
                             -ThreatType "Supply Chain / Execution" -Severity $pSev `
@@ -1011,7 +1671,7 @@ if ($PhasePlan.Hunt) {
         foreach ($rf in @($regFiles | Sort-Object -Unique)) {
             $rHit = Test-ContentRules -FilePath $rf -Rules $DEVTOOL_REGISTRY_RULES -MaxBytes 262144
             if (-not $rHit.Hit) { continue }
-            $rSev = if ("$($rHit.Severity)" -eq 'HIGH') { $SEV_HIGH } else { $SEV_POSSIBLE }
+            $rSev = switch ("$($rHit.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
             Out-Typewriter "  -> PACKAGE REGISTRY OVERRIDE ('$($rHit.Name)'): $rf" "WARN"
             Add-Finding -ID "SUPPLY158_REGISTRY_$([Math]::Abs("$rf".ToLower().GetHashCode()))" -Phase "PHASE 158" `
                 -ThreatType "Supply Chain" -Severity $rSev `
@@ -1065,8 +1725,22 @@ if ($PhasePlan.Hunt) {
     # than returning false, so the whole phase has to degrade cleanly on one.
     $sbState = $null
     $isUefi  = $true
+    $sbError = ''
     try { $sbState = [bool](Confirm-SecureBootUEFI -ErrorAction Stop) }
-    catch { $sbState = $null; $isUefi = $false }
+    catch { $sbState = $null; $sbError = "$($_.Exception.Message)"; $isUefi = $false }
+    # Confirm-SecureBootUEFI throws on a legacy-BIOS machine — but it also throws when the
+    # cmdlet is unavailable, the module is blocked, or WMI is broken. Those are different
+    # facts and reporting the second as the first is a confident false claim about the
+    # hardware. $env:firmware_type is set by Windows and disambiguates them.
+    $fwType = "$env:firmware_type"
+    if ((-not $isUefi) -and $fwType -match '(?i)uefi') {
+        $isUefi = $true
+        Out-Typewriter "  -> SECURE BOOT STATE COULD NOT BE READ ON A UEFI MACHINE." "WARN"
+        Add-Finding -ID "BOOT159_SB_UNREADABLE" -Phase "PHASE 159" `
+            -ThreatType "Boot Integrity" -Severity $SEV_INFO `
+            -Description "This machine reports firmware type '$fwType', so it boots via UEFI - but Confirm-SecureBootUEFI failed and the Secure Boot state could NOT be determined this run. The error was: $sbError. This is reported rather than treated as 'not UEFI', because saying a UEFI machine is legacy BIOS is a false statement about the hardware, and an unread check must never read as a pass. Common causes, in order: the SecureBoot PowerShell module is unavailable or blocked by policy; WMI is unhealthy (try 'winmgmt /verifyrepository'); or the scan is not running elevated, which this engine normally guarantees. Determine it by hand with: Confirm-SecureBootUEFI   and if that fails, msinfo32 reports both Secure Boot State and BIOS Mode on its System Summary page." `
+            -Target "SecureBoot" -FixAction "Info" -Group "Boot Integrity"
+    }
 
     if (-not $isUefi) {
         Out-Typewriter "  -> LEGACY BIOS / NON-UEFI BOOT — ESP AND SECURE BOOT CHECKS DO NOT APPLY." "INFO"
@@ -1083,7 +1757,7 @@ if ($PhasePlan.Hunt) {
         } catch { $blOn = $null }
 
         if ($sbState -eq $true) {
-            Out-Typewriter "  -> SECURE BOOT IS ENABLED." "OK"
+            Out-Typewriter "  -> SECURE BOOT IS ENABLED." "GOOD"
         } else {
             Out-Typewriter "  -> SECURE BOOT IS DISABLED ON A UEFI MACHINE." "CRIT"
             $blNote = if ($blOn -eq $true) {
@@ -1137,16 +1811,31 @@ if ($PhasePlan.Hunt) {
         } else {
             Out-Typewriter "  -> EFI SYSTEM PARTITION REACHABLE AT $espRoot" "INFO"
             $espEfi = Join-Path $espRoot 'EFI'
-            $espDirs = @()
-            try { if (Test-Path -LiteralPath $espEfi) { $espDirs = @(Get-ChildItem -LiteralPath $espEfi -Directory -ErrorAction Stop) } } catch { $espDirs = @() }
-            foreach ($ed in $espDirs) {
-                $rel = "\EFI\$($ed.Name)"
+            $espEntries = New-Object System.Collections.Generic.List[object]
+            # The partition ROOT first: a stray .efi or an extra top-level directory sitting
+            # beside \EFI is exactly what a bootkit installer leaves, and walking only
+            # \EFI\<dir> made it invisible.
+            try {
+                foreach ($re in @(Get-ChildItem -LiteralPath $espRoot -ErrorAction Stop)) {
+                    if ("$($re.Name)" -match '(?i)^EFI$') { continue }
+                    $espEntries.Add([pscustomobject]@{ Rel = "\$($re.Name)"; Full = "$($re.FullName)" })
+                }
+            } catch { }
+            try {
+                if (Test-Path -LiteralPath $espEfi) {
+                    foreach ($ed in @(Get-ChildItem -LiteralPath $espEfi -ErrorAction Stop)) {
+                        $espEntries.Add([pscustomobject]@{ Rel = "\EFI\$($ed.Name)"; Full = "$($ed.FullName)" })
+                    }
+                }
+            } catch { }
+            foreach ($ed in $espEntries) {
+                $rel = "$($ed.Rel)"
                 if (Test-ScytheNameRule -Name $rel -Rules $ESP_EXPECTED_PATHS) { continue }
                 Out-Typewriter "  -> UNEXPECTED DIRECTORY ON THE ESP: $rel" "CRIT"
                 Add-Finding -ID "BOOT159_ESP_UNEXPECTED_$([Math]::Abs("$rel".ToLower().GetHashCode()))" -Phase "PHASE 159" `
                     -ThreatType "Boot Integrity / Bootkit Vector" -Severity $SEV_HIGH `
-                    -Description "'$rel' exists on the EFI System Partition and is not one of the directories that belong there — Windows uses \EFI\Microsoft and \EFI\Boot, and hardware vendors use their own named directory for firmware update and recovery tooling. A directory outside that set holds code the firmware can be pointed at, on a FAT32 volume with no ACLs, that most backup and AV coverage never looks at. The benign cases are worth checking first and are common on real hardware: a dual-boot Linux installation (\EFI\ubuntu, \EFI\grub, \EFI\systemd), a vendor recovery tool, or leftovers from a previous operating system on a reused disk. List it: Get-ChildItem '$($ed.FullName)' -Recurse | Select-Object FullName, Length, LastWriteTime. Check the boot entry list against it: bcdedit /enum firmware. Preserve any unexplained .efi file before removing it — deleting the wrong thing here makes the machine unbootable, so change nothing until you can name what it is." `
-                    -Target "$($ed.FullName)" -FixAction "Info" -Group "Boot Integrity"
+                    -Description "'$rel' exists on the EFI System Partition and is not one of the directories that belong there — Windows uses \EFI\Microsoft and \EFI\Boot, and hardware vendors use their own named directory for firmware update and recovery tooling. A directory outside that set holds code the firmware can be pointed at, on a FAT32 volume with no ACLs, that most backup and AV coverage never looks at. The benign cases are worth checking first and are common on real hardware: a dual-boot Linux installation (\EFI\ubuntu, \EFI\grub, \EFI\systemd), a vendor recovery tool, or leftovers from a previous operating system on a reused disk. List it: Get-ChildItem '$($ed.Full)' -Recurse | Select-Object FullName, Length, LastWriteTime. Check the boot entry list against it: bcdedit /enum firmware. Preserve any unexplained .efi file before removing it — deleting the wrong thing here makes the machine unbootable, so change nothing until you can name what it is." `
+                    -Target "$($ed.Full)" -FixAction "Info" -Group "Boot Integrity"
             }
 
             # Boot binaries: the ESP copy against the servicing copy under %WINDIR%.
@@ -1181,7 +1870,7 @@ if ($PhasePlan.Hunt) {
                     $bMatch = $brx.IsMatch("$bcdText")
                 } catch { $bMatch = $false }
                 if (-not $bMatch) { continue }
-                $bSev = if ("$($bf.Severity)" -eq 'HIGH') { $SEV_HIGH } else { $SEV_POSSIBLE }
+                $bSev = switch ("$($bf.Severity)") { 'CRITICAL' { $SEV_CRITICAL } 'HIGH' { $SEV_HIGH } default { $SEV_POSSIBLE } }
                 Out-Typewriter "  -> BCD FLAG: $($bf.Name)" "WARN"
                 Add-Finding -ID "BOOT159_BCD_$([Math]::Abs("$($bf.Name)".ToLower().GetHashCode()))" -Phase "PHASE 159" `
                     -ThreatType "Boot Integrity" -Severity $bSev `
@@ -1191,7 +1880,7 @@ if ($PhasePlan.Hunt) {
         } catch { Write-Log "PHASE 159: BCD enumeration failed - $($_.Exception.Message)" }
     }
 
-    Out-Typewriter "PERSISTENCE, SUPPLY-CHAIN AND BOOT-INTEGRITY BAND COMPLETE." "OK"
+    Out-Typewriter "PERSISTENCE, SUPPLY-CHAIN AND BOOT-INTEGRITY BAND COMPLETE." "GOOD"
 
     if (-not $global:STEALTH_MODE) {
         Write-Host "  [i] Phases 146 and 148-152 are not built in this release (parallel work package)." -ForegroundColor DarkGray

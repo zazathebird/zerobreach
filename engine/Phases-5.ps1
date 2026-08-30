@@ -180,7 +180,7 @@ if ($PhasePlan.Hunt) {
             }
         }
         if ($htHidden -eq 0 -and $htNoSd -eq 0) {
-            Out-Typewriter "  -> TASK VIEWS AGREE — $($htLeaves.Count) registry entries, $($htApi.Count) via API." "OK"
+            Out-Typewriter "  -> TASK VIEWS AGREE — $($htLeaves.Count) registry entries, $($htApi.Count) via API." "GOOD"
         }
     }
     Stop-PhaseTiming
@@ -217,7 +217,7 @@ if ($PhasePlan.Hunt) {
                 -Description "The service '$sn' is defined under SYSTEM\CurrentControlSet\Services with a Win32 service type ($ti) and an image path of '$simg', but Win32_Service does not report it. The registry is what the SCM loads from at boot. A stale key left by a failed uninstall is the common benign cause; an implant that hides its own service from enumeration is the one that matters. Compare: sc.exe qc `"$sn`" against reg query `"HKLM\SYSTEM\CurrentControlSet\Services\$sn`"" `
                 -Target "HKLM\SYSTEM\CurrentControlSet\Services\$sn" -FixAction "Info" -Group "Cross-View Discrepancy"
         }
-        if ($svcGhost -eq 0) { Out-Typewriter "  -> SERVICE VIEWS AGREE — $($svcApi.Count) services reconcile with the registry." "OK" }
+        if ($svcGhost -eq 0) { Out-Typewriter "  -> SERVICE VIEWS AGREE — $($svcApi.Count) services reconcile with the registry." "GOOD" }
     }
     Stop-PhaseTiming
 
@@ -254,7 +254,7 @@ if ($PhasePlan.Hunt) {
             -Description "$paName (PID $($p.ProcessId), started $($cKid.ToString('yyyy-MM-dd HH:mm:ss'))) reports its parent as $parName (PID $ppid) — but that parent was created at $($cPar.ToString('yyyy-MM-dd HH:mm:ss')), AFTER the child. A process cannot be started by something that did not yet exist. The two explanations are parent-PID spoofing (a documented evasion, MITRE T1134.004, used specifically to defeat the parent-child heuristics this scan relies on in phase 3) or PID reuse after the real parent exited. Check the command line and image path of PID $($p.ProcessId): $($p.ExecutablePath)" `
             -Target "PID:$($p.ProcessId) $($p.ExecutablePath)" -FixAction "Info" -Group "Ancestry Integrity"
     }
-    if ($paHits -eq 0) { Out-Typewriter "  -> ANCESTRY CONSISTENT — no impossible parent-child creation order found." "OK" }
+    if ($paHits -eq 0) { Out-Typewriter "  -> ANCESTRY CONSISTENT — no impossible parent-child creation order found." "GOOD" }
     Stop-PhaseTiming
 
     # ── PHASE 137: WOW64 REGISTRY-VIEW AUTOSTART CROSS-VIEW ───────────────────
@@ -293,7 +293,7 @@ if ($PhasePlan.Hunt) {
             }
         }
     }
-    if ($wvHits -eq 0) { Out-Typewriter "  -> NO VIEW-DIVERGENT AUTOSTART ENTRIES." "OK" }
+    if ($wvHits -eq 0) { Out-Typewriter "  -> NO VIEW-DIVERGENT AUTOSTART ENTRIES." "GOOD" }
     Stop-PhaseTiming
 
     # ── PHASE 138: DRIVER CROSS-VIEW ──────────────────────────────────────────
@@ -335,7 +335,7 @@ if ($PhasePlan.Hunt) {
                 -Description "Driver '$dn' (type $dti, start $dsi — i.e. configured to load automatically) is registered at $dsub with image '$dimg', but Win32_SystemDriver does not list it as present. A driver that is set to auto-load and is not in the loaded set either failed to load — check the System event log for a 7000/7026 error — or unlinked itself from the kernel's module list after loading, which is the defining behaviour of a kernel rootkit and would also hide it from phases 55 and 55.5. Verify the image file exists and is signed: $dimg" `
                 -Target $dsub -FixAction "Info" -Group "Cross-View Discrepancy"
         }
-        if ($drvHits -eq 0) { Out-Typewriter "  -> DRIVER VIEWS AGREE — $($drvApi.Count) loaded drivers reconcile with the registry." "OK" }
+        if ($drvHits -eq 0) { Out-Typewriter "  -> DRIVER VIEWS AGREE — $($drvApi.Count) loaded drivers reconcile with the registry." "GOOD" }
     }
     Stop-PhaseTiming
     # ── PHASE 139: TIMESTAMP TAMPERING (TIMESTOMPING) ─────────────────────────
@@ -383,7 +383,7 @@ if ($PhasePlan.Hunt) {
             -Description "Timestamp anomaly on '$full': $why. Timestomping (MITRE T1070.006) exists to move a dropped file outside the time window an investigator filters on — including the -Hours window of this scan, which means the OTHER phases may have skipped this file. Installers and archive extraction also rewrite timestamps, so corroborate rather than conclude: the \$FILE_NAME timestamps in the MFT cannot be written through any documented API, so 'fsutil usn readjournal C:' or an MFT parser will show the real creation time. Treat this file as in-scope regardless of the window you chose." `
             -Target $full -FixAction "Info" -Group "Timestamp Tampering"
     }
-    if ($tsHits -eq 0) { Out-Typewriter "  -> NO TIMESTAMP ANOMALIES ACROSS $tsSeen EXECUTABLE FILES." "OK" }
+    if ($tsHits -eq 0) { Out-Typewriter "  -> NO TIMESTAMP ANOMALIES ACROSS $tsSeen EXECUTABLE FILES." "GOOD" }
     Stop-PhaseTiming
 
     # ── PHASE 140: FILENAME & NAMESPACE ANTI-FORENSICS ────────────────────────
@@ -419,7 +419,7 @@ if ($PhasePlan.Hunt) {
             -Description "The file at '$full' $why. Names of this shape are not produced by ordinary software: they are produced to make a file look like something else to a human (MITRE T1036.002 right-to-left override, T1036.005 match-legitimate-name) or to put it beyond the reach of the file APIs an investigator enumerates with. Inspect it with a tool that shows raw bytes — Get-ChildItem -LiteralPath '<parent>' | ForEach-Object { [int[]][char[]]`$_.Name } — and treat the displayed name as untrustworthy." `
             -Target $full -FixAction "Info" -Group "Filename Anti-Forensics"
     }
-    if ($nsHits -eq 0) { Out-Typewriter "  -> NO FILENAME OR NAMESPACE ANOMALIES." "OK" }
+    if ($nsHits -eq 0) { Out-Typewriter "  -> NO FILENAME OR NAMESPACE ANOMALIES." "GOOD" }
     Stop-PhaseTiming
 
     # ── PHASE 141: UNBACKED THREAD START ADDRESSES ────────────────────────────
@@ -468,7 +468,7 @@ if ($PhasePlan.Hunt) {
             -Description "$pname (PID $($p.Id), image '$ppath') has $bad thread(s) whose start address — the first at $badAddr — falls outside every DLL and EXE mapped into it. Code is executing there with no file backing it, which is what reflective DLL injection, manual mapping and injected shellcode all look like (MITRE T1055.001/T1620), and it is invisible to phase 93 because unbacked code never enters the module list. IMPORTANT CONTEXT BEFORE YOU ACT: .NET JIT-compiled stubs, some JavaScript engines and most EDR products legitimately execute from dynamically allocated memory, so a managed or browser process here is weak evidence. Strong evidence is an unsigned, user-path, non-.NET binary with unbacked threads. Corroborate with phases 3, 93 and 136 for the same PID before treating this as an implant." `
             -Target "PID:$($p.Id) $ppath" -FixAction "Info" -Group "Unbacked Memory"
     }
-    if ($tbHits -eq 0) { Out-Typewriter "  -> ALL THREAD START ADDRESSES RESOLVE TO MAPPED MODULES ($tbChecked processes)." "OK" }
+    if ($tbHits -eq 0) { Out-Typewriter "  -> ALL THREAD START ADDRESSES RESOLVE TO MAPPED MODULES ($tbChecked processes)." "GOOD" }
     Stop-PhaseTiming
 
     # ── PHASE 142: CLR HOSTED IN AN UNEXPECTED PROCESS ────────────────────────
@@ -498,7 +498,7 @@ if ($PhasePlan.Hunt) {
             -Description "$($p.Name) (PID $($p.Id), image '$cpath') has $clrName loaded. This binary is native and does not host managed code in normal operation, so the .NET runtime is present because something loaded an assembly into it — the standard shape of an in-memory .NET payload (execute-assembly, donut, Covenant), which leaves no file on disk for any other phase to find. Corroborate with phase 141 (unbacked threads in the same PID) and phase 136 (ancestry), then capture the process memory before terminating it: & '`$env:WINDIR\System32\rundll32.exe' comsvcs.dll, MiniDump $($p.Id) C:\evidence\$($p.Id).dmp full — the assembly only exists there." `
             -Target "PID:$($p.Id) $cpath" -FixAction "Info" -Group "Unexpected CLR Host"
     }
-    if ($clrHits -eq 0) { Out-Typewriter "  -> NO UNEXPECTED .NET RUNTIME HOSTS." "OK" }
+    if ($clrHits -eq 0) { Out-Typewriter "  -> NO UNEXPECTED .NET RUNTIME HOSTS." "GOOD" }
     Stop-PhaseTiming
 
     # ── PHASE 143: MODULE-FILE INTEGRITY (STOMPING / DELETED BACKING FILE) ────
@@ -527,7 +527,7 @@ if ($PhasePlan.Hunt) {
             }
         } catch { continue }
     }
-    if ($msHits -eq 0) { Out-Typewriter "  -> EVERY LOADED MODULE RESOLVES TO A FILE ON DISK." "OK" }
+    if ($msHits -eq 0) { Out-Typewriter "  -> EVERY LOADED MODULE RESOLVES TO A FILE ON DISK." "GOOD" }
     Stop-PhaseTiming
     # ── PHASE 144: PROCESS IMAGE INTEGRITY & MASQUERADING ─────────────────────
     Show-PhaseHeader "PHASE 144" "PROCESS IMAGE INTEGRITY (HOLLOWING / MASQUERADING)" "INJECTION"
@@ -570,7 +570,7 @@ if ($PhasePlan.Hunt) {
             -Description "$($p.Name) (PID $($p.Id)): $why. The two sources for a process image path are the PEB, which a process can rewrite about itself, and the kernel, which it cannot — so a disagreement means the PEB has been edited, which is what process hollowing (MITRE T1055.012) and PEB-unlinking masquerade tools do. A binary running under a system filename from a non-system directory is T1036.005. This matters beyond the process itself: every other phase in this scan that judged this process by its path may have judged the wrong path. Verify with a third source: Get-CimInstance Win32_Process -Filter 'ProcessId=$($p.Id)' | Select-Object ExecutablePath, CommandLine" `
             -Target "PID:$($p.Id) $dotnetPath" -FixAction "Info" -Group "Image Integrity"
     }
-    if ($piHits -eq 0) { Out-Typewriter "  -> ALL PROCESS IMAGE PATHS AGREE ACROSS BOTH SOURCES." "OK" }
+    if ($piHits -eq 0) { Out-Typewriter "  -> ALL PROCESS IMAGE PATHS AGREE ACROSS BOTH SOURCES." "GOOD" }
     Stop-PhaseTiming
 
     # ── PHASE 145: FULLY SUSPENDED PROCESSES (HOLLOWING IN FLIGHT) ────────────
@@ -606,6 +606,6 @@ if ($PhasePlan.Hunt) {
             -Description "$($p.Name) (PID $($p.Id), image '$ppath', signature status: $($verdict.Status)) has all $total of its threads suspended. Process hollowing begins with CreateProcess(CREATE_SUSPENDED) — the victim is created, its image is unmapped and overwritten, then resumed — so a process caught fully suspended may be mid-injection, or may be a payload parked to sit out a scan. BENIGN CAUSES ARE COMMON: Store/UWP apps are suspended whenever they lose focus (those are excluded here), and a process stopped at a debugger breakpoint looks identical. Weigh it with the signature status above and with phases 141 and 144 for the same PID; an unsigned, user-path, fully-suspended process is worth capturing before you resume or kill it." `
             -Target "PID:$($p.Id) $ppath" -FixAction "Info" -Group "Suspended Process"
     }
-    if ($spHits -eq 0) { Out-Typewriter "  -> NO FULLY SUSPENDED PROCESSES OUTSIDE THE STORE APP MODEL." "OK" }
+    if ($spHits -eq 0) { Out-Typewriter "  -> NO FULLY SUSPENDED PROCESSES OUTSIDE THE STORE APP MODEL." "GOOD" }
     Stop-PhaseTiming
 }

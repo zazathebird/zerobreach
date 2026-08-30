@@ -44,7 +44,7 @@ if ($global:SCYTHE_SIG_TAMPER -and $global:SCYTHE_SIG_TAMPER.Count -gt 0) {
             -Target "data\detection_signatures.json" -FixAction "Info" -Group "Scanner Integrity"
     }
 } else {
-    Out-Typewriter "  -> FP ALLOWLISTS VALIDATED — no universal, uncompilable or backtracking patterns." "OK"
+    Out-Typewriter "  -> FP ALLOWLISTS VALIDATED — no universal, uncompilable or backtracking patterns." "GOOD"
 }
 
 # ── P0.2 · Data + engine file manifest ────────────────────────────────────────
@@ -89,7 +89,7 @@ if (Test-Path -LiteralPath $pfManifest) {
             }
         }
         if ($pfBad -eq 0) {
-            Out-Typewriter "  -> ENGINE + SIGNATURE INTEGRITY VERIFIED ($pfChecked files match the release manifest)." "OK"
+            Out-Typewriter "  -> ENGINE + SIGNATURE INTEGRITY VERIFIED ($pfChecked files match the release manifest)." "GOOD"
         }
     }
 } else {
@@ -109,7 +109,7 @@ if ($global:SCYTHE_IS_WOW64) {
         -Description "Scythe is running as a 32-BIT process on 64-bit Windows. The OS silently redirects C:\Windows\System32 to SysWOW64 and HKLM\SOFTWARE to Wow6432Node, so the System32 binary audits (phases 15/109/113) and every HKLM\SOFTWARE registry phase are reading the WRONG half of this machine — malware in the real System32 and real HKLM run keys is invisible to them. The WS7 band routes its own access around this, but the legacy phases do not. RE-RUN FROM A 64-BIT POWERSHELL: %SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe (note that from a 32-bit shell you must type %SystemRoot%\Sysnative\WindowsPowerShell\v1.0\powershell.exe to reach it)." `
         -Target "Process bitness: 32-bit on x64" -FixAction "Info" -Group "Scanner Integrity"
 } else {
-    Out-Typewriter "  -> BITNESS OK — no WOW64 file-system or registry redirection in effect." "OK"
+    Out-Typewriter "  -> BITNESS OK — no WOW64 file-system or registry redirection in effect." "GOOD"
 }
 
 # ── P0.4 · Constrained language / policy degradation ──────────────────────────
@@ -195,7 +195,7 @@ foreach ($pfAmsiRoot in @('HKLM:\SOFTWARE\Microsoft\AMSI\Providers')) {
 }
 
 if ($pfIssues -eq 0) {
-    Out-Typewriter "  -> PREFLIGHT CLEAN — scanner integrity and scan environment validated." "OK"
+    Out-Typewriter "  -> PREFLIGHT CLEAN — scanner integrity and scan environment validated." "GOOD"
 } else {
     Out-Typewriter "  -> PREFLIGHT RAISED $pfIssues ISSUE(S). Read them BEFORE reading the scan results." "WARN"
 }

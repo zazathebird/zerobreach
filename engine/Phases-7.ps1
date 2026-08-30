@@ -88,7 +88,7 @@ if ($PhasePlan.Hunt) {
     $ccAll = @($global:AuditFindings | Where-Object { "$($_.Severity)" -ne 'INFO' })
     $ccN   = $ccAll.Count
     if ($ccN -lt 2) {
-        Out-Typewriter "  -> NOTHING TO CORRELATE ($ccN actionable finding(s))." "OK"
+        Out-Typewriter "  -> NOTHING TO CORRELATE ($ccN actionable finding(s))." "GOOD"
     } else {
         # Entity index, then union-find over it. Cheap and order-independent.
         $ccEnt    = New-Object 'System.Collections.Generic.List[object]'
@@ -171,7 +171,7 @@ if ($PhasePlan.Hunt) {
                 -Target "Correlated chain of $($members.Count) findings" -FixAction "Info" -Group "Attack Chain"
         }
         if ($ccReported -eq 0) {
-            Out-Typewriter "  -> NO CORRELATED CHAINS ABOVE THE REPORTING THRESHOLD ACROSS $ccN FINDINGS." "OK"
+            Out-Typewriter "  -> NO CORRELATED CHAINS ABOVE THE REPORTING THRESHOLD ACROSS $ccN FINDINGS." "GOOD"
         } else {
             Out-Typewriter "  -> $ccReported CORRELATED CHAIN(S) REPORTED." "WARN"
         }
@@ -202,7 +202,7 @@ if ($PhasePlan.Hunt) {
         }
     }
     if ($pzItems.Count -eq 0) {
-        Out-Typewriter "  -> NO ACTIONABLE FINDING RESOLVES TO A FILE STILL ON DISK." "OK"
+        Out-Typewriter "  -> NO ACTIONABLE FINDING RESOLVES TO A FILE STILL ON DISK." "GOOD"
     } else {
         $pzSorted = @($pzItems | Sort-Object -Property When)
         $pz = $pzSorted[0]
@@ -222,7 +222,7 @@ if ($PhasePlan.Hunt) {
     Show-PhaseHeader "PHASE 162" "INCIDENT TIMELINE EXPORT" "SYNTHESIS"
     Out-Typewriter "WRITING A TIME-ORDERED EVIDENCE TIMELINE..." "HUNT"
     if ($pzItems.Count -eq 0) {
-        Out-Typewriter "  -> NO RESOLVABLE ARTIFACTS — TIMELINE NOT WRITTEN." "OK"
+        Out-Typewriter "  -> NO RESOLVABLE ARTIFACTS — TIMELINE NOT WRITTEN." "GOOD"
     } else {
         $tlPath = Join-Path $OUT_ROOT "KrakenTimeline_$STAMP.csv"
         try {
@@ -242,7 +242,7 @@ if ($PhasePlan.Hunt) {
                 [void]$sb.AppendLine($row)
             }
             [System.IO.File]::WriteAllText($tlPath, $sb.ToString(), (New-Object System.Text.UTF8Encoding($false)))
-            Out-Typewriter "  -> TIMELINE WRITTEN: $tlPath ($($pzItems.Count) events)" "OK"
+            Out-Typewriter "  -> TIMELINE WRITTEN: $tlPath ($($pzItems.Count) events)" "GOOD"
             Write-Log "TIMELINE: $tlPath ($($pzItems.Count) events)"
             Add-Finding -ID "TL162_EXPORT" -Phase "PHASE 162" `
                 -ThreatType "Incident Timeline" -Severity $SEV_INFO `

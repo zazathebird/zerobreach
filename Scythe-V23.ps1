@@ -1157,7 +1157,6 @@ $PERSIST_DROPPER_EXTS     = @((Get-Sig 'persist_dropper_extensions') | ForEach-O
 $PERSIST_DROPPER_RULES    = Get-Sig 'persist_dropper_content_rules'        # Phase 157
 $PERSIST_PROFILER_BENIGN_RE = Join-AllowRegex 'persist_profiler_benign_names'        # Phase 157
 $PERSIST_DLL_BENIGN_RE      = Join-AllowRegex 'persist_dll_benign_paths'             # Phase 157
-$PERSIST_STUBPATH_BENIGN_RE = Join-AllowRegex 'persist_stubpath_benign_values'       # Phase 157
 $PERSIST_TRIGGER_BENIGN_RE  = Join-AllowRegex 'persist_service_trigger_benign_names' # Phase 157
 $DEVTOOL_PATHS            = @((Get-Sig 'devtool_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
 $DEVTOOL_HOOK_RULES       = Get-Sig 'devtool_hook_rules'                   # Phase 158
@@ -1171,6 +1170,24 @@ $BCD_UNSAFE_FLAGS         = Get-Sig 'bcd_unsafe_flags'                     # Pha
 # Object, not a list: Get-Sig always wraps, so index through @(...) — a bare [0] on a
 # single-element return would index the first CHARACTER of a string (CLAUDE.md 5.1 rule).
 $DBX_BASELINE             = @(Get-Sig 'dbx_current_baseline')[0]           # Phase 159
+# ── WS7 phase 146 — PE structural analysis (2026-08-30) ──────────────────────
+$PE_SCAN_ROOTS_HOT        = @((Get-Sig 'pe_scan_roots_hot_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$PE_SCAN_ROOTS_APP        = @((Get-Sig 'pe_scan_roots_app_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$PE_EXTENSIONS            = @((Get-Sig 'pe_extensions') | ForEach-Object { "$_".ToLower() })
+$PE_PROBE_EXTENSIONS      = @((Get-Sig 'pe_probe_extensions') | ForEach-Object { "$_".ToLower() })
+$PE_PACKER_SECTIONS       = Get-Sig 'pe_packer_section_names'              # Phase 146 S3
+$PE_IMPORT_TRIADS         = Get-Sig 'pe_import_triads'                     # Phase 146 S9
+$PE_MASQUERADE_NAMES      = Get-Sig 'pe_masquerade_names'                  # Phase 146 C5
+# pe_transient_paths is a POSITIVE match list, so it is joined HERE rather than through
+# Join-AllowRegex. Join-AllowRegex fails closed to '(?!)' on a missing key — correct for a
+# suppression list, exactly wrong for this one, where failing closed would silently switch
+# off a scoring signal instead of making the phase noisy.
+$PE_TRANSIENT_RE          = if (@(Get-Sig 'pe_transient_paths').Count) {
+    '(' + ((@(Get-Sig 'pe_transient_paths')) -join '|') + ')'
+} else { '(?!)' }
+$PE_PACKER_BENIGN_RE      = Join-AllowRegex 'pe_packer_benign_paths'       # Phase 146
+# Object, not a list — index through @(...) so a single-element return is not indexed as a string.
+$PE_SCORE                 = @(Get-Sig 'pe_score_thresholds')[0]            # Phase 146
 # Native binaries that never host managed code. Anchored to the whole process NAME
 # (System.Diagnostics.Process.Name carries no extension), because an unanchored
 # substring would match e.g. "notepad++" and half of Program Files — the exact class

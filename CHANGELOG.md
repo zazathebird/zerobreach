@@ -1,5 +1,105 @@
 # CHANGELOG — Scythe V23
 
+## 2026-08-30 (later) — phase 146, and an adversarial review that found four rules firing on every healthy machine
+
+Five parallel agents: `lib/` rule-engine architecture, an F2 design for 148-152, an F3 design
+for 146, an adversarial review of the morning's commit, and a survey of public skill repos.
+The review is the important one.
+
+### Phase 146 — PE structural analysis
+
+Parses the binary instead of pattern-matching its name. Pure .NET over a byte array — no
+P/Invoke, no `Add-Type`, per the AMSI rule. Header, section table, import descriptors and
+thunks, per-section Shannon entropy, overlay (certificate-table-corrected, or every signed
+binary on the machine appears to carry one).
+
+**The scoring discipline is the design.** Packing is not malicious — half of commercial
+software is packed and .NET obfuscators are a product category. A lone high-entropy section
+scores **2 against a reporting floor of 7**, so it cannot produce a finding at all. HIGH
+additionally requires independent context (unsigned, transient path, recent) *and* three
+distinct structural signals, because a packed file trips entropy, packer name, zero-raw and
+W+X as one fact wearing four hats. A valid signature from a trusted signer caps the result at
+INFO. Thresholds live in `pe_score_thresholds` so a live FP round can retune without an engine
+edit. Signed-but-invalid gets its own finding regardless of score — nothing else in the engine
+distinguishes *unsigned* from *tried to look signed*, and the second is far more interesting.
+
+Cost is controlled by tiering, not by cutting checks: header work on all 400 candidates,
+entropy and import names only where something already scored, Authenticode last and only above
+a structural threshold, under the shared `SIG_AUDIT` budget.
+
+Cut from the brief after weighing FP rate: `TimeDateStamp` in the future (reproducible builds
+set it to a content hash — Go, Rust and MSVC `/Brepro` all produce future timestamps),
+`TimeDateStamp` vs file creation time (meaningless — creation time is copy time), whole-file
+entropy (phase 52 owns it), and uncommon-section-name (subsumed by the specific packer list).
+
+### Four rules that fired on every healthy machine, or could not fire at all
+
+All four shared one root cause: **the suite compile-checked pattern strings and grepped them
+for a keyword, but never ran them against realistic content.**
+
+- **`bcdedit` pads the element name out to column 24** — the gap can be twenty spaces.
+  `\s{1,8}` could not reach the value, so `BCD-FlightSigning`, `BCD-KernelDebugEnabled`,
+  `BCD-BootDebugEnabled` and `BCD-SafeBootConfigured` were **dead**. Phase 40's existing rule
+  has always used unbounded `\s+`.
+- **A negative lookahead followed by `[^\r\n]` lets the engine backtrack into the padding**,
+  where the lookahead trivially succeeds because the text there is spaces. That made
+  `BCD-CustomBootLoader` fire on every healthy UEFI machine, and made
+  `core.fsmonitor = true` — the value Git for Windows 2.37+ and Scalar write themselves — a
+  **HIGH** finding telling the operator their git config was weaponised. `\S` closes it.
+- **`DevRegistry-NonDefaultNuGet` matched any non-URL config value**, e.g.
+  `value="Highest"`. It now requires the value to be a feed URL or a UNC path.
+- **`Cred-PrivateKeyBlock` was tautological**: `cloud_cred_text_formats` admitted `id_rsa` and
+  the rule matches a PEM private-key header, so every SSH key on earth produced a POSSIBLE the
+  description already admitted was not a finding. Key files are no longer content-scanned —
+  their existence is inventory, and a copy in a staging directory is branch (c)'s job.
+
+`Test-Hunt-Band.ps1` §15 now runs every rule set against realistic content and asserts both
+directions. Reverting each fix reproduces exactly the original failure.
+
+### Phase 157 duplicated six mechanisms phase 126 already owns
+
+`extended_autostart_points` in `data/detection_signatures.json` already walks netsh helpers,
+print monitors, W32Time time providers, Active Setup StubPath, `SCRNSAVE.EXE` and the Winsock
+catalogue — and phase 126 runs whenever HUNT runs. Two findings, different IDs, different
+severities, one artifact; **phase 160 then correlates them on the shared target as though they
+were two independent facts.** All six removed from 157, revert-proofed in both directions.
+
+Deleting the Active Setup branch also removed a real FP: `Resolve-ScytheModulePath` could not
+strip arguments, so `"C:\Program Files\Google\Chrome\...\chrmstp.exe" --configure-user-settings`
+was reported on every endpoint with system-level Chrome.
+
+### The rest of the review
+
+- **Phase 157's signature loops carried no `SIG_AUDIT` budget** — a direct CLAUDE.md violation.
+  Over ~40-60 modules with CRL/OCSP unreachable (routine on a segmented client network, and
+  the exact condition the budget exists for) that is **ten-plus minutes inside one phase**. The
+  budget now lives inside `Test-ScytheUntrustedModule`, covering every call site, and fails
+  **quiet** rather than noisy — an environmental fault must not become fifty HIGH findings.
+- **COR_PROFILER reported HIGH when profiling was explicitly disabled** (`$enabled` was never
+  compared to 1), with an empty path that the APM allowlist could not match.
+- **`PERS157_RDPINIT` had no gate at all** — every RDS session host and kiosk deployment.
+- **`Confirm-SecureBootUEFI` failing for any reason was reported as "this machine does not boot
+  via UEFI"** — a confident false claim about the hardware when the cause is a blocked module
+  or unhealthy WMI. `$env:firmware_type` disambiguates; an unreadable check now says so.
+- The **ESP inventory only walked `\EFI\<dir>`**, so a stray `.efi` at the partition root was
+  invisible and two `esp_expected_paths` entries were unreachable — one of which the suite
+  asserts, i.e. it was testing dead code.
+- **Severity mapping silently downgraded CRITICAL to POSSIBLE** at seven sites.
+- **`Get-ScytheRepoRoots` ran three times per scan** and walked `Documents`/`Desktop`, which on
+  a managed endpoint are commonly folder-redirected to a UNC share — three SMB directory walks
+  per scan. Now memoised, deadline-bounded, and those roots dropped.
+- The **trigger-service allowlist** covered Microsoft's demand-start defaults but not the set a
+  CIS/STIG-hardened endpoint disables by policy — which is Scythe's actual target.
+
+### `Out-Typewriter "OK"` is not a valid level, in 25 places
+
+The switch cases are `INFO/WARN/CRIT/GOOD/ACT/VER/DATA/HUNT/FIND`. `"OK"` falls through to an
+empty prefix, so those compliant-state lines reached the GUI **with no `[OK ]` bracket tag**
+and the server's `Classify` fell back to the prose keyword table — the §5.1 audit bug. Fixed
+across `Phases-0/5/6/7` (pre-existing in 0/5/7); the test now refuses the whole band.
+
+`Test-Hunt-Band.ps1`: **315 → 352 assertions**, whole suite green.
+
 ## 2026-08-30 — phases 147, 157, 158 and 159: four of the six remaining engine stubs
 
 `engine/Phases-6.ps1` grew from 319 to 1,201 lines. Tasks **F1, F4, F5 and F7** from

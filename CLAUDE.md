@@ -165,7 +165,11 @@ PowerShell 5.1+, admin rights.
 │   │                           (timestomp, filename/namespace), process memory (unbacked
 │   │                           threads, unexpected CLR host, deleted module backing, image
 │   │                           integrity, suspended processes)
-│   ├── Phases-6.ps1            if($PhasePlan.Hunt) 146-159. 147 + 153-159 BUILT.
+│   ├── Phases-6.ps1            if($PhasePlan.Hunt) 146-159. 146-147 + 153-159 BUILT.
+│   │                           146 (2026-08-30) PE structural analysis: pure-.NET header/
+│   │                           section/import parsing, per-section entropy, SCORED not
+│   │                           reported (a lone high-entropy section scores 2 of a 7-point
+│   │                           floor; HIGH needs context + 3 distinct signals).
 │   │                           147 (2026-08-30) cloud/DevOps credential theft: inventory,
 │   │                           plaintext secrets, weak ACLs, staged copies, token-minting
 │   │                           command lines. NEVER reads the opaque token caches.
@@ -173,10 +177,11 @@ PowerShell 5.1+, admin rights.
 │   │                           (registry/CIM reads, sends no packets, no -ScanLan switch):
 │   │                           SMB signing/guest/null-session, shares + share ACLs,
 │   │                           LLMNR/NBT-NS/mDNS/NTLM, firewall + Delivery Optimization.
-│   │                           157-159 (2026-08-30) persistence surface (profiler, Active
-│   │                           Setup, SilentProcessExit, WER, time providers, print
-│   │                           monitors, netsh, LSP, SCRNSAVE, RDP, service triggers,
-│   │                           shell droppers, AppDomainManager sidecar); supply chain
+│   │                           157-159 (2026-08-30) persistence surface (COR_PROFILER,
+│   │                           SilentProcessExit, WER, SSODL/SharedTaskScheduler,
+│   │                           AutodialDLL, RDP InitialProgram, service triggers, shell
+│   │                           droppers, AppDomainManager sidecar — NOT the six phase 126
+│   │                           already owns); supply chain
 │   │                           (extensions, tasks.json, git hooks/config, npm/NuGet
 │   │                           registries, MSBuild inline tasks, Jupyter kernels); UEFI
 │   │                           (Secure Boot, dbx, ESP, BCD) — MOUNTS NOTHING.
@@ -544,10 +549,12 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   places** — the loader's `$PhasePlan`, `$MODE_PHASES` in `Scythe-Server.ps1`, `MODE_PHASES`
   in `_python/server.py`, and the mode whitelist in both servers. `Test-Hunt-Band.ps1` checks them
   together. HUNT is deliberately NOT folded into DEEP: the band walks process memory (141-145), so
-  it costs real wall-clock and must stay an explicit operator choice. (**It does not hash the
-  ESP** — UEFI/ESP integrity is phase 159 and is still a stub. That claim was in this file and in
-  `README.md` until 2026-08-22; corrected rather than implemented, because documenting a
-  capability the engine does not have is the one error class an IR tool cannot afford.)
+  it costs real wall-clock and must stay an explicit operator choice. (Phase 159 does now hash the ESP boot binaries against
+  the servicing copies, built 2026-08-30 — but only when the ESP is already mounted, and it
+  mounts nothing itself. Between 2026-08-22 and then this file and `README.md` claimed the
+  capability while 159 was a stub; that was corrected rather than implemented at the time,
+  because documenting a capability the engine does not have is the one error class an IR tool
+  cannot afford.)
 - **Every finding in 134-162 is `FixAction "Info"`. There are no exceptions and there must not
   be**, for a reason specific to this band: its best phases fire on healthy managed endpoints by
   construction. **An EDR is, by every signal phases 134-138 and 141-145 look for, a legitimate
@@ -654,6 +661,51 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   package names to mean anything; that list is a standing maintenance commitment this project
   has not made, and a stale one produces confident false accusations about a developer's own
   dependencies.
+
+### Rule regexes must be run against REALISTIC content, not just compiled (added 2026-08-30)
+
+Four rules shipped that could not fire, or fired on every healthy machine, and the suite did
+not notice — because it compile-checked the pattern *strings* and grepped them for a keyword.
+**A pattern that compiles is not a pattern that works.** `Test-Hunt-Band.ps1` §15 now runs each
+rule set against realistic content and asserts both directions: silent on the healthy sample,
+firing on the malicious one. Add a case there for every new rule set.
+
+The two mistakes, both worth knowing by shape:
+
+- **`bcdedit` pads the element name out to column 24**, so the gap before the value can be
+  **twenty spaces**. `\s{1,8}` could not reach the value at all, and four of seven BCD rules
+  were dead. Phase 40's existing `testsigning\s+Yes` has always used unbounded `\s+`; match it.
+- **Match a value with `\S`, never `[^\r\n]`, when a negative lookahead precedes it.** With
+  `[^\r\n]` the engine backtracks *into* the whitespace run, where `(?!true|false)` or
+  `(?!\\Windows\\...)` trivially succeeds because the text there is spaces. That is what made
+  `core.fsmonitor = true` — the value Git for Windows 2.37+ and Scalar write themselves — a
+  HIGH finding, and made every healthy UEFI machine report a custom boot loader. `\S` closes it,
+  because after a partial whitespace consumption the next character is whitespace and `\S`
+  cannot match there.
+
+### Do not duplicate a mechanism another phase already owns (added 2026-08-30)
+
+Phase 157 shipped covering six mechanisms **phase 126 already walks** via
+`extended_autostart_points` — netsh helpers, print monitors, W32Time time providers, Active
+Setup StubPath, `SCRNSAVE.EXE` and the Winsock catalogue (126 also covers
+`Protocol_Catalog9_64`, which 157 did not). Phase 126 runs whenever HUNT runs, because
+`$PhasePlan.Extended` is true for HUNT. The result was two findings with different IDs and
+different severities for one artifact — and **phase 160 then correlates them on the shared
+target as though they were two independent facts**, which is worse than either alone.
+
+The band's banner said it covered what "phases 20-35 and 90-105" miss; nobody checked 116-133.
+**Before adding a mechanism to any phase, grep the whole engine AND `data/detection_signatures.json`
+for it** — a mechanism can be owned by a data-driven table rather than by code, which is
+exactly how these six were missed. `Test-Hunt-Band.ps1` revert-proofs all six in both
+directions: re-adding one to 157 fails, and so does losing it from 126.
+
+### `Out-Typewriter` has no `OK` level — use `GOOD` (added 2026-08-30)
+
+The switch cases are `INFO / WARN / CRIT / GOOD / ACT / VER / DATA / HUNT / FIND`. `"OK"` falls
+through to an empty prefix, so the line reaches the GUI **with no `[OK ]` bracket tag and no
+timestamp**, and the server's `Classify` falls back to the prose keyword table — the exact
+§5.1 audit bug where the engine's own banners painted a clean scan red. `GOOD` is what emits
+`[OK ]`. 25 sites across `Phases-0/5/6/7` had it wrong; the test now refuses the whole band.
 
 ### When a stub becomes real, re-check every test list that names modules explicitly
 - `Test-Hunt-Band.ps1` §9 (safe-wrapper discipline: no raw `Get-ItemPropertyValue` /

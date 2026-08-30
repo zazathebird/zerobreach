@@ -3605,7 +3605,7 @@
     "(?i)\\\\msal_token_cache\\.bin$",
     "(?i)\\\\(credentials|access_tokens)\\.db$"
   ],
-  "_comment_cloud_cred_text_formats": "Phase 147. Leaf-name regexes for the targets that are PLAIN TEXT and may therefore be content-scanned with Test-ContentRules. Anything not on this list is treated as opaque and only its existence and ACL are reported. Anchored whole-leaf on purpose: 'config' here means .aws\\config or .kube\\config, not every file with config in the name.",
+  "_comment_cloud_cred_text_formats": "Phase 147. Leaf-name regexes for the targets that are PLAIN TEXT and may therefore be content-scanned with Test-ContentRules. Anything not on this list is treated as opaque and only its existence and ACL are reported. Anchored whole-leaf on purpose: 'config' here means .aws\\config or .kube\\config, not every file with config in the name. NOTE the deliberate absence of id_rsa and its siblings (removed 2026-08-30): the Cred-PrivateKeyBlock rule matches a PEM private-key header, so scanning an SSH key file for it is tautological - every key on earth matched and the phase shipped a POSSIBLE it already knew was not a finding. An SSH key's existence is inventory; a COPY of one in a staging directory is branch (c).",
   "cloud_cred_text_formats": [
     "(?i)^credentials$",
     "(?i)^config$",
@@ -3622,7 +3622,6 @@
     "(?i)^service_principal_entries\\.json$",
     "(?i)^application_default_credentials\\.json$",
     "(?i)^credentials\\.tfrc\\.json$",
-    "(?i)^id_(rsa|dsa|ecdsa|ed25519)$",
     "(?i)^.{1,120}\\.tfstate(\\.backup)?$"
   ],
   "_comment_cloud_cred_content_rules": "Phase 147 content rules, consumed by Test-ContentRules. These are secret FORMATS, never secrets: AKIA[0-9A-Z]{16} is the shape of an AWS access key id, not a key. The matched text is deliberately NOT written into the finding description - a finding that quotes the credential turns the client report into a second copy of it. PrivateKeyBlock is POSSIBLE rather than HIGH because an ~/.ssh key is exactly where a private key is supposed to be; the staging-directory and weak-ACL branches are what escalate it.",
@@ -3793,20 +3792,17 @@
     "(?i)\\\\Program Files( \\(x86\\))?\\\\Windows Defender\\\\",
     "(?i)\\\\Windows\\\\System32\\\\(spool|DriverStore)\\\\"
   ],
-  "_comment_persist_stubpath_benign_values": "Phase 157 FP allowlist for Active Setup StubPath, consumed through Join-AllowRegex. StubPath is a command line an attacker fully controls, so every entry here pins the ENTIRE string with ^...$ and bounded wildcards - a name-only or prefix pattern would let malware self-allowlist by naming its command after a Microsoft one (the failure caught in review 2026-07-02). These are the stock Windows entries.",
-  "persist_stubpath_benign_values": [
-    "(?i)^\"?%?systemroot%?\\\\system32\\\\(ie4uinit\\.exe|unregmp2\\.exe|regsvr32\\.exe|ie4ushowIE\\.exe)\"?[^\"|&;]{0,60}$",
-    "(?i)^\"?%?windir%?\\\\system32\\\\(ie4uinit\\.exe|unregmp2\\.exe)\"?[^\"|&;]{0,60}$",
-    "(?i)^U$",
-    "(?i)^\"?%?ProgramFiles%?\\\\Windows ?(Media Player|Mail)\\\\[A-Za-z0-9_.]{1,40}\\.exe\"?[^\"|&;]{0,40}$"
-  ],
-  "_comment_persist_service_trigger_benign_names": "Phase 157 FP allowlist for the disabled-but-trigger-started service check, consumed through Join-AllowRegex and matched against the SERVICE KEY NAME, whole-name anchored. Windows ships a number of demand-start services that are legitimately disabled by policy yet retain TriggerInfo; these are the ones seen on stock and domain-managed builds.",
+  "_comment_persist_service_trigger_benign_names": "Phase 157 FP allowlist for the disabled-but-trigger-started service check, consumed through Join-AllowRegex and matched against the SERVICE KEY NAME, whole-name anchored. Two groups: the demand-start services Windows itself ships disabled-with-triggers, and - added 2026-08-30 - the set a CIS/STIG-hardened or GPO-managed endpoint disables by policy while they keep their TriggerInfo. That second group is the one that matters here, because a hardened managed endpoint is Scythe's actual target and without it this branch reports a handful of POSSIBLE findings on every such machine every run.",
   "persist_service_trigger_benign_names": [
     "(?i)^(BITS|WSearch|WerSvc|Wecsvc|MapsBroker|DoSvc|dmwappushservice|diagnosticshub\\.standardcollector\\.service)$",
     "(?i)^(TabletInputService|TouchKeyboard|WpnService|WpnUserService[_0-9a-f]{0,12})$",
     "(?i)^(WinHttpAutoProxySvc|iphlpsvc|NcaSvc|NlaSvc|WlanSvc|WwanSvc|dot3svc|EapHost)$",
     "(?i)^(PrintNotify|Spooler|PrintWorkflowUserSvc[_0-9a-f]{0,12}|DeviceAssociationService)$",
-    "(?i)^(GoogleUpdaterInternalService[0-9.]{0,16}|edgeupdate|edgeupdatem|MicrosoftEdgeElevationService)$"
+    "(?i)^(GoogleUpdaterInternalService[0-9.]{0,16}|edgeupdate|edgeupdatem|MicrosoftEdgeElevationService)$",
+    "(?i)^(bthserv|BluetoothUserService[_0-9a-f]{0,12}|XboxGipSvc|XblAuthManager|XblGameSave|XboxNetApiSvc)$",
+    "(?i)^(WMPNetworkSvc|RemoteAccess|RemoteRegistry|SSDPSRV|upnphost|lfsvc|PhoneSvc|WalletService|RetailDemo)$",
+    "(?i)^(PimIndexMaintenanceSvc[_0-9a-f]{0,12}|CDPUserSvc[_0-9a-f]{0,12}|OneSyncSvc[_0-9a-f]{0,12}|MessagingService[_0-9a-f]{0,12})$",
+    "(?i)^(SharedRealitySvc|SEMgrSvc|icssvc|WFDSConMgrSvc|AarSvc[_0-9a-f]{0,12}|DevicePickerUserSvc[_0-9a-f]{0,12})$"
   ],
   "_comment_devtool_paths_raw": "Phase 158. Developer-tooling roots, env-var-expanded at load via ExpandString - literal paths, NOT regexes. On a developer or technician workstation this is the softest surface in the building, and it is how an MSP gets hit THROUGH its own staff: an editor extension or a git hook runs arbitrary code on an ordinary, unremarkable action.",
   "devtool_paths_raw": [
@@ -3865,26 +3861,26 @@
       "Severity": "POSSIBLE"
     }
   ],
-  "_comment_devtool_gitconfig_rules": "Phase 158, consumed by Test-ContentRules against .gitconfig and a repository's .git/config. Every one of these executes a command during ordinary git operations, and core.fsmonitor fires on EVERY git command - so a weaponised .gitconfig is persistence that triggers dozens of times a day and appears in no autostart list. Reported POSSIBLE on their own because each has a legitimate use (Git LFS installs a filter; delta installs a pager); the hook rules above are what make one HIGH.",
+  "_comment_devtool_gitconfig_rules": "Phase 158, consumed by Test-ContentRules against .gitconfig and a repository's .git/config. Every one of these executes a command during ordinary git operations, and core.fsmonitor fires on EVERY git command - so a weaponised .gitconfig is persistence that triggers dozens of times a day and appears in no autostart list. Reported POSSIBLE on their own because each has a legitimate use (Git LFS installs a filter; delta installs a pager); the hook rules are what make one HIGH. ESCAPING RULE (2026-08-30): the value is matched with \\S, never [^\\r\\n]. With [^\\r\\n] the engine backtracks into the whitespace before the value, where the (?!true|false) lookahead trivially succeeds - which made 'core.fsmonitor = true', the setting Git for Windows 2.37+ and Scalar write themselves, a HIGH finding on every machine.",
   "devtool_gitconfig_rules": [
     {
       "Name": "GitConfig-FsMonitorCommand",
-      "Pattern": "(?im)^\\s{0,8}fsmonitor\\s{0,4}=\\s{0,4}(?!true\\s*$|false\\s*$)[^\\r\\n]{2,}",
+      "Pattern": "(?im)^\\s*fsmonitor\\s*=\\s*(?!(true|false)\\s*$)\\S{2,}",
       "Severity": "HIGH"
     },
     {
       "Name": "GitConfig-SshCommand",
-      "Pattern": "(?im)^\\s{0,8}sshCommand\\s{0,4}=\\s{0,4}[^\\r\\n]{2,}",
+      "Pattern": "(?im)^\\s*sshCommand\\s*=\\s*\\S{2,}",
       "Severity": "POSSIBLE"
     },
     {
       "Name": "GitConfig-TextConv",
-      "Pattern": "(?im)^\\s{0,8}textconv\\s{0,4}=\\s{0,4}[^\\r\\n]{2,}",
+      "Pattern": "(?im)^\\s*textconv\\s*=\\s*\\S{2,}",
       "Severity": "POSSIBLE"
     },
     {
       "Name": "GitConfig-FilterProcess",
-      "Pattern": "(?im)^\\s{0,8}(clean|smudge|process)\\s{0,4}=\\s{0,4}[^\\r\\n]{2,}",
+      "Pattern": "(?im)^\\s*(clean|smudge|process)\\s*=\\s*\\S{2,}",
       "Severity": "POSSIBLE"
     },
     {
@@ -3894,7 +3890,7 @@
     },
     {
       "Name": "GitConfig-PagerCommand",
-      "Pattern": "(?im)^\\s{0,8}pager\\s{0,4}=\\s{0,4}[^\\r\\n]{2,}",
+      "Pattern": "(?im)^\\s*pager\\s*=\\s*\\S{2,}",
       "Severity": "POSSIBLE"
     }
   ],
@@ -3926,26 +3922,26 @@
       "Severity": "POSSIBLE"
     }
   ],
-  "_comment_devtool_registry_rules": "Phase 158, consumed by Test-ContentRules against .npmrc and NuGet.Config. A registry override that is not the vendor default silently redirects every package install on this machine, which is the dependency-confusion delivery path. Bounded quantifiers; the negative lookahead is what keeps the default registries out of the result.",
+  "_comment_devtool_registry_rules": "Phase 158, consumed by Test-ContentRules against .npmrc and NuGet.Config. A registry override that is not the vendor default silently redirects every package install on this machine, which is the dependency-confusion delivery path. The NuGet rule REQUIRES the value to be a URL or a UNC path: without that it matched every ordinary key in NuGet.Config, including value=\"Highest\" (caught 2026-08-30). Values are matched with \\S so the engine cannot backtrack into the whitespace and satisfy the negative lookahead there.",
   "devtool_registry_rules": [
     {
       "Name": "DevRegistry-NonDefaultNpm",
-      "Pattern": "(?im)^\\s{0,8}registry\\s{0,4}=\\s{0,4}(?!https?://registry\\.npmjs\\.org)[^\\r\\n]{4,}",
+      "Pattern": "(?im)^\\s*registry\\s*=\\s*(?!https?://registry\\.npmjs\\.org)\\S{4,}",
       "Severity": "POSSIBLE"
     },
     {
       "Name": "DevRegistry-ScopedOverride",
-      "Pattern": "(?im)^\\s{0,8}@[A-Za-z0-9_-]{1,40}:registry\\s{0,4}=\\s{0,4}[^\\r\\n]{4,}",
+      "Pattern": "(?im)^\\s*@[A-Za-z0-9_-]{1,40}:registry\\s*=\\s*\\S{4,}",
       "Severity": "POSSIBLE"
     },
     {
       "Name": "DevRegistry-NonDefaultNuGet",
-      "Pattern": "(?i)<add\\s{1,4}key=\"[^\"]{1,60}\"\\s{1,4}value=\"(?!https?://api\\.nuget\\.org)[^\"]{4,}\"",
+      "Pattern": "(?i)<add\\s+key=\"[^\"]{1,60}\"\\s+value=\"(?!https?://api\\.nuget\\.org)((https?|ftp)://|\\\\\\\\)[^\"]{4,}\"",
       "Severity": "POSSIBLE"
     },
     {
       "Name": "DevRegistry-PlainHttpFeed",
-      "Pattern": "(?i)(registry\\s{0,4}=\\s{0,4}|value=\")http://[^\\s\"\\r\\n]{4,}",
+      "Pattern": "(?i)(^\\s*registry\\s*=\\s*|value=\")http://[^\\s\"\\r\\n]{4,}",
       "Severity": "HIGH"
     }
   ],
@@ -3982,41 +3978,41 @@
     "winload.efi",
     "winresume.efi"
   ],
-  "_comment_bcd_unsafe_flags": "Phase 159, consumed by matching against the text of 'bcdedit /enum {current}'. Phase 40 already covers testsigning and nointegritychecks and this key deliberately does NOT repeat them - only what phase 40 misses. disableelamdrivers is the important one: it stops the early-launch anti-malware driver loading, so the endpoint's own security product is blind for the part of boot a bootkit uses.",
+  "_comment_bcd_unsafe_flags": "Phase 159, matched against the text of 'bcdedit /enum {current}'. Phase 40 already covers testsigning and nointegritychecks and this deliberately does not repeat them - only what phase 40 misses. disableelamdrivers is the important one: it stops the early-launch anti-malware driver loading, so the endpoint's own security product is blind for exactly the part of boot a bootkit uses. TWO ESCAPING RULES HERE, both learned the hard way (2026-08-30): bcdedit pads the element name out to column 24, so the gap can be TWENTY spaces - use unbounded \\s+, never \\s{1,8}, or the rule silently never fires; and the value must be matched with \\S, never [^\\r\\n], or the engine backtracks INTO the padding where a negative lookahead trivially succeeds and the rule fires on every healthy machine.",
   "bcd_unsafe_flags": [
     {
       "Name": "BCD-DisableElamDrivers",
-      "Pattern": "(?im)^\\s{0,8}disableelamdrivers\\s{1,8}Yes\\b",
+      "Pattern": "(?im)^\\s*disableelamdrivers\\s+Yes\\b",
       "Severity": "HIGH"
     },
     {
       "Name": "BCD-FlightSigning",
-      "Pattern": "(?im)^\\s{0,8}flightsigning\\s{1,8}Yes\\b",
+      "Pattern": "(?im)^\\s*flightsigning\\s+Yes\\b",
       "Severity": "HIGH"
     },
     {
       "Name": "BCD-IntegrityServicesDisabled",
-      "Pattern": "(?im)^\\s{0,8}integrityservices\\s{1,8}Disable\\b",
+      "Pattern": "(?im)^\\s*integrityservices\\s+Disable\\b",
       "Severity": "HIGH"
     },
     {
       "Name": "BCD-KernelDebugEnabled",
-      "Pattern": "(?im)^\\s{0,8}debug\\s{1,8}Yes\\b",
+      "Pattern": "(?im)^\\s*debug\\s+Yes\\b",
       "Severity": "POSSIBLE"
     },
     {
       "Name": "BCD-BootDebugEnabled",
-      "Pattern": "(?im)^\\s{0,8}bootdebug\\s{1,8}Yes\\b",
+      "Pattern": "(?im)^\\s*bootdebug\\s+Yes\\b",
       "Severity": "POSSIBLE"
     },
     {
       "Name": "BCD-SafeBootConfigured",
-      "Pattern": "(?im)^\\s{0,8}safeboot\\s{1,8}[A-Za-z]{2,20}\\b",
+      "Pattern": "(?im)^\\s*safeboot\\s+[A-Za-z]{2,20}\\b",
       "Severity": "POSSIBLE"
     },
     {
       "Name": "BCD-CustomBootLoader",
-      "Pattern": "(?im)^\\s{0,8}path\\s{1,8}(?!\\\\(Windows\\\\system32\\\\winload\\.(efi|exe)|EFI\\\\Microsoft\\\\Boot\\\\bootmgfw\\.efi|EFI\\\\Microsoft\\\\Boot\\\\memtest\\.efi))[^\\r\\n]{4,}",
+      "Pattern": "(?im)^\\s*path\\s+(?!\\\\(Windows\\\\system32\\\\winload\\.(efi|exe)|WINDOWS\\\\system32\\\\winload\\.(efi|exe)|EFI\\\\Microsoft\\\\Boot\\\\(bootmgfw|memtest)\\.efi|Windows\\\\system32\\\\winresume\\.(efi|exe)))\\S{4,}",
       "Severity": "POSSIBLE"
     }
   ],
@@ -4026,5 +4022,199 @@
     "ReferenceKb": "KB5025885",
     "ReferenceUrl": "https://support.microsoft.com/help/5025885",
     "VerifyCommand": "[System.BitConverter]::ToString((Get-SecureBootUEFI dbx).Bytes).Length"
-  }
+  },
+  "_comment_pe_scan_roots_hot_raw": "Phase 146. User-writable roots where an unsigned PE is anomalous by LOCATION alone. Walked first and under their own Get-ScanFiles budget, so a browser-cache-heavy AppData walk cannot starve them. Env-var-expanded at load via ExpandString - literal paths, not regexes. Program Files, WindowsApps and System32 are deliberately absent: nearly everything there is validly signed and would be suppressed anyway, the volume would eat the whole file budget, and System32 integrity is already phases 15/109/113.",
+  "pe_scan_roots_hot_raw": [
+    "$env:TEMP",
+    "$env:USERPROFILE\\Downloads",
+    "$env:USERPROFILE\\Desktop",
+    "$env:PUBLIC",
+    "$env:windir\\Temp"
+  ],
+  "_comment_pe_scan_roots_app_raw": "Phase 146. Profile application data, walked second under a separate budget. Get-ScanFiles already prunes the browser/Electron/Teams cache trees that would otherwise dominate these roots. Env-var-expanded at load.",
+  "pe_scan_roots_app_raw": [
+    "$env:APPDATA",
+    "$env:LOCALAPPDATA",
+    "$env:ProgramData",
+    "$env:USERPROFILE\\Documents"
+  ],
+  "_comment_pe_extensions": "Phase 146. Extensions parsed as PE images. Lowercase with a leading dot, compared with -contains against Extension.ToLower() - these are LITERALS, not regexes. Extensionless files and .tmp/.dat get a 2-byte MZ probe in the hot roots only, because that is where a staged payload with a disguised name lives.",
+  "pe_extensions": [
+    ".exe",
+    ".dll",
+    ".sys",
+    ".scr",
+    ".ocx",
+    ".cpl",
+    ".ax",
+    ".node",
+    ".efi"
+  ],
+  "_comment_pe_probe_extensions": "Phase 146. Extensions (plus the empty string for an extensionless file) that are cheap MZ-probed in the hot roots rather than skipped. Lowercase literals.",
+  "pe_probe_extensions": [
+    "",
+    ".tmp",
+    ".dat",
+    ".bin",
+    ".log",
+    ".old"
+  ],
+  "_comment_pe_packer_section_names": "Phase 146 signal S3. Matched against the 8-byte PE section name after NUL-trimming and stripping non-printables. FULLY ANCHORED ^...$ on purpose: the name field is 8 bytes of attacker-controlled data, and an unanchored 'upx' would match a legitimate section named '.upxdata'. Packing is NOT malicious - half of commercial software is packed and .NET obfuscators are a legitimate product category - so this list carries weight 2 against a 17-point HIGH threshold and can never escalate on its own.",
+  "pe_packer_section_names": [
+    "^UPX[0-9!]$",
+    "^\\.UPX[0-9]$",
+    "^\\.aspack$",
+    "^\\.adata$",
+    "^ASPack$",
+    "^\\.themida$",
+    "^Themida$",
+    "^\\.winlice$",
+    "^\\.vmp[0-9]$",
+    "^\\.enigma[0-9]$",
+    "^\\.petite$",
+    "^\\.MPRESS[0-9]$",
+    "^\\.boom$",
+    "^\\.taz$",
+    "^\\.packed$",
+    "^PELock$",
+    "^\\.perplex$",
+    "^\\.sforce[0-9]$",
+    "^kkrunchy$",
+    "^\\.nsp[0-9]$",
+    "^\\.RLPack$",
+    "^\\.mackt$",
+    "^\\.neolite?$",
+    "^\\.charmve$",
+    "^\\.pklstb$",
+    "^\\.y0da$",
+    "^\\.shrink[0-9]$",
+    "^\\.svkp$",
+    "^\\.tsuarch$",
+    "^\\.tsustub$"
+  ],
+  "_comment_pe_import_triads": "Phase 146 signal S9. A rule fires only when EVERY name in All is present in the import table. Weight 4 of a 17-point HIGH threshold - deliberately not decisive, because debuggers, AV/EDR, RMM agents, screen-capture tools and several installers legitimately import these triads. A validly signed trusted binary matching one stays silent by design.",
+  "pe_import_triads": [
+    {
+      "Name": "RemoteThreadInjector",
+      "All": [
+        "VirtualAllocEx",
+        "WriteProcessMemory",
+        "CreateRemoteThread"
+      ]
+    },
+    {
+      "Name": "RemoteThreadInjectorEx",
+      "All": [
+        "VirtualAllocEx",
+        "WriteProcessMemory",
+        "CreateRemoteThreadEx"
+      ]
+    },
+    {
+      "Name": "NtInjectPrimitives",
+      "All": [
+        "NtAllocateVirtualMemory",
+        "NtWriteVirtualMemory",
+        "NtCreateThreadEx"
+      ]
+    },
+    {
+      "Name": "ProcessHollowing",
+      "All": [
+        "CreateProcessA",
+        "NtUnmapViewOfSection",
+        "SetThreadContext"
+      ]
+    },
+    {
+      "Name": "ProcessHollowingW",
+      "All": [
+        "CreateProcessW",
+        "ZwUnmapViewOfSection",
+        "ResumeThread"
+      ]
+    },
+    {
+      "Name": "ApcInjector",
+      "All": [
+        "OpenThread",
+        "QueueUserAPC",
+        "VirtualAllocEx"
+      ]
+    },
+    {
+      "Name": "ReflectiveSelfLoad",
+      "All": [
+        "VirtualAlloc",
+        "VirtualProtect",
+        "GetProcAddress",
+        "LoadLibraryA"
+      ]
+    }
+  ],
+  "_comment_pe_masquerade_names": "Phase 146 signal C5. Windows binary names that must be Microsoft-signed. Matched against the file NAME only and fully anchored: an unanchored 'svchost' matches 'svchost_helper_setup.exe', the exact bug class that auto-killed healthy signed Store apps in phase 47. Kept short - the general System32 masquerade audit is phases 15/109/113 and this is only the scoring contribution.",
+  "pe_masquerade_names": [
+    "^svchost\\.exe$",
+    "^lsass\\.exe$",
+    "^csrss\\.exe$",
+    "^winlogon\\.exe$",
+    "^services\\.exe$",
+    "^smss\\.exe$",
+    "^explorer\\.exe$",
+    "^rundll32\\.exe$",
+    "^dllhost\\.exe$",
+    "^taskhostw\\.exe$",
+    "^spoolsv\\.exe$",
+    "^conhost\\.exe$",
+    "^wininit\\.exe$",
+    "^lsaiso\\.exe$",
+    "^sihost\\.exe$",
+    "^ctfmon\\.exe$"
+  ],
+  "_comment_pe_transient_paths": "Phase 146 signal C3. A POSITIVE match list, NOT an allowlist - it is loaded with Get-Sig and joined explicitly, never through Join-AllowRegex. Join-AllowRegex fails closed to '(?!)' on a missing key, which is right for a suppression list and exactly wrong here: a missing key would silently switch off the context signal instead of making the phase noisy. Anchored to path COMPONENTS, never bare substrings - a bare 'Desktop' matched the Store package names WhatsAppDesktop and DesktopAppInstaller under Program Files.",
+  "pe_transient_paths": [
+    "\\\\Temp\\\\",
+    "\\\\Downloads\\\\",
+    "\\\\Desktop\\\\",
+    "\\\\AppData\\\\Roaming\\\\",
+    "\\\\AppData\\\\Local\\\\Temp\\\\",
+    "\\\\Users\\\\Public\\\\",
+    "\\\\ProgramData\\\\[^\\\\]{1,80}\\.exe$"
+  ],
+  "_comment_pe_packer_benign_paths": "Phase 146 FP allowlist, consumed through Join-AllowRegex. Locations whose contents are packed or self-extracting BY CONSTRUCTION, where the structural signals carry no information. Deliberately NARROW and path-anchored, and it must never cover a transient root: Temp, Downloads and AppData\\Roaming are where the detection lives, and an entry covering one of them would make the phase dead code - the failure phase 130's discord entry shipped with. Note _MEI\\d+ (one backslash after escaping): _MEI\\\\d+ would be a literal backslash followed by 'd' and silently disabled the whole PyInstaller allowlist once already.",
+  "pe_packer_benign_paths": [
+    "\\\\Program Files( \\(x86\\))?\\\\",
+    "\\\\WindowsApps\\\\",
+    "\\\\Windows\\\\Installer\\\\",
+    "\\\\Windows\\\\SoftwareDistribution\\\\",
+    "\\\\AppData\\\\Local\\\\Temp\\\\_MEI\\d+\\\\",
+    "\\\\AppData\\\\Local\\\\Programs\\\\(Microsoft VS Code|Cursor|VSCodium)\\\\",
+    "\\\\AppData\\\\Local\\\\Microsoft\\\\(Teams|OneDrive|EdgeUpdate)\\\\",
+    "\\\\NVIDIA Corporation\\\\",
+    "\\\\Packages\\\\[^\\\\]{1,120}\\\\LocalCache\\\\"
+  ],
+  "_comment_pe_score_thresholds": "Phase 146. A single OBJECT, not a list - index it as @(Get-Sig 'pe_score_thresholds')[0], because a bare [0] on a single-element Get-Sig return indexes the first CHARACTER of a string on PowerShell 5.1. Externalised so a live FP round can retune without an engine edit. HighMinContext and HighMinSignals are the gates that stop correlated structural signals - a packed file trips entropy, packer name, zero-raw and W+X as one fact wearing four hats - from reaching HIGH on their own. A lone high-entropy section scores 2 against a ReportFloor of 7 and therefore cannot produce a finding at all.",
+  "pe_score_thresholds": [
+    {
+      "EntropyExec": 7.2,
+      "EntropyData": 7.5,
+      "ReportFloor": 7,
+      "PossibleMin": 12,
+      "PossibleMinContext": 3,
+      "HighMin": 17,
+      "HighMinContext": 6,
+      "HighMinSignals": 3,
+      "OverlayMinBytes": 1048576,
+      "OverlayMinRatio": 0.25,
+      "ZeroRawMinVirtual": 4096,
+      "LowImportMax": 5,
+      "MaxFilesParsed": 400,
+      "MaxSections": 96,
+      "EntropyWindowBytes": 8192,
+      "MaxEntropySections": 4,
+      "MaxFileBytes": 104857600,
+      "MinFileBytes": 1024,
+      "ParseDeadlineMs": 250
+    }
+  ]
 }
