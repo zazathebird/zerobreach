@@ -14,19 +14,7 @@ namespace Scythe.Rules.Tests.Yara;
 /// </summary>
 public class DifferentialMatchTests
 {
-    private static readonly string? YaraPath = FindYara();
-
-    private static string? FindYara()
-    {
-        foreach (var p in new[] { "/usr/bin/yara", "/usr/local/bin/yara" })
-        {
-            if (File.Exists(p))
-            {
-                return p;
-            }
-        }
-        return null;
-    }
+    private static readonly string? YaraPath = ReferenceYara.Path;
 
     /// <summary>Runs the reference CLI and returns each string's match offsets.</summary>
     private static Dictionary<string, List<int>> RunReference(string ruleSource, byte[] data)
@@ -86,7 +74,10 @@ public class DifferentialMatchTests
     {
         if (YaraPath is null)
         {
-            return; // reference binary not installed; vacuous here, exercised on CI
+            // Vacuous without the reference binary. SCYTHE_REQUIRE_YARA=1 turns that into a
+            // failure, so a CI runner cannot go green having compared nothing.
+            ReferenceYara.AssertOptional();
+            return;
         }
         string ruleSource = $"rule t {{ strings: {stringsSection} condition: any of them }}";
 
@@ -156,6 +147,7 @@ public class DifferentialMatchTests
     {
         if (YaraPath is null)
         {
+            ReferenceYara.AssertOptional();
             return;
         }
         // Deterministic pseudo-random buffer with planted needles.

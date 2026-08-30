@@ -317,15 +317,22 @@ public class CorpusValidationTests
         List<(string Buffer, string[] Fired, OperationState State)> verdicts,
         double mibPerSec)
     {
-        // Locate the package root (the directory holding the .sln) from the test bin dir.
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "fable-work-2.sln")))
+        // The destination is NAMED by the caller, never inferred from the tree. This used to
+        // walk up looking for the standalone package's own solution file, which stopped
+        // existing when the package was merged into this repo — so the walk hit the
+        // filesystem root, returned, and every line below became dead code while the test
+        // went on passing. An environment variable cannot silently miss.
+        //
+        // Deliberately opt-in rather than defaulting to the repo root: a generated artifact
+        // written into the source tree on every `dotnet test` is the mistake the integrity
+        // manifest already taught this project (CLAUDE.md, WS7 — it is a release artifact and
+        // is .gitignored precisely so a dev tree does not churn).
+        //
+        //   SCYTHE_CORPUS_REPORT=/tmp/CORPUS_REPORT.md dotnet test lib/Scythe.Rules.Tests
+        string? outPath = Environment.GetEnvironmentVariable("SCYTHE_CORPUS_REPORT");
+        if (string.IsNullOrWhiteSpace(outPath))
         {
-            dir = dir.Parent;
-        }
-        if (dir is null)
-        {
-            return; // running outside the package tree; the report is a convenience artifact
+            return;
         }
 
         var warningGroups = compiled.Diagnostics
@@ -370,7 +377,7 @@ public class CorpusValidationTests
         sb.AppendLine();
         sb.AppendLine($"- {mibPerSec:F0} MiB/s across the synthetic buffer set (this machine, Debug/CI");
         sb.AppendLine("  build of the test host; treat as an order-of-magnitude signal, not a benchmark).");
-        File.WriteAllText(Path.Combine(dir.FullName, "CORPUS_REPORT.md"), sb.ToString());
+        File.WriteAllText(outPath, sb.ToString());
     }
 }
 
@@ -381,8 +388,7 @@ public class CorpusValidationTests
 /// </summary>
 public class DifferentialVerdictTests
 {
-    private static readonly string? YaraPath =
-        new[] { "/usr/bin/yara", "/usr/local/bin/yara" }.FirstOrDefault(File.Exists);
+    private static readonly string? YaraPath = ReferenceYara.Path;
 
     private static string[] ReferenceFired(string ruleSource, byte[] data)
     {
@@ -418,6 +424,7 @@ public class DifferentialVerdictTests
     {
         if (YaraPath is null)
         {
+            ReferenceYara.AssertOptional();
             return;
         }
         var compiled = YaraCompiler.Compile([new YaraSource("diff.yar", ruleSource)]);
@@ -435,6 +442,7 @@ public class DifferentialVerdictTests
     {
         if (YaraPath is null)
         {
+            ReferenceYara.AssertOptional();
             return;
         }
         // Reuse the whole synthetic corpus and its buffers: strongest single check we
