@@ -1,8 +1,74 @@
 # HANDOFF
 
-## Session 2026-08-27 — project renamed to Scythe; the artifact-layer package rebuilt standalone
+## Session 2026-08-30 — engine phases 147, 157, 158 and 159 (tasks F1, F4, F5, F7)
 
 **Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`. Four of the six remaining `engine/Phases-6.ps1` stubs are
+built; the module went 319 → 1,201 lines. Full detail is the top entry of `CHANGELOG.md`; the
+durable rules that came out of it are in `CLAUDE.md` under "Phases 147 / 157 / 158 / 159".
+
+| Check | Result |
+|---|---|
+| `pwsh tools/tests/Run-SecurityTests.ps1` | all 24 suites pass |
+| `tools/tests/Test-Hunt-Band.ps1` | **118 → 315 assertions**, 0 failed |
+| `dotnet build Scythe.sln` / `dotnet test` | untouched this session; 0 warnings / 0 failed, 14 skipped as of the last run |
+| rename audit | old product name in the documented 9 files, `zb` stem in 3 — unchanged |
+
+Files touched: `engine/Phases-6.ps1`, `data/detection_signatures.json` (24 new keys, 190 → 238
+top-level), `Scythe-V23.ps1` (the loader block that pulls them), `tools/tests/Test-Hunt-Band.ps1`.
+
+### What is left in that work package
+
+- **F3 — phase 146, PE structural analysis + a rule engine.** Note before starting: `lib/Scythe.Rules`
+  already ships a YARA-compatible engine and `lib/Scythe.Formats` a PE parser, both merged in
+  `47e2af6` and unused by anything. F3 should be built on top of roadmap item 6 (wire up `lib/`)
+  rather than growing a second rule engine inside the PowerShell tree.
+- **F2 — phases 148-152, lateral movement / AD / credential dumping.** Five phases, the largest
+  remaining piece, and the one the private lab network of deliberately infected peers exists to
+  exercise.
+
+### What could not be verified from Linux, and what needs a Windows box
+
+Everything below is theory until a real registry, a real process table and the PS 5.1 parser
+answer it. This is the same exposure the whole 116-162 span already carries, plus four specifics:
+
+1. **`dbx_current_baseline.MinBytes` is a guess (4096).** It is deliberately conservative — a
+   floor for "never updated", not a real baseline — but it has never been measured against a
+   Windows machine. Measure `(Get-SecureBootUEFI dbx).Bytes.Length` on a few real endpoints of
+   different vintages before trusting the `BOOT159_DBX_STALE` branch; the `BOOT159_DBX_SIZE`
+   measurement branch is safe either way.
+2. **`Get-Partition`'s `AccessPaths` on a real ESP.** `Get-ScytheEspRoot` prefers a drive letter
+   and falls back to any reachable access path. Whether a `\\?\Volume{...}` GUID path is
+   reachable through the FileSystem provider varies by build; the fallback is guarded but has
+   never run against a real ESP. Test both mounted and unmounted.
+3. **The Winsock `PackedCatalogItem` decode.** Only the leading null-terminated wide-string path
+   field is read, which is correct per the documented layout, but it has never been run against
+   a real catalogue. Check it against `netsh winsock show catalog` on a box with a third-party
+   LSP installed.
+4. **Absence semantics on the phase-157 registry keys** — absent vs zero vs default-applies —
+   are reasoned, not observed, exactly as they were for 153-156.
+
+Also worth a live FP round specifically: phase 158 on a real developer workstation (the
+repository discovery walks a fixed shallow list of directories and caps at 60 repositories —
+confirm that is the right shape on a machine with a large `source\repos` tree), and phase 157's
+print-monitor and netsh-helper branches on a box with vendor printing software.
+
+### Deliberately not implemented, so nobody re-litigates it from the brief
+
+- Phase 159 **does not mount the ESP** and no `-MountEsp` switch is to be added. Reasoning in
+  `CLAUDE.md` and in the phase's own banner; the tests refuse every mount cmdlet.
+- Phase 158 has **no typosquat check**. It needs a curated popular-package list that this project
+  has not committed to maintaining.
+- Phase 157 does **not** cover `AppExecutionAlias` hijacking. It was the one mechanism in the F4
+  table left out — fiddly to read reliably across WindowsApps aliases and `App Paths`, and low
+  value next to the fourteen that are in. Worth adding later; it is not an oversight.
+
+---
+
+## Session 2026-08-27 — project renamed to Scythe; the artifact-layer package rebuilt standalone
 
 ### State
 

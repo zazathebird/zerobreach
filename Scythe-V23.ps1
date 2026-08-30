@@ -1141,6 +1141,36 @@ $HUNT_DRIVER_BENIGN_RE  = Join-AllowRegex 'hunt_driver_benign_names'       # Pha
 $HUNT_TIMESTOMP_BENIGN_RE = Join-AllowRegex 'hunt_timestomp_benign_paths'  # Phase 139
 $HUNT_FILENAME_BENIGN_RE  = Join-AllowRegex 'hunt_filename_benign_paths'   # Phase 140
 $HUNT_MEMORY_BENIGN_RE  = Join-AllowRegex 'hunt_memory_benign_paths'       # Phases 141/143
+# ── WS7 phases 147 / 157 / 158 / 159 (2026-08-30) ────────────────────────────
+# Same contract as every block above: detection lists via Get-Sig, FP allowlists via
+# Join-AllowRegex (missing key -> '(?!)', which suppresses nothing). The *_raw lists hold
+# $env: variables and are expanded HERE, once, rather than in the phase body.
+$CLOUD_CRED_PATHS         = @((Get-Sig 'cloud_cred_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$CLOUD_CRED_NEVER_READ    = Get-Sig 'cloud_cred_never_read'                # Phase 147
+$CLOUD_CRED_TEXT_FORMATS  = Get-Sig 'cloud_cred_text_formats'              # Phase 147
+$CLOUD_CRED_CONTENT_RULES = Get-Sig 'cloud_cred_content_rules'             # Phase 147
+$CLOUD_CRED_STAGING_DIRS  = @((Get-Sig 'cloud_cred_staging_dirs_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$CLOUD_CRED_STAGED_NAMES  = Get-Sig 'cloud_cred_staged_names'              # Phase 147
+$CLOUD_CRED_ACCESS_TOOLS  = Get-Sig 'cloud_cred_access_tools'              # Phase 147
+$CLOUD_CRED_BENIGN_RE     = Join-AllowRegex 'cloud_cred_benign_paths'      # Phase 147
+$PERSIST_DROPPER_EXTS     = @((Get-Sig 'persist_dropper_extensions') | ForEach-Object { "$_".ToLower() })
+$PERSIST_DROPPER_RULES    = Get-Sig 'persist_dropper_content_rules'        # Phase 157
+$PERSIST_PROFILER_BENIGN_RE = Join-AllowRegex 'persist_profiler_benign_names'        # Phase 157
+$PERSIST_DLL_BENIGN_RE      = Join-AllowRegex 'persist_dll_benign_paths'             # Phase 157
+$PERSIST_STUBPATH_BENIGN_RE = Join-AllowRegex 'persist_stubpath_benign_values'       # Phase 157
+$PERSIST_TRIGGER_BENIGN_RE  = Join-AllowRegex 'persist_service_trigger_benign_names' # Phase 157
+$DEVTOOL_PATHS            = @((Get-Sig 'devtool_paths_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$DEVTOOL_HOOK_RULES       = Get-Sig 'devtool_hook_rules'                   # Phase 158
+$DEVTOOL_GITCONFIG_RULES  = Get-Sig 'devtool_gitconfig_rules'              # Phase 158
+$DEVTOOL_STARTUP_RULES    = Get-Sig 'devtool_vscode_startup_rules'         # Phase 158
+$DEVTOOL_REGISTRY_RULES   = Get-Sig 'devtool_registry_rules'               # Phase 158
+$DEVTOOL_BENIGN_RE        = Join-AllowRegex 'devtool_benign_paths'         # Phase 158
+$ESP_EXPECTED_PATHS       = Get-Sig 'esp_expected_paths'                   # Phase 159
+$ESP_BOOT_BINARIES        = @((Get-Sig 'esp_boot_binaries') | ForEach-Object { "$_".ToLower() })
+$BCD_UNSAFE_FLAGS         = Get-Sig 'bcd_unsafe_flags'                     # Phase 159
+# Object, not a list: Get-Sig always wraps, so index through @(...) — a bare [0] on a
+# single-element return would index the first CHARACTER of a string (CLAUDE.md 5.1 rule).
+$DBX_BASELINE             = @(Get-Sig 'dbx_current_baseline')[0]           # Phase 159
 # Native binaries that never host managed code. Anchored to the whole process NAME
 # (System.Diagnostics.Process.Name carries no extension), because an unanchored
 # substring would match e.g. "notepad++" and half of Program Files — the exact class

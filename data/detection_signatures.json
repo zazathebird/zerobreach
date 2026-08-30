@@ -3563,5 +3563,468 @@
       "stage": "Lateral Movement",
       "pattern": "(?i)(lateral|worm|share|rdp|winrm|psexec|smb|remote access|rmm)"
     }
-  ]
+  ],
+  "_comment_cloud_cred_paths_raw": "Phase 147. The cloud/DevOps credential inventory. Env-var-expanded at load via ExpandString, so these are literal paths, NOT regexes. Coverage before this phase stopped at browser password stores, FileZilla, WinSCP and PuTTY - a 2015 threat model. On a managed endpoint the crown jewels are cloud tokens: a stolen .azure token cache on one technician's laptop is every client tenant, and it survives a password reset because the token IS the credential. Existence alone is INFO - a developer box legitimately has all of these.",
+  "cloud_cred_paths_raw": [
+    "$env:USERPROFILE\\.aws\\credentials",
+    "$env:USERPROFILE\\.aws\\config",
+    "$env:USERPROFILE\\.azure\\msal_token_cache.bin",
+    "$env:USERPROFILE\\.azure\\accessTokens.json",
+    "$env:USERPROFILE\\.azure\\azureProfile.json",
+    "$env:USERPROFILE\\.azure\\service_principal_entries.json",
+    "$env:LOCALAPPDATA\\Microsoft\\TokenBroker\\Cache",
+    "$env:APPDATA\\Microsoft\\Windows\\SystemCertificates\\Ngc",
+    "$env:APPDATA\\gcloud\\credentials.db",
+    "$env:APPDATA\\gcloud\\access_tokens.db",
+    "$env:APPDATA\\gcloud\\application_default_credentials.json",
+    "$env:USERPROFILE\\.kube\\config",
+    "$env:USERPROFILE\\.docker\\config.json",
+    "$env:USERPROFILE\\.ssh\\id_rsa",
+    "$env:USERPROFILE\\.ssh\\id_dsa",
+    "$env:USERPROFILE\\.ssh\\id_ecdsa",
+    "$env:USERPROFILE\\.ssh\\id_ed25519",
+    "$env:USERPROFILE\\.ssh\\known_hosts",
+    "$env:USERPROFILE\\.git-credentials",
+    "$env:USERPROFILE\\.gitconfig",
+    "$env:USERPROFILE\\.npmrc",
+    "$env:USERPROFILE\\.pypirc",
+    "$env:APPDATA\\NuGet\\NuGet.Config",
+    "$env:USERPROFILE\\.netrc",
+    "$env:USERPROFILE\\_netrc",
+    "$env:APPDATA\\terraform.d\\credentials.tfrc.json",
+    "$env:APPDATA\\Microsoft\\Credentials",
+    "$env:LOCALAPPDATA\\Microsoft\\Credentials",
+    "$env:APPDATA\\Microsoft\\Protect"
+  ],
+  "_comment_cloud_cred_never_read": "Phase 147. Targets whose EXISTENCE and ACL may be reported but whose CONTENT must never be read by this tool. These hold live DPAPI-protected key material and Entra PRT/NGC key containers; an incident-response tool that reads them becomes the credential-theft primitive it is looking for, and reading a TokenBroker cache can also invalidate the user's session. Matched as regexes against the FULL expanded path.",
+  "cloud_cred_never_read": [
+    "(?i)\\\\Microsoft\\\\TokenBroker\\\\",
+    "(?i)\\\\SystemCertificates\\\\Ngc(\\\\|$)",
+    "(?i)\\\\Microsoft\\\\Protect(\\\\|$)",
+    "(?i)\\\\Microsoft\\\\Credentials(\\\\|$)",
+    "(?i)\\\\msal_token_cache\\.bin$",
+    "(?i)\\\\(credentials|access_tokens)\\.db$"
+  ],
+  "_comment_cloud_cred_text_formats": "Phase 147. Leaf-name regexes for the targets that are PLAIN TEXT and may therefore be content-scanned with Test-ContentRules. Anything not on this list is treated as opaque and only its existence and ACL are reported. Anchored whole-leaf on purpose: 'config' here means .aws\\config or .kube\\config, not every file with config in the name.",
+  "cloud_cred_text_formats": [
+    "(?i)^credentials$",
+    "(?i)^config$",
+    "(?i)^config\\.json$",
+    "(?i)^\\.npmrc$",
+    "(?i)^\\.pypirc$",
+    "(?i)^NuGet\\.Config$",
+    "(?i)^\\.git-credentials$",
+    "(?i)^\\.gitconfig$",
+    "(?i)^\\.netrc$",
+    "(?i)^_netrc$",
+    "(?i)^azureProfile\\.json$",
+    "(?i)^accessTokens\\.json$",
+    "(?i)^service_principal_entries\\.json$",
+    "(?i)^application_default_credentials\\.json$",
+    "(?i)^credentials\\.tfrc\\.json$",
+    "(?i)^id_(rsa|dsa|ecdsa|ed25519)$",
+    "(?i)^.{1,120}\\.tfstate(\\.backup)?$"
+  ],
+  "_comment_cloud_cred_content_rules": "Phase 147 content rules, consumed by Test-ContentRules. These are secret FORMATS, never secrets: AKIA[0-9A-Z]{16} is the shape of an AWS access key id, not a key. The matched text is deliberately NOT written into the finding description - a finding that quotes the credential turns the client report into a second copy of it. PrivateKeyBlock is POSSIBLE rather than HIGH because an ~/.ssh key is exactly where a private key is supposed to be; the staging-directory and weak-ACL branches are what escalate it.",
+  "cloud_cred_content_rules": [
+    {
+      "Name": "Cred-AwsAccessKeyId",
+      "Pattern": "(?i)\\b(AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ABIA|ACCA)[0-9A-Z]{16}\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-AwsSecretAssignment",
+      "Pattern": "(?i)aws_secret_access_key\\s*=\\s*[^\\s]{20,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-GitHubToken",
+      "Pattern": "(?i)\\b(ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{20,}\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-SlackToken",
+      "Pattern": "(?i)\\bxox[baprs]-[A-Za-z0-9-]{10,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-JwtBearerToken",
+      "Pattern": "(?i)\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-NpmAuthToken",
+      "Pattern": "(?i)_auth(Token)?\\s*=\\s*[^\\s]{16,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-UrlEmbeddedPassword",
+      "Pattern": "(?i)https?://[^:@/\\s]{1,64}:[^@/\\s]{4,}@",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-KubeconfigToken",
+      "Pattern": "(?im)^\\s{0,20}token:\\s{0,4}[^\\s]{20,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-DockerAuthBlob",
+      "Pattern": "(?i)\"auth\"\\s*:\\s*\"[A-Za-z0-9+/=]{20,}\"",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Cred-GenericSecretAssignment",
+      "Pattern": "(?i)\\b(password|passwd|client_secret|api[_-]?key|access[_-]?token)\\b\\s{0,4}[:=]\\s{0,4}[\"']?[^\\s\"']{8,}",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "Cred-TerraformStateSecret",
+      "Pattern": "(?i)\"(client_secret|password|secret_key|private_key)\"\\s{0,4}:\\s{0,4}\"[^\"]{8,}\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "Cred-PrivateKeyBlock",
+      "Pattern": "-----BEGIN [A-Z ]{0,24}PRIVATE KEY-----",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_cloud_cred_staging_dirs_raw": "Phase 147 branch (c). Env-var-expanded literal directories, NOT regexes. A copy of credential material here did not get there by the tool that owns it - no cloud CLI ever writes its token cache to Downloads. This is the branch that turns 'a developer box has secrets' into 'someone staged the secrets for collection'.",
+  "cloud_cred_staging_dirs_raw": [
+    "$env:TEMP",
+    "$env:USERPROFILE\\Downloads",
+    "$env:USERPROFILE\\Desktop",
+    "$env:PUBLIC",
+    "$env:ProgramData"
+  ],
+  "_comment_cloud_cred_staged_names": "Phase 147 branch (c). Leaf-name regexes that are alarming OUTSIDE their normal home. Deliberately excludes config.json and config - those are far too common in Temp and ProgramData to mean anything, and including them would drown the branch. Whole-leaf anchored so a longer benign name cannot be matched by a prefix.",
+  "cloud_cred_staged_names": [
+    "(?i)^credentials(\\.txt|\\.bak|\\.json|\\.old)?$",
+    "(?i)^id_(rsa|dsa|ecdsa|ed25519)(\\.bak|\\.txt|\\.key)?$",
+    "(?i)^msal_token_cache\\.bin$",
+    "(?i)^(accessTokens|azureProfile|service_principal_entries)\\.json$",
+    "(?i)^\\.?git-credentials$",
+    "(?i)^\\.?npmrc$",
+    "(?i)^\\.?pypirc$",
+    "(?i)^\\.?netrc$",
+    "(?i)^kubeconfig(\\.txt|\\.yaml|\\.yml)?$",
+    "(?i)^(credentials|access_tokens)\\.db$",
+    "(?i)^application_default_credentials\\.json$",
+    "(?i)^.{1,120}\\.tfstate(\\.backup)?$",
+    "(?i)^(aws|azure|gcp|ssh|kube|creds?|secrets?)[-_ ]?(creds?|credentials|keys?|backup|dump|export)\\.(zip|7z|rar|tar|gz|txt|json)$"
+  ],
+  "_comment_cloud_cred_access_tools": "Phase 147 branch (d). Regexes matched against process command lines from Get-ProcSnapshot. These are the tools whose ONLY job is to mint or lift a cloud token. az/aws/kubectl/gcloud are legitimate administration tools, so the rules are anchored on the specific token-extracting subcommand rather than the binary name; the named offensive tools are matched whole-word. Every quantifier is BOUNDED - an unbounded .* between two anchors against an attacker-authored command line is a denial of service on the scan itself.",
+  "cloud_cred_access_tools": [
+    "(?i)\\baz\\b[^\\r\\n]{0,80}\\baccount\\b[^\\r\\n]{0,40}\\bget-access-token\\b",
+    "(?i)\\bGet-AzAccessToken\\b",
+    "(?i)\\bgcloud\\b[^\\r\\n]{0,60}\\bauth\\b[^\\r\\n]{0,40}\\bprint-(access|identity)-token\\b",
+    "(?i)\\baws\\b[^\\r\\n]{0,60}\\bsts\\b[^\\r\\n]{0,40}\\b(get-session-token|assume-role|get-federation-token)\\b",
+    "(?i)\\bkubectl\\b[^\\r\\n]{0,60}\\bconfig\\b[^\\r\\n]{0,30}\\bview\\b[^\\r\\n]{0,30}--raw\\b",
+    "(?i)\\b(TokenTactics|ROADrecon|ROADtools|AADInternals|SharpCloud|SharpDPAPI|SharpChrome|SeatBelt|LaZagne)\\b",
+    "(?i)\\bGet-AADInt[A-Za-z]{2,40}\\b",
+    "(?i)\\b(copy|copy-item|cpi|xcopy|robocopy|move|move-item)\\b[^\\r\\n]{0,120}\\\\\\.?(aws|azure|kube|gcloud|ssh)\\\\"
+  ],
+  "_comment_cloud_cred_benign_paths": "Phase 147 FP allowlist, consumed through Join-AllowRegex. Package and vendor trees carry example and test credential files by the thousand - node_modules alone will produce hundreds of .npmrc and credentials fixtures. Anchored to PATH COMPONENTS, never bare substrings. Deliberately contains NO entry matching Temp, Downloads, Desktop, Public or ProgramData: those are the staging directories of branch (c), and an allowlist entry covering one of them would make its own detection branch unreachable (the failure mode phase 130's discord entry shipped with).",
+  "cloud_cred_benign_paths": [
+    "\\\\node_modules\\\\",
+    "\\\\site-packages\\\\",
+    "\\\\dist-info\\\\",
+    "\\\\__pycache__\\\\",
+    "\\\\go\\\\pkg\\\\mod\\\\",
+    "\\\\\\.nuget\\\\packages\\\\",
+    "\\\\\\.gradle\\\\caches\\\\",
+    "\\\\\\.m2\\\\repository\\\\",
+    "\\\\vendor\\\\(github\\.com|golang\\.org|gopkg\\.in)\\\\",
+    "\\\\(test|tests|testing|fixture|fixtures|example|examples|sample|samples|testdata)\\\\",
+    "\\\\Program Files( \\(x86\\))?\\\\(Amazon|Microsoft|Google|Docker|HashiCorp|Kubernetes)\\\\",
+    "\\\\AppData\\\\Local\\\\Programs\\\\(Microsoft VS Code|Cursor|VSCodium)\\\\"
+  ],
+  "_comment_persist_dropper_extensions": "Phase 157. Windows shell file types that execute or coerce authentication when merely rendered in Explorer. They are text, they are not blocked by mark-of-the-web prompts the way a .exe is, and mail gateways historically pass them. Existence is not the finding - the content rules below are.",
+  "persist_dropper_extensions": [
+    ".settingcontent-ms",
+    ".library-ms",
+    ".url",
+    ".scf",
+    ".appref-ms"
+  ],
+  "_comment_persist_dropper_content_rules": "Phase 157, consumed by Test-ContentRules against the shell file types above. Two distinct techniques: DeepLink/URL pointing at an executable (direct execution on double-click or, for .settingcontent-ms, on preview), and IconFile/url pointing at a UNC path, which makes Explorer authenticate to an attacker-controlled host and hand over a net-NTLMv2 response with no user interaction at all. Every quantifier is bounded.",
+  "persist_dropper_content_rules": [
+    {
+      "Name": "Dropper-DeepLinkExecutable",
+      "Pattern": "(?i)<DeepLink>[^<]{0,300}\\.(exe|bat|cmd|ps1|vbs|js|jse|wsf|hta|scr|com|pif)\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Dropper-DeepLinkShell",
+      "Pattern": "(?i)<DeepLink>[^<]{0,300}\\b(powershell|pwsh|cmd\\.exe|mshta|rundll32|regsvr32|wscript|cscript|certutil|bitsadmin|curl|msiexec)\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Dropper-UncIconFile",
+      "Pattern": "(?im)^\\s{0,8}IconFile\\s{0,4}=\\s{0,4}\\\\\\\\[^\\r\\n]{3,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Dropper-UncLibraryUrl",
+      "Pattern": "(?i)<url>\\s{0,8}\\\\\\\\[^<\\r\\n]{3,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Dropper-UrlFileToExecutable",
+      "Pattern": "(?im)^\\s{0,8}URL\\s{0,4}=\\s{0,4}(file|ms-msdt|search-ms|ms-officecmd|ms-appinstaller|ms-search)[^\\r\\n]{0,300}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "Dropper-EncodedPowerShell",
+      "Pattern": "(?i)\\b(powershell|pwsh)\\b[^\\r\\n]{0,80}\\s-e(nc|c|ncoded|ncodedcommand)?\\s{1,4}[A-Za-z0-9+/=]{40,}",
+      "Severity": "HIGH"
+    }
+  ],
+  "_comment_persist_profiler_benign_names": "Phase 157 FP allowlist for the COR_PROFILER / CORECLR_PROFILER .NET profiler hijack, consumed through Join-AllowRegex and matched against the profiler DLL PATH. Application performance monitoring agents set this legitimately and machine-wide, which is precisely what makes the technique attractive: on a monitored fleet the mechanism is already expected. Anchored to path components. An unsigned profiler DLL outside these trees is the finding.",
+  "persist_profiler_benign_names": [
+    "(?i)\\\\(AppDynamics|Dynatrace|New ?Relic|newrelic|Datadog|DataDog|Elastic|OpenTelemetry|SolarWinds|AppOptics|Contrast|Instana|Stackify|Riverbed)\\\\",
+    "(?i)\\\\Program Files( \\(x86\\))?\\\\Microsoft Visual Studio\\\\",
+    "(?i)\\\\Program Files( \\(x86\\))?\\\\dotnet\\\\",
+    "(?i)\\\\Microsoft Visual Studio\\\\Shared\\\\",
+    "(?i)\\\\Microsoft\\\\VisualStudio\\\\[0-9.]{1,10}\\\\"
+  ],
+  "_comment_persist_dll_benign_paths": "Phase 157 FP allowlist for the DLL-loading persistence mechanisms (netsh helpers, print monitors, time providers, Winsock LSPs, ShellServiceObjectDelayLoad). Consumed through Join-AllowRegex, matched against the resolved DLL path. Kept SMALL on purpose: the signature verdict does the real work here, and a broad path allowlist would suppress exactly the case these mechanisms exist to catch - a signed-looking DLL dropped into a trusted directory by an attacker who already has administrator rights.",
+  "persist_dll_benign_paths": [
+    "(?i)\\\\(Citrix|VMware|Cisco|Palo Alto Networks|Sophos|CrowdStrike|SentinelOne|ESET|Bitdefender|Trend Micro|Fortinet|Zscaler|Netskope)\\\\",
+    "(?i)\\\\Program Files( \\(x86\\))?\\\\Windows Defender\\\\",
+    "(?i)\\\\Windows\\\\System32\\\\(spool|DriverStore)\\\\"
+  ],
+  "_comment_persist_stubpath_benign_values": "Phase 157 FP allowlist for Active Setup StubPath, consumed through Join-AllowRegex. StubPath is a command line an attacker fully controls, so every entry here pins the ENTIRE string with ^...$ and bounded wildcards - a name-only or prefix pattern would let malware self-allowlist by naming its command after a Microsoft one (the failure caught in review 2026-07-02). These are the stock Windows entries.",
+  "persist_stubpath_benign_values": [
+    "(?i)^\"?%?systemroot%?\\\\system32\\\\(ie4uinit\\.exe|unregmp2\\.exe|regsvr32\\.exe|ie4ushowIE\\.exe)\"?[^\"|&;]{0,60}$",
+    "(?i)^\"?%?windir%?\\\\system32\\\\(ie4uinit\\.exe|unregmp2\\.exe)\"?[^\"|&;]{0,60}$",
+    "(?i)^U$",
+    "(?i)^\"?%?ProgramFiles%?\\\\Windows ?(Media Player|Mail)\\\\[A-Za-z0-9_.]{1,40}\\.exe\"?[^\"|&;]{0,40}$"
+  ],
+  "_comment_persist_service_trigger_benign_names": "Phase 157 FP allowlist for the disabled-but-trigger-started service check, consumed through Join-AllowRegex and matched against the SERVICE KEY NAME, whole-name anchored. Windows ships a number of demand-start services that are legitimately disabled by policy yet retain TriggerInfo; these are the ones seen on stock and domain-managed builds.",
+  "persist_service_trigger_benign_names": [
+    "(?i)^(BITS|WSearch|WerSvc|Wecsvc|MapsBroker|DoSvc|dmwappushservice|diagnosticshub\\.standardcollector\\.service)$",
+    "(?i)^(TabletInputService|TouchKeyboard|WpnService|WpnUserService[_0-9a-f]{0,12})$",
+    "(?i)^(WinHttpAutoProxySvc|iphlpsvc|NcaSvc|NlaSvc|WlanSvc|WwanSvc|dot3svc|EapHost)$",
+    "(?i)^(PrintNotify|Spooler|PrintWorkflowUserSvc[_0-9a-f]{0,12}|DeviceAssociationService)$",
+    "(?i)^(GoogleUpdaterInternalService[0-9.]{0,16}|edgeupdate|edgeupdatem|MicrosoftEdgeElevationService)$"
+  ],
+  "_comment_devtool_paths_raw": "Phase 158. Developer-tooling roots, env-var-expanded at load via ExpandString - literal paths, NOT regexes. On a developer or technician workstation this is the softest surface in the building, and it is how an MSP gets hit THROUGH its own staff: an editor extension or a git hook runs arbitrary code on an ordinary, unremarkable action.",
+  "devtool_paths_raw": [
+    "$env:USERPROFILE\\.vscode\\extensions",
+    "$env:USERPROFILE\\.vscode-insiders\\extensions",
+    "$env:USERPROFILE\\.vscode-server\\extensions",
+    "$env:USERPROFILE\\.cursor\\extensions",
+    "$env:USERPROFILE\\.vscodium\\extensions",
+    "$env:USERPROFILE\\.windsurf\\extensions",
+    "$env:USERPROFILE\\.gitconfig",
+    "$env:USERPROFILE\\.npmrc",
+    "$env:USERPROFILE\\.config\\git\\config",
+    "$env:APPDATA\\jupyter\\kernels",
+    "$env:PROGRAMDATA\\jupyter\\kernels"
+  ],
+  "_comment_devtool_hook_rules": "Phase 158, consumed by Test-ContentRules against git hooks, .vscode/tasks.json, package.json install scripts and Jupyter kernel specs. The FILE existing is INFO; these constructs are what escalate it. A stock .git\\hooks directory contains only .sample files and must produce zero findings, which is asserted by the test suite.",
+  "devtool_hook_rules": [
+    {
+      "Name": "DevHook-EncodedPowerShell",
+      "Pattern": "(?i)\\b(powershell|pwsh)\\b[^\\r\\n]{0,80}\\s-e(nc|c|ncoded|ncodedcommand)?\\s{1,4}[A-Za-z0-9+/=]{40,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "DevHook-Downloader",
+      "Pattern": "(?i)\\b(Invoke-WebRequest|Invoke-RestMethod|Net\\.WebClient|DownloadString|DownloadFile|certutil\\s{1,4}-urlcache|bitsadmin\\s{1,4}/transfer|Start-BitsTransfer)\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "DevHook-RawIpUrl",
+      "Pattern": "(?i)\\bhttps?://(\\d{1,3}\\.){3}\\d{1,3}(:\\d{1,5})?[/\\s\"']",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "DevHook-PipeToShell",
+      "Pattern": "(?i)\\|\\s{0,4}(bash|sh|zsh|powershell|pwsh|iex|Invoke-Expression)\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "DevHook-CurlPipe",
+      "Pattern": "(?i)\\b(curl|wget)\\b[^\\r\\n|]{0,120}\\|",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "DevHook-Base64Decode",
+      "Pattern": "(?i)\\b(FromBase64String|base64\\s{1,4}-{1,2}d(ecode)?\\b|atob\\s{0,4}\\()",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevHook-ChildProcessSpawn",
+      "Pattern": "(?i)\\b(child_process|execSync|spawnSync)\\b",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevHook-HiddenWindow",
+      "Pattern": "(?i)-(w(indowstyle)?)\\s{1,4}h(idden)?\\b",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_devtool_gitconfig_rules": "Phase 158, consumed by Test-ContentRules against .gitconfig and a repository's .git/config. Every one of these executes a command during ordinary git operations, and core.fsmonitor fires on EVERY git command - so a weaponised .gitconfig is persistence that triggers dozens of times a day and appears in no autostart list. Reported POSSIBLE on their own because each has a legitimate use (Git LFS installs a filter; delta installs a pager); the hook rules above are what make one HIGH.",
+  "devtool_gitconfig_rules": [
+    {
+      "Name": "GitConfig-FsMonitorCommand",
+      "Pattern": "(?im)^\\s{0,8}fsmonitor\\s{0,4}=\\s{0,4}(?!true\\s*$|false\\s*$)[^\\r\\n]{2,}",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "GitConfig-SshCommand",
+      "Pattern": "(?im)^\\s{0,8}sshCommand\\s{0,4}=\\s{0,4}[^\\r\\n]{2,}",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "GitConfig-TextConv",
+      "Pattern": "(?im)^\\s{0,8}textconv\\s{0,4}=\\s{0,4}[^\\r\\n]{2,}",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "GitConfig-FilterProcess",
+      "Pattern": "(?im)^\\s{0,8}(clean|smudge|process)\\s{0,4}=\\s{0,4}[^\\r\\n]{2,}",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "GitConfig-ShellAlias",
+      "Pattern": "(?im)^\\s{0,8}[A-Za-z0-9_-]{1,40}\\s{0,4}=\\s{0,4}![^\\r\\n]{2,}",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "GitConfig-PagerCommand",
+      "Pattern": "(?im)^\\s{0,8}pager\\s{0,4}=\\s{0,4}[^\\r\\n]{2,}",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_devtool_vscode_startup_rules": "Phase 158, consumed by Test-ContentRules against an extension's package.json and against .vscode/tasks.json. An extension activating on '*' or onStartupFinished runs whenever the editor opens; a task with runOn folderOpen runs when a repository is merely OPENED, which is a genuine drive-by on a developer box. Both are common and legitimate, so both are POSSIBLE - they mark WHICH files the hook rules above are then applied to.",
+  "devtool_vscode_startup_rules": [
+    {
+      "Name": "DevStartup-WildcardActivation",
+      "Pattern": "(?i)\"activationEvents\"\\s{0,4}:\\s{0,4}\\[[^\\]]{0,400}\"\\*\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevStartup-OnStartupFinished",
+      "Pattern": "(?i)\"onStartupFinished\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevStartup-TaskRunOnFolderOpen",
+      "Pattern": "(?i)\"runOn\"\\s{0,4}:\\s{0,4}\"folderOpen\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevStartup-TerminalEnvOverride",
+      "Pattern": "(?i)\"terminal\\.integrated\\.(env|automationProfile|profiles)\\.(windows|linux|osx)\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevStartup-InterpreterOverride",
+      "Pattern": "(?i)\"(python\\.defaultInterpreterPath|python\\.pythonPath|git\\.path|npm\\.packageManager)\"\\s{0,4}:\\s{0,4}\"[^\"]{2,}\"",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_devtool_registry_rules": "Phase 158, consumed by Test-ContentRules against .npmrc and NuGet.Config. A registry override that is not the vendor default silently redirects every package install on this machine, which is the dependency-confusion delivery path. Bounded quantifiers; the negative lookahead is what keeps the default registries out of the result.",
+  "devtool_registry_rules": [
+    {
+      "Name": "DevRegistry-NonDefaultNpm",
+      "Pattern": "(?im)^\\s{0,8}registry\\s{0,4}=\\s{0,4}(?!https?://registry\\.npmjs\\.org)[^\\r\\n]{4,}",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevRegistry-ScopedOverride",
+      "Pattern": "(?im)^\\s{0,8}@[A-Za-z0-9_-]{1,40}:registry\\s{0,4}=\\s{0,4}[^\\r\\n]{4,}",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevRegistry-NonDefaultNuGet",
+      "Pattern": "(?i)<add\\s{1,4}key=\"[^\"]{1,60}\"\\s{1,4}value=\"(?!https?://api\\.nuget\\.org)[^\"]{4,}\"",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "DevRegistry-PlainHttpFeed",
+      "Pattern": "(?i)(registry\\s{0,4}=\\s{0,4}|value=\")http://[^\\s\"\\r\\n]{4,}",
+      "Severity": "HIGH"
+    }
+  ],
+  "_comment_devtool_benign_paths": "Phase 158 FP allowlist, consumed through Join-AllowRegex. Scope hard: walking a developer's node_modules blows the wall-clock budget and finds nothing. Anchored to path components. NOTE the deliberate absence of a bare '\\\\.git\\\\' entry - the git-hook branch reads .git\\hooks, and allowlisting .git would make that branch unreachable dead code, which is the failure phase 130's discord entry shipped with. The test suite asserts this allowlist does not match a stock .git\\hooks path.",
+  "devtool_benign_paths": [
+    "\\\\node_modules\\\\",
+    "\\\\site-packages\\\\",
+    "\\\\\\.venv\\\\",
+    "\\\\venv\\\\(Lib|Scripts)\\\\",
+    "\\\\__pycache__\\\\",
+    "\\\\dist-info\\\\",
+    "\\\\\\.gradle\\\\caches\\\\",
+    "\\\\\\.m2\\\\repository\\\\",
+    "\\\\go\\\\pkg\\\\mod\\\\",
+    "\\\\target\\\\(debug|release)\\\\",
+    "\\\\(obj|bin)\\\\(Debug|Release)\\\\",
+    "\\\\\\.git\\\\(objects|refs|logs|modules|lfs)\\\\"
+  ],
+  "_comment_esp_expected_paths": "Phase 159. Top-level directories that legitimately exist on an EFI System Partition, as regexes matched against the ESP-relative path. \\EFI\\Microsoft and \\EFI\\Boot are Windows; the rest are OEM firmware-update and recovery directories seen on shipped hardware. Anything OUTSIDE this list on the ESP is the finding: the ESP is FAT32, unprotected by NTFS ACLs once mounted, excluded from most backup and AV coverage, and is where a modern bootkit lives.",
+  "esp_expected_paths": [
+    "(?i)^\\\\?EFI\\\\Microsoft(\\\\|$)",
+    "(?i)^\\\\?EFI\\\\Boot(\\\\|$)",
+    "(?i)^\\\\?EFI\\\\(HP|Dell|Lenovo|Acer|ASUS|MSI|Gigabyte|Toshiba|Samsung|Sony|Fujitsu|Panasonic|Razer|Framework|Insyde|Phoenix|AMI)(\\\\|$)",
+    "(?i)^\\\\?EFI\\\\(ubuntu|debian|fedora|centos|rhel|opensuse|grub|systemd|refind|shim)(\\\\|$)",
+    "(?i)^\\\\?EFI\\\\(Recovery|Tools|Dell_Recovery|OEM)(\\\\|$)",
+    "(?i)^\\\\?(System Volume Information|FOUND\\.\\d{3}|\\$RECYCLE\\.BIN)(\\\\|$)",
+    "(?i)^\\\\?EFI$"
+  ],
+  "_comment_esp_boot_binaries": "Phase 159. The boot-chain binaries whose ESP copy is compared against the servicing copy under %WINDIR%\\Boot\\EFI. A MISMATCH between the two is the signal - Windows servicing keeps them in step, so a divergence means something wrote the ESP copy outside servicing. Leaf names only; the phase resolves them under both roots.",
+  "esp_boot_binaries": [
+    "bootmgfw.efi",
+    "bootmgr.efi",
+    "memtest.efi",
+    "winload.efi",
+    "winresume.efi"
+  ],
+  "_comment_bcd_unsafe_flags": "Phase 159, consumed by matching against the text of 'bcdedit /enum {current}'. Phase 40 already covers testsigning and nointegritychecks and this key deliberately does NOT repeat them - only what phase 40 misses. disableelamdrivers is the important one: it stops the early-launch anti-malware driver loading, so the endpoint's own security product is blind for the part of boot a bootkit uses.",
+  "bcd_unsafe_flags": [
+    {
+      "Name": "BCD-DisableElamDrivers",
+      "Pattern": "(?im)^\\s{0,8}disableelamdrivers\\s{1,8}Yes\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "BCD-FlightSigning",
+      "Pattern": "(?im)^\\s{0,8}flightsigning\\s{1,8}Yes\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "BCD-IntegrityServicesDisabled",
+      "Pattern": "(?im)^\\s{0,8}integrityservices\\s{1,8}Disable\\b",
+      "Severity": "HIGH"
+    },
+    {
+      "Name": "BCD-KernelDebugEnabled",
+      "Pattern": "(?im)^\\s{0,8}debug\\s{1,8}Yes\\b",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "BCD-BootDebugEnabled",
+      "Pattern": "(?im)^\\s{0,8}bootdebug\\s{1,8}Yes\\b",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "BCD-SafeBootConfigured",
+      "Pattern": "(?im)^\\s{0,8}safeboot\\s{1,8}[A-Za-z]{2,20}\\b",
+      "Severity": "POSSIBLE"
+    },
+    {
+      "Name": "BCD-CustomBootLoader",
+      "Pattern": "(?im)^\\s{0,8}path\\s{1,8}(?!\\\\(Windows\\\\system32\\\\winload\\.(efi|exe)|EFI\\\\Microsoft\\\\Boot\\\\bootmgfw\\.efi|EFI\\\\Microsoft\\\\Boot\\\\memtest\\.efi))[^\\r\\n]{4,}",
+      "Severity": "POSSIBLE"
+    }
+  ],
+  "_comment_dbx_current_baseline": "Phase 159. The Secure Boot forbidden-signature database (dbx) is the revocation list that makes Secure Boot mean anything; BlackLotus and its successors depend on it being stale, because the vulnerable-but-signed bootloader they abuse is only stopped by a dbx entry. NO exact size baseline is shipped here on purpose: dbx size varies by architecture, OEM and servicing level, and a wrong baseline would produce a confident false finding on every healthy machine - the one error class an IR tool cannot afford. MinBytes is set to the level below which the list is UNAMBIGUOUSLY the factory stub that has never been updated. Everything above that is reported as an operator-verifiable measurement, not a verdict. This value needs confirming against a real Windows fleet - see HANDOFF.md.",
+  "dbx_current_baseline": {
+    "MinBytes": 4096,
+    "ReferenceKb": "KB5025885",
+    "ReferenceUrl": "https://support.microsoft.com/help/5025885",
+    "VerifyCommand": "[System.BitConverter]::ToString((Get-SecureBootUEFI dbx).Bytes).Length"
+  }
 }

@@ -165,14 +165,24 @@ PowerShell 5.1+, admin rights.
 │   │                           (timestomp, filename/namespace), process memory (unbacked
 │   │                           threads, unexpected CLR host, deleted module backing, image
 │   │                           integrity, suspended processes)
-│   ├── Phases-6.ps1            if($PhasePlan.Hunt) 146-159. 153-156 BUILT (2026-08-22) —
-│   │                           network-exposure band, HOST-SIDE ONLY (registry/CIM reads,
-│   │                           sends no packets, no -ScanLan switch): SMB signing/guest/
-│   │                           null-session, shares + share ACLs, LLMNR/NBT-NS/mDNS/NTLM,
-│   │                           firewall profile + inbound rules + Delivery Optimization.
-│   │                           146-152 + 157-159 STILL STUB (parallel work package, see
-│   │                           fable-work/): PE structure, cloud+DevOps creds, lateral
-│   │                           /AD/cred-dumping, persistence surface, supply chain, UEFI
+│   ├── Phases-6.ps1            if($PhasePlan.Hunt) 146-159. 147 + 153-159 BUILT.
+│   │                           147 (2026-08-30) cloud/DevOps credential theft: inventory,
+│   │                           plaintext secrets, weak ACLs, staged copies, token-minting
+│   │                           command lines. NEVER reads the opaque token caches.
+│   │                           153-156 (2026-08-22) network-exposure band, HOST-SIDE ONLY
+│   │                           (registry/CIM reads, sends no packets, no -ScanLan switch):
+│   │                           SMB signing/guest/null-session, shares + share ACLs,
+│   │                           LLMNR/NBT-NS/mDNS/NTLM, firewall + Delivery Optimization.
+│   │                           157-159 (2026-08-30) persistence surface (profiler, Active
+│   │                           Setup, SilentProcessExit, WER, time providers, print
+│   │                           monitors, netsh, LSP, SCRNSAVE, RDP, service triggers,
+│   │                           shell droppers, AppDomainManager sidecar); supply chain
+│   │                           (extensions, tasks.json, git hooks/config, npm/NuGet
+│   │                           registries, MSBuild inline tasks, Jupyter kernels); UEFI
+│   │                           (Secure Boot, dbx, ESP, BCD) — MOUNTS NOTHING.
+│   │                           146 + 148-152 STILL STUB (parallel work package, see
+│   │                           fable-work/tasks/_deferred/): PE structure + rule engine
+│   │                           (F3), lateral movement / AD / credential dumping (F2)
 │   ├── Phases-7.ps1            if($PhasePlan.Hunt) 160-162 — SYNTHESIS. No new detection:
 │   │                           attack-chain correlation, patient zero, timeline export
 │   ├── Summary.ps1             risk score + audit summary + stealth/auto exits
@@ -593,6 +603,58 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   sharing or logon outright if written blind. The exact operator-run command goes in the
   description.
 
+### Phases 147 / 157 / 158 / 159 (`engine/Phases-6.ps1`, added 2026-08-30)
+
+- **Phase 159 does not mount the EFI System Partition, and no switch is to be added.** The F7
+  brief said to mount it read-only with `mountvol` and unmount in a `finally`; that scope was
+  dropped, for the same reason F6's LAN scan was. Assigning and removing a system partition's
+  access path is a live change to a client machine's boot volume state, and *leave nothing
+  behind on a client machine* is the standing rule (audit M5/M9/M10). If the ESP already has an
+  access path the phase inventories `\EFI\` and compares each boot binary against the servicing
+  copy under `%WINDIR%\Boot\EFI`; if it does not, the phase **says so in the report** and hands
+  over the exact commands rather than staying silent — an un-run check that leaves no trace
+  reads as a pass. Secure Boot state, `dbx` currency and the BCD flags need no mount, which is
+  most of the value. `Test-Hunt-Band.ps1` asserts the module invokes no `mountvol`,
+  `Add-PartitionAccessPath`, `Remove-PartitionAccessPath`, `Set-Partition`, `New-Partition` or
+  `Format-Volume`.
+- **`Confirm-SecureBootUEFI` throws on a legacy-BIOS machine rather than returning `$false`.**
+  Wrap it; the whole phase must degrade cleanly and still report the boot mode.
+- **Phase 159 must not duplicate phase 40.** Phase 40 owns `testsigning` and
+  `nointegritychecks`; `bcd_unsafe_flags` covers only what it misses, `disableelamdrivers` being
+  the important one. There is a test.
+- **`dbx_current_baseline` is a floor, not a baseline, and that is deliberate.** dbx size varies
+  legitimately by architecture, OEM and servicing level. `MinBytes` is the level below which the
+  list is unambiguously the never-updated factory stub; anything above it is reported as a
+  **measurement** to compare against a peer machine, not as a verdict. Do not "improve" this by
+  hard-coding an exact size measured on one machine — a wrong baseline is a confident false
+  finding on every healthy endpoint.
+- **Phase 147 never reads the opaque credential stores.** `cloud_cred_never_read` covers
+  TokenBroker, the NGC key containers, DPAPI master keys, Credential Manager and the
+  MSAL/gcloud binary caches — existence and ACL only. Reading them makes this tool the
+  credential-theft primitive it exists to find, and reading a TokenBroker cache can invalidate
+  the user's live session. **And no finding in this band quotes the matched secret**: a finding
+  that reproduces the credential turns the client report into a second copy of it.
+- **Two allowlists here can switch off their own detection branch, and both are revert-proofed.**
+  `cloud_cred_benign_paths` must never match Temp, Downloads, Desktop, Public or ProgramData —
+  those are phase 147's staging directories, and branch (c) is what separates *a developer box
+  has secrets* from *someone staged the secrets*. `devtool_benign_paths` must never carry a bare
+  `\.git\` entry — phase 158's hook branch reads `.git\hooks`; only `objects`, `refs`, `logs`,
+  `modules` and `lfs` are allowlisted. Same failure as phase 130's `discord` entry.
+- **`persist_stubpath_benign_values` entries must be fully `^...$`-anchored.** Active Setup
+  StubPath is a command line the attacker controls, so a prefix pattern lets malware
+  self-allowlist by naming its command after a Microsoft one. Asserted.
+- **Phase 158 reuses `webhook_c2_rules`, it does not grow a second copy** — and it must keep
+  ignoring `.sample` git hooks, or every developer workstation reports findings. Both asserted.
+- **The safe-wrapper assertions match INVOCATIONS via the AST, not the module text.** This band
+  is `FixAction "Info"`, so the description *is* the remediation, and telling a technician to run
+  `Get-AuthenticodeSignature <path>` is the correct instruction — a text match on the cmdlet name
+  fires on that prose. `Test-Hunt-Band.ps1` §9 walks `CommandAst` nodes instead. If you add a
+  cmdlet to that list, prove it bites by injecting a real call.
+- **No typosquat check in phase 158, on purpose.** It needs a curated list of very-popular
+  package names to mean anything; that list is a standing maintenance commitment this project
+  has not made, and a stale one produces confident false accusations about a developer's own
+  dependencies.
+
 ### When a stub becomes real, re-check every test list that names modules explicitly
 - `Test-Hunt-Band.ps1` §9 (safe-wrapper discipline: no raw `Get-ItemPropertyValue` /
   `Get-AuthenticodeSignature` / `Get-FileHash`, no P/Invoke, no piped `Get-ScanFiles`) enumerated
@@ -827,8 +889,12 @@ integrity gate, and the native C# engine (10 scanners / 63 checks).
    save→re-scan, STEALTH, plus the live finding ticker/chips and clean-banner glyphs.
 3. **FP rounds on the new bands.** Extended and HUNT ship `Info` throughout precisely because they
    have never met a real fleet.
-4. **`engine/Phases-6.ps1` stubs 146-152 and 157-159** — the remaining parallel work package. Read
-   the "When a stub becomes real" rule above before filling either.
+4. **`engine/Phases-6.ps1` stubs 146 and 148-152** — the remaining parallel work package.
+   147 and 157-159 were filled on 2026-08-30 (tasks F1/F4/F5/F7); what is left is **F3**
+   (phase 146, PE structural analysis — and note `lib/Scythe.Rules` already ships a YARA
+   engine, so F3 should be built on top of item 6 rather than growing a second one) and **F2**
+   (phases 148-152, lateral movement / AD / credential dumping, five phases). Read the
+   "When a stub becomes real" rule above before filling either.
 5. **Detection parity** — port PS coverage into the native scanners; and per-check status +
    deterministic finding ids flowing the other way, from native into PS.
 6. **Wire up `lib/`** (BLUEPRINT.md §10 item 6). The copy-in is **done** (2026-08-26): YARA +

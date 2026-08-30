@@ -1,5 +1,90 @@
 # CHANGELOG — Scythe V23
 
+## 2026-08-30 — phases 147, 157, 158 and 159: four of the six remaining engine stubs
+
+`engine/Phases-6.ps1` grew from 319 to 1,201 lines. Tasks **F1, F4, F5 and F7** from
+`fable-work/tasks/_deferred/` are built; **F3 (phase 146) and F2 (phases 148-152) are still
+stubs**, and F6 was already spent on the host-side 153-156 band in August. F8 (packaging) was
+delivered long ago as the native engine and `docs/_history/PACKAGING_STUDY.md`.
+
+| Phase | Task | What it does |
+|---|---|---|
+| 147 | F1 | Cloud identity and DevOps credential theft — AWS/Azure/GCP/Kubernetes/Docker/SSH/git/npm/NuGet/Terraform stores: inventory, plaintext secret content, weak ACLs, copies staged for collection, and token-minting command lines |
+| 157 | F4 | The persistence surface nothing else reaches — COR_PROFILER, Active Setup StubPath, SilentProcessExit, WER debugger hooks, time providers, print monitors, netsh helpers, Winsock LSP and AutodialDLL, ShellServiceObjectDelayLoad/SharedTaskScheduler, SCRNSAVE.EXE, RDP InitialProgram, disabled-but-trigger-started services, shell dropper file types, AppDomainManager `.config` sidecars |
+| 158 | F5 | Supply chain and developer tooling — editor extensions, `.vscode/tasks.json` folderOpen, git hooks, weaponised `.gitconfig`, npm/NuGet registry redirection, MSBuild inline tasks, Jupyter kernel specs |
+| 159 | F7 | Secure Boot state, dbx currency, the EFI System Partition, and the BCD flags phase 40 does not cover |
+
+24 new signature keys in `data/detection_signatures.json` (238 top-level keys, up from 190),
+every one pulled by the loader so `Test-Extended-Band`'s orphan check stays satisfied. Six new
+module-level helpers in `Phases-6.ps1`. Everything is `FixAction "Info"` — the band rule, and
+`Test-M-Tier.ps1` enforces it.
+
+### Three places where the brief was narrowed on purpose
+
+- **Phase 159 does not mount the EFI System Partition, and no switch is provided to make it.**
+  The F7 brief said to mount it read-only via `mountvol` and unmount in a `finally`. Assigning
+  and removing a system partition's access path is a live change to a client machine's boot
+  volume state, and *leave nothing behind on a client machine* is the standing rule from audit
+  M5/M9/M10. If the operator has already mounted the ESP the phase inventories it and compares
+  each boot binary against the servicing copy under `%WINDIR%\Boot\EFI`; if not, it says so
+  plainly and hands over the exact `mountvol` commands. Secure Boot state, dbx currency and the
+  BCD flags need no mount at all, which is most of the value. Same shape of decision as the
+  F6 → host-side narrowing in August, and revert-proofed the same way: the test suite asserts
+  the module invokes no `mountvol` / `Add-PartitionAccessPath` / `Set-Partition`.
+- **Phase 147 never reads the opaque token caches.** `cloud_cred_never_read` covers TokenBroker,
+  the NGC key containers, DPAPI master keys, Credential Manager and the MSAL/gcloud binary
+  caches: existence and ACL only. Reading them would make this tool the credential-theft
+  primitive it exists to find, and reading a TokenBroker cache can invalidate the user's live
+  session as a side effect. The finding descriptions also never quote the matched secret — a
+  finding that reproduces the credential turns the client report into a second copy of it.
+- **No typosquat check in phase 158.** The brief asked for a narrow, INFO-only one. It needs a
+  curated list of very-popular package names to mean anything, that list is a standing
+  maintenance commitment this project has not made, and a stale one produces confident false
+  accusations about a developer's own dependencies.
+
+### `dbx_current_baseline` ships a floor, not a baseline
+
+The F7 brief asked for the current dbx size compared against a shipped baseline. dbx size varies
+legitimately by architecture, OEM and servicing level, and this tree has no Windows machine to
+measure one on — so a fabricated baseline would produce a confident false finding on every
+healthy endpoint, which is the one error class an IR tool cannot afford. What ships instead is a
+`MinBytes` floor (4096) below which the list is unambiguously the never-updated factory stub, and
+above which the size is reported as an operator-verifiable **measurement** naming KB5025885, with
+the instruction to compare against a peer machine of the same model and build. The floor needs
+confirming against a real fleet — recorded in `HANDOFF.md`.
+
+### The safe-wrapper test now matches invocations, not mentions
+
+`Test-Hunt-Band.ps1` §9 asserted no raw `Get-AuthenticodeSignature` / `Get-ItemPropertyValue` /
+`Get-WinEvent` / `Get-FileHash` by regexing the module text. That fires on the cmdlet NAME
+appearing inside a `-Description` — and it legitimately appears there: this band is
+`FixAction "Info"`, so the description **is** the remediation, and *run
+`Get-AuthenticodeSignature <path>`* is exactly the right instruction to give a technician at 2am.
+The four checks now walk the module AST for `CommandAst` nodes instead, which distinguishes a
+command being invoked from a command being named in prose — the distinction the rule was always
+about. Proven to still bite: injecting a real call to each of the four fails the assertion.
+
+### Two FP traps the new allowlists are specifically able to fall into, and the tests for them
+
+Both are the failure phase 130's `discord` entry shipped with — an allowlist that makes its own
+detection branch unreachable dead code.
+
+- `cloud_cred_benign_paths` must not match Temp, Downloads, Desktop, Public or ProgramData:
+  those are phase 147's staging directories, and branch (c) is the one that turns *a developer
+  box has secrets* into *someone staged the secrets for collection*.
+- `devtool_benign_paths` must not contain a bare `\.git\` entry: phase 158's hook branch reads
+  `.git\hooks`. Only the noisy subdirectories (`objects`, `refs`, `logs`, `modules`, `lfs`) are
+  allowlisted.
+
+Both are asserted against realistic **Windows** paths, and both fail when the offending entry is
+added back. Also asserted: a stock `.git\hooks` directory of `.sample` files matches no hook
+rule (three weaponised hooks do), the staged-name list deliberately ignores the ubiquitous
+`config.json`, every `persist_stubpath_benign_values` entry is fully `^...$`-anchored because
+StubPath is attacker-controlled text, and `bcd_unsafe_flags` does not duplicate phase 40's
+`testsigning` / `nointegritychecks`.
+
+`Test-Hunt-Band.ps1`: **118 → 315 assertions**, all green, whole suite green.
+
 ## 2026-08-27 — renamed the project to Scythe, and rebuilt the third Fable package as a standalone
 
 Two pieces of work, related only in that the second forced the first.
