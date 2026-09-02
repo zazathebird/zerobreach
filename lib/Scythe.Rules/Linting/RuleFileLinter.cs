@@ -46,7 +46,7 @@ public static class RuleFileLinter
         }
 
         var findings = new List<LintFinding>();
-        var file = RuleFileReader.Read(parse.Root!, fileName, findings);
+        var file = RuleFileReader.Read(parse.Root!, fileName, findings, options);
 
         LintStructure(file, fileName, findings);
         LintReferences(file, fileName, options, findings);
@@ -81,7 +81,7 @@ public static class RuleFileLinter
     {
         foreach (var set in file.IndicatorSets)
         {
-            if (set.Entries.Count == 0)
+            if (set.ItemCount == 0)
             {
                 findings.Add(new LintFinding(
                     LintSeverity.Warning, LintCode.EmptyIndicatorSet,
@@ -175,10 +175,11 @@ public static class RuleFileLinter
 
     /// <summary>One entry's compiled/analysed state, kept for the cross-checks.</summary>
     private sealed record AnalyzedEntry(
-        RuleSet Set, RuleEntry Entry, Regex? Regex, PatternNode? Ast, bool BlewBudget);
+        RuleSet Set, RuleEntry Entry, Regex? Regex, PatternNode? Ast, bool BlewBudget,
+        bool IsReference, bool IsWholeValue);
 
-    /// <summary>Runs every per-pattern check. Returns null when everything ran, or the
-    /// Incomplete reason when the total deadline cut the run short.</summary>
+    private enum EntryKind { Regex, Literal, Equality, Wildcard }
+
     private static string? LintPatterns(
         RuleFile file, string fileName, LintOptions options, List<LintFinding> findings)
     {
@@ -223,11 +224,25 @@ public static class RuleFileLinter
         RuleSet set, RuleEntry entry, bool isAllowlist, string fileName,
         LintOptions options, List<LintFinding> findings)
     {
-        string pattern = entry.Value;
+        bool isReference = options.ReferenceSets.Contains(set.Name);
+        var kind = options.LiteralSets.Contains(set.Name) ? EntryKind.Literal
+                 : options.EqualitySets.Contains(set.Name) ? EntryKind.Equality
+                 : options.WildcardSets.Contains(set.Name) ? EntryKind.Wildcard
+                 : EntryKind.Regex;
 
-        // Text-level check first: it works even when the pattern does not compile, and
-        // the double-escaped entry usually *does* compile — that is the whole problem.
-        if (FindDoubleEscapedClass(pattern) is { } doubled)
+        if (kind is EntryKind.Literal or EntryKind.Equality)
+        {
+            return AnalyzeLiteralEntry(set, entry, isAllowlist, isReference,
+                wholeValue: kind == EntryKind.Equality, fileName, options, findings);
+        }
+
+        // A glob is checked as the anchored regex the host builds from it:
+        // '^' + [regex]::Escape($_).Replace('\*','.*') + '$'.
+        string pattern = kind == EntryKind.Wildcard
+            ? "^" + Regex.Escape(entry.Value).Replace(@"\*", ".*").Replace(@"\?", ".") + "$"
+            : entry.Value;
+
+        if (kind == EntryKind.Regex && FindDoubleEscapedClass(pattern) is { } doubled)
         {
             findings.Add(new LintFinding(
                 LintSeverity.Warning, LintCode.DoubleEscapedClass,
@@ -245,9 +260,9 @@ public static class RuleFileLinter
         {
             findings.Add(new LintFinding(
                 LintSeverity.Error, LintCode.RegexDoesNotCompile,
-                $"entry \"{pattern}\" in \"{set.Name}\" is not a valid regex ({TrimEngineMessage(ex.Message)}); it matches nothing, which looks exactly like a passing check",
-                fileName, entry.Location, SetName: set.Name, Entry: pattern));
-            return new AnalyzedEntry(set, entry, null, null, BlewBudget: false);
+                $"entry \"{entry.Value}\" in \"{set.Name}\" is not a valid regex ({TrimEngineMessage(ex.Message)}); it matches nothing, which looks exactly like a passing check",
+                fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
+            return new AnalyzedEntry(set, entry, null, null, BlewBudget: false, isReference, IsWholeValue: false);
         }
 
         bool blewBudget = false;
@@ -256,23 +271,76 @@ public static class RuleFileLinter
             blewBudget = true;
             findings.Add(new LintFinding(
                 LintSeverity.Error, LintCode.CatastrophicBacktracking,
-                $"entry \"{pattern}\" in \"{set.Name}\" exceeded the {options.PerPatternTimeout.TotalMilliseconds:0} ms match budget against {bait}; " +
+                $"entry \"{entry.Value}\" in \"{set.Name}\" exceeded the {options.PerPatternTimeout.TotalMilliseconds:0} ms match budget against {bait}; " +
                 "on attacker-authored content this pattern is a denial of service on the scan",
-                fileName, entry.Location, SetName: set.Name, Entry: pattern));
+                fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
         }
 
         var ast = PatternParser.TryParse(pattern);
 
         if (isAllowlist)
         {
-            LintAllowlistEntry(set, entry, regex, ast, blewBudget, fileName, findings);
+            // A glob is whole-string by construction; only a hand-written regex can be unanchored.
+            LintAllowlistEntry(set, entry, regex, ast, blewBudget,
+                checkAnchors: kind == EntryKind.Regex, fileName, options, findings);
         }
-        else
+        else if (!isReference)
         {
             LintIndicatorEntry(set, entry, regex, ast, blewBudget, fileName, options, findings);
         }
 
-        return new AnalyzedEntry(set, entry, regex, ast, blewBudget);
+        return new AnalyzedEntry(set, entry, regex, ast, blewBudget, isReference, IsWholeValue: kind == EntryKind.Wildcard);
+    }
+
+    /// <summary>
+    /// An entry the host matches as a literal substring or by equality. Escaped before it is
+    /// compiled, so the regex checks (compile, backtracking, double-escaped classes,
+    /// anchoring) do not apply — but the collision corpus does, on the escaped form, because
+    /// a substring match on a process name is exactly what the host's auto-kill lists do. An
+    /// empty literal is an error, not a warning: <c>-match [regex]::Escape('')</c> is true for
+    /// every input, and on an auto-kill list that is every process on the machine.
+    /// </summary>
+    private static AnalyzedEntry AnalyzeLiteralEntry(
+        RuleSet set, RuleEntry entry, bool isAllowlist, bool isReference, bool wholeValue,
+        string fileName, LintOptions options, List<LintFinding> findings)
+    {
+        string literal = entry.Value;
+        if (string.IsNullOrWhiteSpace(literal))
+        {
+            // Equality against an empty string matches only an empty value (a file with no
+            // extension); it is the substring form that matches everything.
+            if (!isReference && !isAllowlist && !wholeValue)
+            {
+                findings.Add(new LintFinding(
+                    LintSeverity.Error, LintCode.IndicatorTooShort,
+                    $"literal entry in \"{set.Name}\" is empty or whitespace; as a substring it matches every input, which on an auto-kill list is every process on the machine",
+                    fileName, entry.Location, SetName: set.Name, Entry: literal));
+            }
+            return new AnalyzedEntry(set, entry, null, null, BlewBudget: false, isReference, wholeValue);
+        }
+
+        string escaped = wholeValue ? "^" + Regex.Escape(literal) + "$" : Regex.Escape(literal);
+        var regex = new Regex(escaped, EntryOptions, options.PerPatternTimeout);
+        var ast = PatternParser.TryParse(escaped);
+
+        if (isAllowlist || isReference)
+        {
+            // A literal cannot be universal unless empty (handled above) and anchoring is a
+            // regex concept; a reference entry is legitimate by design. Nothing further.
+            return new AnalyzedEntry(set, entry, regex, ast, BlewBudget: false, isReference, wholeValue);
+        }
+
+        if (literal.Length < options.MinIndicatorLiteralLength)
+        {
+            findings.Add(new LintFinding(
+                LintSeverity.Warning, LintCode.IndicatorTooShort,
+                $"literal indicator \"{literal}\" in \"{set.Name}\" is shorter than {options.MinIndicatorLiteralLength} characters; " +
+                "as a substring it will occur inside legitimate names",
+                fileName, entry.Location, SetName: set.Name, Entry: literal));
+        }
+
+        ReportCollisions(set, entry, regex, wholeValue ? "equals" : "is a substring of", fileName, options, findings);
+        return new AnalyzedEntry(set, entry, regex, ast, BlewBudget: false, isReference, wholeValue);
     }
 
     private static void LintIndicatorEntry(
@@ -294,8 +362,13 @@ public static class RuleFileLinter
             return; // every corpus probe would just burn the budget again
         }
 
-        // The corpus is matched unanchored and case-insensitively — exactly how an
-        // indicator meets a process list or a path in the host.
+        ReportCollisions(set, entry, regex, "matches", fileName, options, findings);
+    }
+
+    private static void ReportCollisions(
+        RuleSet set, RuleEntry entry, Regex regex, string verb,
+        string fileName, LintOptions options, List<LintFinding> findings)
+    {
         string? firstHit = null;
         int hits = 0;
         foreach (var name in CollisionCorpus.StarterNames.Concat(options.AdditionalCollisionNames))
@@ -306,45 +379,75 @@ public static class RuleFileLinter
                 hits++;
             }
         }
-        if (firstHit is not null)
+        if (firstHit is null)
         {
-            string more = hits > 1 ? $" (and {hits - 1} more corpus name{(hits > 2 ? "s" : "")})" : "";
-            findings.Add(new LintFinding(
-                LintSeverity.Error, LintCode.IndicatorCollidesWithLegitimateName,
-                $"indicator \"{entry.Value}\" in \"{set.Name}\" matches \"{firstHit}\"{more} — the name of real, common software; this detection would fire on a healthy machine",
-                fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
+            return;
         }
+
+        string more = hits > 1 ? $" (and {hits - 1} more corpus name{(hits > 2 ? "s" : "")})" : "";
+        string message =
+            $"indicator \"{entry.Value}\" in \"{set.Name}\" {verb} \"{firstHit}\"{more} — the name of real, common software; this detection would fire on a healthy machine";
+
+        var accepted = options.AcceptedCollisions.FirstOrDefault(a =>
+            string.Equals(a.Set, set.Name, StringComparison.Ordinal) &&
+            string.Equals(a.Entry, entry.Value, StringComparison.Ordinal));
+        if (accepted is not null)
+        {
+            findings.Add(new LintFinding(
+                LintSeverity.Info, LintCode.IndicatorCollidesWithLegitimateName,
+                message + $" [accepted: {accepted.Why}]",
+                fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
+            return;
+        }
+
+        findings.Add(new LintFinding(
+            LintSeverity.Error, LintCode.IndicatorCollidesWithLegitimateName,
+            message, fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
     }
 
     private static void LintAllowlistEntry(
         RuleSet set, RuleEntry entry, Regex regex, PatternNode? ast, bool blewBudget,
-        string fileName, List<LintFinding> findings)
+        bool checkAnchors, string fileName, LintOptions options, List<LintFinding> findings)
     {
-        bool startsAnchored, endsAnchored;
-        if (ast is not null)
+        if (checkAnchors)
         {
-            startsAnchored = PatternInsight.StartsAnchored(ast);
-            endsAnchored = PatternInsight.EndsAnchored(ast);
-        }
-        else
-        {
-            // The pattern compiled but is beyond the analysis model; fall back to a
-            // textual check of the outermost characters.
-            (startsAnchored, endsAnchored) = TextualAnchors(entry.Value);
-        }
-        if (!startsAnchored || !endsAnchored)
-        {
-            string where = (startsAnchored, endsAnchored) switch
+            bool substring = options.SubstringAllowlists.Contains(set.Name);
+            bool startsAnchored, endsAnchored;
+            if (ast is not null)
             {
-                (false, false) => "at either end",
-                (false, true) => "at the start",
-                _ => "at the end",
-            };
-            findings.Add(new LintFinding(
-                LintSeverity.Error, LintCode.UnanchoredAllowlist,
-                $"allowlist entry \"{entry.Value}\" in \"{set.Name}\" is not anchored {where}; " +
-                "allowlists are compared against attacker-controlled values, and an unanchored entry lets malware allowlist itself by choosing its own name",
-                fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
+                startsAnchored = PatternInsight.StartsAnchored(ast);
+                endsAnchored = PatternInsight.EndsAnchored(ast);
+            }
+            else
+            {
+                (startsAnchored, endsAnchored) = TextualAnchors(entry.Value);
+            }
+            if (substring)
+            {
+                var (componentStart, componentEnd) = ComponentAnchors(entry.Value);
+                startsAnchored |= componentStart;
+                endsAnchored |= componentEnd;
+            }
+            if (!startsAnchored || !endsAnchored)
+            {
+                string where = (startsAnchored, endsAnchored) switch
+                {
+                    (false, false) => "at either end",
+                    (false, true) => "at the start",
+                    _ => "at the end",
+                };
+                findings.Add(substring
+                    ? new LintFinding(
+                        LintSeverity.Warning, LintCode.UnanchoredAllowlist,
+                        $"allowlist entry \"{entry.Value}\" in \"{set.Name}\" is not anchored to a path component {where}; " +
+                        "a bare substring can be reproduced inside a path the attacker chooses",
+                        fileName, entry.Location, SetName: set.Name, Entry: entry.Value)
+                    : new LintFinding(
+                        LintSeverity.Error, LintCode.UnanchoredAllowlist,
+                        $"allowlist entry \"{entry.Value}\" in \"{set.Name}\" is not anchored {where}; " +
+                        "allowlists are compared against attacker-controlled values, and an unanchored entry lets malware allowlist itself by choosing its own name",
+                        fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
+            }
         }
 
         if (blewBudget)
@@ -372,13 +475,29 @@ public static class RuleFileLinter
     }
 
     /// <summary>
-    /// The unreachable-branch check (BLUEPRINT §9: an allowlist that swallows its own
-    /// detection's reason for existing). For every indicator entry a witness string is
-    /// generated from its own structure and verified against its own regex; an allowlist
-    /// entry that matches such a witness suppresses exactly what that detection exists to
-    /// find. Universal entries are excluded — they already carry a Critical finding and
-    /// would only bury it under one warning per indicator.
+    /// Path-component anchoring, the host's own rule for path allowlists: the entry begins
+    /// at a path separator (an escaped backslash) and ends at one, or at a real anchor. A
+    /// trailing <c>(\\|$)</c> — "separator or end of string" — counts as an end anchor.
+    /// Leading inline option groups such as <c>(?i)</c> are skipped.
     /// </summary>
+    private static (bool Start, bool End) ComponentAnchors(string pattern)
+    {
+        string body = pattern;
+        while (body.StartsWith("(?", StringComparison.Ordinal))
+        {
+            int close = body.IndexOf(')');
+            if (close < 0 || body.AsSpan(2, close - 2).IndexOfAny('(', '|') >= 0)
+            {
+                break; // not an inline-option group
+            }
+            body = body[(close + 1)..];
+        }
+        bool start = body.StartsWith(@"\\", StringComparison.Ordinal);
+        bool end = body.EndsWith(@"\\", StringComparison.Ordinal)
+                   || body.EndsWith(@"(\\|$)", StringComparison.Ordinal);
+        return (start, end);
+    }
+
     private static void LintSwallowedDetections(
         List<AnalyzedEntry> indicators, List<AnalyzedEntry> allowlists, string fileName,
         List<LintFinding> findings, Func<bool> overDeadline, out bool cutShort)
@@ -391,7 +510,8 @@ public static class RuleFileLinter
 
         foreach (var indicator in indicators)
         {
-            if (indicator.Regex is null || indicator.Ast is null || indicator.BlewBudget)
+            if (indicator.Regex is null || indicator.Ast is null || indicator.BlewBudget ||
+                indicator.IsReference || indicator.IsWholeValue)
             {
                 continue;
             }

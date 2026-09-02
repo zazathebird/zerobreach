@@ -5,8 +5,16 @@ namespace Scythe.Rules.Linting;
 /// <summary>One pattern entry with the position of its string literal in the file.</summary>
 public sealed record RuleEntry(string Value, LintLocation Location);
 
-/// <summary>A named set — either an indicator set or an allowlist.</summary>
-public sealed record RuleSet(string Name, LintLocation NameLocation, IReadOnlyList<RuleEntry> Entries);
+/// <summary>A named set — either an indicator set or an allowlist. <paramref name="Entries"/>
+/// holds the pattern strings the linter can check; <paramref name="ItemCount"/> counts the
+/// JSON items the set carries, which is larger when a flat-shape set holds rule objects or
+/// numbers that are not patterns. Emptiness is judged on the item count: a set of 22 port
+/// numbers has no patterns but is not empty.</summary>
+public sealed record RuleSet(string Name, LintLocation NameLocation, IReadOnlyList<RuleEntry> Entries, int ItemCount)
+{
+    public RuleSet(string name, LintLocation nameLocation, IReadOnlyList<RuleEntry> entries)
+        : this(name, nameLocation, entries, entries.Count) { }
+}
 
 /// <summary>One target of a <c>references</c> declaration: <paramref name="Consumer"/> is
 /// the host-side name doing the referencing (a phase or check), <paramref name="Target"/>
@@ -56,7 +64,14 @@ public static class RuleFileReader
     /// <summary>Reserved top-level key holding reference declarations.</summary>
     public const string ReferencesKey = "references";
 
-    public static RuleFile Read(JsonSourceValue root, string fileName, List<LintFinding> findings)
+    /// <summary>Prefix of a flat-shape key whose string value is documentation, not a set.</summary>
+    public const string CommentKeyPrefix = "_comment";
+
+    public static RuleFile Read(JsonSourceValue root, string fileName, List<LintFinding> findings) =>
+        Read(root, fileName, findings, LintOptions.Default);
+
+    public static RuleFile Read(
+        JsonSourceValue root, string fileName, List<LintFinding> findings, LintOptions options)
     {
         var indicatorSets = new List<RuleSet>();
         var allowlists = new List<RuleSet>();
@@ -96,7 +111,15 @@ public static class RuleFileReader
                     ReadReferences(property, fileName, references, findings);
                     break;
                 default:
-                    ReadIndicatorSet(property, fileName, indicatorSets, findings);
+                    var target = options.AllowlistNames.Contains(property.Name) ? allowlists : indicatorSets;
+                    if (options.Shape == RuleFileShape.Flat)
+                    {
+                        ReadFlatSet(property, fileName, target, findings);
+                    }
+                    else
+                    {
+                        ReadIndicatorSet(property, fileName, target, findings);
+                    }
                     break;
             }
         }
@@ -118,6 +141,94 @@ public static class RuleFileReader
         sets.Add(new RuleSet(property.Name, property.NameLocation,
             ReadEntries(array, property.Name, fileName, findings)));
     }
+
+    /// <summary>
+    /// The field-name convention that marks a regex inside a flat-shape rule object:
+    /// <c>Pattern</c> / <c>pattern</c>, or a name ending in <c>Rx</c>, <c>Regex</c>,
+    /// <c>regex</c> or <c>_rule</c>. Everything else in a rule object (names, severities,
+    /// descriptions, registry paths, expanded-path lists, thresholds) is data the host reads
+    /// literally, and linting it as a regex would report its own prose as a broken pattern.
+    /// </summary>
+    public static bool IsPatternField(string fieldName) =>
+        fieldName is "Pattern" or "pattern" ||
+        fieldName.EndsWith("Rx", StringComparison.Ordinal) ||
+        fieldName.EndsWith("Regex", StringComparison.Ordinal) ||
+        fieldName.EndsWith("regex", StringComparison.Ordinal) ||
+        fieldName.EndsWith("_rule", StringComparison.Ordinal);
+
+    private static void ReadFlatSet(
+        JsonSourceProperty property, string fileName, List<RuleSet> sets, List<LintFinding> findings)
+    {
+        switch (property.Value)
+        {
+            case JsonSourceString when property.Name.StartsWith(CommentKeyPrefix, StringComparison.Ordinal):
+                return; // documentation for the key after it; not a set
+
+            case JsonSourceString s:
+                // A single regex string ("c2_named_pipe_regex"): one entry, one item.
+                sets.Add(new RuleSet(property.Name, property.NameLocation,
+                    new[] { new RuleEntry(s.Value, s.Location) }, 1));
+                return;
+
+            case JsonSourceArray array:
+            {
+                var entries = new List<RuleEntry>();
+                foreach (var item in array.Items)
+                {
+                    switch (item)
+                    {
+                        case JsonSourceString str:
+                            entries.Add(new RuleEntry(str.Value, str.Location));
+                            break;
+                        case JsonSourceObject rule:
+                            foreach (var field in rule.Properties)
+                            {
+                                if (field.Value is JsonSourceString fs && IsPatternField(field.Name))
+                                {
+                                    entries.Add(new RuleEntry(fs.Value, fs.Location));
+                                }
+                            }
+                            break;
+                        // Numbers (port lists), booleans, nulls and nested arrays carry no
+                        // pattern; they count as items so the set is not reported empty.
+                    }
+                }
+                sets.Add(new RuleSet(property.Name, property.NameLocation, entries, array.Items.Count));
+                return;
+            }
+
+            case JsonSourceObject obj:
+            {
+                // A threshold/baseline object ("dbx_current_baseline"): declared, so a host
+                // reference to it is not dangling; its regex-named string fields are linted.
+                var entries = new List<RuleEntry>();
+                foreach (var field in obj.Properties)
+                {
+                    if (field.Value is JsonSourceString fs && IsPatternField(field.Name))
+                    {
+                        entries.Add(new RuleEntry(fs.Value, fs.Location));
+                    }
+                }
+                sets.Add(new RuleSet(property.Name, property.NameLocation, entries, obj.Properties.Count));
+                return;
+            }
+
+            default:
+                findings.Add(new LintFinding(
+                    LintSeverity.Error, LintCode.SchemaViolation,
+                    $"set \"{property.Name}\" is a bare {Describe(property.Value)}; a flat-shape set must be a string, an array or an object",
+                    fileName, property.Value.Location, SetName: property.Name));
+                return;
+        }
+    }
+
+    private static string Describe(JsonSourceValue value) => value switch
+    {
+        JsonSourceNumber => "number",
+        JsonSourceBoolean => "boolean",
+        JsonSourceNull => "null",
+        _ => value.GetType().Name,
+    };
 
     private static void ReadNamedSets(
         JsonSourceProperty property, string fileName, string kind,

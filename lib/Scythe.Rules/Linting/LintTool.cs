@@ -27,8 +27,9 @@ public static class LintTool
         "usage: scythe-lint <rulefile.json> [--format text|json] [--fail-on-warning] [--manifest <file>]\n" +
         "  --format text|json   output style (default: text)\n" +
         "  --fail-on-warning    exit 1 on warning-level findings too\n" +
-        "  --manifest <file>    JSON array of set names the host consumes,\n" +
-        "                       included in orphan/dangling-reference analysis";
+        "  --manifest <file>    what the host says about itself: a JSON array of the set\n" +
+        "                       names it consumes, or an object with \"shape\" (flat|nested),\n" +
+        "                       \"consumed\", \"allowlists\" and \"literal_sets\"";
 
     public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
     {
@@ -84,11 +85,11 @@ public static class LintTool
         var options = LintOptions.Default;
         if (manifestPath is not null)
         {
-            if (LoadManifest(manifestPath, stderr) is not { } externalReferences)
+            if (LoadManifest(manifestPath, stderr) is not { } manifest)
             {
                 return ExitDidNotComplete;
             }
-            options = options with { ExternalReferences = externalReferences };
+            options = manifest.Apply(options);
         }
 
         string jsonText;
@@ -123,8 +124,7 @@ public static class LintTool
         return result.HasFindingAtOrAbove(threshold) ? ExitFindings : ExitClean;
     }
 
-    /// <summary>Reads a manifest: a JSON array of set-name strings.</summary>
-    private static IReadOnlyList<string>? LoadManifest(string path, TextWriter stderr)
+    private static LintManifest? LoadManifest(string path, TextWriter stderr)
     {
         string text;
         try
@@ -137,32 +137,6 @@ public static class LintTool
             stderr.WriteLine($"error: cannot read manifest '{path}': {ex.Message}");
             return null;
         }
-
-        var parse = JsonSourceParser.Parse(text);
-        if (parse.State != OperationState.Ok)
-        {
-            stderr.WriteLine(
-                $"error: manifest '{path}' is not valid JSON " +
-                $"({parse.ErrorLocation.Line},{parse.ErrorLocation.Column}): {parse.Message}");
-            return null;
-        }
-        if (parse.Root is not JsonSourceArray array)
-        {
-            stderr.WriteLine($"error: manifest '{path}' must be a JSON array of set names");
-            return null;
-        }
-
-        var names = new List<string>(array.Items.Count);
-        foreach (var item in array.Items)
-        {
-            if (item is not JsonSourceString s)
-            {
-                stderr.WriteLine(
-                    $"error: manifest '{path}' entry at ({item.Location.Line},{item.Location.Column}) is not a string");
-                return null;
-            }
-            names.Add(s.Value);
-        }
-        return names;
+        return LintManifest.Parse(text, path, stderr);
     }
 }

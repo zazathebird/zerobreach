@@ -37,6 +37,7 @@ $tests = @(
     @{ Name = 'WS7 HUNT band 134-162 + preflight';    File = 'Test-Hunt-Band.ps1' }
     @{ Name = 'WS7 runtime correlation (executes 160-162)'; File = 'Test-Hunt-Correlation.ps1' }
     @{ Name = 'WS7 runtime PE parser (executes 146 parser)'; File = 'Test-Pe-Parser.ps1' }
+    @{ Name = 'LINT signature-lint contract (call sites + manifest)'; File = 'Test-Signature-Lint.ps1' }
 
     # G-series operator tooling + the shared assertion library. These use tools/tests/lib/ScytheAssert.ps1,
     # exit non-zero on failure and print an "N passed, M failed" summary, so they are judged on that

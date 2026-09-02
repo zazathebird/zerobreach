@@ -1,0 +1,68 @@
+{
+  "_comment": "Host manifest for lib/Scythe.Rules/Linting against data/detection_signatures.json. Read by lib/Scythe.Rules.Tests/Linting/ShippedSignatureFileTests.cs (dotnet test) and usable with LintTool --manifest. Two things are deliberately NOT listed here because the test derives them from the engine source and they cannot go stale: which sets are consumed (every Get-Sig / Join-AllowRegex call site whose loader variable is used somewhere) and which are allowlists (every Join-AllowRegex name). Only what the source cannot reveal - how the host MATCHES an entry - lives here. Classify a new set by reading its consumer, never by its name.",
+  "shape": "flat",
+
+  "_comment_allowlists": "Sets that suppress or skip a detection without going through Join-AllowRegex: -contains / -notin skip lists, the script's own-strings self-filter, the partner-vendor list, and the two regex skip lists phase 147/159 pass to Test-ScytheNameRule.",
+  "allowlists": [
+    "winsock_lsp_benign", "remote_access_partner_vendors", "safeboot_default_entries",
+    "script_own_strings", "cloud_cred_never_read", "esp_expected_paths"
+  ],
+
+  "_comment_literal_sets": "Matched as escaped SUBSTRINGS: [regex]::Escape($_) inside -match, or bounded the same way (c2_pipe_patterns). The linter escapes these before compiling and runs the collision corpus on the escaped form - the same substring match the engine performs, which is why an entry here may not be a word that occurs inside a legitimate process name. A regex set listed here loses every regex check, so add a name ONLY after reading its consumer.",
+  "literal_sets": [
+    "known_miner_procs", "known_rat_procs", "known_keylogger_procs", "loader_procs", "banking_trojan_procs",
+    "infostealer_procs", "wiper_procs", "script_own_strings", "banking_named_pipes", "c2_pipe_patterns",
+    "remote_access_partner_vendors", "known_c2_domains", "suspicious_dns_domains", "loader_c2_domains",
+    "infostealer_c2_domains", "email_phishing_trojans"
+  ],
+
+  "_comment_equality_sets": "Compared as WHOLE values: -contains / -in / -eq, a hashtable key, a mutex name opened by exact name, or a path expanded and handed to Test-Path / Get-Item. Checked as ^escaped$, so '.bat' in an extension list does not collide with 'Adobe Acrobat' and a path list is not a detection an allowlist can swallow.",
+  "equality_sets": [
+    "ransomware_extensions", "email_attach_extensions", "proactive_lure_extensions",
+    "office_addin_extensions", "webshell_extensions", "persist_dropper_extensions", "pe_extensions",
+    "pe_probe_extensions", "known_malware_hashes", "safeboot_default_entries", "sideload_dll_names",
+    "byovd_driver_names", "winsock_lsp_benign", "lateral_admin_shares", "lateral_remote_exec_children",
+    "esp_boot_binaries", "lolbas_expanded", "auto_elevate_bins", "known_malware_mutexes", "rat_reg_paths",
+    "uac_bypass_regs", "adware_pup_regs", "native_messaging_keys", "office_addin_keys",
+    "rat_config_paths_raw", "email_scan_paths_raw", "sideload_scan_roots_raw", "office_template_paths_raw",
+    "monitored_app_roots_raw", "webshell_roots_raw", "cloud_cred_paths_raw", "cloud_cred_staging_dirs_raw",
+    "devtool_paths_raw", "pe_scan_roots_hot_raw", "pe_scan_roots_app_raw", "creddump_search_roots_raw",
+    "outbound_session_files_raw"
+  ],
+
+  "_comment_wildcard_sets": "-like globs, or paths carrying a * segment for Get-Item. The engine builds '^' + [regex]::Escape($_).Replace('\\*','.*') + '$' from them and so does the linter.",
+  "wildcard_sets": [
+    "ransom_note_filenames", "cred_dump_tools", "tunneling_tools", "tunneling_tools_dualuse", "stego_tools",
+    "email_lure_filename_patterns", "infostealer_target_paths_raw", "trojan_file_patterns"
+  ],
+
+  "_comment_reference_sets": "Entries that name legitimate or structural things BY DESIGN: the system image names a masquerade check compares against, LOLBin and auto-elevate binaries, the child processes remote execution spawns, file extensions, kill-chain stage keywords matched against the tool's own finding text, and the dual-use tunnelling tools whose second list exists precisely to downgrade them. 'This matches real software' is the point. Compile, budget and duplicate checks still apply; the collision corpus, the length floor and the swallowed-detection pairing do not.",
+  "reference_sets": [
+    "system_image_names", "pe_masquerade_names", "clr_unexpected_hosts", "lolbas_expanded", "auto_elevate_bins",
+    "lateral_remote_exec_children", "killchain_stages", "esp_boot_binaries", "sideload_dll_names",
+    "pe_extensions", "pe_probe_extensions", "email_attach_extensions", "office_addin_extensions",
+    "webshell_extensions", "persist_dropper_extensions", "proactive_lure_extensions",
+    "tunneling_tools", "tunneling_tools_dualuse"
+  ],
+
+  "_comment_substring_allowlists": "Allowlists matched against text whose LOCATION the attacker does not choose (install paths, signer names) - CLAUDE.md's 'path-only allowlists are fine' rule. They are held to component anchoring (an entry begins and ends at a path separator or a real anchor) at warning level instead of ^...$ at error level. Every allowlist NOT listed here is compared against an attacker-chosen value (a run-key value, a command line, a service or file name, an account) and must be fully anchored. Two entries here are weaker than the rest and are recorded, not hidden: trusted_root_ca_issuers matches bare vendor words against root-store certificate subjects, which a rogue CA can name itself after, and native_messaging_benign_hosts matches host-name PREFIXES that an attacker registering a host can also choose. Both are heuristic by design and belong to the FP/hardening round (HANDOFF.md 2026-09-02).",
+  "substring_allowlists": [
+    "cloud_cred_benign_paths", "creddump_hive_benign_paths", "devtool_benign_paths", "exec_evidence_benign_paths",
+    "hidden_task_benign_paths", "hunt_filename_benign_paths", "hunt_memory_benign_paths", "hunt_ppid_benign_paths",
+    "hunt_task_benign_paths", "hunt_timestomp_benign_paths", "infostealer_benign_paths", "keylogger_benign_paths",
+    "logon_explicit_cred_benign_procs", "miner_config_benign_paths", "native_messaging_benign_hosts",
+    "office_addin_benign_paths", "outbound_session_benign_paths", "packed_script_benign_paths",
+    "pe_packer_benign_paths", "persist_dll_benign_paths", "persist_profiler_benign_names", "sct_benign_paths",
+    "shell_extension_benign_dlls", "sideload_benign_paths", "spooler_benign_dlls", "trusted_root_ca_issuers",
+    "webhook_c2_benign_paths", "yara_benign_paths", "cloud_cred_never_read", "esp_expected_paths"
+  ],
+
+  "_comment_accepted_collisions": "Collisions with the legitimate-software corpus that were reviewed and kept. Reported at Info with the reason; editing the entry re-opens the question.",
+  "accepted_collisions": [
+    {
+      "set": "lateral_movement_artifacts",
+      "entry": "(?i)^[a-z]{8}\\.exe$",
+      "why": "impacket's psexec/smbexec drop an 8-random-letter service binary and the shape is the only signal. The rule runs only over *.exe CREATED in System32 inside the scan window, at POSSIBLE with FixAction Info, so it is never auto-selected. Any 8-letter Windows binary (msconfig.exe, cleanmgr.exe, taskkill.exe) matches by shape on a machine serviced inside the window: expected noise for the FP round, not an action."
+    }
+  ]
+}

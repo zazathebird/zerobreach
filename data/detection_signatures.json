@@ -1021,7 +1021,6 @@
     "d-trust",
     "hellenic",
     "network solutions",
-    "starfield",
     "affirmtrust",
     "secom",
     "security communication",
@@ -1048,18 +1047,18 @@
   "cloaked_benign_names": [
     "^desktop\\.ini$",
     "^thumbs\\.db$",
-    "iconcache",
-    "thumbcache",
-    "\\.library-ms$",
-    "^ntuser\\.dat",
+    "^iconcache(_[0-9a-z_]+)?\\.db$",
+    "^thumbcache(_[0-9a-z_]+)?\\.db$",
+    "^[^\\\\]+\\.library-ms$",
+    "^ntuser\\.dat(\\.log\\d*|\\{[0-9a-f-]+\\}\\.(tm\\.blf|tmcontainer\\d+\\.regtrans-ms))?$",
     "^ntuser\\.ini$",
     "^ntuser\\.pol$",
-    "\\.customdestinations-ms$",
-    "\\.automaticdestinations-ms$",
-    "gdipfontcachev1\\.dat",
+    "^[^\\\\]+\\.customdestinations-ms$",
+    "^[^\\\\]+\\.automaticdestinations-ms$",
+    "^gdipfontcachev1\\.dat$",
     "^bootstat\\.dat$",
     "^index\\.dat$",
-    "\\.lnk$",
+    "^[^\\\\]+\\.lnk$",
     "^edb\\.log$",
     "^pagefile\\.sys$",
     "^swapfile\\.sys$",
@@ -2526,7 +2525,6 @@
   "office_addin_extensions": [
     ".xll",
     ".wll",
-    ".xlam",
     ".xla",
     ".ppam",
     ".dotm",
@@ -3474,7 +3472,7 @@
   ],
   "_comment_hunt_service_benign_names": "Phase 135 allowlist. Per-user service TEMPLATE instances carry a transient _<luid> suffix and never appear in Win32_Service under the template name.",
   "hunt_service_benign_names": [
-    "_[0-9a-f]{4,8}$",
+    "^[A-Za-z0-9._-]{2,64}_[0-9a-f]{4,8}$",
     "^(BITS|TrustedInstaller|WaaSMedicSvc|DoSvc|MapsBroker)$"
   ],
   "_comment_hunt_ppid_benign_paths": "Phase 136 allowlist. Session and job managers whose children are legitimately re-parented, which makes creation-order comparison meaningless for them.",
@@ -4325,9 +4323,8 @@
   ],
   "_comment_outbound_session_file_rules": "Phase 151. A stored credential inside one of those files. The rules match the ELEMENT that holds a secret, not the secret, so a finding never reproduces the credential.",
   "outbound_session_file_rules": [
-    { "Name": "mRemoteNG stored password", "Pattern": "(?i)Password=\"[^\"]{4,}\"", "Severity": "HIGH" },
-    { "Name": "RDCMan stored password", "Pattern": "(?i)<password[^>]{0,40}>\\S{4,}</password>", "Severity": "HIGH" },
-    { "Name": "SuperPuTTY stored password", "Pattern": "(?i)Password=\"[^\"]{4,}\"", "Severity": "HIGH" }
+    { "Name": "mRemoteNG / SuperPuTTY stored password", "Pattern": "(?i)Password=\"[^\"]{4,}\"", "Severity": "HIGH" },
+    { "Name": "RDCMan stored password", "Pattern": "(?i)<password[^>]{0,40}>\\S{4,}</password>", "Severity": "HIGH" }
   ],
   "_comment_outbound_session_benign_paths": "Phase 151 ALLOWLIST. Path-only, and deliberately tiny - the branch exists to inventory what is there, so a wide allowlist would make the phase report nothing on the machines where the answer matters most.",
   "outbound_session_benign_paths": [ "(?i)\\\\Windows\\\\Installer\\\\", "(?i)\\\\WinSxS\\\\" ],

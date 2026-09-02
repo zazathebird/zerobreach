@@ -1,5 +1,89 @@
 # CHANGELOG — Scythe V23
 
+## 2026-09-02 (later) — the `lib/` linter meets the real signature file
+
+BLUEPRINT §10 item 6 said to start wiring `lib/` with the linter, and named one blocker: the
+linter expected the BLUEPRINT §9 schema (arrays of strings, allowlists under `fp_allowlists`)
+and `data/detection_signatures.json` is flat. **Decision: the file stays flat, the linter
+adapted.** The file is read by 139 `Get-Sig` and 37 `Join-AllowRegex` sites and it was never
+close to the nested shape anyway — 302 keys, 130 comment strings, 63 arrays of rule *objects*,
+four bare regexes, one threshold object. Restructuring it would have changed shipped data and
+every test that loads it, to fix 37 keys out of ~170.
+
+### What was built
+
+- **`RuleFileShape.Flat`** (`lib/Scythe.Rules/Linting`): `_comment*` strings are documentation, a
+  bare string is a one-pattern set, rule objects are linted by their regex-bearing fields only
+  (`Pattern`/`pattern`, `*Rx`, `*Regex`, `*_rule`), numbers and threshold objects are declared
+  but patternless (so `stratum_ports` is not "empty" and `dbx_current_baseline` is not
+  "dangling"). Nested shape is unchanged and still the default.
+- **Match kinds, because "compiles as a regex" was the wrong question for two thirds of the
+  file.** `LintOptions` gained `LiteralSets` (escaped, substring — the auto-kill lists),
+  `EqualitySets` (`^escaped$` — extension lists, hashes, `Test-Path` paths, mutex names),
+  `WildcardSets` (`-like` globs, translated exactly as the engine does),
+  `ReferenceSets` (legitimate names by design: `system_image_names`, LOLBins, extensions,
+  kill-chain keywords — exempt from the collision corpus, the length floor and the swallow
+  pairing, not from compile/budget/duplicate checks), `SubstringAllowlists` (path-shaped
+  allowlists held to path-component anchoring at Warning instead of `^…$` at Error) and
+  `AcceptedCollisions` (reviewed collisions reported at Info with their reason; the entry must
+  match verbatim). `LintManifest` reads all of it from an object-form manifest; the legacy
+  array form still works; unknown keys are refused.
+- **`data/signature_lint_manifest.json`** — the host's description of *how* each set is
+  matched, built by reading every consumer (`tools`-side notes in the file). It deliberately
+  does not list which sets are consumed or which are allowlists.
+- **`ShippedSignatureFileTests`** derives those two lists from the engine source: every
+  `Get-Sig`/`Join-AllowRegex` call site, with a loader-bound name counted as consumed only if
+  its variable is read somewhere. It lints the real file with the real manifest, prints the
+  full report, fails at Error, and ratchets warnings (`WarningCeiling`).
+- **`tools/tests/Test-Signature-Lint.ps1`** (26th suite file, registered in
+  `Run-SecurityTests.ps1`): AST-asserts every call site is a constant string (what makes the
+  C# scan complete), checks every manifest name against the file, refuses a set that claims two
+  kinds, and checks each accepted collision still quotes a live entry. 32 assertions; bite
+  proven by a typo'd manifest name and an injected `Get-Sig $var` (2 fails, restored).
+- 19 new linter unit tests (`FlatShapeTests`), each proving its category in both directions.
+  Rules project 536 → 563 tests.
+
+### What the first run found
+
+488 errors, 176 warnings. After classification: **0 errors, 170 warnings, 1 info.** In the
+errors were:
+
+- **`cloaked_benign_names` was name-anchored on one side only** — `iconcache`, `thumbcache`,
+  `gdipfontcachev1\.dat` and `^ntuser\.dat` matched anywhere in a hidden+system file's name,
+  so a payload named `iconcache.exe` or `ntuser.dat.exe` was skipped by phase 45. Because the
+  phase only reports payload extensions, those entries could *only ever* have protected
+  malware; they are now anchored to the real cache/hive file shapes (verified against
+  `iconcache_32.db`, `ntuser.dat.LOG1`, the `{guid}.TM.blf` / `.regtrans-ms` transaction
+  files, and against the five hostile names). Zero FP cost.
+- **`hunt_service_benign_names` per-user-service suffix `_[0-9a-f]{4,8}$`** was start-open;
+  now `^[A-Za-z0-9._-]{2,64}_[0-9a-f]{4,8}$`, the actual `<Service>_<LUID>` shape.
+- Duplicates: `starfield` twice in `trusted_root_ca_issuers`, `.xlam` twice in
+  `office_addin_extensions`, and two phase-151 rules with the identical pattern (the SuperPuTTY
+  rule could never be the one named in a finding — merged into "mRemoteNG / SuperPuTTY stored
+  password").
+- **Five sets the loader pulls and no phase reads**: `auto_elevate_bins`,
+  `email_phishing_trojans`, `proactive_lure_extensions`, `proactive_persistence_regs`,
+  `trojan_file_patterns`. Reported as orphans on every run; not removed here — whether to wire
+  or delete them is a detection decision.
+
+The rest were the linter not knowing the engine: 162 "does not compile" on path/registry-key
+lists that are never compiled, 271 "unanchored" on path allowlists the project's own rule
+exempts, 55 "collides with real software" on lists whose *purpose* is to name real software.
+
+### What the warnings say, and were left saying
+
+- 130 unanchored-to-a-component warnings, 60 of them `trusted_root_ca_issuers` (bare vendor
+  words against root-store certificate subjects — a rogue CA named "Windows Update Root" is
+  allowlisted by `windows`), 30 `native_messaging_benign_hosts` (name prefixes an attacker
+  registering a host can also choose), 25 `hidden_task_benign_paths` bare words. Recorded in
+  the manifest as heuristic by design; they belong to the FP/hardening round, not to a lint fix.
+- One accepted collision: `lateral_movement_artifacts`' 8-random-letter service-binary rule
+  matches `msconfig.exe`/`cleanmgr.exe`/`taskkill.exe` by shape. It runs only over `*.exe`
+  created in System32 inside the scan window at POSSIBLE/Info, so on a machine serviced inside
+  the window it is expected noise — flagged for the FP round.
+
+Suite: Rules 563/0; solution build 0 warnings; PowerShell suite 26 files, all green.
+
 ## 2026-09-02 — phase 146's PE parser meets its first PEs, and fails on an affected .NET host
 
 The parser had never parsed a PE (HANDOFF 2026-08-30 flagged it as the most testable

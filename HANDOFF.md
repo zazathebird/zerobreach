@@ -1,8 +1,64 @@
 # HANDOFF
 
-## Session 2026-09-02 — F2 committed; phase 146's PE parser verified against fixture PEs
+## Session 2026-09-02 (later) — the `lib/` linter is wired to the real signature file
 
 **Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`. BLUEPRINT §10 item 6's first step is done: the
+`lib/Scythe.Rules` linter reads `data/detection_signatures.json` as the engine does and runs
+on every `dotnet test`. The schema blocker was resolved by adapting the linter, not the data
+(reasons in `CHANGELOG.md` 2026-09-02 (later); rules in `CLAUDE.md` "The signature file is
+linted from C#").
+
+Touched: `lib/Scythe.Rules/Linting/{LintOptions,LintManifest,RuleFileModel,RuleFileLinter,
+LintTool}.cs`; `lib/Scythe.Rules.Tests/Linting/{FlatShapeTests,ShippedSignatureFileTests,
+LintToolTests}.cs`; **new** `data/signature_lint_manifest.json`; `data/detection_signatures.json`
+(five small fixes: cloaked-file name anchoring, per-user-service suffix anchoring, two
+duplicate entries, one merged phase-151 rule); `tools/tests/Test-Signature-Lint.ps1` (new,
+registered); docs.
+
+Verified: Rules project 563 passed / 0 failed; `dotnet build Scythe.sln` 0 warnings; the
+PowerShell suite (26 files) green under pwsh 7.4.6; both new tests proven to bite by injection.
+
+### What the lint now says about the file — this is the new risk surface
+
+The report is printed by `dotnet test lib/Scythe.Rules.Tests --filter ShippedSignatureFileTests
+--logger "console;verbosity=detailed"`. 0 errors, 170 warnings, 1 info. The warnings are not
+noise to be silenced; they are the list of things the data still gets away with:
+
+1. **Five dead sets.** `auto_elevate_bins`, `email_phishing_trojans`,
+   `proactive_lure_extensions`, `proactive_persistence_regs`, `trojan_file_patterns` are pulled
+   by the loader and read by no phase. Decide: wire (phase 74.7 presumably once used the
+   proactive ones) or delete. Deleting is a one-line change each; the orphan warning goes with
+   it.
+2. **`trusted_root_ca_issuers` is a substring allowlist of bare vendor words against
+   certificate subjects.** A rogue root CA can name itself "Windows Update Root" and phase 39
+   calls it known. The honest fix is a thumbprint check against the Microsoft CTL, not tighter
+   words. Hardening-round item.
+3. **`native_messaging_benign_hosts` skips by host-name prefix before looking at the host
+   binary.** `com.microsoft.backdoor` pointing at `%APPDATA%\evil.exe` is never examined by
+   phase 117. Fix is to check the binary's path/signature *after* the name match, not to
+   anchor the prefixes. Hardening-round item.
+4. **`hidden_task_benign_paths` has 25 bare-word entries** (`adobegcinvoker`,
+   `appxdeploymentclient`, …) matched against task paths. Same class as the two above, lower
+   stakes; tighten to `\\name\\` components when it next meets a Windows box.
+5. **The 8-letter service-binary rule** in `lateral_movement_artifacts` will fire POSSIBLE on
+   `msconfig.exe`/`cleanmgr.exe`/`taskkill.exe` after any servicing inside the scan window.
+   Accepted in the manifest with the reason; first thing to look at in the FP round for 133.
+
+### The next thing to do
+
+Unchanged from the morning entry for the Windows-bound work: **Windows validation of 116-162**,
+**FP rounds** on Extended + HUNT (now with the five items above as the opening list). The
+Linux-side backlog gained one item back from the lint: the five dead sets (item 1) are a
+Linux-doable decision. After that, item 6 proper — how `Scythe.Rules` YARA/Sigma plugs into
+`SignatureDb` — and folding phase 146 onto `Scythe.Formats`.
+
+---
+
+## Session 2026-09-02 — F2 committed; phase 146's PE parser verified against fixture PEs
 
 ### State
 

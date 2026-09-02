@@ -381,14 +381,14 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   `data/detection_signatures.json`, loaded at runtime via `Get-Sig` (data files aren't AMSI-scanned).
 - **FP allowlists are NOT signatures** — they live in that same JSON and load via `Join-AllowRegex`
   (empty key → `(?!)`, suppresses nothing). No new literal lists in the `.ps1`.
-  **Correction (2026-08-26): they are NOT under an `fp_allowlists` block.** This file said so for
-  a long time and it is wrong. `data/detection_signatures.json` is **flat** — 190 top-level keys,
-  70 of them `_comment_*` strings — and `Join-AllowRegex` resolves a bare key name through
-  `Get-Sig $Name`. Allowlist keys are distinguished by naming convention only (`*_benign_*`,
-  `*_allow*`, `trusted_*`). A `_comment_fp_allowlists` marker string exists and is the likely
-  source of the belief. This matters now because `lib/Scythe.Rules/Linting` was written to
-  the documented schema and therefore cannot read the real file — one side has to move, and that
-  is an open decision, not a bug to patch on sight.
+  **They are NOT under an `fp_allowlists` block.** `data/detection_signatures.json` is **flat**
+  — 302 top-level keys, 130 of them `_comment_*` strings, 63 of them arrays of rule *objects*,
+  four bare regex strings and one threshold object — and `Join-AllowRegex` resolves a bare key
+  name through `Get-Sig $Name`. A `_comment_fp_allowlists` marker string exists and is the
+  likely source of the old belief. **Resolved 2026-09-02: the file stays flat and the linter
+  adapted** (`RuleFileShape.Flat` + `data/signature_lint_manifest.json`, see "The signature
+  file is linted from C#" below). Allowlist names are *not* a naming convention — they are
+  whatever the engine passes to `Join-AllowRegex`, and the lint derives that from the source.
 - **An allowlist entry matched against attacker-controllable text (run-key values, command lines,
   task actions) must pin the ENTIRE string to the exact benign shape** — `^…$` anchors, bounded
   wildcards like `[^"]*` (never `.*` spanning the name/value boundary). A name-only prefix pattern
@@ -853,6 +853,59 @@ timestamp**, and the server's `Classify` falls back to the prose keyword table �
   removed during the 2026-08-19 expansion. The suite asserts no entry collides with a list
   of real software names and that none is shorter than 4 characters.
 
+### The signature file is linted from C# (added 2026-09-02)
+
+`lib/Scythe.Rules/Linting` now reads `data/detection_signatures.json` as the engine reads it,
+and `dotnet test` fails on anything at Error or above. The first run against the real file
+reported 488 errors; two were defects in shipped data (below) and the rest were the linter not
+knowing how the engine *matches* each set. That knowledge now lives in one place and these are
+the rules that keep it true:
+
+- **The signature file stays flat. The linter adapted; the data did not move.** The file is
+  read by 139 `Get-Sig` sites, 37 `Join-AllowRegex` sites and every test that loads it, and it
+  was never the "arrays of strings under `fp_allowlists`" shape the linter was written to —
+  nesting the 37 allowlists would have fixed 37 of ~170 keys. `RuleFileShape.Flat` reads
+  `_comment*` strings as documentation, a bare string as a one-pattern set, rule objects by
+  their regex-bearing fields (`Pattern`/`pattern`, or a name ending `Rx`, `Regex`, `regex`,
+  `_rule` — **nothing else in a rule object is linted**, so a `Name` or `Why` field is never
+  reported as a broken pattern), and numbers/threshold objects as declared-but-patternless.
+- **`data/signature_lint_manifest.json` says HOW each set is matched, and nothing else.** Which
+  sets are consumed and which are allowlists are **derived from the engine source** by
+  `ShippedSignatureFileTests` (a name is consumed only if the loader variable it is bound to is
+  read somewhere; a `Join-AllowRegex` name is an allowlist) so they cannot go stale. The manifest
+  carries what the source cannot reveal: `literal_sets` (`[regex]::Escape` substring),
+  `equality_sets` (`-contains`/`-in`/hashtable key/`Test-Path`), `wildcard_sets` (`-like`),
+  `reference_sets` (entries that name legitimate things *by design* — system image names,
+  LOLBins, extensions, kill-chain keywords), `substring_allowlists` (path-shaped, held to
+  component anchoring at Warning) and `accepted_collisions` (each with a `why`; the entry must
+  match verbatim, so editing the rule re-opens the question). **Classify a new set by reading
+  its consumer, never by its name.** A regex set listed as literal loses every regex check; a
+  detection listed as reference loses the collision check; both fail open.
+- **Every `Get-Sig` / `Join-AllowRegex` call site is a constant string** — that is what makes the
+  source scan complete, and `tools/tests/Test-Signature-Lint.ps1` walks the AST to assert it
+  (the two helper bodies are the only exceptions). The same test checks every manifest name
+  against the file, that no set claims two match kinds, and that every accepted collision still
+  quotes an entry that exists.
+- **An allowlist not declared `substring_allowlists` must be fully `^…$`-anchored, or the build
+  fails.** That is the existing "pin the ENTIRE string" rule, now enforced. Declaring a list as
+  substring is a statement that the attacker does not choose where the matched text lives
+  (install paths, signer names); the manifest records the two that are weaker than that
+  (`trusted_root_ca_issuers`, `native_messaging_benign_hosts`) rather than hiding them.
+- **The swallow check is file-global and its warnings are expected to include cross-phase
+  pairings** (`trusted_root_ca_issuers` "nvidia" against `leaked_cert_issuers`). The linter does
+  not know which phase pairs which list; a warning there is a prompt to read both consumers,
+  not a bug in either. Equality sets, path lists and globs are excluded from the indicator side
+  because a path handed to `Test-Path` is not a detection an allowlist can swallow.
+- **A set the loader pulls but no phase reads is reported as an orphan.** Five exist today
+  (`auto_elevate_bins`, `email_phishing_trojans`, `proactive_lure_extensions`,
+  `proactive_persistence_regs`, `trojan_file_patterns`); they are dead data until someone
+  either wires them or deletes them, and the test names them on every run.
+- **Warnings are ratcheted, not ignored.** `ShippedSignatureFileTests.WarningCeiling` fails the
+  test if the count grows past it; lower it as lists are tightened, raise it only with a
+  `CHANGELOG.md` entry naming the entries that earned the warnings.
+- Run it with `dotnet test lib/Scythe.Rules.Tests --filter ShippedSignatureFileTests --logger
+  "console;verbosity=detailed"` to see the full report; the whole Rules project is 563 tests.
+
 ### Authenticode memo (WS4, added 2026-08-19)
 - **`Get-AuthSig` is memoised per path** (`$global:AUTHSIG_CACHE`, case-insensitive key,
   bounded by `AUTHSIG_CACHE_MAX`, sharing the `SCYTHE_NOCACHE` kill-switch). It is the engine's
@@ -865,7 +918,7 @@ timestamp**, and the server's `Classify` falls back to the prose keyword table �
 
 ### Security regression suite
 - `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 1,500+
-  assertions across 25 test files, covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
+  assertions across 26 test files, covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
   (incl. RUNTIME tests of correlation, of the signature-set integrity gate, and of the phase 146
   PE parser against fixture-built PEs — `Test-Pe-Parser.ps1`, a PS port of
   `PeFixtureBuilder.cs` with a byte-by-byte truncation sweep) + WS4 signature
@@ -1038,8 +1091,11 @@ integrity gate, and the native C# engine (10 scanners / 63 checks).
    Sigma rule engines, PE + container parsers, a Windows path normaliser, a signature/rule
    linter, an IOC feed normaliser and two diff/baseline engines are in `lib/`, in the solution,
    1,664 tests green. **Nothing in `Scythe.*` references them yet.** Item 5 (detection
-   parity) should be built on top of this, not run as a separate track. Start with the linter
-   against `data/detection_signatures.json` — but read the `fp_allowlists` note below first.
+   parity) should be built on top of this, not run as a separate track. **The linter is wired
+   (2026-09-02):** `ShippedSignatureFileTests` lints `data/detection_signatures.json` on every
+   `dotnet test`, with the host's match kinds in `data/signature_lint_manifest.json`. Next on
+   this item is the design decision for `SignatureDb` (YARA/Sigma), then folding phase 146's
+   PE reader onto `Scythe.Formats`.
 
 7. **The offline artifact layer — 37 projects, not yet written.** The work package lives at
    `~/Downloads/claude/scythe-work/` (sanitized, standalone, `Scythe.*` throughout); readers over

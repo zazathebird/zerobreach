@@ -331,10 +331,16 @@ mapping is a follow-on audit.
      "allowlist must not swallow its own detection branch" check — and `LintTool` is already
      CLI-shaped with 0/1/2 exit codes. Pointing it at `data/detection_signatures.json` is the
      highest-value, lowest-risk wiring available, and it improves the **PS** engine from C#.
-   - **One blocker, and it is ours:** the linter expects allowlists under an `fp_allowlists`
-     object because `CLAUDE.md` says they live there. The shipped file has no such key — it is
-     flat, and `Join-AllowRegex` reads flat names via `Get-Sig`. Decide which side moves before
-     writing code against either.
+   - **Done 2026-09-02.** The blocker was the schema: the linter expected allowlists under an
+     `fp_allowlists` object and the shipped file is flat. The file stays flat; the linter gained
+     `RuleFileShape.Flat` and a host manifest (`data/signature_lint_manifest.json`) that says how
+     each set is *matched* (literal / equality / glob / regex, reference lists, path-shaped
+     allowlists, accepted collisions). Consumed-set and allowlist names are derived from the
+     engine source, not listed. `ShippedSignatureFileTests` lints the real file on every
+     `dotnet test` and fails at Error; `tools/tests/Test-Signature-Lint.ps1` guards the contract
+     from the PowerShell side. First run: 488 errors, two of them real (an unanchored
+     cloaked-file allowlist and the per-user-service suffix rule), five dead sets found.
+     Detail in `CHANGELOG.md` 2026-09-02; rules in `CLAUDE.md`.
 7. **Close the detection parity gap** — port PS coverage into native scanners, F-series first,
    built on the item-6 library layer where a track maps onto one (YARA/Sigma → `SignatureDb`,
    PE/containers → `ContentScan`, path normaliser → the destructive-op guard, IOC normaliser →

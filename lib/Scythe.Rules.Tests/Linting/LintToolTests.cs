@@ -165,9 +165,16 @@ public class LintToolTests : IDisposable
     public void ABadManifestExitsTwo()
     {
         string rules = WriteFile("rules.json", """{ "s": ["some_pattern"] }""");
-        string manifest = WriteFile("manifest.json", """{ "not": "an array" }""");
+        string manifest = WriteFile("manifest.json", "42");
         var (exit, _, err) = Run(rules, "--manifest", manifest);
         Assert.Equal(LintTool.ExitDidNotComplete, exit);
         Assert.Contains("array of set names", err);
+
+        // The object form refuses a key it does not know, so a typo cannot silently
+        // disable the section it was meant to fill.
+        string typo = WriteFile("typo.json", """{ "not": ["a section"] }""");
+        var (exit2, _, err2) = Run(rules, "--manifest", typo);
+        Assert.Equal(LintTool.ExitDidNotComplete, exit2);
+        Assert.Contains("unknown key 'not'", err2);
     }
 }
