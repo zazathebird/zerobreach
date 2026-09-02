@@ -1,8 +1,46 @@
 # HANDOFF
 
-## Session 2026-08-31 — phases 148-152 built; `Phases-6.ps1` has no stubs left
+## Session 2026-09-02 — F2 committed; phase 146's PE parser verified against fixture PEs
 
 **Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`. Two things happened:
+
+1. **The 2026-08-31 session's work (phases 148-152) is now committed** — it had been left
+   verified but uncommitted in the working tree (`f345e16`).
+2. **`tools/tests/Test-Pe-Parser.ps1` built** — the Linux-doable item from the 2026-08-30
+   handoff. A PowerShell port of `PeFixtureBuilder.cs` builds real PE32/PE32+ images
+   (imports, certificates, overlays, hostile knobs) and runs the phase 146 parser functions
+   against them, including a truncation sweep at every header-region byte boundary. 89
+   assertions, bite proven by three injections. Suite is now 25 files, 1,500+ assertions,
+   all green.
+
+**The first run found a real fault**: `@($Sections)` enumeration throws on a .NET 8.0.10
+host (the Oct 2024 Linq.Expressions servicing regression), the parser's try/catch ate it,
+and `Read-ScythePeImports` returned `$null` for every file — phase 146 then scored healthy
+binaries S8 "import table unreachable". Five sites in the 146 path now use plain `foreach`.
+Details in `CHANGELOG.md` 2026-09-02; rule in `CLAUDE.md` (PowerShell engine safety).
+
+### What this changes about the risk surface
+
+The 2026-08-31 entry's list still stands, minus its parser item: phase 146's parser has now
+met real (fixture) PEs on Linux, including hostile shapes. What Windows adds that fixtures
+cannot: real signed binaries at scale, Authenticode tier-3, locked/in-use files, and
+wall-clock on a full System32. The `.Properties` indices, `klist` locale, ADSI, WebClient
+and wall-clock unknowns (items 1-6 of that entry) are untouched by this session.
+
+### The next thing to do
+
+Unchanged from 2026-08-31, in order: **Windows validation of 116-162** (critical path),
+**fold phase 146 onto `lib/Scythe.Rules`** (two rule engines that can diverge), **FP
+rounds** on Extended + HUNT. All three need either Windows or a real fleet; the Linux-side
+backlog for this branch is now empty.
+
+---
+
+## Session 2026-08-31 — phases 148-152 built; `Phases-6.ps1` has no stubs left
 
 ### State
 

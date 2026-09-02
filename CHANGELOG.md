@@ -1,5 +1,37 @@
 # CHANGELOG — Scythe V23
 
+## 2026-09-02 — phase 146's PE parser meets its first PEs, and fails on an affected .NET host
+
+The parser had never parsed a PE (HANDOFF 2026-08-30 flagged it as the most testable
+unverified thing in the band). `tools/tests/Test-Pe-Parser.ps1` now builds genuine PE32 and
+PE32+ images byte by byte — a PowerShell port of `lib/Scythe.Formats.Tests/PeFixtureBuilder.cs`
+with the same deterministic layout and hostile knobs — and runs the real parser functions
+(extracted from `engine/Phases-6.ps1` via the AST) against them. 89 assertions:
+
+- **A truncation sweep at every byte boundary through the header region** (679 lengths),
+  asserting the "return `$null` or partial, NEVER throw" contract — one escaped exception is
+  one RECOVERED ERROR per hostile file in a live scan.
+- Unsigned reads (`0xFFFFFFFF` must be positive), RVA→offset virtual-only refusal (the
+  anti-attacker-chosen-bytes property), certificate-vs-overlay accounting, the bound-import
+  `OriginalFirstThunk=0` fallback, PE32+ bit-63 ordinals, `NumberOfSections=65535` capping,
+  `NumberOfRvaAndSizes` clamping, non-standard `SizeOfOptionalHeader`, absurd `e_lfanew`,
+  and both import-walk DoS bounds (unterminated descriptor and thunk arrays must truncate).
+- Bite proven three ways: re-adding `@(...)` (below) fails 5, `ToUInt32`→`ToInt32` fails the
+  unsigned assertion with `-1`, and widening RVA containment to `VirtualSize` fails the
+  virtual-only assertion.
+
+**And the first run found a real fault.** `foreach ($s in @($Sections))` throws "Argument
+types do not match" on a host running .NET 8.0.10 (the October 2024 `System.Linq.Expressions`
+servicing regression: the `@()`-to-object-array binder fails on the PSObject-wrapped
+`List[object]` that `New-Object` returns; plain `foreach` is unaffected). The parser's own
+try/catch ate the throw, so `Read-ScythePeImports` returned `$null` for **every** file —
+which phase 146 scores as S8 "import table unreachable", a wrong signal on every healthy
+signed binary, with nothing anywhere saying so. Five enumeration sites in the 146 path now
+use plain `foreach` (the list is always one the parser itself built; `foreach` over `$null`
+iterates zero times, so the wrapper bought nothing). Rule added to `CLAUDE.md`.
+
+Suite: 24 → 25 files, 1,400+ → 1,500+ assertions, all green.
+
 ## 2026-08-31 — phases 148-152: the last stubs in `Phases-6.ps1`, and two narrowings
 
 Task F2, the largest remaining piece of the WS7 work package. `engine/Phases-6.ps1` now has

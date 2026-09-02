@@ -237,6 +237,15 @@ function Get-ScytheEspRoot {
 # A malformed PE is NORMAL INPUT here, not an error. Every function returns $null or a
 # partial result rather than throwing — a hostile file must never reach the resilience trap
 # and be reported as a RECOVERED ERROR.
+#
+# The Sections list is enumerated with a PLAIN foreach, never `@($Sections)`. The .NET
+# 8.0.10 servicing regression (System.Linq.Expressions; PowerShell "Argument types do not
+# match") breaks the @()-to-object-array binder on the PSObject-wrapped List[object] that
+# New-Object returns, while plain foreach enumeration is unaffected. On an affected host
+# the @() form made Read-ScythePeImports return $null for EVERY file (its try/catch ate
+# the throw), which phase 146 scores as S8 "import table unreachable" — a wrong signal on
+# every healthy signed binary. foreach over $null iterates zero times, so the wrapper
+# bought nothing here. Caught by Test-Pe-Parser.ps1, which runs these functions for real.
 
 function Open-ScythePeStream {
     # FileShare ReadWrite|Delete on purpose. [IO.File]::OpenRead requests FileShare.Read and
@@ -342,7 +351,7 @@ function ConvertTo-ScytheFileOffset {
     param([long]$Rva, $Sections, [long]$SizeOfHeaders, [long]$FileLength)
     if ($Rva -lt 0) { return $null }
     if ($Rva -lt $SizeOfHeaders -and $Rva -lt $FileLength) { return $Rva }
-    foreach ($s in @($Sections)) {
+    foreach ($s in $Sections) {
         $delta = $Rva - [long]$s.VirtualAddress
         if ($delta -lt 0 -or $delta -ge [long]$s.SizeOfRawData) { continue }
         $off = [long]$s.PointerToRawData + $delta
@@ -501,7 +510,7 @@ function Read-ScythePeImports {
         # $winSection, not $host — $Host is a PowerShell automatic variable and assigning to it
         # is a runtime error (CLAUDE.md: never give a local the letters of a broader-scope name).
         $winSection = $null
-        foreach ($s in @($Image.Sections)) {
+        foreach ($s in $Image.Sections) {
             if ($impOff -ge $s.PointerToRawData -and $impOff -lt ($s.PointerToRawData + $s.SizeOfRawData)) {
                 $winSection = $s; break
             }
@@ -792,7 +801,7 @@ if ($PhasePlan.Hunt) {
 
             $sig = New-Object System.Collections.Generic.List[string]
             $sc = 0
-            foreach ($s in @($img.Sections)) {
+            foreach ($s in $img.Sections) {
                 if (Test-ScytheNameRule -Name $s.Name -Rules $PE_PACKER_SECTIONS) {
                     if (-not $sig.Contains('S3')) { $sig.Add('S3'); $sc += 2 }
                 }
@@ -808,7 +817,7 @@ if ($PhasePlan.Hunt) {
             # Entry point outside every section, or inside a writable one. Strongly abnormal
             # for a compiler-produced image and free to compute.
             $epSection = $null
-            foreach ($s in @($img.Sections)) {
+            foreach ($s in $img.Sections) {
                 if ($img.EntryRva -ge $s.VirtualAddress -and $img.EntryRva -lt ($s.VirtualAddress + [Math]::Max($s.VirtualSize, $s.SizeOfRawData))) {
                     $epSection = $s; break
                 }
@@ -851,7 +860,7 @@ if ($PhasePlan.Hunt) {
             $entStream = Open-ScythePeStream $p.Cand.Path
             if ($null -ne $entStream) {
                 $entDone = 0
-                foreach ($s in @($p.Image.Sections)) {
+                foreach ($s in $p.Image.Sections) {
                     if ($entDone -ge $peMaxEntSec) { break }
                     if ($s.SizeOfRawData -lt 4096) { continue }
                     if ("$($s.Name)" -match '(?i)^\.rsrc$') { continue }   # PNGs and manifests: high by nature

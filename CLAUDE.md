@@ -351,6 +351,13 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
 - **Never `(fn …)[0]` when `fn` may return a single value** — PS 5.1 unwraps a single-element `@()`
   return to a scalar, so `[0]` indexes into a *string's first character*. Use `@(fn …)[0]` (force array,
   then index). Only a genuine array literal / `-split` result is safe to bare-index.
+- **`@(...)` over a `New-Object`-built `List[object]` can THROW on a .NET 8.0.10 host**
+  ("Argument types do not match", the October 2024 `System.Linq.Expressions` servicing
+  regression; plain `foreach` enumeration is unaffected). Inside a function with its own
+  try/catch the throw is silent and the function just returns `$null` — phase 146's import
+  parse returned `$null` for every file and scored healthy binaries as "import table
+  unreachable" (caught by `Test-Pe-Parser.ps1`, 2026-09-02). When the collection is a list
+  the code itself built, enumerate it plainly; `@()` is for genuinely scalar-or-array values.
 - **`try/catch` is statement-only in PS 5.1** — never use `(try{…}catch{…})` as a sub-expression
   (parses in PS 7, runtime-errors on 5.1). Restructure with early `return`s + a trailing try/catch.
 - **Any loop calling `Get-AuthSig` over many files MUST carry the `$global:SIG_AUDIT_*` budget**
@@ -857,11 +864,14 @@ timestamp**, and the server's `Classify` falls back to the prose keyword table �
   wrapper. The suite asserts that count.
 
 ### Security regression suite
-- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 1,400+
-  assertions across 24 test files, covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
-  (incl. a RUNTIME test of correlation and of the signature-set integrity gate) + WS4 signature
+- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 1,500+
+  assertions across 25 test files, covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
+  (incl. RUNTIME tests of correlation, of the signature-set integrity gate, and of the phase 146
+  PE parser against fixture-built PEs — `Test-Pe-Parser.ps1`, a PS port of
+  `PeFixtureBuilder.cs` with a byte-by-byte truncation sweep) + WS4 signature
   memo, the parse+BOM gate, and the embedded runspace here-strings.
-- **`Test-Extended-Smoke.ps1` is the only test that EXECUTES engine code.** It runs
+- **`Test-Extended-Smoke.ps1` is the oldest of the tests that EXECUTE engine code**
+  (`Test-Hunt-Correlation.ps1` and `Test-Pe-Parser.ps1` are the others). It runs
   `engine/Phases-4.ps1` against a generated fixture filesystem plus an in-memory registry
   (`ExtendedSmoke.Harness.ps1`), and it is what catches runtime faults the AST tests cannot see —
   it found five real bugs on the day the band was written. It runs on Linux, but fixture paths use
