@@ -2,6 +2,14 @@
 
 **Priority 2.** `ADVERSARY_ANALYSIS.md` §B4. Size: L. Five phases.
 
+> **BUILT 2026-08-31, with the scope narrowed.** Read `CLAUDE.md` "Phases 148-152" and the
+> `CHANGELOG.md` entry before touching these phases: roughly twenty sub-checks below were
+> dropped because another phase already owns them (107, 133, 106, 41, 88, 129, 153), and the
+> domain-wide LDAP sweep in phase 150 plus ADCS ESC8 were dropped outright — the sweep is
+> query-for-query what BloodHound issues against the customer's directory, and ESC8 needs an
+> HTTP request to a customer server. Both drops are revert-proofed in `Test-Hunt-Band.ps1`
+> §16. The brief below is kept as written, as the record of what was asked for.
+
 This matters more than usual for this project: the tool is being validated on a **private lab
 network of deliberately infected peers**, so lateral-movement evidence is the thing the test rig
 is actually built to produce.

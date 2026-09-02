@@ -274,13 +274,17 @@ Write-Host "`n-- phases 147/157/158/159 (tasks F1/F4/F5/F7) --" -ForegroundColor
 $p6 = Get-Content (Join-Path $root 'engine/Phases-6.ps1') -Raw
 $p6ast = Get-Ast 'engine/Phases-6.ps1'
 
-foreach ($n in @(146,147,153,154,155,156,157,158,159)) {
+foreach ($n in @(146,147,148,149,150,151,152,153,154,155,156,157,158,159)) {
     Assert-True "Phase $n — header present in Phases-6" ($p6 -match ('Show-PhaseHeader "PHASE {0}"' -f $n))
 }
-# 146 and 148-152 are still the parallel work package; the module must not claim them.
-foreach ($n in @(148,149,150,151,152)) {
-    Assert-True "Phase $n — still a stub, no header emitted" (-not ($p6 -match ('Show-PhaseHeader "PHASE {0}"' -f $n)))
-}
+# Phases run in NUMERIC order inside a module and every one of them reuses variables set by
+# the ones before it, so the order in the file is not cosmetic. 148-152 were spliced between
+# two already-shipped phases; this is what catches a re-splice landing in the wrong place.
+$p6Order = @(146,147,148,149,150,151,152,153,154,155,156,157,158,159) |
+           ForEach-Object { $p6.IndexOf(('Show-PhaseHeader "PHASE {0}"' -f $_)) }
+$p6Sorted = @($p6Order | Sort-Object)
+Assert-True 'Phases-6 — every phase header appears in numeric order' `
+    ((($p6Order -join ',') -eq ($p6Sorted -join ',')) -and ($p6Order -notcontains -1))
 # Phases run in numeric order within a module. 147 must precede 153.
 Assert-True 'Phases-6 — 146 is emitted before 147' `
     ($p6.IndexOf('Show-PhaseHeader "PHASE 146"') -lt $p6.IndexOf('Show-PhaseHeader "PHASE 147"'))
@@ -294,7 +298,9 @@ Assert-True 'Phases-6 — 157 is emitted after 156' `
 $p6Funcs = @($p6ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true) |
              ForEach-Object { $_.Name })
 foreach ($fn in @('Test-ScytheNameRule','Test-ScytheTextRules','Resolve-ScytheModulePath',
-                  'Test-ScytheUntrustedModule','Get-ScytheRepoRoots','Get-ScytheEspRoot')) {
+                  'Test-ScytheUntrustedModule','Get-ScytheRepoRoots','Get-ScytheEspRoot',
+                  'Get-ScytheEvents','Get-ScytheEvtField','Test-ScytheDomainJoined',
+                  'ConvertTo-ScytheSeverity','Invoke-ScytheConsoleTool')) {
     Assert-True "Phases-6 — helper $fn is defined" ($p6Funcs -contains $fn)
     Assert-True "Phases-6 — helper $fn is defined OUTSIDE the PhasePlan gate" `
         ($p6.IndexOf("function $fn") -lt $p6.IndexOf('if ($PhasePlan.Hunt) {'))
@@ -642,6 +648,274 @@ Assert-That 'dropper rules are SILENT on an ordinary .url shortcut' `
     ((Get-BandRuleHits $sig.persist_dropper_content_rules $urlBenign).Count) 0
 Assert-True 'dropper rules DO flag a UNC IconFile (NTLM coercion)' `
     ((Get-BandRuleHits $sig.persist_dropper_content_rules $urlUnc) -contains 'Dropper-UncIconFile')
+
+
+# ── 16. Phases 148-152 (task F2) — structure, narrowings and anti-duplication ─
+Write-Host "`n-- phases 148-152 (task F2): lateral / credential / Kerberos --" -ForegroundColor Cyan
+
+$p1  = Get-Content (Join-Path $root 'engine/Phases-1.ps1') -Raw
+$p3  = Get-Content (Join-Path $root 'engine/Phases-3.ps1') -Raw
+$p4  = Get-Content (Join-Path $root 'engine/Phases-4.ps1') -Raw
+
+# (a) Signature-DB hygiene for the F2 keys, on the same contract as every band before it.
+$f2Keys = @('lateral_remote_exec_parents','lateral_remote_exec_children','lateral_dcom_rules',
+            'lateral_remote_task_rules','lateral_admin_shares','lateral_remote_exec_benign_cmdlines',
+            'lateral_share_benign_sources','creddump_cmdline_rules','creddump_hive_names',
+            'creddump_hive_benign_paths','creddump_search_roots_raw','creddump_thresholds',
+            'kerberos_ticket_thresholds','kerberos_weak_etype_rules','kerberos_etype_benign_services',
+            'outbound_session_keys','outbound_session_secret_names','outbound_session_files_raw',
+            'outbound_session_file_rules','outbound_session_benign_paths',
+            'logon_anomaly_thresholds','logon_benign_accounts','logon_explicit_cred_benign_procs')
+foreach ($k in $f2Keys) {
+    Assert-True "sig — key '$k' present and non-empty" ($null -ne $sig.$k -and @($sig.$k).Count -gt 0)
+    Assert-True "sig — key '$k' carries a _comment"     ($null -ne $sig."_comment_$k")
+    Assert-True "loader — pulls '$k'" ($loader -match "(?:Get-Sig|Join-AllowRegex) '$k'")
+}
+foreach ($k in @('creddump_search_roots_raw','outbound_session_files_raw')) {
+    Assert-True "sig — '$k' entries are `$env:-prefixed literals" `
+        (@(@($sig.$k) | Where-Object { "$_" -notmatch '^\$env:' }).Count -eq 0)
+    Assert-True "loader — '$k' is ExpandString-expanded at load" `
+        ($loader -match "(?s)Get-Sig '$k'\) \| ForEach-Object \{ \`$ExecutionContext\.InvokeCommand\.ExpandString")
+}
+# Allowlists: compile, and none universal (the E1 blinding attack).
+$f2AllowKeys = @('lateral_remote_exec_benign_cmdlines','lateral_share_benign_sources',
+                 'creddump_hive_benign_paths','kerberos_etype_benign_services',
+                 'outbound_session_benign_paths','logon_benign_accounts',
+                 'logon_explicit_cred_benign_procs')
+foreach ($k in $f2AllowKeys) {
+    $univ = 0; $nocomp = 0
+    foreach ($pat in @($sig.$k)) {
+        $rx = $null
+        try { $rx = New-Object System.Text.RegularExpressions.Regex($pat,'IgnoreCase',[TimeSpan]::FromMilliseconds(150)) }
+        catch { $nocomp++; continue }
+        $all = $true
+        foreach ($c in $canaries) { if (-not $rx.IsMatch($c)) { $all = $false; break } }
+        if ($all) { $univ++ }
+    }
+    Assert-That "sig — '$k' all patterns compile"      $nocomp 0
+    Assert-That "sig — '$k' has no universal pattern"  $univ   0
+}
+# A COMMAND LINE is attacker-authored text, so its allowlist must pin the whole string.
+# A name-only prefix would let malware self-allowlist by naming its command after an RMM
+# one — the failure class caught in review on 2026-07-02 and re-proved for Active Setup.
+foreach ($pat in @($sig.lateral_remote_exec_benign_cmdlines)) {
+    Assert-True "sig — RMM command-line allowlist entry is fully anchored" `
+        ($pat -match '^\^' -and $pat -match '\$$')
+    Assert-True "sig — RMM command-line allowlist entry uses bounded wildcards, never .*" `
+        ($pat -notmatch '\.\*')
+}
+foreach ($pat in @($sig.logon_benign_accounts)) {
+    Assert-True "sig — logon account allowlist entry is fully anchored: $pat" `
+        ($pat -match '^\^' -and $pat -match '\$$')
+}
+
+# (b) The five phases are wired, gated and Info-only. Rule #1 and the trap rule are already
+#     asserted for the whole module in sections 1 and 2; what is checked here is that the
+#     new phases sit INSIDE the HUNT gate rather than running in every mode.
+foreach ($n in @(148,149,150,151,152)) {
+    Assert-True "Phase $n — emitted inside the PhasePlan.Hunt gate" `
+        ($p6.IndexOf(('Show-PhaseHeader "PHASE {0}"' -f $n)) -gt $p6.IndexOf('if ($PhasePlan.Hunt) {'))
+}
+
+# (c) THE ANTI-DUPLICATION CONTRACT, both directions. Phase 157 shipped six mechanisms
+#     phase 126 already owned, and phase 160 then correlated the two findings about one
+#     artifact as though they were independent facts. These assertions fail if 148-152
+#     grow a second opinion on something another phase reports, AND fail if the owning
+#     phase loses it.
+Assert-True 'phase 133 still owns the wmic /node lateral command line' `
+    ((($sig.lateral_movement_artifacts | ForEach-Object { "$($_.Rx)" }) -join ' ') -match 'wmic')
+Assert-True 'phase 133 still owns the schtasks /s lateral command line' `
+    ((($sig.lateral_movement_artifacts | ForEach-Object { "$($_.Rx)" }) -join ' ') -match 'schtasks')
+$dcomPats = ($sig.lateral_dcom_rules | ForEach-Object { "$($_.Pattern)" }) -join ' '
+Assert-True 'phase 148 does NOT re-match wmic (phase 133 owns it)'    ($dcomPats -notmatch 'wmic')
+Assert-True 'phase 148 does NOT re-match schtasks (phase 133 owns it)' ($dcomPats -notmatch 'schtasks')
+Assert-True 'phase 148 does NOT re-match the PsExec service names (phase 133 owns them)' `
+    ($dcomPats -notmatch '(?i)psexesvc|paexec|remcomsvc')
+Assert-True 'phase 107 still queries event 7045 and 4624' (($p3 -match '\b7045\b') -and ($p3 -match '\b4624\b'))
+Assert-True 'phase 148 does NOT re-report the 7045 service-install record' `
+    ($p6 -notmatch 'Id\s*@?\(?\s*7045')
+# Phase 152 must emit NO per-record 4624 finding: phase 107 already reports one per record,
+# and two findings on one event id would give phase 160 a shared target to correlate on.
+Assert-True 'phase 152 does NOT pull event 4624 (phase 107 owns it)' `
+    ($p6 -notmatch 'Get-ScytheEvents[^\r\n]*4624')
+Assert-True 'phase 106 still owns the crash-dump directories' `
+    (($p3 -match 'CrashDumps') -and ($p3 -match 'Minidump'))
+Assert-True 'phase 149 search roots exclude %TEMP% (phase 106 owns it)' `
+    (@(@($sig.creddump_search_roots_raw) | Where-Object { "$_" -match '(?i)\$env:TEMP$|CrashDumps' }).Count -eq 0)
+Assert-True 'phase 41 still owns WDigest UseLogonCredential and LSA RunAsPPL' `
+    (($p1 -match 'UseLogonCredential') -and ($p1 -match 'RunAsPPL'))
+# The check is on the registry READ, never on the file text: this band is FixAction Info,
+# so the phase comments legitimately NAME what other phases own, and a text match fires on
+# the sentence that documents the narrowing (the same trap section 9 solved with the AST).
+Assert-True 'phase 149 does NOT re-read WDigest UseLogonCredential (phase 41 owns it)' `
+    ($p6 -notmatch "-Name\s+'?UseLogonCredential")
+Assert-True 'phase 149 does NOT re-read LSA RunAsPPL (phase 41 owns it)' `
+    ($p6 -notmatch "-Name\s+'?RunAsPPL")
+Assert-True 'phase 129 still owns winscp.ini (exfil staging config)' `
+    ((($sig.exfil_staging_tools | ForEach-Object { ($_.config_raw -join ' ') }) -join ' ') -match '(?i)winscp\.ini')
+Assert-True 'phase 151 does NOT re-read winscp.ini (phase 129 owns it)' `
+    (@(@($sig.outbound_session_files_raw) | Where-Object { "$_" -match '(?i)winscp\.ini' }).Count -eq 0)
+Assert-True 'phase 150 does NOT re-report SMB signing (phase 153 owns it)' `
+    ($p6 -match 'NET153_SRVSIGN')
+Assert-True 'phase 88 still owns the 4769 golden-ticket event view' `
+    ((Get-Content (Join-Path $root 'engine/Phases-2.ps1') -Raw) -match '4769')
+
+# (d) THE REACH NARROWING. The F2 brief asked for a domain-wide AS-REP / delegation /
+#     AdminSDHolder sweep and for ADCS ESC8. Both were dropped: the sweep is, query for
+#     query, what BloodHound issues against the customer's own directory, and ESC8 needs
+#     an HTTP request to a customer server. Phase 150 reads ONE object — this computer's —
+#     with both timeouts set. Revert-proofed the way phase 159's "mounts nothing" is.
+Assert-True 'phase 150 queries only this computer by sAMAccountName' `
+    ($p6 -match 'objectClass=computer\)\(sAMAccountName=')
+Assert-True 'phase 150 sets SizeLimit on the directory search'       ($p6 -match '\.SizeLimit\s*=\s*1\b')
+Assert-True 'phase 150 sets a client timeout on the directory search' ($p6 -match '\.ClientTimeout\s*=')
+Assert-True 'phase 150 sets a server time limit on the directory search' ($p6 -match '\.ServerTimeLimit\s*=')
+# Banned tokens are ones that can only appear in CODE. AdminSDHolder and adminCount are
+# deliberately absent from this list: the phase banner names them when it explains what was
+# dropped, and banning the word would ban the explanation.
+foreach ($banned in @('objectCategory=person','objectClass=user','samAccountType=',
+                      'userAccountControl:1\.2\.840\.113556\.1\.4\.803',
+                      'DirectorySearcher\(\)','\.FindAll\(')) {
+    Assert-True "phase 150 does not enumerate the directory ($banned)" ($p6 -notmatch $banned)
+}
+Assert-That 'phase 150 builds exactly ONE directory search' `
+    (@([regex]::Matches($p6,'\[ADSISearcher\]')).Count) 1
+foreach ($banned in @('Invoke-WebRequest','Invoke-RestMethod','Net\.WebClient','certsrv','System\.Net\.Sockets','New-Object System\.Net')) {
+    Assert-True "phases 148-152 send no network traffic ($banned)" ($p6 -notmatch $banned)
+}
+# klist and cmdkey are read-only Microsoft binaries, but a hung KDC must not hang the scan.
+Assert-True 'console tools run only through Invoke-ScytheConsoleTool' `
+    (($p6 -notmatch '(?m)^\s*&\s*[''"]?(klist|cmdkey)') -and ($p6 -notmatch 'Start-Process[^\r\n]*(klist|cmdkey)'))
+Assert-True 'Invoke-ScytheConsoleTool enforces a deadline and kills on expiry' `
+    (($p6 -match 'WaitForExit\(\$TimeoutMs\)') -and ($p6 -match '\$proc\.Kill\(\)'))
+Assert-True 'Invoke-ScytheConsoleTool drains stderr asynchronously (audit H2)' `
+    ($p6 -match 'StandardError\.ReadToEndAsync\(\)')
+
+# (e) THE WALL-CLOCK CONTRACT. Every existing event query in the engine filters time
+#     client-side; on a domain workstation with a large Security log that materialises
+#     hundreds of thousands of records first. StartTime inside the FilterHashtable
+#     compiles to server-side XPath, and the pull is memoised per (log, id-set, cap).
+Assert-True 'Get-ScytheEvents puts StartTime INSIDE the FilterHashtable' `
+    ($p6 -match "\`$filter\['StartTime'\]\s*=\s*\`$global:TIME_LIMIT")
+Assert-True 'Get-ScytheEvents memoises its pulls' ($p6 -match 'SCYTHE_EVT_CACHE')
+Assert-True 'Get-ScytheEvents goes through the safe wrapper' ($p6 -match 'Get-WinEventSafe -Filter \$filter')
+$p6EvtCalls = @($p6ast.FindAll({ param($n)
+    $n -is [System.Management.Automation.Language.CommandAst] -and
+    "$($n.GetCommandName())" -eq 'Get-WinEventSafe' }, $true)).Count
+Assert-That 'Phases-6 reaches the event log through exactly one call site' $p6EvtCalls 1
+# The positional .Properties read is the fast path; a value that does not look like the
+# field it claims to be must fall back to the named lookup, because the provider layout
+# is a manifest detail and a silently-wrong index would put an account name in the
+# source-address column of a client report.
+Assert-True 'Get-ScytheEvtField validates the positional read' ($p6 -match '\$Validate -eq')
+Assert-True 'Get-ScytheEvtField falls back to the named lookup' ($p6 -match 'EventData\.Data \| Where-Object')
+
+# (f) THE RULE SETS, RUN AGAINST REALISTIC CONTENT. A pattern that compiles is not a
+#     pattern that works — four rules shipped in this band that could not fire, or fired
+#     on every healthy machine, and the suite did not notice because it only compiled them.
+$mmcBenign = '"C:\Windows\System32\mmc.exe" "C:\Windows\System32\compmgmt.msc" /computer:.'
+$mmcEvil   = "powershell.exe -nop -c [activator]::CreateInstance([type]::GetTypeFromProgID('MMC20.Application','10.0.0.5'))"
+$shwEvil   = "powershell -c [type]::GetTypeFromCLSID('9BA05972-F6A8-11CF-A442-00A0C90A8F39','10.0.0.5')"
+Assert-That 'DCOM rules are SILENT on an ordinary mmc.exe console launch' `
+    ((Get-BandRuleHits $sig.lateral_dcom_rules $mmcBenign).Count) 0
+Assert-True 'DCOM rules DO flag MMC20.Application by ProgID' `
+    ((Get-BandRuleHits $sig.lateral_dcom_rules $mmcEvil) -contains 'MMC20.Application DCOM')
+Assert-True 'DCOM rules DO flag ShellWindows by CLSID (the half that cannot be renamed)' `
+    ((Get-BandRuleHits $sig.lateral_dcom_rules $shwEvil) -contains 'ShellWindows DCOM')
+
+$taskBenign = 'C:\Program Files\Vendor\agent.exe --run --quiet'
+$taskUnc    = '\\10.0.0.5\ADMIN$\svc_update.exe -install'
+Assert-That 'task rules are SILENT on an ordinary local task action' `
+    ((Get-BandRuleHits $sig.lateral_remote_task_rules $taskBenign).Count) 0
+Assert-True 'task rules DO flag an action on an administrative share' `
+    ((Get-BandRuleHits $sig.lateral_remote_task_rules $taskUnc) -contains 'Task action on an administrative share')
+# Phase 148 composes "Execute Arguments" before matching, so no rule may end with $ —
+# the LNK-ScriptHostTarget lesson: an anchored rule against a composed string never fires.
+foreach ($r in @($sig.lateral_remote_task_rules)) {
+    # An ESCAPED trailing dollar is a literal — ADMIN$ ends three of these rules — so the
+    # test looks for an unescaped one, which is the anchor that could never fire.
+    Assert-True "task rule '$($r.Name)' carries no end-of-string anchor (composed string)" `
+        ("$($r.Pattern)" -notmatch '(?<!\\)\$$')
+}
+
+$cdBenign  = '"C:\Windows\System32\rundll32.exe" shell32.dll,Control_RunDLL desk.cpl'
+$cdComsvcs = 'rundll32.exe C:\Windows\System32\comsvcs.dll, MiniDump 640 C:\Users\Public\l.dmp full'
+$cdRegSave = 'reg save hklm\sam C:\Users\Public\sam.hiv'
+$cdRegOk   = 'reg query hklm\software\microsoft\windows\currentversion'
+Assert-That 'credential-dump rules are SILENT on an ordinary rundll32 control-panel launch' `
+    ((Get-BandRuleHits $sig.creddump_cmdline_rules $cdBenign).Count) 0
+Assert-That 'credential-dump rules are SILENT on an ordinary reg query' `
+    ((Get-BandRuleHits $sig.creddump_cmdline_rules $cdRegOk).Count) 0
+Assert-True 'credential-dump rules DO flag comsvcs.dll MiniDump' `
+    ((Get-BandRuleHits $sig.creddump_cmdline_rules $cdComsvcs) -contains 'comsvcs.dll MiniDump (LSASS)')
+Assert-True 'credential-dump rules DO flag reg save of the SAM hive' `
+    ((Get-BandRuleHits $sig.creddump_cmdline_rules $cdRegSave) -contains 'reg save of a credential hive')
+
+foreach ($hv in @('SAM','SYSTEM','SECURITY','ntds.dit','SAM.bak')) {
+    Assert-True "hive-name list catches '$hv'" (Test-BandNames $sig.creddump_hive_names $hv)
+}
+foreach ($nothv in @('system.ini','SAMSUNG.exe','Security.evtx','systeminfo.txt','ntdsapi.dll')) {
+    Assert-True "hive-name list ignores '$nothv'" (-not (Test-BandNames $sig.creddump_hive_names $nothv))
+}
+# The hive allowlist must not cover the directories the branch exists for — the phase-130
+# discord failure, where an allowlist made its own detection branch unreachable.
+function Join-F2Allow { param([string]$Key) $a = @($sig.$Key); if ($a.Count) { ($a -join '|') } else { '(?!)' } }
+$hiveAllow = Join-F2Allow 'creddump_hive_benign_paths'
+foreach ($staged in @('C:\Users\tech\Downloads\SAM','C:\Users\Public\ntds.dit',
+                      'C:\ProgramData\SYSTEM','C:\PerfLogs\SECURITY','C:\Windows\Temp\SAM')) {
+    Assert-True "hive allowlist does NOT swallow a staged copy at '$staged'" ($staged -notmatch $hiveAllow)
+}
+# NOT $home: PowerShell's $HOME is a read-only automatic variable and assigning it throws
+# — the same class of collision as the one-letter helper names that shadow built-in aliases.
+foreach ($hiveHome in @('C:\Windows\System32\config\SAM','C:\Windows\NTDS\ntds.dit')) {
+    Assert-True "hive allowlist DOES cover the legitimate home '$hiveHome'" ($hiveHome -match $hiveAllow)
+}
+
+$etypeGood = 'AES-256-CTS-HMAC-SHA1-96'
+$etypeWeak = 'RSADSI RC4-HMAC(NT)'
+Assert-That 'Kerberos etype rules are SILENT on an AES-256 ticket' `
+    ((Get-BandRuleHits $sig.kerberos_weak_etype_rules $etypeGood).Count) 0
+Assert-True 'Kerberos etype rules DO flag an RC4-HMAC ticket' `
+    ((Get-BandRuleHits $sig.kerberos_weak_etype_rules $etypeWeak) -contains 'RC4-HMAC service ticket')
+
+$sessBenign = '<Node Name="srv01" Hostname="10.0.0.5" Username="admin" Password="" Protocol="RDP" />'
+$sessEvil   = '<Node Name="srv01" Hostname="10.0.0.5" Username="admin" Password="pFqXm2lKd9sQ" Protocol="RDP" />'
+Assert-That 'session-file rules are SILENT on a profile with no stored password' `
+    ((Get-BandRuleHits $sig.outbound_session_file_rules $sessBenign).Count) 0
+Assert-True 'session-file rules DO flag a stored password' `
+    ((Get-BandRuleHits $sig.outbound_session_file_rules $sessEvil).Count -gt 0)
+
+$acctAllow = Join-F2Allow 'logon_benign_accounts'
+foreach ($noise in @('DWM-1','UMFD-0','ANONYMOUS LOGON','WKSTN01$','-')) {
+    Assert-True "logon allowlist filters the routine account '$noise'" ($noise -match $acctAllow)
+}
+foreach ($real in @('jsmith','Administrator','svc_backup','helpdesk.admin')) {
+    Assert-True "logon allowlist does NOT filter the real account '$real'" ($real -notmatch $acctAllow)
+}
+# Event 4648's allowlist is on the calling image PATH — the safe kind. It must not cover a
+# shell or a script host, because a shell supplying somebody else's credential IS the case
+# the branch exists for.
+$explAllow = Join-F2Allow 'logon_explicit_cred_benign_procs'
+foreach ($shell in @('C:\Windows\System32\cmd.exe','C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe',
+                     'C:\Windows\System32\wscript.exe','C:\Users\tech\AppData\Local\Temp\a.exe')) {
+    Assert-True "4648 allowlist does NOT swallow '$shell'" ($shell -notmatch $explAllow)
+}
+foreach ($ok in @('C:\Windows\System32\svchost.exe','C:\Program Files\CentraStage\CagService.exe')) {
+    Assert-True "4648 allowlist DOES cover the routine caller '$ok'" ($ok -match $explAllow)
+}
+
+# (g) Thresholds are objects, not lists, and are indexed through @(...) — a bare [0] on a
+#     single-element Get-Sig return indexes the first CHARACTER of a string on 5.1.
+foreach ($k in @('creddump_thresholds','kerberos_ticket_thresholds','logon_anomaly_thresholds')) {
+    Assert-True "loader — '$k' is indexed through @(...)[0]" `
+        ($loader -match "@\(Get-Sig '$k'\)\[0\]")
+}
+# The golden-ticket threshold has to sit far above every legitimate policy, or the phase
+# becomes an argument about ticket lifetimes on healthy domains. A KDC issues 10 hours.
+Assert-True 'golden-ticket threshold is well above any real Kerberos policy' `
+    ([int]@($sig.kerberos_ticket_thresholds)[0].MaxTicketHours -ge 168)
+Assert-True 'spray threshold requires several DISTINCT accounts, not just many failures' `
+    ([int]@($sig.logon_anomaly_thresholds)[0].SprayDistinctAccounts -ge 3)
 
 Write-Host "`n  $pass passed, $fail failed" -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if ($fail) { exit 1 }

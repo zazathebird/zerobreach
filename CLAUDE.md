@@ -185,9 +185,14 @@ PowerShell 5.1+, admin rights.
 │   │                           (extensions, tasks.json, git hooks/config, npm/NuGet
 │   │                           registries, MSBuild inline tasks, Jupyter kernels); UEFI
 │   │                           (Secure Boot, dbx, ESP, BCD) — MOUNTS NOTHING.
-│   │                           146 + 148-152 STILL STUB (parallel work package, see
-│   │                           fable-work/tasks/_deferred/): PE structure + rule engine
-│   │                           (F3), lateral movement / AD / credential dumping (F2)
+│   │                           148-152 (2026-08-31) lateral movement, credential
+│   │                           dumping, Kerberos/NTLM, outbound reach, logon anomalies.
+│   │                           Owns the process-tree and share-access side of inbound
+│   │                           lateral (107 owns 7045/4624, 133 owns the command lines);
+│   │                           the no-tools credential techniques (106 owns .dmp and the
+│   │                           tool names, 41 owns WDigest/RunAsPPL); THIS COMPUTER'S OWN
+│   │                           AD object only — NO DIRECTORY ENUMERATION, NO ADCS PROBE.
+│   │                           Phases-6.ps1 has NO STUBS LEFT.
 │   ├── Phases-7.ps1            if($PhasePlan.Hunt) 160-162 — SYNTHESIS. No new detection:
 │   │                           attack-chain correlation, patient zero, timeline export
 │   ├── Summary.ps1             risk score + audit summary + stealth/auto exits
@@ -662,6 +667,77 @@ Violating one silently breaks a scan, hangs the tool, or damages a user's machin
   has not made, and a stale one produces confident false accusations about a developer's own
   dependencies.
 
+### Phases 148-152 (`engine/Phases-6.ps1`, added 2026-08-31)
+
+- **Phase 150 does not enumerate the directory, and no switch is to be added.** The F2 brief
+  asked for an AS-REP-roastable / unconstrained-delegation / RBCD / AdminSDHolder sweep across
+  the domain. That sweep is, query for query, what BloodHound issues — against the customer's
+  own domain controllers, from an endpoint, under an MSP contract, while the customer's
+  detection stack is watching. Same reasoning that made 153-156 host-side and 159 mount
+  nothing. What ships instead reads **this computer's own AD object**: one `[ADSISearcher]`,
+  filtered on `sAMAccountName`, `SizeLimit 1`, both `ClientTimeout` and `ServerTimeLimit` set.
+  ADCS ESC8 is dropped outright — it needs an HTTP request to a customer server.
+  `Test-Hunt-Band.ps1` §16(d) asserts exactly one searcher, no `FindAll(`, no
+  `objectClass=user` / `objectCategory=person` / `samAccountType=` filter, and no
+  `Invoke-WebRequest` / `Invoke-RestMethod` / `Net.WebClient` / `System.Net.Sockets` anywhere
+  in the module. The banned-token list deliberately omits *AdminSDHolder* and *adminCount*:
+  the phase banner names them when it explains what was dropped, and banning the word would
+  ban the explanation.
+- **Roughly twenty sub-checks from the F2 brief were dropped because another phase owns them,
+  and every one is revert-proofed in both directions.** 107 owns 7045 and per-record 4624;
+  133 owns the `wmic /node`, `schtasks /s` and ADMIN$ **command lines** and the PsExec service
+  binaries; 106 owns `.dmp` in the crash-dump directories and the dumper tool names; 41 owns
+  WDigest `UseLogonCredential` and LSA `RunAsPPL`; 88 owns 4769/4662; 129 owns `winscp.ini`;
+  153 owns SMB signing; `LmCompatibilityLevel` is already duplicated between 46 and 155 and
+  must not gain a third. **Before adding anything to 148-152, grep the engine AND
+  `data/detection_signatures.json` for the mechanism** — the reason 157 shipped six duplicates
+  is that six of them lived in a data-driven table rather than in code.
+- **Phase 152 emits no per-record 4624 finding, deliberately.** Phase 107 already reports one
+  finding per logon record. A second would give one event two ids and two severities, and
+  phase 160 would then correlate them on the shared target as two independent facts. 152 owns
+  the **aggregate** instead — a spray is many accounts from one source, which cannot be seen
+  one record at a time. Asserted.
+- **Event queries put `StartTime` INSIDE the `FilterHashtable`.** Every older query in this
+  engine pulls N records and filters with `Test-InScope` afterwards; on a domain workstation
+  with a large Security log that materialises hundreds of thousands of records in the
+  pipeline first. Inside the hashtable it compiles to XPath the Event Log service evaluates
+  itself. `Get-ScytheEvents` is the single call site (asserted via the AST — the *comment*
+  above it also names `Get-WinEventSafe`, so a text count says two) and it memoises per
+  (log, id-set, cap).
+- **`Get-ScytheEvtField` reads `.Properties` positionally and validates the result.**
+  `[xml]$e.ToXml()` per record is two orders of magnitude more expensive and is the whole cost
+  of the phase on a real log. But the positional layout is a property of the provider
+  **manifest** and has moved between Windows versions, and a silently-wrong index would put an
+  account name in the source-address column of a client report — so a value that fails its
+  validation regex falls back to the named lookup **for that record only**.
+- **Reading two event ids together needs TWO PASSES, because `Get-WinEvent` returns newest
+  first.** The 4732 that added an account to Administrators arrives *before* the 4720 that
+  created it, so a single pass never sees the pairing that is the entire reason for reading
+  the pair. Phase 152 builds the created-account set first, then reports.
+- **Two allowlists here can switch off their own detection branch, and both are asserted.**
+  `logon_explicit_cred_benign_procs` (4648) must never match `cmd.exe`, `powershell.exe`,
+  `wscript.exe` or anything under a user-writable path — a shell supplying somebody else's
+  credential *is* the case the branch exists for. `creddump_hive_benign_paths` must never
+  match Downloads, Public, ProgramData, PerfLogs or `%WINDIR%\Temp` — those are exactly where
+  a staged SAM turns up. Same failure as phase 130's `discord` entry.
+- **`lateral_remote_exec_benign_cmdlines` matches a COMMAND LINE, so every entry is fully
+  `^...$`-anchored with bounded wildcards and no `.*`.** Datto / CentraStage / Kaseya run
+  scripts through WMI and WinRM constantly and the phase is unusable on a managed fleet
+  without this list — but a name-only prefix would let malware self-allowlist by naming its
+  command after an RMM one. Asserted, including the `.*` ban.
+- **`klist` and `cmdkey` run only through `Invoke-ScytheConsoleTool`.** They answer questions
+  no registry read can, they are read-only Microsoft-signed binaries already on the box, and
+  they hang forever against an unreachable KDC — so the helper starts them detached, drains
+  stderr with `ReadToEndAsync` (audit H2, applied to a child we start), and **kills on the
+  deadline** instead of waiting. Asserted.
+- **`%WINDIR%\repair` is searched and deliberately NOT allowlisted.** Windows XP and Server
+  2003 kept genuine SAM/SYSTEM backups there; modern builds leave it empty, so a hive in it
+  is worth reporting, and the finding's own text tells the operator to check the dates before
+  escalating rather than the allowlist silently deciding for them.
+- **`$HOME` is a read-only automatic variable** — `foreach ($home in ...)` throws
+  `Cannot overwrite variable HOME`. Same family as the one-letter helper names that lose to
+  built-in aliases; it cost a test run here.
+
 ### Rule regexes must be run against REALISTIC content, not just compiled (added 2026-08-30)
 
 Four rules shipped that could not fire, or fired on every healthy machine, and the suite did
@@ -781,8 +857,8 @@ timestamp**, and the server's `Classify` falls back to the prose keyword table �
   wrapper. The suite asserts that count.
 
 ### Security regression suite
-- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 617+
-  assertions covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
+- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 1,400+
+  assertions across 24 test files, covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
   (incl. a RUNTIME test of correlation and of the signature-set integrity gate) + WS4 signature
   memo, the parse+BOM gate, and the embedded runspace here-strings.
 - **`Test-Extended-Smoke.ps1` is the only test that EXECUTES engine code.** It runs
@@ -927,7 +1003,7 @@ short orientation.
 Most of the roadmap is **done and merged** on both engines: scan-blocking prompts, re-run handling,
 MITRE, IOC Manager, HTML/CSV export, STEALTH parsing, real remediation, the three-layer safety
 guard, FP rounds 1-5, the engine split + WS2 port, the live finding stream + UTF-8 pipeline,
-VFX/themes/sound, the extended band 116-133, the HUNT band 134-145 and 160-162, the preflight
+VFX/themes/sound, the extended band 116-133, the whole HUNT band 134-162, the preflight
 integrity gate, and the native C# engine (10 scanners / 63 checks).
 
 **What is actually outstanding:**
@@ -941,12 +1017,11 @@ integrity gate, and the native C# engine (10 scanners / 63 checks).
    save→re-scan, STEALTH, plus the live finding ticker/chips and clean-banner glyphs.
 3. **FP rounds on the new bands.** Extended and HUNT ship `Info` throughout precisely because they
    have never met a real fleet.
-4. **`engine/Phases-6.ps1` stubs 146 and 148-152** — the remaining parallel work package.
-   147 and 157-159 were filled on 2026-08-30 (tasks F1/F4/F5/F7); what is left is **F3**
-   (phase 146, PE structural analysis — and note `lib/Scythe.Rules` already ships a YARA
-   engine, so F3 should be built on top of item 6 rather than growing a second one) and **F2**
-   (phases 148-152, lateral movement / AD / credential dumping, five phases). Read the
-   "When a stub becomes real" rule above before filling either.
+4. **`engine/Phases-6.ps1` has no stubs left** (147 and 157-159 on 2026-08-30, 146 on
+   2026-08-30, 148-152 on 2026-08-31). What remains from that work package is the *rule
+   engine* half of F3: phase 146 parses PE structure with its own pure-.NET reader, while
+   `lib/Scythe.Rules` already ships YARA and Sigma engines that nothing references. Fold
+   146 onto `lib/` under item 6 rather than letting two rule engines diverge.
 5. **Detection parity** — port PS coverage into the native scanners; and per-check status +
    deterministic finding ids flowing the other way, from native into PS.
 6. **Wire up `lib/`** (BLUEPRINT.md §10 item 6). The copy-in is **done** (2026-08-26): YARA +

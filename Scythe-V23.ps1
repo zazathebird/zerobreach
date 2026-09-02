@@ -1202,6 +1202,32 @@ $CLR_UNEXPECTED_HOSTS_RE = if (@(Get-Sig 'clr_unexpected_hosts').Count) {
     '^(' + ((@(Get-Sig 'clr_unexpected_hosts') | ForEach-Object { [regex]::Escape("$_") }) -join '|') + ')$'
 } else { '(?!)' }
 
+# ── WS7 phases 148-152 — lateral movement / credential dumping / AD (task F2) ─
+# Same contract as every block above. The *_raw list is expanded HERE, once.
+$LATERAL_EXEC_PARENTS     = Get-Sig 'lateral_remote_exec_parents'          # Phase 148
+$LATERAL_EXEC_CHILDREN    = @((Get-Sig 'lateral_remote_exec_children') | ForEach-Object { "$_".ToLower() })
+$LATERAL_DCOM_RULES       = Get-Sig 'lateral_dcom_rules'                   # Phase 148
+$LATERAL_TASK_RULES       = Get-Sig 'lateral_remote_task_rules'            # Phase 148
+$LATERAL_ADMIN_SHARES     = @((Get-Sig 'lateral_admin_shares') | ForEach-Object { "$_".ToLower() })
+$LATERAL_EXEC_BENIGN_RE   = Join-AllowRegex 'lateral_remote_exec_benign_cmdlines'  # Phase 148
+$LATERAL_SRC_BENIGN_RE    = Join-AllowRegex 'lateral_share_benign_sources'         # Phase 148
+$CREDDUMP_CMDLINE_RULES   = Get-Sig 'creddump_cmdline_rules'               # Phase 149
+$CREDDUMP_HIVE_NAMES      = Get-Sig 'creddump_hive_names'                  # Phase 149
+$CREDDUMP_HIVE_BENIGN_RE  = Join-AllowRegex 'creddump_hive_benign_paths'   # Phase 149
+$CREDDUMP_SEARCH_ROOTS    = @((Get-Sig 'creddump_search_roots_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$CREDDUMP_THRESH          = @(Get-Sig 'creddump_thresholds')[0]            # Phase 149
+$KERB_THRESH              = @(Get-Sig 'kerberos_ticket_thresholds')[0]     # Phase 150
+$KERB_ETYPE_RULES         = Get-Sig 'kerberos_weak_etype_rules'            # Phase 150
+$KERB_ETYPE_BENIGN_RE     = Join-AllowRegex 'kerberos_etype_benign_services'       # Phase 150
+$OUTBOUND_SESSION_KEYS    = Get-Sig 'outbound_session_keys'                # Phase 151
+$OUTBOUND_SECRET_NAMES    = Get-Sig 'outbound_session_secret_names'        # Phase 151
+$OUTBOUND_SESSION_FILES   = @((Get-Sig 'outbound_session_files_raw') | ForEach-Object { $ExecutionContext.InvokeCommand.ExpandString($_) })
+$OUTBOUND_FILE_RULES      = Get-Sig 'outbound_session_file_rules'          # Phase 151
+$OUTBOUND_BENIGN_RE       = Join-AllowRegex 'outbound_session_benign_paths'        # Phase 151
+$LOGON_THRESH             = @(Get-Sig 'logon_anomaly_thresholds')[0]       # Phase 152
+$LOGON_ACCT_BENIGN_RE     = Join-AllowRegex 'logon_benign_accounts'        # Phase 152
+$LOGON_EXPLICIT_BENIGN_RE = Join-AllowRegex 'logon_explicit_cred_benign_procs'     # Phase 152
+
 # WS2 detection-coverage expansion (2026-07-01) — all externalized data, AMSI-safe.
 # Consumed by: Phase 55.5 (BYOVD), Phase 53 (ransom-note names/content), Phase 62
 # (anchored C2/banking pipe second pass), Phase 69 (mutex probe), Phase 99.5 (cmdline

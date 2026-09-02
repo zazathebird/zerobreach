@@ -18,9 +18,9 @@
 > | E6 fixed task name / budget starvation | open | **STILL OPEN.** Task name is deliberately fixed (`CLAUDE.md`); group-cap rollup is still silent at INFO |
 > | E7 no HMAC on reports / quarantine manifests | open | **STILL OPEN** |
 > | B1 no memory inspection anywhere | open | **CLOSED** — 141-145. This is the single most misleading section in the file as written |
-> | B2/146 PE structure · B3/147 cloud identity · B4/148-152 lateral+AD | open | **STILL OPEN** (stubs) |
+> | B2/146 PE structure · B3/147 cloud identity · B4/148-152 lateral+AD | open | **CLOSED** — 146/147 built 2026-08-30, 148-152 built 2026-08-31 (B4 narrowed: no directory enumeration, no ADCS probe) |
 > | B5 the LAN | open | **PARTIALLY CLOSED, and re-scoped** — see the note below |
-> | B6/157 · B7/158 · B8/159 | open | **STILL OPEN** (stubs) |
+> | B6/157 · B7/158 · B8/159 | open | **CLOSED** — built 2026-08-30 (B8 narrowed: mounts no ESP) |
 > | B9 no correlation | open | **CLOSED** — 160/161 |
 > | B10 no timeline / evidence package | open | **CLOSED** — 162 |
 > | B11 `yara_lite_rules` shape | open | **STILL OPEN** |

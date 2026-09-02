@@ -9,10 +9,11 @@ observed to work. Nothing here is theoretical. Each entry ends with `→ DETECT:
 Scythe phase that should catch it.
 
 Target slot in the engine: `engine/Phases-6.ps1` reserved **148-152 (lateral movement / AD /
-credential dumping)** and **153-156**. 153-156 were **built 2026-08-22** — as a *host-side*
-network-exposure band, not the originally-briefed LAN scanner: no packets, no LAN enumeration,
-no `-ScanLan` switch (see the deliverable section at the end of this file). Discovery findings
-below map onto 153-156; post-access findings map onto 148-152, still a stub.
+credential dumping)** and **153-156**. Both are now **built** — 153-156 on 2026-08-22 and
+148-152 on 2026-08-31 — and both were narrowed the same way: no packets, no LAN enumeration,
+no `-ScanLan` switch, and in 148-152 no directory enumeration and no ADCS probe (see the
+deliverable section at the end of this file). Discovery findings below map onto 153-156;
+post-access findings map onto 148-152.
 
 ---
 

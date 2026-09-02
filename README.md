@@ -109,9 +109,16 @@ hard-errors on them (`Scythe.Cli/CliOptions.cs`).
 HUNT is deliberately not folded into DEEP — it walks process memory (phases 141-145), so it costs
 real wall-clock and stays an explicit operator choice.
 
-**162 is the phase-number ceiling, not the count that executes.** Phases 146-152 and 157-159 are
-still stubs, so a HUNT run performs roughly 153 phases. The network-exposure phases 153-156 are
-host-side reads only — they send no packets and do not enumerate the network.
+**162 is the phase-number ceiling and, since 2026-08-31, every number below it is a real
+phase** — the last stubs (146-152, 157-159) were filled on 2026-08-30 and 2026-08-31. A HUNT
+run performs 167 phases in total: 162 numbered ones plus five fractional insertions (55.5,
+74.5/.6/.7, 99.5), which advance the counter as real plan steps.
+
+Three phases in the band are deliberately narrower than their briefs, for one reason: this
+tool runs on customer networks under an MSP contract. The network-exposure phases 153-156 are
+host-side reads only — no packets, no network enumeration. Phase 159 inventories the EFI
+System Partition only if it is already mounted; it mounts nothing. Phase 150 reads this
+machine's own Active Directory object and does not enumerate the directory.
 
 ---
 

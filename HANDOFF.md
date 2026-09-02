@@ -1,8 +1,71 @@
 # HANDOFF
 
-## Session 2026-08-30 (later) — phase 146, and the adversarial review of the morning's work
+## Session 2026-08-31 — phases 148-152 built; `Phases-6.ps1` has no stubs left
 
 **Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`, working tree clean of unrelated changes. Task F2 is
+done: phases 148-152 are built, the HUNT band 134-162 is complete, and `engine/Phases-6.ps1`
+carries no stub. `Test-Hunt-Band.ps1` 363 → 568 assertions; the whole suite is green
+(1,400+ assertions across 24 files). Full detail in `CHANGELOG.md`; the durable rules are in
+`CLAUDE.md` under "Phases 148-152".
+
+Touched this session: `engine/Phases-6.ps1` (+~840 lines: five helpers before the
+`$PhasePlan` gate, five phases between 147 and 153), `Scythe-V23.ps1` (23 `Get-Sig` /
+`Join-AllowRegex` pulls), `data/detection_signatures.json` (23 keys + comments, 302 total),
+`data/mitre_mapping.json` (phase_map 146-159, 24 techniques, stale metadata counts),
+`tools/tests/Test-Hunt-Band.ps1` (§16), and the docs.
+
+### What could not be verified from Linux — this is now the whole risk surface
+
+Everything in the prior entries still stands. New to this session, and every item is a
+Windows-only unknown:
+
+1. **The `.Properties` positional indices in `Get-ScytheEvtField`.** 4625 IpAddress at 19,
+   4648 ProcessName at 11, 5140 ShareName at 7, 4732 MemberName at 0. These come from the
+   provider manifests and are the single most likely thing to be subtly wrong. The design
+   already assumes they might be: each read carries a validation regex and falls back to the
+   named XML lookup for that record. **On the first Windows run, confirm the fallback is not
+   firing on every record** — if it is, the phase still works but at the cost the positional
+   read exists to avoid.
+2. **`klist tickets` output shape and locale.** The parser keys off `Server:`,
+   `KerbTicket Encryption Type:`, `Start Time:` and `End Time:` with a `(local)` suffix. A
+   localised Windows prints those labels translated, in which case the phase parses nothing
+   and says so — degradation is clean, but coverage on a non-English endpoint is zero and
+   nobody has looked at what the labels actually are.
+3. **`[ADSISearcher]` on a domain-joined box.** Never exercised. The failure mode to watch is
+   a slow or unreachable DC: `ClientTimeout`/`ServerTimeLimit` are both set to 10s, which is
+   theory until a real DC is slow.
+4. **`Get-Service WebClient` on a machine where the service is set to Manual and stopped** —
+   the branch reports on Running *or* Automatic, so Manual+stopped should be silent. Verify,
+   because Manual is the Windows 10/11 default and a false positive there hits every endpoint.
+5. **Phase 151's inventory finding fires on almost every machine** (mapped drives, RDP MRU).
+   That is deliberate and it is INFO, so it can never be auto-selected — but it is the first
+   thing to look at in an FP round, because it is the one finding here that is *supposed* to
+   be common and could still be too noisy in the report.
+6. **Wall-clock.** Six event-log pulls, memoised, all server-side filtered. Modelled, not
+   measured. If the band is slow on a domain workstation, the lever is `MaxEvents` in
+   `logon_anomaly_thresholds`, not cutting a branch.
+
+### The next thing to do
+
+`Phases-6.ps1` is finished, so the roadmap's item 4 is closed. What is left, in the order
+`CLAUDE.md` §Outstanding Work now states it:
+
+- **Windows validation of the whole 116-162 span** (item 1) is now the critical path and has
+  grown, not shrunk: 148-152 add event-log parsing, an LDAP call and two console-tool
+  invocations, none of which has met Windows.
+- **Fold phase 146 onto `lib/Scythe.Rules`** (item 4's remainder, under item 6). Phase 146
+  parses PE structure with its own pure-.NET reader while `lib/Scythe.Formats/Pe` and the
+  YARA/Sigma engines sit unreferenced. Two rule engines that can diverge is the thing to fix
+  before adding a third.
+- **FP rounds** (item 3) on Extended and HUNT, which have still never met a real fleet.
+
+---
+
+## Session 2026-08-30 (later) — phase 146, and the adversarial review of the morning's work
 
 ### State
 

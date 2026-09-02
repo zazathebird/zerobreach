@@ -8,17 +8,27 @@
 trap { Write-RecoveredError $_; continue }   # module-level resilience (see CLAUDE.md engine-split rule)
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  HUNT BAND — PHASES 146-159
+#  HUNT BAND — PHASES 146-159 — COMPLETE (2026-08-31)
 #
-#  147 and 157-159 ARE BUILT (2026-08-30) — tasks F1, F4, F5 and F7:
+#    146      PE structural analysis                               (task F3)
 #    147      cloud identity + DevOps credential theft             (task F1)
+#    148-152  lateral movement, credential dumping, Kerberos/NTLM  (task F2)
+#    153-156  network-exposure posture, host-side only             (task F6)
 #    157      remaining persistence surface                        (task F4)
 #    158      supply chain + developer tooling                     (task F5)
 #    159      UEFI / ESP integrity                                 (task F7)
 #
-#  Still a parallel work package (see fable-work/tasks/_deferred/):
-#    146      PE structural analysis + rule engine                 (task F3)
-#    148-152  lateral movement, AD, credential dumping             (task F2)
+#  148-152 (2026-08-31) narrow their brief the same way 159 and 153-156 narrowed
+#  theirs, on two counts. First, DUPLICATION: phase 107 already owns the 7045 and
+#  4624 records, 133 owns the lateral command lines, 106 owns .dmp files and dumper
+#  tool names, 88 owns 4769/4662, and 41 owns WDigest and RunAsPPL — roughly twenty
+#  sub-checks from the F2 brief were dropped or re-scoped rather than shipped as a
+#  second opinion on an artifact another phase already reports. Second, REACH: the
+#  domain-wide LDAP sweep the brief asked for (AS-REP roastable accounts, delegation
+#  across every computer object, AdminSDHolder drift) is query-for-query what
+#  BloodHound issues against the customer's directory, and ADCS ESC8 needs an HTTP
+#  request to a customer server. Phase 150 reads THIS COMPUTER'S OWN object, one
+#  result, timeouts set, and nothing else.
 #
 #  Phase 159 narrows its brief the same way 153-156 narrowed F6, and for the same
 #  reason: it DOES NOT MOUNT the EFI System Partition and no switch is provided to
@@ -567,6 +577,132 @@ function Read-ScythePeImports {
     }
 }
 
+# ── Helpers for phases 148-152 (task F2) ─────────────────────────────────────
+# Defined unconditionally, before the $PhasePlan gate, like the rest of the band.
+
+$global:SCYTHE_EVT_CACHE = $null
+
+function Get-ScytheEvents {
+    # A memoised, SERVER-SIDE-FILTERED event pull.
+    #
+    # Every other event query in this engine filters time on the CLIENT: it asks for N
+    # records and then drops the out-of-window ones with Test-InScope. On a domain
+    # workstation with a large Security log that materialises hundreds of thousands of
+    # records in the PowerShell pipeline first, and phases 148-152 need six separate
+    # id-sets out of that one log. StartTime INSIDE the FilterHashtable compiles to an
+    # XPath query the Event Log service evaluates itself, so the records never cross the
+    # process boundary. Memoised per (log, id-set, cap) because the engine is audit-only
+    # under -Auto and the log does not move underneath a run in any way that matters.
+    #
+    # Through Get-WinEventSafe, never raw: Get-WinEvent -FilterHashtable throws a
+    # TERMINATING error on an unregistered log that -EA SilentlyContinue does not suppress,
+    # and on a workstation with no Security-log access that is the normal case, not an
+    # exceptional one.
+    param([string]$LogName, [int[]]$Id, [int]$MaxEvents = 1500)
+    if ($null -eq $global:SCYTHE_EVT_CACHE) { $global:SCYTHE_EVT_CACHE = @{} }
+    $key = "$LogName|" + ((@($Id) | Sort-Object) -join ',') + "|$MaxEvents"
+    if ($global:SCYTHE_EVT_CACHE.ContainsKey($key)) { return ,$global:SCYTHE_EVT_CACHE[$key] }
+    $filter = @{ LogName = $LogName; Id = @($Id) }
+    if ($null -ne $global:TIME_LIMIT -and $global:TIME_LIMIT -ne [datetime]::MinValue) {
+        $filter['StartTime'] = $global:TIME_LIMIT
+    }
+    $evts = @(Get-WinEventSafe -Filter $filter -MaxEvents $MaxEvents)
+    $global:SCYTHE_EVT_CACHE[$key] = $evts
+    return ,$evts
+}
+
+function Get-ScytheEvtField {
+    # One EventData field, read POSITIONALLY from .Properties with a named fallback.
+    #
+    # [xml]$e.ToXml() per record is the readable way and it is roughly two orders of
+    # magnitude more expensive — on a 3000-record pull it is the whole cost of the phase.
+    # .Properties is the same data already materialised. The catch is that the positional
+    # layout is a property of the PROVIDER MANIFEST and has changed between Windows
+    # versions before, and a silently-wrong index is far worse here than a slow phase: it
+    # would put an account name in the source-address field of a client report. So the
+    # positional read is validated, and a value that does not look like the field it claims
+    # to be falls back to the named lookup FOR THAT RECORD ONLY. Fast path stays fast,
+    # wrong path cannot stay wrong.
+    param($Event, [int]$Index, [string]$Name, [string]$Validate = '')
+    $val = $null
+    try {
+        $props = $Event.Properties
+        if ($null -ne $props -and $Index -ge 0 -and $Index -lt $props.Count) {
+            $val = "$($props[$Index].Value)"
+        }
+    } catch { $val = $null }
+    if ($null -ne $val -and ($Validate -eq '' -or $val -match $Validate)) { return "$val" }
+    try {
+        $xml  = [xml]$Event.ToXml()
+        $node = @($xml.Event.EventData.Data | Where-Object { "$($_.Name)" -eq $Name })
+        if ($node.Count -gt 0) { return "$($node[0].'#text')" }
+    } catch { }
+    return "$val"
+}
+
+function Test-ScytheDomainJoined {
+    # Phase 150 must degrade to silence on a workgroup machine, and most of the MSP fleet
+    # this tool runs on IS workgroup. Win32_ComputerSystem.PartOfDomain is the cheap
+    # authoritative answer and it is already in the snapshot on most runs.
+    try {
+        $cs = Get-WmiObject Win32_ComputerSystem -ErrorAction SilentlyContinue
+        if ($null -eq $cs) { return $false }
+        return [bool]$cs.PartOfDomain
+    } catch { return $false }
+}
+
+function ConvertTo-ScytheSeverity {
+    # Rule objects in data/detection_signatures.json carry a severity as a STRING. The band
+    # repeats this switch in a dozen places; one function is one place to be wrong.
+    param([string]$Name)
+    switch ("$Name".ToUpper()) {
+        "CRITICAL" { return $SEV_CRITICAL }
+        "HIGH"     { return $SEV_HIGH }
+        "POSSIBLE" { return $SEV_POSSIBLE }
+        default    { return $SEV_INFO }
+    }
+}
+
+function Invoke-ScytheConsoleTool {
+    # stdout of a built-in console tool, as a string array, with a hard timeout.
+    #
+    # klist and cmdkey answer questions no registry read can (what tickets are in THIS
+    # logon session; what credentials are in the user's vault), and both are read-only
+    # Microsoft-signed binaries already on every Windows install. They are also the kind
+    # of call that hangs forever against an unreachable KDC, so the process is started
+    # detached and killed on the deadline rather than waited on. Returns @() on anything
+    # unexpected — a missing tool is a normal answer, not an error.
+    param([string]$File, [string]$Arguments = '', [int]$TimeoutMs = 8000)
+    $psi = $null; $proc = $null
+    try {
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName               = $File
+        $psi.Arguments              = $Arguments
+        $psi.UseShellExecute        = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError  = $true
+        $psi.CreateNoWindow         = $true
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        if ($null -eq $proc) { return @() }
+        # ReadToEndAsync, not BeginOutputReadLine and not a blocking ReadToEnd: .NET keeps
+        # draining the pipe (so a chatty tool cannot deadlock on a full buffer) and the text
+        # is still there after the wait (audit H2's lesson, applied to a child we start).
+        $stdout = $proc.StandardOutput.ReadToEndAsync()
+        [void]$proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit($TimeoutMs)) {
+            try { $proc.Kill() } catch { }
+            return @()
+        }
+        $text = "$($stdout.Result)"
+        if ([string]::IsNullOrWhiteSpace($text)) { return @() }
+        return @($text -split "`r?`n")
+    } catch {
+        return @()
+    } finally {
+        if ($null -ne $proc) { try { $proc.Dispose() } catch { } }
+    }
+}
+
 if ($PhasePlan.Hunt) {
     trap { Write-RecoveredError $_; continue }   # localize faults: resume at next phase, not end-of-group
 
@@ -983,6 +1119,708 @@ if ($PhasePlan.Hunt) {
             -Target "PID:$ppid $pname" -FixAction "Info" -Group "Credential Exposure"
     }
 
+
+    # ── PHASE 148: REMOTE-EXECUTION EVIDENCE (INBOUND LATERAL) ────────────────
+    # Phases 66, 88, 76 and 77 answer "what can this host reach". Nothing before this one
+    # answered the question a responder actually asks first: WAS THIS HOST REACHED, and by
+    # whom. That matters more here than usual — the rig this tool is validated against is a
+    # lab of deliberately infected peers, so inbound lateral evidence is the thing it is
+    # built to produce.
+    #
+    # SCOPE, and it is narrow on purpose. Two phases already own most of the classic
+    # indicators and a second opinion on one artifact is the mistake phase 157 shipped:
+    #   * phase 107 owns the 7045 service-install record — every PsExec-class install is
+    #     already reported there, with the image path and the service name.
+    #   * phase 133 owns the lateral COMMAND LINES — wmic /node process call create,
+    #     schtasks /s /create, ADMIN$ paths, and the PsExec service binaries in System32.
+    # What neither of them can see is the PROCESS TREE (who is the parent of the shell that
+    # is running right now) and the SHARE-ACCESS record (which remote address opened
+    # ADMIN$). Those are this phase.
+    Show-PhaseHeader "PHASE 148" "REMOTE-EXECUTION EVIDENCE — WHO REACHED THIS HOST" "LATERAL"
+    Out-Typewriter "RECONSTRUCTING THE INBOUND SIDE OF LATERAL MOVEMENT..." "HUNT"
+    $latHits = 0
+
+    # (a) The process tree. Remote execution leaves a PARENT, not a file: whatever the
+    #     framework is called, wmiexec ends up with a shell under WmiPrvSE and PSRemoting
+    #     ends up with one under wsmprovhost. This only sees a session that is still live,
+    #     which is a real limitation and is stated in the finding — the historical answer
+    #     is 4688, and phase 107 already mines that.
+    try {
+        $latProcs = @(Get-ProcSnapshot)
+        $latById  = @{}
+        foreach ($lp in $latProcs) { $latById["$($lp.ProcessId)"] = $lp }
+        foreach ($lp in $latProcs) {
+            $childName = "$($lp.Name)".ToLower()
+            if ($LATERAL_EXEC_CHILDREN -notcontains $childName) { continue }
+            $par = $null
+            if ($latById.ContainsKey("$($lp.ParentProcessId)")) { $par = $latById["$($lp.ParentProcessId)"] }
+            if ($null -eq $par) { continue }
+            $parName = "$($par.Name)".ToLower()
+            $lrule = $null
+            foreach ($lr in @($LATERAL_EXEC_PARENTS)) {
+                if ("$($lr.Parent)".ToLower() -eq $parName) { $lrule = $lr; break }
+            }
+            if ($null -eq $lrule) { continue }
+            $childCmd = "$($lp.CommandLine)"
+            # Datto / CentraStage / Kaseya are legitimate partner tooling and they run
+            # scripts through WMI and WinRM all day (CLAUDE.md user rule 2). Without this
+            # the branch is unusable on a managed fleet — which is every fleet this runs on.
+            if (-not [string]::IsNullOrWhiteSpace($childCmd) -and $childCmd -match $LATERAL_EXEC_BENIGN_RE) { continue }
+            $latHits++
+            $childShort = if ($childCmd.Length -gt 180) { $childCmd.Substring(0,180) } else { $childCmd }
+            if ([string]::IsNullOrWhiteSpace($childShort)) { $childShort = '(command line unavailable)' }
+            $lsev = ConvertTo-ScytheSeverity "$($lrule.Severity)"
+            Out-Typewriter "  -> REMOTE-EXECUTION PARENT: $parName -> $childName (PID $($lp.ProcessId))" "CRIT"
+            Add-Finding -ID "LAT148_TREE_$($lp.ProcessId)_$([Math]::Abs("$parName$childName".ToLower().GetHashCode()))" -Phase "PHASE 148" `
+                -ThreatType "Lateral Movement" -Severity $lsev `
+                -Description "'$childName' (PID $($lp.ProcessId)) is running as a child of '$parName' — $($lrule.Label). Command line: $childShort. Why this is the signal: a script host under the WMI provider or the WinRM host did not start from anybody's desktop; something on the network asked this machine to run it, and that widens the incident from one endpoint to whatever else that credential can reach (MITRE T1021.006, T1047). Why it is often benign: PowerShell Remoting and WMI are also how a technician administers a fleet and how several RMM products deliver scripts, so the question to answer is WHOSE session it was. Get the source: Get-WinEvent -LogName Security -FilterXPath '*[System[EventID=4624]]' -MaxEvents 50 | Where-Object Message -match 'Logon Type:\s+3' , then match the logon time to this process. Note the limitation — this branch sees only a session that is still running; for a session that has ended, phase 107's 4688 records are the evidence." `
+                -Target "PID:$($lp.ProcessId) $childName" -FixAction "Info" -Group "Lateral Movement — Inbound"
+        }
+    } catch { Write-Log "PHASE 148: process-tree branch failed - $($_.Exception.Message)" }
+
+    # (b) The DCOM activation primitives, by ProgID and by CLSID. A script that
+    #     instantiates MMC20.Application by GUID never mentions the friendly name, and the
+    #     GUID is the half that cannot be renamed.
+    try {
+        foreach ($dp in @(Get-ProcSnapshot)) {
+            $dcl = "$($dp.CommandLine)"
+            if ([string]::IsNullOrWhiteSpace($dcl)) { continue }
+            $drule = Test-ScytheTextRules -Text $dcl -Rules $LATERAL_DCOM_RULES
+            if ($null -eq $drule) { continue }
+            if ($dcl -match $LATERAL_EXEC_BENIGN_RE) { continue }
+            $latHits++
+            $dclShort = if ($dcl.Length -gt 180) { $dcl.Substring(0,180) } else { $dcl }
+            Out-Typewriter "  -> DCOM LATERAL PRIMITIVE IN A COMMAND LINE: $($drule.Name)" "CRIT"
+            Add-Finding -ID "LAT148_DCOM_$($dp.ProcessId)_$([Math]::Abs("$($drule.Name)".ToLower().GetHashCode()))" -Phase "PHASE 148" `
+                -ThreatType "Lateral Movement" -Severity (ConvertTo-ScytheSeverity "$($drule.Severity)") `
+                -Description "Process '$($dp.Name)' (PID $($dp.ProcessId)) has a command line matching '$($drule.Name)'. Command line: $dclShort. These COM objects exist so that one machine can drive an application on another, and each of them has a method that ends in a new process — which makes them a remote-execution channel that creates no service, writes no file and is invisible to every autostart check in this scan (MITRE T1021.003). Legitimate use of these ProgIDs outside a developer's own tooling is rare enough to be worth explaining. Identify the caller: Get-CimInstance Win32_Process -Filter 'ProcessId=$($dp.ProcessId)' | Select-Object ParentProcessId, CreationDate, CommandLine ." `
+                -Target "PID:$($dp.ProcessId) $($dp.Name)" -FixAction "Info" -Group "Lateral Movement — Inbound"
+        }
+    } catch { Write-Log "PHASE 148: DCOM command-line branch failed - $($_.Exception.Message)" }
+
+    # (c) Scheduled task at a distance. Phase 29 audits task actions for script hosts and
+    #     user-writable paths and phase 104 reads Hidden and SDDL — neither has a UNC term
+    #     anywhere in it, so this is free ground rather than a third opinion.
+    try {
+        $latTasks = @(Get-ScheduledTask -ErrorAction SilentlyContinue)
+        foreach ($lt in $latTasks) {
+            foreach ($la in @($lt.Actions)) {
+                $laStr = "$($la.Execute) $($la.Arguments)".Trim()
+                if ([string]::IsNullOrWhiteSpace($laStr)) { continue }
+                $trule = Test-ScytheTextRules -Text $laStr -Rules $LATERAL_TASK_RULES
+                if ($null -eq $trule) { continue }
+                if ($laStr -match $LATERAL_EXEC_BENIGN_RE) { continue }
+                $latHits++
+                Out-Typewriter "  -> TASK RUNS FROM A NETWORK PATH: $($lt.TaskPath)$($lt.TaskName)" "CRIT"
+                Add-Finding -ID "LAT148_TASK_$([Math]::Abs("$($lt.TaskPath)$($lt.TaskName)".ToLower().GetHashCode()))" -Phase "PHASE 148" `
+                    -ThreatType "Lateral Movement" -Severity (ConvertTo-ScytheSeverity "$($trule.Severity)") `
+                    -Description "Scheduled task '$($lt.TaskPath)$($lt.TaskName)' matched '$($trule.Name)'. Action: $laStr. A task whose payload lives on another machine is the at-a-distance execution shape: the binary is never on this disk for a file scan to find, and whoever controls that share controls what this machine runs, every time the trigger fires (MITRE T1053.005, T1021.002). The benign cases are real — a login script on the domain SYSVOL share, a software-deployment task pointing at a distribution point — so confirm the share before acting. Inspect the whole definition, including who registered it and when: Export-ScheduledTask -TaskName '$($lt.TaskName)' -TaskPath '$($lt.TaskPath)' . Remove it only after that, with: Unregister-ScheduledTask -TaskName '$($lt.TaskName)' -TaskPath '$($lt.TaskPath)' -Confirm:`$false ." `
+                    -Target "Task: $($lt.TaskPath)$($lt.TaskName)" -FixAction "Info" -Group "Lateral Movement — Inbound"
+                break
+            }
+        }
+    } catch { Write-Log "PHASE 148: remote-task branch failed - $($_.Exception.Message)" }
+
+    # (d) The share-access record. This is the missing half of every PsExec-class
+    #     technique: phase 107 reports that a service was installed, and 5140 says which
+    #     remote address opened ADMIN$ to install it. Aggregated per (source, share) —
+    #     one intrusion produces hundreds of these records and an operator needs the pair.
+    try {
+        $shareEvts = @(Get-ScytheEvents -LogName 'Security' -Id @(5140) -MaxEvents 2000)
+        if ($shareEvts.Count -eq 0) {
+            # Report the state, do not stay silent. "Audit File Share" is OFF by default, so
+            # an empty result is ambiguous between "nothing happened" and "nothing was
+            # recorded", and an un-run check that leaves no trace reads to an operator as a
+            # pass (the same reasoning that made phase 159 announce an unmounted ESP).
+            Out-Typewriter "  -> NO ADMINISTRATIVE-SHARE ACCESS RECORDED IN THE WINDOW." "INFO"
+            Out-Typewriter "     (Audit File Share is OFF by default — absence here is not evidence of absence.)" "INFO"
+        } else {
+            $shareSeen = @{}
+            foreach ($se in $shareEvts) {
+                $srcIp = Get-ScytheEvtField -Event $se -Index 5 -Name 'IpAddress' -Validate '^(\d{1,3}(\.\d{1,3}){3}|[0-9A-Fa-f:]{2,45}|-)$'
+                $shName = Get-ScytheEvtField -Event $se -Index 7 -Name 'ShareName' -Validate '^\\\\'
+                $acct   = Get-ScytheEvtField -Event $se -Index 1 -Name 'SubjectUserName'
+                if ($LATERAL_ADMIN_SHARES -notcontains "$shName".ToLower()) { continue }
+                if ("$srcIp" -match $LATERAL_SRC_BENIGN_RE) { continue }
+                $sk = "$srcIp|$shName"
+                if ($shareSeen.ContainsKey($sk)) { $shareSeen[$sk].Count++; continue }
+                $shareSeen[$sk] = [pscustomobject]@{ Src = "$srcIp"; Share = "$shName"; Acct = "$acct"; Count = 1; First = $se.TimeCreated }
+            }
+            foreach ($sk in @($shareSeen.Keys)) {
+                $sv = $shareSeen[$sk]
+                $latHits++
+                Out-Typewriter "  -> ADMINISTRATIVE SHARE OPENED FROM THE NETWORK: $($sv.Share) from $($sv.Src)" "CRIT"
+                Add-Finding -ID "LAT148_SHARE_$([Math]::Abs($sk.ToLower().GetHashCode()))" -Phase "PHASE 148" `
+                    -ThreatType "Lateral Movement" -Severity $SEV_HIGH `
+                    -Description "The administrative share '$($sv.Share)' was opened from $($sv.Src) as '$($sv.Acct)' — $($sv.Count) access record(s), first seen $($sv.First). The administrative shares are not used by ordinary file sharing: they are how a remote administrator, a backup agent, and every PsExec-class remote-execution tool put a payload onto this machine before starting it (MITRE T1021.002, T1570). Pair this with phase 107's 7045 service-install records — a service installed within a minute or two of this access, from a binary that is now gone, is the classic remote-execution sequence. If $($sv.Src) is not a management host you recognise, treat the account '$($sv.Acct)' as compromised and check where else it authenticated. To see the local path each access touched: Get-WinEvent -LogName Security -FilterXPath '*[System[EventID=5145]]' -MaxEvents 200 | Format-List TimeCreated, Message ." `
+                    -Target "$($sv.Share) from $($sv.Src)" -FixAction "Info" -Group "Lateral Movement — Inbound"
+            }
+        }
+    } catch { Write-Log "PHASE 148: share-access branch failed - $($_.Exception.Message)" }
+
+    if ($latHits -eq 0) { Out-Typewriter "  -> [OK ] NO INBOUND REMOTE-EXECUTION EVIDENCE." "GOOD" }
+
+    # ── PHASE 149: CREDENTIAL-DUMPING ARTIFACTS ───────────────────────────────
+    # Phase 106 walks the crash-dump directories for .dmp files and looks for the named
+    # dumper tools; phase 41 checks the LSA hardening values. This phase covers what those
+    # two cannot see: the TECHNIQUES that need no tool at all. comsvcs.dll MiniDump is the
+    # important one — it is a Microsoft-signed DLL, already on the machine, invoked through
+    # rundll32, and it produces a full LSASS image with nothing to detect on disk except
+    # the output file. The rules therefore anchor on the technique, never on a tool name:
+    # the tool gets renamed, the technique does not.
+    #
+    # The search roots deliberately EXCLUDE %TEMP% and the CrashDumps directories. Phase
+    # 106 already walks those, and two findings for one .dmp is the duplication that made
+    # phase 157 worse than either of its halves.
+    Show-PhaseHeader "PHASE 149" "CREDENTIAL-DUMPING TECHNIQUES AND STAGED HIVES" "CREDENTIAL ACCESS"
+    Out-Typewriter "LOOKING FOR THE NO-TOOLS-REQUIRED WAYS TO LIFT CREDENTIALS..." "HUNT"
+    $cdHits = 0
+    $cdMaxFiles  = if ($null -ne $CREDDUMP_THRESH) { [int]$CREDDUMP_THRESH.MaxFiles }     else { 400 }
+    $cdMinBytes  = if ($null -ne $CREDDUMP_THRESH) { [long]$CREDDUMP_THRESH.DumpMinBytes } else { 20971520 }
+    $cdMaxReport = if ($null -ne $CREDDUMP_THRESH) { [int]$CREDDUMP_THRESH.MaxReported }  else { 25 }
+
+    # (a) The techniques, in live command lines.
+    try {
+        foreach ($cp in @(Get-ProcSnapshot)) {
+            $ccl = "$($cp.CommandLine)"
+            if ([string]::IsNullOrWhiteSpace($ccl)) { continue }
+            $crule = Test-ScytheTextRules -Text $ccl -Rules $CREDDUMP_CMDLINE_RULES
+            if ($null -eq $crule) { continue }
+            $cdHits++
+            $cclShort = if ($ccl.Length -gt 180) { $ccl.Substring(0,180) } else { $ccl }
+            Out-ThreatBanner "CREDENTIAL-DUMPING COMMAND" "$($crule.Name) — PID $($cp.ProcessId)"
+            Add-Finding -ID "CRED149_CMD_$($cp.ProcessId)_$([Math]::Abs("$($crule.Name)".ToLower().GetHashCode()))" -Phase "PHASE 149" `
+                -ThreatType "Credential Access" -Severity (ConvertTo-ScytheSeverity "$($crule.Severity)") `
+                -Description "Process '$($cp.Name)' (PID $($cp.ProcessId)) is running '$($crule.Name)'. Command line: $cclShort. Every rule in this set describes a way to obtain credentials that needs nothing the machine does not already have — a signed Microsoft DLL, a built-in console tool, or a shadow copy — which is why none of them is caught by anything that looks for malware on disk (MITRE T1003). Treat this as an active compromise until proven otherwise: every credential cached on this machine, including any domain account that has logged in, must be considered exposed. Capture the evidence before you kill anything, because the output file is the proof: Get-CimInstance Win32_Process -Filter 'ProcessId=$($cp.ProcessId)' | Select-Object CommandLine, CreationDate, ParentProcessId . The benign case exists and is narrow — a support engineer collecting a dump under vendor instruction — and it is answered by asking who was at the keyboard." `
+                -Target "PID:$($cp.ProcessId) $($cp.Name)" -FixAction "Info" -Group "Credential Dumping"
+        }
+    } catch { Write-Log "PHASE 149: command-line branch failed - $($_.Exception.Message)" }
+
+    # (b) Staged hive copies. SAM, SECURITY, SYSTEM and ntds.dit each have exactly one
+    #     legitimate home. A copy anywhere else was made deliberately, and the only reason
+    #     to copy one is to read the credentials out of it somewhere else.
+    try {
+        $cdRoots = @($CREDDUMP_SEARCH_ROOTS | Where-Object { $_ -and (Test-Path -LiteralPath $_) })
+        if ($cdRoots.Count -gt 0) {
+            # Parenthesised, never piped: Get-ScanFiles returns ,$arr and a direct pipe
+            # delivers the whole array as ONE item, so the filter matches everything.
+            $cdFiles = @((Get-ScanFiles -Path $cdRoots -MaxFiles $cdMaxFiles))
+            $cdReported = 0
+            foreach ($cf in $cdFiles) {
+                if ($cdReported -ge $cdMaxReport) { break }
+                $cfPath = "$($cf.FullName)"
+                if ($cfPath -match $CREDDUMP_HIVE_BENIGN_RE) { continue }
+                if (-not (Test-ScytheNameRule -Name "$($cf.Name)" -Rules $CREDDUMP_HIVE_NAMES)) { continue }
+                $cdHits++; $cdReported++
+                Out-ThreatBanner "REGISTRY HIVE COPY" $cfPath
+                Add-Finding -ID "CRED149_HIVE_$([Math]::Abs($cfPath.ToLower().GetHashCode()))" -Phase "PHASE 149" `
+                    -ThreatType "Credential Access" -Severity $SEV_CRITICAL `
+                    -Description "'$cfPath' is named like a registry hive or the Active Directory database, and it is not in the one place Windows keeps that file. Written $($cf.LastWriteTime), $([Math]::Round($cf.Length/1MB,1)) MB. SAM plus SYSTEM is every local password hash on this machine; SECURITY adds the cached domain credentials and the LSA secrets, which include service-account passwords in plaintext; ntds.dit plus SYSTEM is the entire domain (MITRE T1003.002, T1003.003). None of these can be copied while Windows is running without going through a shadow copy or a backup API, so this file is the product of a deliberate act. One benign case exists and is worth ruling out first: %WINDIR%\repair held genuine SAM and SYSTEM backups on Windows XP and Server 2003, so a hive there with a creation date from that era on a long-upgraded machine is a fossil rather than a theft — check the dates before you escalate. Otherwise: preserve it as evidence before deleting it, then rotate local accounts, every service account, and — if ntds.dit is involved — krbtgt, twice. Establish when and by whom: Get-Item '$cfPath' | Format-List CreationTime, LastWriteTime, Length   and   (Get-Acl '$cfPath').Owner ." `
+                    -Target $cfPath -FixAction "Info" -Group "Credential Dumping"
+            }
+            # (c) A process image is big. An application crash dump is not. A multi-hundred-
+            #     megabyte .dmp in Downloads is an LSASS image or a full-memory capture, and
+            #     either way it holds credentials — this is scoped to the roots phase 106
+            #     does not walk, so no dump is reported twice.
+            $cdReported = 0
+            foreach ($cf in $cdFiles) {
+                if ($cdReported -ge $cdMaxReport) { break }
+                $cfPath = "$($cf.FullName)"
+                if ("$($cf.Extension)".ToLower() -ne '.dmp') { continue }
+                if ($cfPath -match $CREDDUMP_HIVE_BENIGN_RE) { continue }
+                $cfNamesLsa = ("$($cf.Name)" -match '(?i)lsa(ss)?')
+                if (-not $cfNamesLsa -and [long]$cf.Length -lt $cdMinBytes) { continue }
+                $cdHits++; $cdReported++
+                $cfSev = if ($cfNamesLsa) { $SEV_CRITICAL } else { $SEV_HIGH }
+                Out-Typewriter "  -> PROCESS-IMAGE DUMP OUTSIDE THE CRASH DIRECTORIES: $cfPath" "CRIT"
+                Add-Finding -ID "CRED149_DUMP_$([Math]::Abs($cfPath.ToLower().GetHashCode()))" -Phase "PHASE 149" `
+                    -ThreatType "Credential Access" -Severity $cfSev `
+                    -Description "'$cfPath' is a $([Math]::Round($cf.Length/1MB,1)) MB memory dump sitting outside every directory Windows writes crash dumps to, last written $($cf.LastWriteTime). $(if ($cfNamesLsa) { 'Its name references the process that holds every credential in use on this machine.' } else { 'A dump this large is a process image or a full-memory capture, not an application crash report.' }) A dump of the LSA process contains the plaintext or reusable form of every credential that has authenticated since boot, and it is a FILE — it can be copied off the machine and cracked at leisure, which is exactly why this technique is preferred over running a credential tool in place (MITRE T1003.001). Confirm what it is before deleting it, because it is also the evidence: Get-Item '$cfPath' | Format-List *   and check which process wrote it against phase 107's 4688 records for the same minute. If it is a dump of the LSA process, every account cached here is compromised." `
+                    -Target $cfPath -FixAction "Info" -Group "Credential Dumping"
+            }
+        }
+    } catch { Write-Log "PHASE 149: staged-file branch failed - $($_.Exception.Message)" }
+
+    # (d) The two registry writes that make dumping EASIER, which phase 41 does not cover.
+    #     WDigest UseLogonCredential and LSA RunAsPPL are phase 41's and are not repeated.
+    try {
+        $draKey = 'SYSTEM\CurrentControlSet\Control\Lsa'
+        $dra = Get-RegVal64 -Hive LocalMachine -SubKey $draKey -Name 'DisableRestrictedAdmin'
+        if ($null -ne $dra -and [int]$dra -eq 1) {
+            $cdHits++
+            Out-Typewriter "  -> RESTRICTED ADMIN MODE IS DISABLED FOR RDP." "WARN"
+            Add-Finding -ID "CRED149_RESTRICTADMIN" -Phase "PHASE 149" `
+                -ThreatType "Credential Access" -Severity $SEV_HIGH `
+                -Description "HKLM\$draKey\DisableRestrictedAdmin = 1. Restricted Admin mode lets an administrator connect over RDP without sending a reusable credential to the destination; turning it off means every RDP administration session leaves that administrator's credential in the memory of the machine they connected to, where anything with local admin can lift it. This value is written by an attacker who wants exactly that, and it is also written by administrators who found that Restricted Admin broke a tool that needed delegated credentials — so establish which before changing it. Note the trade-off honestly: enabling Restricted Admin protects the credential but enables pass-the-hash TO this host, so the correct answer on a managed fleet is usually Remote Credential Guard rather than either extreme. Read the current state with: Get-ItemProperty 'HKLM:\$draKey' -Name DisableRestrictedAdmin ." `
+                -Target "HKLM\$draKey\DisableRestrictedAdmin" -FixAction "Info" -Group "Credential Dumping"
+        }
+        # WER LocalDumps aimed at the LSA process is not a hardening setting at all — it is
+        # a standing instruction to Windows to dump credentials to disk on demand. Phase
+        # 157 owns the WER *debugger* values; this is a different key and a different act.
+        $werBase = 'SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps'
+        foreach ($werSub in @("$werBase\lsass.exe", $werBase)) {
+            $werPath = Get-RegVal64 -Hive LocalMachine -SubKey $werSub -Name 'DumpFolder'
+            $werType = Get-RegVal64 -Hive LocalMachine -SubKey $werSub -Name 'DumpType'
+            if ($null -eq $werPath -and $null -eq $werType) { continue }
+            $werIsLsa = ($werSub -match '(?i)lsass\.exe$')
+            if (-not $werIsLsa -and ($null -eq $werType -or [int]$werType -ne 2)) { continue }
+            $cdHits++
+            Out-Typewriter "  -> WER LOCAL DUMPS CONFIGURED: $werSub" $(if ($werIsLsa) { "CRIT" } else { "WARN" })
+            Add-Finding -ID "CRED149_WERDUMP_$([Math]::Abs($werSub.ToLower().GetHashCode()))" -Phase "PHASE 149" `
+                -ThreatType "Credential Access" -Severity $(if ($werIsLsa) { $SEV_CRITICAL } else { $SEV_POSSIBLE }) `
+                -Description "HKLM\$werSub is configured for local crash dumps (DumpFolder='$werPath', DumpType='$werType'). $(if ($werIsLsa) { 'It is scoped to the LSA process specifically, and there is no support scenario in which an administrator needs Windows to write a full image of that process to disk automatically. Configured this way, the attacker does not have to touch the process at all: they crash it, or wait, and Windows writes the credentials out for them.' } else { 'DumpType 2 is a FULL memory dump of any application that crashes, which means the contents of any process that handles credentials can land in this folder and stay there.' }) (MITRE T1003.001). Check the folder for what it has already collected: Get-ChildItem '$werPath' -ErrorAction SilentlyContinue | Sort-Object Length -Descending . Remove the setting once you have confirmed no crash-collection product owns it: Remove-Item 'HKLM:\$werSub' -Recurse ." `
+                -Target "HKLM\$werSub" -FixAction "Info" -Group "Credential Dumping"
+        }
+        # Sysinternals writes an EULA-accepted value the first time a tool runs. It survives
+        # the binary being deleted, which makes it execution evidence for a tool that is no
+        # longer on disk — and procdump is the one that matters here.
+        $pdEula = Get-RegVal64 -Hive CurrentUser -SubKey 'Software\Sysinternals\ProcDump' -Name 'EulaAccepted'
+        if ($null -ne $pdEula) {
+            $cdHits++
+            Out-Typewriter "  -> PROCDUMP HAS BEEN RUN BY THIS USER AT SOME POINT." "WARN"
+            Add-Finding -ID "CRED149_PROCDUMP_EULA" -Phase "PHASE 149" `
+                -ThreatType "Credential Access" -Severity $SEV_POSSIBLE `
+                -Description "HKCU\Software\Sysinternals\ProcDump\EulaAccepted exists, which means procdump has been run under this user account on this machine. The value is written on first run and is never cleaned up, so it survives the binary being deleted — this is execution evidence for a tool that phase 106's file scan can no longer find. procdump is a legitimate Microsoft diagnostic utility and an administrator or a developer may well have run it deliberately, so this is POSSIBLE and not an accusation. What makes it matter is the pairing: procdump plus a large .dmp in a user-writable directory, or procdump on a machine whose administrator does not recognise it, is the tool-plus-output pattern of an LSA dump. Ask when it ran: (Get-Item 'HKCU:\Software\Sysinternals\ProcDump').LastWriteTime ." `
+                -Target "HKCU\Software\Sysinternals\ProcDump" -FixAction "Info" -Group "Credential Dumping"
+        }
+    } catch { Write-Log "PHASE 149: registry branch failed - $($_.Exception.Message)" }
+
+    if ($cdHits -eq 0) { Out-Typewriter "  -> [OK ] NO CREDENTIAL-DUMPING ARTIFACTS OR ENABLING SETTINGS." "GOOD" }
+
+    # ── PHASE 150: KERBEROS AND NTLM ABUSE SURFACE ────────────────────────────
+    # SCOPE NARROWED, for the same reason phase 159 does not mount the ESP and the 153-156
+    # band sends no packets. The F2 brief asked for an AS-REP-roastable / delegation /
+    # AdminSDHolder sweep of the directory. That sweep is, query for query, what BloodHound
+    # issues — run against the customer's own domain controllers, from an endpoint, under
+    # an MSP contract, while the customer's detection stack is watching. A tool that cannot
+    # be told apart on the wire from the thing it exists to detect is a liability to the
+    # provider, and the finding it produces is a domain-wide fact that does not belong in a
+    # single machine's report anyway.
+    #
+    # What survives is everything answerable WITHOUT enumerating anybody: the tickets in
+    # this logon session (klist reads a local cache), this computer's OWN directory object
+    # (one object, SizeLimit 1, timeouts set), and the local relay surface. ADCS ESC8 is
+    # dropped outright — it requires an HTTP request to a customer server.
+    Show-PhaseHeader "PHASE 150" "KERBEROS TICKET ANOMALIES AND NTLM RELAY SURFACE" "CREDENTIAL ACCESS"
+    Out-Typewriter "READING THIS SESSION'S OWN TICKETS AND THIS MACHINE'S OWN AD OBJECT..." "HUNT"
+    $kbHits = 0
+
+    # The WebClient branch is deliberately OUTSIDE the domain gate: WebDAV coercion works
+    # against a workgroup machine too, and the service has no desktop use either way.
+    try {
+        $wcSvc = Get-Service -Name 'WebClient' -ErrorAction SilentlyContinue
+        if ($null -ne $wcSvc -and ("$($wcSvc.Status)" -eq 'Running' -or "$($wcSvc.StartType)" -eq 'Automatic')) {
+            $kbHits++
+            Out-Typewriter "  -> WEBCLIENT (WEBDAV) SERVICE IS ACTIVE ON A WORKSTATION." "WARN"
+            Add-Finding -ID "KERB150_WEBCLIENT" -Phase "PHASE 150" `
+                -ThreatType "Credential Access" -Severity $SEV_HIGH `
+                -Description "The WebClient service is $($wcSvc.Status) with start type $($wcSvc.StartType). WebClient is the WebDAV redirector, and on a desktop it has essentially no use — almost nothing maps a WebDAV drive any more. What it does have is a property no other service has: it turns a UNC path into an HTTP request that carries the machine account's credential, and it does so over a channel where SMB signing does not apply. That makes this host a usable relay source the moment anything can make it touch an attacker-supplied path (MITRE T1187, T1557.001). The service is also started on demand by a mapped WebDAV drive or by SharePoint's Open-in-Explorer, so confirm nothing needs it first, then: Set-Service -Name WebClient -StartupType Disabled ; Stop-Service -Name WebClient . Phase 153 covers the SMB signing half of the same exposure and is the other thing to fix." `
+                -Target "Service: WebClient" -FixAction "Info" -Group "Credential Access — Relay Surface"
+        }
+    } catch { Write-Log "PHASE 150: WebClient check failed - $($_.Exception.Message)" }
+
+    if (-not (Test-ScytheDomainJoined)) {
+        Out-Typewriter "  -> MACHINE IS NOT DOMAIN-JOINED — KERBEROS AND AD BRANCHES SKIPPED." "INFO"
+    } else {
+        # (a) The tickets this logon session is holding. klist reads a local cache; it asks
+        #     the directory nothing and it works with no special rights.
+        try {
+            $kMax = if ($null -ne $KERB_THRESH) { [int]$KERB_THRESH.MaxTicketsParsed } else { 200 }
+            $kHrs = if ($null -ne $KERB_THRESH) { [int]$KERB_THRESH.MaxTicketHours }   else { 720 }
+            $klistOut = @(Invoke-ScytheConsoleTool -File 'klist.exe' -Arguments 'tickets' -TimeoutMs 8000)
+            $kServer = ''; $kEtype = ''; $kStart = $null; $kEnd = $null; $kSeen = 0
+            foreach ($kl in $klistOut) {
+                if ($kSeen -ge $kMax) { break }
+                if ($kl -match '^\s*#\d+>') {
+                    $kServer = ''; $kEtype = ''; $kStart = $null; $kEnd = $null
+                    continue
+                }
+                if ($kl -match '^\s*Server:\s*(?<v>\S.*?)\s*$')                          { $kServer = "$($Matches['v'])"; continue }
+                if ($kl -match '^\s*KerbTicket Encryption Type:\s*(?<v>\S.*?)\s*$')      { $kEtype  = "$($Matches['v'])"; continue }
+                # TryParse's RETURN VALUE decides, never the out-parameter. On failure it
+                # writes DateTime.MinValue, not $null — take that as a parsed date and the
+                # lifetime arithmetic yields two thousand years and this phase reports a
+                # forged ticket on every healthy domain machine whose locale klist prints
+                # dates in. The out-parameter is only trusted when the call said true.
+                if ($kl -match '^\s*Start Time:\s*(?<v>\S.*?)\s*\(') {
+                    $kTmp = [datetime]::MinValue
+                    $kStart = if ([datetime]::TryParse("$($Matches['v'])", [ref]$kTmp)) { $kTmp } else { $null }
+                    continue
+                }
+                if ($kl -notmatch '^\s*End Time:\s*(?<v>\S.*?)\s*\(') { continue }
+                $kTmp = [datetime]::MinValue
+                $kEnd = if ([datetime]::TryParse("$($Matches['v'])", [ref]$kTmp)) { $kTmp } else { $null }
+                # End Time is the last line of the block this phase needs, so the ticket is
+                # evaluated here rather than on the next #N> marker — a truncated final
+                # block then simply never fires, instead of firing on half a ticket.
+                if ([string]::IsNullOrWhiteSpace($kServer)) { continue }
+                $kSeen++
+                # A lifetime measured in months is not a policy setting anybody has; a real
+                # KDC issues ten hours. The threshold sits far above every legitimate policy
+                # so that crossing it is not a judgement call.
+                if ($null -ne $kStart -and $null -ne $kEnd -and $kEnd -gt $kStart) {
+                    $kLifeHrs = ($kEnd - $kStart).TotalHours
+                    if ($kLifeHrs -gt $kHrs) {
+                        $kbHits++
+                        Out-ThreatBanner "FORGED KERBEROS TICKET" "$kServer — lifetime $([Math]::Round($kLifeHrs/24,1)) days"
+                        Add-Finding -ID "KERB150_LIFETIME_$([Math]::Abs("$kServer".ToLower().GetHashCode()))" -Phase "PHASE 150" `
+                            -ThreatType "Credential Access" -Severity $SEV_CRITICAL `
+                            -Description "This logon session holds a Kerberos ticket for '$kServer' with a lifetime of $([Math]::Round($kLifeHrs/24,1)) days ($kStart to $kEnd). A domain controller issues a ticket that lives ten hours and renews for seven days; no policy in the field stretches a single ticket past a few days, because the lifetime is what limits the damage of a stolen one. A ticket like this was not issued by a KDC — it was minted offline with the krbtgt key and injected into this session, which is what a golden or silver ticket IS (MITRE T1558.001, T1558.002). If the server field names krbtgt, the domain key itself is compromised and the remediation is the double krbtgt password reset, with the second reset only after the first has replicated. Preserve the evidence first: klist tickets   from this session, and purge only afterwards with: klist purge . Phase 88 reports the 4769 side of the same attack from the domain controller's view." `
+                            -Target "Kerberos ticket: $kServer" -FixAction "Info" -Group "Credential Access — Kerberos"
+                        continue
+                    }
+                }
+                if ([string]::IsNullOrWhiteSpace($kEtype)) { continue }
+                if ("$kServer" -match $KERB_ETYPE_BENIGN_RE) { continue }
+                $kRule = Test-ScytheTextRules -Text $kEtype -Rules $KERB_ETYPE_RULES
+                if ($null -eq $kRule) { continue }
+                $kbHits++
+                Out-Typewriter "  -> WEAK TICKET ENCRYPTION: $kServer ($kEtype)" "WARN"
+                Add-Finding -ID "KERB150_ETYPE_$([Math]::Abs("$kServer$kEtype".ToLower().GetHashCode()))" -Phase "PHASE 150" `
+                    -ThreatType "Credential Access" -Severity (ConvertTo-ScytheSeverity "$($kRule.Severity)") `
+                    -Description "The service ticket for '$kServer' held by this session uses '$kEtype' — $($kRule.Name). This matters because of what the ticket contains: a service ticket is encrypted with the service account's password hash, so anyone who can request one can attack that password offline, and RC4 is the encryption type an attacker asks for precisely because it is the one the cracker handles fastest (MITRE T1558.003). A ticket in this session is not itself an attack — the machine may simply be on a domain that still permits RC4, which is common and is the benign reading. What to check: whether the account behind '$kServer' is a service account with a human-chosen password, and whether the domain still allows RC4 at all. Look at what else this session holds with: klist tickets ." `
+                    -Target "Kerberos ticket: $kServer" -FixAction "Info" -Group "Credential Access — Kerberos"
+            }
+            if ($kSeen -eq 0) { Out-Typewriter "  -> NO CACHED KERBEROS TICKETS READABLE IN THIS SESSION." "INFO" }
+            else { Out-Typewriter "  -> $kSeen CACHED TICKET(S) EXAMINED." "DATA" }
+        } catch { Write-Log "PHASE 150: klist branch failed - $($_.Exception.Message)" }
+
+        # (b) THIS COMPUTER'S OWN directory object, and nothing else. One object, one
+        #     result, both timeouts set. Unconstrained delegation on a workstation means
+        #     any credential that touches it can be reused anywhere; resource-based
+        #     constrained delegation configured on it means somebody else was granted the
+        #     right to impersonate anyone TO this machine, which is a backdoor written in
+        #     the directory rather than on the disk.
+        try {
+            $adFilter   = '(&(objectClass=computer)(sAMAccountName=' + $env:COMPUTERNAME + '$))'
+            $adSearcher = [ADSISearcher]$adFilter
+            $adSearcher.SizeLimit       = 1
+            $adSearcher.ClientTimeout   = [TimeSpan]::FromSeconds(10)
+            $adSearcher.ServerTimeLimit = [TimeSpan]::FromSeconds(10)
+            [void]$adSearcher.PropertiesToLoad.Add('useraccountcontrol')
+            [void]$adSearcher.PropertiesToLoad.Add('msds-allowedtoactonbehalfofotheridentity')
+            [void]$adSearcher.PropertiesToLoad.Add('distinguishedname')
+            $adRes = $adSearcher.FindOne()
+            if ($null -eq $adRes) {
+                Out-Typewriter "  -> THIS MACHINE'S OWN AD OBJECT WAS NOT READABLE." "INFO"
+            } else {
+                $adDn  = "$(@($adRes.Properties['distinguishedname'])[0])"
+                $adHits = 0
+                $adUac = 0
+                $adUacRaw = @($adRes.Properties['useraccountcontrol'])
+                if ($adUacRaw.Count -gt 0) { $adUac = [int]$adUacRaw[0] }
+                # 0x80000 TRUSTED_FOR_DELEGATION. On a domain controller this is normal and
+                # expected; on anything else it is the single most valuable misconfiguration
+                # in a Windows network, so the finding says which this machine is.
+                if (($adUac -band 0x80000) -ne 0) {
+                    $adIsDc = $false
+                    try { $adIsDc = ([int](Get-WmiObject Win32_ComputerSystem -ErrorAction SilentlyContinue).DomainRole -ge 4) } catch { $adIsDc = $false }
+                    $kbHits++; $adHits++
+                    Out-Typewriter "  -> THIS MACHINE IS TRUSTED FOR UNCONSTRAINED DELEGATION." $(if ($adIsDc) { "INFO" } else { "CRIT" })
+                    Add-Finding -ID "KERB150_UNCONSTRAINED" -Phase "PHASE 150" `
+                        -ThreatType "Credential Access" -Severity $(if ($adIsDc) { $SEV_INFO } else { $SEV_CRITICAL }) `
+                        -Description "This computer's directory object ($adDn) has TRUSTED_FOR_DELEGATION set in userAccountControl ($adUac). Unconstrained delegation means that when any account authenticates to this machine over Kerberos, its ticket-granting ticket is cached in this machine's memory — so local administrator here is domain administrator anywhere a domain administrator has connected, and an attacker only has to make one connect (MITRE T1558, T1187). $(if ($adIsDc) { 'This machine is a domain controller, where the flag is expected and normal — recorded so the reader knows the check ran and what it found, not as a fault.' } else { 'This machine is NOT a domain controller, and there is almost no remaining reason for a member server or workstation to hold this flag; the legitimate cases are old and were replaced by constrained delegation years ago.' }) Confirm with the directory team before changing anything, because clearing it breaks whatever was relying on it: Get-ADComputer '$env:COMPUTERNAME' -Properties TrustedForDelegation ." `
+                        -Target "AD object: $adDn" -FixAction "Info" -Group "Credential Access — Kerberos"
+                }
+                $adRbcd = @($adRes.Properties['msds-allowedtoactonbehalfofotheridentity'])
+                if ($adRbcd.Count -gt 0 -and $null -ne $adRbcd[0]) {
+                    $kbHits++; $adHits++
+                    Out-Typewriter "  -> RESOURCE-BASED CONSTRAINED DELEGATION IS CONFIGURED ON THIS MACHINE." "CRIT"
+                    Add-Finding -ID "KERB150_RBCD" -Phase "PHASE 150" `
+                        -ThreatType "Credential Access" -Severity $SEV_HIGH `
+                        -Description "This computer's directory object ($adDn) has msDS-AllowedToActOnBehalfOfOtherIdentity populated. That attribute is a list of principals allowed to impersonate ANY user to this machine — including a domain administrator, and including accounts that have never logged in here. It is a legitimate feature, and it is also the standard privilege-escalation finish: an attacker who can write one attribute on a computer object gains full access to that computer without touching it, and the change lives in the directory where no endpoint scan can see it (MITRE T1134.001). This scan cannot tell you WHICH principal was granted the right without querying the directory, which it deliberately does not do. Read it from a management host: Get-ADComputer '$env:COMPUTERNAME' -Properties PrincipalsAllowedToDelegateToAccount . If the answer is not a service you deployed on purpose, treat it as a backdoor and remove it there." `
+                        -Target "AD object: $adDn" -FixAction "Info" -Group "Credential Access — Kerberos"
+                }
+                if ($adHits -eq 0) { Out-Typewriter "  -> THIS MACHINE'S AD OBJECT CARRIES NO DELEGATION RIGHTS." "GOOD" }
+            }
+        } catch { Write-Log "PHASE 150: AD self-object branch failed - $($_.Exception.Message)" }
+    }
+
+    if ($kbHits -eq 0) { Out-Typewriter "  -> [OK ] NO KERBEROS OR RELAY-SURFACE ANOMALIES." "GOOD" }
+
+    # ── PHASE 151: OUTBOUND LATERAL CAPABILITY ────────────────────────────────
+    # Phase 148 asks who reached this host. This one asks the other question, and it is the
+    # one an incident-response engagement is actually scoped by: if this machine is patient
+    # zero, WHERE CAN IT GO. None of these findings is a compromise on its own — a saved
+    # RDP destination is not malware — and the phase says so. The value is that the answer
+    # is knowable in seconds, from the registry, on day one, instead of being reconstructed
+    # from interviews on day three.
+    #
+    # winscp.ini is deliberately NOT read here: phase 129 already reads that file for cloud
+    # remotes, and one file with two findings is the phase-157 mistake. The registry
+    # session store is a different artifact and is this phase's.
+    Show-PhaseHeader "PHASE 151" "OUTBOUND REACH — WHERE THIS MACHINE CAN GO NEXT" "LATERAL"
+    Out-Typewriter "INVENTORYING SAVED DESTINATIONS, CREDENTIALS AND REMOTING TRUST..." "HUNT"
+    $obHits = 0; $obInv = New-Object System.Collections.Generic.List[string]
+
+    # (a) TrustedHosts. This one IS a finding: '*' disables the authentication of the
+    #     SERVER by the client for every WinRM connection this machine makes.
+    try {
+        $thVal = Get-RegVal64 -Hive LocalMachine -SubKey 'SOFTWARE\Microsoft\Windows\CurrentVersion\WSMAN\Client' -Name 'TrustedHosts'
+        if ([string]::IsNullOrWhiteSpace("$thVal")) {
+            $thVal = Get-RegVal64 -Hive LocalMachine -SubKey 'SOFTWARE\Policies\Microsoft\Windows\WinRM\Client' -Name 'TrustedHosts'
+        }
+        if (-not [string]::IsNullOrWhiteSpace("$thVal")) {
+            $thWild = ("$thVal".Trim() -eq '*')
+            $obHits++
+            Out-Typewriter "  -> WINRM TRUSTEDHOSTS IS SET: $thVal" $(if ($thWild) { "CRIT" } else { "WARN" })
+            Add-Finding -ID "OUT151_TRUSTEDHOSTS" -Phase "PHASE 151" `
+                -ThreatType "Lateral Movement" -Severity $(if ($thWild) { $SEV_HIGH } else { $SEV_POSSIBLE }) `
+                -Description "The WinRM client TrustedHosts list on this machine is '$thVal'. TrustedHosts is what lets this machine connect to a remote host WITHOUT authenticating that host first, which is why it exists for workgroup administration and why it is dangerous: for every entry, this machine will hand its credential to whatever answers at that name. $(if ($thWild) { 'The value is the wildcard, so that is EVERY host on the network — anything that can win a name-resolution race, which phase 155 covers, can collect this credential.' } else { 'The list is explicit rather than a wildcard, which is the correct shape; confirm the named hosts are the management stations you expect.' }) On a domain-joined machine Kerberos authenticates the server mutually and TrustedHosts should normally be empty. Inspect and correct with: Get-Item WSMan:\localhost\Client\TrustedHosts   then   Set-Item WSMan:\localhost\Client\TrustedHosts -Value '' -Force ." `
+                -Target "WinRM TrustedHosts" -FixAction "Info" -Group "Lateral Movement — Outbound"
+        }
+    } catch { Write-Log "PHASE 151: TrustedHosts check failed - $($_.Exception.Message)" }
+
+    # (b) The saved-destination stores. Kind decides what is read: an MRU is inventoried,
+    #     a SECRET store is additionally checked for a stored credential — by VALUE NAME
+    #     only. The value itself is never read and never printed, for the same reason phase
+    #     147 never opens a token cache: a finding that reproduces the credential turns the
+    #     client report into a second copy of it.
+    try {
+        foreach ($ok in @($OUTBOUND_SESSION_KEYS)) {
+            $okHive = "$($ok.Hive)"; $okSub = "$($ok.SubKey)"; $okKind = "$($ok.Kind)"
+            $okSubs = @(Get-RegSubKeys64 -Hive $okHive -SubKey $okSub)
+            $okVals = @(Get-RegNames64  -Hive $okHive -SubKey $okSub)
+            if ($okSubs.Count -eq 0 -and $okVals.Count -eq 0) { continue }
+            if ($okKind -eq 'MAPPED') {
+                foreach ($md in $okSubs) {
+                    $mdPath = Get-RegVal64 -Hive $okHive -SubKey "$okSub\$md" -Name 'RemotePath'
+                    if ([string]::IsNullOrWhiteSpace("$mdPath")) { continue }
+                    $obInv.Add("mapped drive ${md}: -> $mdPath")
+                }
+                continue
+            }
+            if ($okKind -eq 'VALUES') {
+                foreach ($ov in $okVals) {
+                    if ($ov -notmatch '^MRU') { continue }
+                    $ovVal = Get-RegVal64 -Hive $okHive -SubKey $okSub -Name $ov
+                    if ([string]::IsNullOrWhiteSpace("$ovVal")) { continue }
+                    $obInv.Add("recent RDP: $ovVal")
+                }
+                continue
+            }
+            foreach ($os in $okSubs) {
+                $obInv.Add("$($ok.Label): $os")
+                if ($okKind -ne 'SECRET') { continue }
+                $osVals = @(Get-RegNames64 -Hive $okHive -SubKey "$okSub\$os")
+                $osSecret = @($osVals | Where-Object { Test-ScytheNameRule -Name "$_" -Rules $OUTBOUND_SECRET_NAMES })
+                if ($osSecret.Count -eq 0) { continue }
+                $obHits++
+                Out-Typewriter "  -> SAVED SESSION WITH A STORED CREDENTIAL: $($ok.Label) / $os" "WARN"
+                Add-Finding -ID "OUT151_SECRET_$([Math]::Abs("$okSub$os".ToLower().GetHashCode()))" -Phase "PHASE 151" `
+                    -ThreatType "Credential Exposure" -Severity $SEV_HIGH `
+                    -Description "The saved session '$os' under $($ok.Label) carries a stored-credential value ($($osSecret -join ', ')). The value itself has deliberately not been read: this phase reports that a credential is stored, never what it is. What makes this worth acting on is that these stores are not vaults — a session manager's saved password is obfuscated so the tool can replay it, which means anyone who can read the key can recover the plaintext, including any malware running as this user (MITRE T1555, T1552.002). The destination named by the session is also part of this machine's reach and should be added to the incident scope. Remove the stored secret and re-enter it as a key-based or vault-backed credential: the session store is under HKCU\$okSub\$os ." `
+                    -Target "HKCU\$okSub\$os" -FixAction "Info" -Group "Lateral Movement — Outbound"
+            }
+        }
+    } catch { Write-Log "PHASE 151: saved-session branch failed - $($_.Exception.Message)" }
+
+    # (c) The file-backed connection managers. Same rule: the content rules match the
+    #     ELEMENT that holds a secret, so a finding never reproduces the credential.
+    try {
+        foreach ($of in @($OUTBOUND_SESSION_FILES)) {
+            if ([string]::IsNullOrWhiteSpace("$of")) { continue }
+            if (-not (Test-Path -LiteralPath $of)) { continue }
+            if ("$of" -match $OUTBOUND_BENIGN_RE) { continue }
+            $obInv.Add("connection manager profile: $of")
+            $ofr = Test-ContentRules -FilePath $of -Rules $OUTBOUND_FILE_RULES
+            if (-not $ofr.Hit) { continue }
+            $obHits++
+            Out-Typewriter "  -> CONNECTION-MANAGER PROFILE WITH STORED PASSWORDS: $of" "WARN"
+            Add-Finding -ID "OUT151_FILE_$([Math]::Abs("$of".ToLower().GetHashCode()))" -Phase "PHASE 151" `
+                -ThreatType "Credential Exposure" -Severity (ConvertTo-ScytheSeverity "$($ofr.Severity)") `
+                -Description "'$of' matched '$($ofr.Name)' — a connection manager's profile containing stored passwords. These files are the single highest-value target on an administrator's workstation: one file, every server the administrator manages, with a credential for each, encrypted under a scheme the tool itself has to be able to reverse (MITRE T1555.005). If this machine is compromised, treat every destination in this profile as reachable by the attacker and every credential in it as disclosed. The file is also the fastest way for YOU to scope the incident — open it and list the destinations. Rotate what it holds, then move the profile to a credential store the tool can read without keeping plaintext." `
+                -Target $of -FixAction "Info" -Group "Lateral Movement — Outbound"
+        }
+    } catch { Write-Log "PHASE 151: session-file branch failed - $($_.Exception.Message)" }
+
+    # (d) The credential vault, by target name only. cmdkey prints targets, never secrets.
+    try {
+        $ckOut = @(Invoke-ScytheConsoleTool -File 'cmdkey.exe' -Arguments '/list' -TimeoutMs 6000)
+        # $Matches is scoped to the scriptblock it was set in, so a Where-Object that
+        # matches and a ForEach-Object that reads $Matches[1] do not see the same thing.
+        # An explicit loop is the only shape that is correct on 5.1.
+        $ckTargets = New-Object System.Collections.Generic.List[string]
+        foreach ($cl in $ckOut) {
+            if ($cl -notmatch '^\s*Target:\s*(?<t>\S.*)$') { continue }
+            $ckTargets.Add("$($Matches['t'])".Trim())
+        }
+        $ckDomain  = @(@($ckTargets) | Where-Object { $_ -match '(?i)^(Domain:target=|TERMSRV/)' })
+        foreach ($ct in (@($ckTargets) | Select-Object -First 40)) { $obInv.Add("saved credential for $ct") }
+        if ($ckDomain.Count -gt 0) {
+            $obHits++
+            Out-Typewriter "  -> $($ckDomain.Count) SAVED DOMAIN / RDP CREDENTIAL(S) IN THIS USER'S VAULT." "WARN"
+            Add-Finding -ID "OUT151_CMDKEY" -Phase "PHASE 151" `
+                -ThreatType "Credential Exposure" -Severity $SEV_POSSIBLE `
+                -Description "This user's credential vault holds $($ckDomain.Count) saved domain or Remote Desktop credential(s): $(($ckDomain | Select-Object -First 8) -join '; '). Only the target names are listed — cmdkey does not print secrets and this phase does not try to recover them. Why it matters for scoping: a saved credential is replayed automatically, so anything running as this user can connect to those destinations without ever knowing the password, which is what makes 'the user's machine was compromised' and 'those servers were reachable' the same sentence (MITRE T1078, T1555.004). Why it is usually benign: saving an RDP credential is what the Remote Desktop client offers to do on every connection, so most of these were created by the user on purpose. Review and prune with: cmdkey /list   then   cmdkey /delete:<target> ." `
+                -Target "Credential Manager (user vault)" -FixAction "Info" -Group "Lateral Movement — Outbound"
+        }
+    } catch { Write-Log "PHASE 151: credential-vault branch failed - $($_.Exception.Message)" }
+
+    # The inventory is the deliverable even when nothing is wrong — the same reasoning as
+    # phase 155 printing the name-resolution channels that were already correct. An
+    # operator scoping an incident needs the list, and a phase that reports only failures
+    # would print nothing here on the machines where the list matters most.
+    if ($obInv.Count -gt 0) {
+        Out-Typewriter "  -> THIS MACHINE HAS $($obInv.Count) RECORDED ROUTE(S) TO OTHER HOSTS." "DATA"
+        foreach ($oi in ($obInv | Select-Object -First 15)) { Out-Typewriter "     - $oi" "DATA" }
+        Add-Finding -ID "OUT151_INVENTORY" -Phase "PHASE 151" `
+            -ThreatType "Attack Surface" -Severity $SEV_INFO `
+            -Description "This machine records $($obInv.Count) route(s) to other hosts: $(($obInv | Select-Object -First 12) -join '; ')$(if ($obInv.Count -gt 12) { ' (and more)' } else { '' }). This is an inventory, not a finding — every item here is a normal artifact of somebody doing their job. It is in the report because it is the answer to the first question of any incident: if this endpoint is compromised, what else is in scope. Each destination named above should be checked before the engagement is closed, and each stored credential associated with one should be rotated." `
+            -Target "Outbound reach inventory" -FixAction "Info" -Group "Lateral Movement — Outbound"
+    }
+    if ($obHits -eq 0) { Out-Typewriter "  -> [OK ] NO STORED CREDENTIALS OR OVER-WIDE REMOTING TRUST." "GOOD" }
+
+    # ── PHASE 152: SESSION AND LOGON ANOMALIES ────────────────────────────────
+    # Phase 107 already reports individual 4624 logons of type 3 and 10 from non-local
+    # addresses, one finding per record. This phase deliberately emits NO per-record 4624
+    # finding: a second opinion on the same event record would give one artifact two ids
+    # and two severities, and phase 160 would then correlate them on the shared target as
+    # though they were two independent facts — precisely what made phase 157 worse than
+    # its parts. What is left to 152 is the AGGREGATE, which is a different question and
+    # one that cannot be asked one record at a time: a spray is many accounts from one
+    # source; a single failure is a typo.
+    #
+    # Every pull here goes through Get-ScytheEvents, which puts StartTime inside the
+    # FilterHashtable so the Event Log service does the filtering. On a domain workstation
+    # with a large Security log, the client-side alternative materialises hundreds of
+    # thousands of records before the first comparison.
+    Show-PhaseHeader "PHASE 152" "LOGON ANOMALIES — SPRAYS, EXPLICIT CREDENTIALS, NEW ADMINS" "EVT-HUNT"
+    Out-Typewriter "AGGREGATING AUTHENTICATION RECORDS RATHER THAN LISTING THEM..." "HUNT"
+    $lgHits = 0
+    $lgMax     = if ($null -ne $LOGON_THRESH) { [int]$LOGON_THRESH.MaxEvents }             else { 3000 }
+    $lgAccts   = if ($null -ne $LOGON_THRESH) { [int]$LOGON_THRESH.SprayDistinctAccounts } else { 5 }
+    $lgWindow  = if ($null -ne $LOGON_THRESH) { [int]$LOGON_THRESH.SprayWindowMinutes }    else { 30 }
+    $lgMinFail = if ($null -ne $LOGON_THRESH) { [int]$LOGON_THRESH.SprayMinFailures }      else { 10 }
+    $lgReport  = if ($null -ne $LOGON_THRESH) { [int]$LOGON_THRESH.MaxReported }           else { 20 }
+
+    # (a) The spray. Grouped by SOURCE, because that is what a spray has one of and a
+    #     forgetful user does not: many distinct accounts, one origin, a short window.
+    try {
+        $failEvts = @(Get-ScytheEvents -LogName 'Security' -Id @(4625) -MaxEvents $lgMax)
+        if ($failEvts.Count -eq 0) {
+            Out-Typewriter "  -> NO FAILED-LOGON RECORDS IN THE WINDOW." "GOOD"
+        } else {
+            $lgBySrc = @{}
+            foreach ($fe in $failEvts) {
+                $feUser = Get-ScytheEvtField -Event $fe -Index 5  -Name 'TargetUserName'
+                $feWks  = Get-ScytheEvtField -Event $fe -Index 13 -Name 'WorkstationName'
+                $feIp   = Get-ScytheEvtField -Event $fe -Index 19 -Name 'IpAddress' -Validate '^(\d{1,3}(\.\d{1,3}){3}|[0-9A-Fa-f:]{2,45}|-)$'
+                if ("$feUser" -match $LOGON_ACCT_BENIGN_RE) { continue }
+                $feSrc = if (-not [string]::IsNullOrWhiteSpace("$feIp") -and "$feIp" -ne '-') { "$feIp" }
+                         elseif (-not [string]::IsNullOrWhiteSpace("$feWks")) { "$feWks" }
+                         else { 'local console' }
+                if (-not $lgBySrc.ContainsKey($feSrc)) {
+                    $lgBySrc[$feSrc] = [pscustomobject]@{
+                        Count = 0
+                        Users = (New-Object System.Collections.Generic.HashSet[string])
+                        First = $fe.TimeCreated
+                        Last  = $fe.TimeCreated
+                    }
+                }
+                $agg = $lgBySrc[$feSrc]
+                $agg.Count++
+                [void]$agg.Users.Add("$feUser".ToLower())
+                if ($fe.TimeCreated -lt $agg.First) { $agg.First = $fe.TimeCreated }
+                if ($fe.TimeCreated -gt $agg.Last)  { $agg.Last  = $fe.TimeCreated }
+            }
+            $lgSprayed = 0
+            foreach ($src in @($lgBySrc.Keys)) {
+                if ($lgSprayed -ge $lgReport) { break }
+                $agg = $lgBySrc[$src]
+                if ($agg.Users.Count -lt $lgAccts -or $agg.Count -lt $lgMinFail) { continue }
+                $spanMin = [Math]::Round(($agg.Last - $agg.First).TotalMinutes, 1)
+                if ($spanMin -gt $lgWindow) { continue }
+                $lgHits++; $lgSprayed++
+                Out-ThreatBanner "PASSWORD SPRAY AGAINST THIS HOST" "$($agg.Users.Count) accounts from $src"
+                Add-Finding -ID "LOGON152_SPRAY_$([Math]::Abs("$src".ToLower().GetHashCode()))" -Phase "PHASE 152" `
+                    -ThreatType "Credential Access" -Severity $SEV_HIGH `
+                    -Description "$($agg.Count) failed logons against $($agg.Users.Count) DISTINCT accounts arrived from '$src' inside $spanMin minute(s), between $($agg.First) and $($agg.Last). One person failing to log in produces many attempts against ONE account; many accounts from one source is a spray — a small number of common passwords tried against a list of user names, kept below the lockout threshold on purpose (MITRE T1110.003). The account list itself is worth reading: if it matches this organisation's real user names, the attacker already has a directory listing from somewhere. Check whether any attempt SUCCEEDED from the same source, because that is the finding that changes the response — search the 4624 records for '$src' with: Get-WinEvent -FilterHashtable @{LogName='Security';Id=4624;StartTime=(Get-Date).AddDays(-2)} | Where-Object Message -match '$src' . Block '$src' at the firewall if it is not a host you own, and confirm the lockout policy is doing its job." `
+                    -Target "Logon source: $src" -FixAction "Info" -Group "Logon Anomalies"
+            }
+            if ($lgSprayed -eq 0) { Out-Typewriter "  -> $($failEvts.Count) FAILED LOGON(S), NO SPRAY PATTERN." "GOOD" }
+        }
+    } catch { Write-Log "PHASE 152: 4625 branch failed - $($_.Exception.Message)" }
+
+    # (b) Event 4648 — a logon with EXPLICITLY supplied credentials. On a managed endpoint
+    #     the raw event is constant noise (runas, stored task passwords, every RMM agent),
+    #     which is why the allowlist is on the calling image PATH — the safe kind — and why
+    #     this is grouped per (process, target account) rather than reported per record.
+    try {
+        $explEvts = @(Get-ScytheEvents -LogName 'Security' -Id @(4648) -MaxEvents $lgMax)
+        $lgByProc = @{}
+        foreach ($ee in $explEvts) {
+            $eeProc = Get-ScytheEvtField -Event $ee -Index 11 -Name 'ProcessName'
+            $eeTgt  = Get-ScytheEvtField -Event $ee -Index 5  -Name 'TargetUserName'
+            $eeSrv  = Get-ScytheEvtField -Event $ee -Index 8  -Name 'TargetServerName'
+            if ("$eeProc" -match $LOGON_EXPLICIT_BENIGN_RE) { continue }
+            if ("$eeTgt"  -match $LOGON_ACCT_BENIGN_RE)     { continue }
+            $ek = "$eeProc|$eeTgt|$eeSrv"
+            if (-not $lgByProc.ContainsKey($ek)) {
+                $lgByProc[$ek] = [pscustomobject]@{ Proc = "$eeProc"; Target = "$eeTgt"; Server = "$eeSrv"; Count = 0; Last = $ee.TimeCreated }
+            }
+            $lgByProc[$ek].Count++
+            if ($ee.TimeCreated -gt $lgByProc[$ek].Last) { $lgByProc[$ek].Last = $ee.TimeCreated }
+        }
+        $lgExpl = 0
+        foreach ($ek in @($lgByProc.Keys)) {
+            if ($lgExpl -ge $lgReport) { break }
+            $ev = $lgByProc[$ek]
+            $lgHits++; $lgExpl++
+            Out-Typewriter "  -> EXPLICIT-CREDENTIAL LOGON: $($ev.Proc) as $($ev.Target) -> $($ev.Server)" "WARN"
+            Add-Finding -ID "LOGON152_EXPLICIT_$([Math]::Abs($ek.ToLower().GetHashCode()))" -Phase "PHASE 152" `
+                -ThreatType "Lateral Movement" -Severity $SEV_POSSIBLE `
+                -Description "'$($ev.Proc)' supplied explicit credentials for account '$($ev.Target)' to '$($ev.Server)' — $($ev.Count) time(s), most recently $($ev.Last). Event 4648 fires when a process authenticates as somebody other than the logged-on user, which is exactly what a stolen credential looks like being used: the attacker has the credential, not the session, so every connection has to present it explicitly (MITRE T1078, T1550). The routine causes are runas, a scheduled task with a stored password, and an administration tool being pointed at a server — and the image paths that do that legitimately are already filtered out here, which is why this one surfaced. The question to answer is whether '$($ev.Proc)' has any business holding that account's password. If the target server is not one this machine normally administers, add it to the incident scope." `
+                -Target "$($ev.Proc) as $($ev.Target)" -FixAction "Info" -Group "Logon Anomalies"
+        }
+        if ($lgExpl -eq 0) { Out-Typewriter "  -> NO UNEXPLAINED EXPLICIT-CREDENTIAL LOGONS." "GOOD" }
+    } catch { Write-Log "PHASE 152: 4648 branch failed - $($_.Exception.Message)" }
+
+    # (c) Accounts created, and accounts added to a privileged group. Two events, reported
+    #     together because the pair is the finding: an account created and then made an
+    #     administrator inside the same window is persistence being established, and it is
+    #     one of the very few things in this band that is almost never benign on a
+    #     workstation.
+    try {
+        $acctEvts = @(Get-ScytheEvents -LogName 'Security' -Id @(4720,4732) -MaxEvents 1000)
+        # TWO PASSES, and the first one is not optional. Get-WinEvent returns NEWEST FIRST,
+        # so the 4732 that added the account to Administrators arrives BEFORE the 4720 that
+        # created it — a single pass would never see the pairing that is the whole point of
+        # reading these two ids together, and the created-then-privileged case would be
+        # reported as two unrelated POSSIBLEs on every machine where it happened.
+        $newAccts = New-Object System.Collections.Generic.HashSet[string]
+        foreach ($ae in $acctEvts) {
+            if ([int]$ae.Id -ne 4720) { continue }
+            $aeNew = Get-ScytheEvtField -Event $ae -Index 0 -Name 'TargetUserName'
+            if (-not [string]::IsNullOrWhiteSpace("$aeNew")) { [void]$newAccts.Add("$aeNew".ToLower()) }
+        }
+        $lgAcct = 0
+        foreach ($ae in $acctEvts) {
+            if ($lgAcct -ge $lgReport) { break }
+            $isCreate = ([int]$ae.Id -eq 4720)
+            $aeWho    = if ($isCreate) { Get-ScytheEvtField -Event $ae -Index 0 -Name 'TargetUserName' }
+                        else            { Get-ScytheEvtField -Event $ae -Index 0 -Name 'MemberName' }
+            $aeBy     = if ($isCreate) { Get-ScytheEvtField -Event $ae -Index 4 -Name 'SubjectUserName' }
+                        else            { Get-ScytheEvtField -Event $ae -Index 6 -Name 'SubjectUserName' }
+            $aeGroup  = if ($isCreate) { '' } else { Get-ScytheEvtField -Event $ae -Index 2 -Name 'TargetUserName' }
+            if ([string]::IsNullOrWhiteSpace("$aeWho")) { continue }
+            # A group addition only matters here when the group is a privileged one. Users,
+            # Remote Desktop Users and the rest are ordinary administration and reporting
+            # them would bury the case that matters.
+            if (-not $isCreate -and "$aeGroup" -notmatch '(?i)^(Administrators|Administradores|Administrateurs|Domain Admins|Enterprise Admins|Backup Operators)$') { continue }
+            $aeAlsoNew = ((-not $isCreate) -and $newAccts.Contains("$aeWho".ToLower()))
+            $lgHits++; $lgAcct++
+            $aeSev = if ($aeAlsoNew) { $SEV_HIGH } else { $SEV_POSSIBLE }
+            Out-Typewriter "  -> $(if ($isCreate) { 'ACCOUNT CREATED' } else { "ADDED TO $aeGroup" }): $aeWho (by $aeBy)" $(if ($aeAlsoNew) { "CRIT" } else { "WARN" })
+            Add-Finding -ID "LOGON152_ACCT_$($ae.RecordId)" -Phase "PHASE 152" `
+                -ThreatType "Persistence" -Severity $aeSev `
+                -Description "$(if ($isCreate) { "Account '$aeWho' was CREATED" } else { "Account '$aeWho' was ADDED TO '$aeGroup'" }) by '$aeBy' at $($ae.TimeCreated).$(if ($aeAlsoNew) { ' This account was also created inside the same scan window — created and then made privileged is an attacker establishing a way back in that survives the original access being closed, and it is the single most common form of Windows persistence after a successful intrusion.' } else { '' }) On a workstation, local account changes are rare and every one of them should have a change record behind it (MITRE T1136.001, T1098). What to check: whether '$aeBy' is an administrator who intended this, and whether the new account has a password that meets policy. List what exists now and compare: Get-LocalUser | Format-Table Name, Enabled, LastLogon   and   Get-LocalGroupMember -Group 'Administrators' ." `
+                -Target "Account: $aeWho" -FixAction "Info" -Group "Logon Anomalies"
+        }
+        if ($lgAcct -eq 0) { Out-Typewriter "  -> NO ACCOUNTS CREATED OR PRIVILEGED IN THE WINDOW." "GOOD" }
+    } catch { Write-Log "PHASE 152: 4720/4732 branch failed - $($_.Exception.Message)" }
+
+    if ($lgHits -eq 0) { Out-Typewriter "  -> [OK ] NO LOGON ANOMALIES." "GOOD" }
 
     # ── PHASE 153: SMB SERVER + AUTHENTICATION POSTURE ────────────────────────
     Show-PhaseHeader "PHASE 153" "SMB SIGNING, GUEST AUTH AND NULL-SESSION POSTURE" "HARDENING"

@@ -1,5 +1,81 @@
 # CHANGELOG — Scythe V23
 
+## 2026-08-31 — phases 148-152: the last stubs in `Phases-6.ps1`, and two narrowings
+
+Task F2, the largest remaining piece of the WS7 work package. `engine/Phases-6.ps1` now has
+no stubs left; the HUNT band 134-162 is complete.
+
+### What was built
+
+| Phase | Owns |
+|---|---|
+| 148 | Inbound lateral: the **process tree** (a shell under `WmiPrvSE`/`wsmprovhost`/`mmc`/an Office host), the DCOM activation primitives by ProgID **and CLSID**, scheduled tasks whose action runs from a UNC path, and administrative-share access from a remote address (5140) |
+| 149 | The **no-tools** credential-dumping techniques: `comsvcs.dll MiniDump`, `MiniDumpWriteDump` via rundll32, `reg save hklm\sam`, `ntdsutil ifm`, `esentutl` on `ntds.dit`, shadow-copy device paths; staged hive copies; process-image dumps outside the crash directories; `DisableRestrictedAdmin`; WER `LocalDumps` aimed at the LSA process; the procdump EULA key as execution evidence for a deleted binary |
+| 150 | Kerberos ticket anomalies from `klist` (a lifetime measured in months is a forged ticket; RC4 service tickets are the Kerberoasting request), **this computer's own** AD object (unconstrained delegation, RBCD), and the WebClient/WebDAV coercion primitive |
+| 151 | Outbound reach: WinRM `TrustedHosts`, RDP MRU, PuTTY/WinSCP registry sessions with stored secrets, mRemoteNG/SuperPuTTY/RDCMan profiles, mapped drives, the credential vault by target name — plus an INFO **inventory** finding, because "what else is in scope" is the first question of an engagement |
+| 152 | Logon **aggregates**: password spray (many distinct accounts, one source, short window), unexplained explicit-credential logons (4648), and accounts created then added to Administrators |
+
+23 findings, every one `FixAction "Info"` per the band rule. 23 new signature keys, all with
+`_comment` prose, all pulled in the loader. `Test-Hunt-Band.ps1` 363 → 568 assertions.
+Whole suite green: 1,400+ assertions across 24 files.
+
+### Two narrowings, recorded so nobody widens them back
+
+**Phase 150 does not enumerate the directory.** The brief asked for a domain-wide AS-REP /
+delegation / AdminSDHolder sweep. That is, query for query, what BloodHound issues — against
+the customer's own domain controllers, from an endpoint, under an MSP contract, while the
+customer's detection stack is watching. Same reasoning that made 153-156 host-side and 159
+mount nothing. What ships reads one object: `[ADSISearcher]` filtered on `sAMAccountName`,
+`SizeLimit 1`, both timeouts set. ADCS ESC8 was dropped outright — it needs an HTTP request to
+a customer server. Also dropped on the same grounds: VSS create/delete correlation (Datto's
+core product is backup; the pairing cannot separate an attacker from the backup job), bulk
+7036, `reg load` of unloaded user hives, and business-hours logon detection (an MSP does
+maintenance at night by definition).
+
+**Roughly twenty sub-checks were dropped because another phase already owns them**, and the
+suite now revert-proofs every one in both directions — re-adding it to 148-152 fails, and so
+does losing it from the owning phase. 107 owns 7045 and per-record 4624; 133 owns the
+`wmic`/`schtasks`/ADMIN$ command lines and the PsExec service binaries; 106 owns `.dmp` in the
+crash directories and the dumper tool names; 41 owns WDigest and RunAsPPL; 88 owns 4769/4662;
+129 owns `winscp.ini`; 153 owns SMB signing. This is the phase-157 lesson applied before the
+fact rather than after it.
+
+### Three bugs caught during the build, all of the "fires on every healthy machine" class
+
+- **`[datetime]::TryParse` writes `DateTime.MinValue` on failure, not `$null`.** Phase 150's
+  first draft read the out-parameter without checking the return value, so on any machine
+  whose locale `klist` prints dates in differently, `End - Start` came out at roughly two
+  thousand years and every healthy domain workstation reported a forged Kerberos ticket.
+- **`Get-WinEvent` returns newest first**, so the 4732 that adds an account to Administrators
+  arrives *before* the 4720 that created it. A single pass over the pair never sees the
+  pairing that is the whole reason for reading them together. Phase 152 now builds the
+  created-account set in a first pass.
+- **`$Matches` is scoped to the scriptblock that set it**, so `... | Where-Object { $_ -match
+  ... } | ForEach-Object { $Matches[1] }` reads someone else's `$Matches`. The `cmdkey` parse
+  is an explicit loop.
+
+### Test-suite notes
+
+- Two assertions initially agreed for the wrong reason and were rewritten: counting
+  `Get-WinEventSafe` by text found **two** hits, because the comment above the single call
+  site names the wrapper (fixed by counting `CommandAst` nodes), and banning the words
+  *WDigest* / *RunAsPPL* / *AdminSDHolder* in the module fired on the comments that document
+  the narrowing (fixed by asserting on the registry read and on code-only tokens).
+- A trailing `\$` is a literal, not an anchor — three of the task rules end in `ADMIN$`. The
+  "no end-of-string anchor" assertion uses `(?<!\\)\$$`.
+- `$HOME` is read-only; `foreach ($home in ...)` throws.
+- All six revert-injections were exercised and bite: a raw `Get-ItemPropertyValue`, removing
+  the server-side `StartTime`, `FindOne()` → `FindAll()`, re-adding `wmic /node` to the DCOM
+  rules, an unanchored RMM allowlist entry, and putting `%TEMP%` back into phase 149's roots.
+
+### MITRE mapping — a gap closed while passing through
+
+`data/mitre_mapping.json` had `phase_map` entries for 134-145 and 160-162 and **nothing for
+146-159**, so every finding from the phases built on 2026-08-30 fell through to the keyword
+map for its badge. Added 146-159 (14 entries) and the 24 techniques they reference; corrected
+`metadata.phase_map_entries` and `metadata.techniques`, which had been stale since before the
+2026-08-30 work. No existing entry was modified — verified against `HEAD` key by key.
+
 ## 2026-08-30 (later) — phase 146, and an adversarial review that found four rules firing on every healthy machine
 
 Five parallel agents: `lib/` rule-engine architecture, an F2 design for 148-152, an F3 design

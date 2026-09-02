@@ -4216,5 +4216,131 @@
       "MinFileBytes": 1024,
       "ParseDeadlineMs": 250
     }
+  ],
+
+  "_comment_lateral_remote_exec_parents": "Phase 148. Remote execution leaves a PARENT, not a file. wmiprvse.exe is the WMI provider host - a shell or script host under it means something called Win32_Process.Create over DCOM, which is what wmiexec does. wsmprovhost.exe is the WinRM / PowerShell-Remoting host and has no other job, which is also why it is POSSIBLE and not HIGH: PSRemoting IS how an MSP technician administers a fleet, so the finding is a question about whose session it was, not an accusation. mmc.exe and the Office hosts are the DCOM lateral primitives. Phase 107 owns the 7045 service-install record and phase 133 owns the wmic / schtasks / ADMIN$ COMMAND LINES; this phase owns the process-tree side, which neither of them sees.",
+  "lateral_remote_exec_parents": [
+    { "Parent": "wmiprvse.exe",    "Label": "WMI remote execution (Win32_Process Create over DCOM)", "Severity": "HIGH" },
+    { "Parent": "wsmprovhost.exe", "Label": "WinRM / PowerShell Remoting",                           "Severity": "POSSIBLE" },
+    { "Parent": "mmc.exe",         "Label": "DCOM lateral movement (MMC20.Application)",             "Severity": "POSSIBLE" },
+    { "Parent": "winword.exe",     "Label": "Office host spawning a shell (macro or DCOM lateral)",  "Severity": "HIGH" },
+    { "Parent": "excel.exe",       "Label": "Office host spawning a shell (macro or DCOM lateral)",  "Severity": "HIGH" },
+    { "Parent": "powerpnt.exe",    "Label": "Office host spawning a shell (macro or DCOM lateral)",  "Severity": "HIGH" },
+    { "Parent": "outlook.exe",     "Label": "Office host spawning a shell (macro or DCOM lateral)",  "Severity": "HIGH" }
+  ],
+  "_comment_lateral_remote_exec_children": "Phase 148. What counts as 'executed something' under one of the parents above. Matched whole-name against the child image name, never as a substring - a bare 'cmd' matches foocmd.exe (the phase 47 lesson).",
+  "lateral_remote_exec_children": [
+    "cmd.exe", "powershell.exe", "pwsh.exe", "wscript.exe", "cscript.exe", "mshta.exe",
+    "rundll32.exe", "regsvr32.exe", "msbuild.exe", "installutil.exe", "certutil.exe",
+    "bitsadmin.exe", "curl.exe", "net.exe", "net1.exe", "sc.exe", "reg.exe", "at.exe", "schtasks.exe"
+  ],
+  "_comment_lateral_dcom_rules": "Phase 148. The DCOM lateral primitives named in a command line, by ProgID and by CLSID - a script that instantiates them by GUID never mentions the friendly name. Deliberately does NOT re-match wmic /node ... process call create or schtasks /s ... /create: phase 133's lateral_movement_artifacts already owns both, and two findings for one command line is the phase-157 mistake.",
+  "lateral_dcom_rules": [
+    { "Name": "MMC20.Application DCOM", "Pattern": "(?i)(MMC20\\.Application|49B2791A-B1AE-4C90-9B8E-E860BA07F889)", "Severity": "HIGH" },
+    { "Name": "ShellWindows DCOM", "Pattern": "(?i)(ShellWindows|9BA05972-F6A8-11CF-A442-00A0C90A8F39)", "Severity": "HIGH" },
+    { "Name": "ShellBrowserWindow DCOM", "Pattern": "(?i)(ShellBrowserWindow|C08AFD90-F2A1-11D1-8455-00A0C91F3880)", "Severity": "HIGH" },
+    { "Name": "Excel DDE / XLL remote activation", "Pattern": "(?i)Excel\\.Application[^\\r\\n]{0,120}(DDEInitiate|RegisterXLL)", "Severity": "HIGH" },
+    { "Name": "Outlook shell object", "Pattern": "(?i)Outlook\\.Application[^\\r\\n]{0,120}CreateObject[^\\r\\n]{0,80}Shell", "Severity": "HIGH" }
+  ],
+  "_comment_lateral_remote_task_rules": "Phase 148. A scheduled task whose action runs a binary from a UNC path is the atexec / at-a-distance shape. Phase 29 audits task actions for script hosts and user-writable paths but its alternation contains no UNC term, and phase 104 reads only Hidden and SDDL - so this is free ground rather than a third opinion on the same artifact. The value tested is the composed 'Execute Arguments' string, so no rule may be anchored with $ (the LNK-ScriptHostTarget lesson).",
+  "lateral_remote_task_rules": [
+    { "Name": "Task action on a UNC path", "Pattern": "(?i)\\\\\\\\[a-z0-9._-]{2,}\\\\[a-z0-9$._ -]{1,}\\\\", "Severity": "HIGH" },
+    { "Name": "Task action on an administrative share", "Pattern": "(?i)\\\\\\\\[a-z0-9._-]{2,}\\\\(ADMIN|C|IPC)\\$", "Severity": "HIGH" },
+    { "Name": "Task action reads from a mapped WebDAV path", "Pattern": "(?i)\\\\\\\\[a-z0-9._-]{2,}(@ssl)?(@[0-9]{2,5})?\\\\davwwwroot\\\\", "Severity": "HIGH" }
+  ],
+  "_comment_lateral_admin_shares": "Phase 148. The share names whose access from a remote address IS the inbound lateral primitive. These are LITERAL share names as the 5140 / 5145 provider writes them, compared case-insensitively with -eq - they are not regexes, and Windows really does spell the field \\\\*\\ADMIN$.",
+  "lateral_admin_shares": [ "\\\\*\\ADMIN$", "\\\\*\\C$", "\\\\*\\D$", "\\\\*\\IPC$" ],
+  "_comment_lateral_remote_exec_benign_cmdlines": "Phase 148 ALLOWLIST. Datto / CentraStage / Kaseya / N-able / ConnectWise are legitimate partner tooling (CLAUDE.md user rule 2) and they run scripts through WMI and WinRM constantly; without this the phase is unusable on a managed fleet. A command line is attacker-controlled text, so every entry pins the ENTIRE string with ^...$ and bounded wildcards - a name-only prefix would let malware self-allowlist by naming its command after an RMM one (the 2026-07-02 review finding). Asserted anchored by Test-Hunt-Band.",
+  "lateral_remote_exec_benign_cmdlines": [
+    "^\"?[a-zA-Z]:\\\\Program Files( \\(x86\\))?\\\\(CentraStage|Datto|Kaseya|N-able|N-Able|SolarWinds MSP|ConnectWise|ScreenConnect|Automate)\\\\[^\"\\r\\n]{0,160}\"?[^\\r\\n]{0,400}$",
+    "^\"?[a-zA-Z]:\\\\Program Files( \\(x86\\))?\\\\Microsoft Monitoring Agent\\\\[^\"\\r\\n]{0,160}\"?[^\\r\\n]{0,400}$",
+    "^\"?[a-zA-Z]:\\\\Windows\\\\CCM\\\\[^\"\\r\\n]{0,160}\"?[^\\r\\n]{0,400}$",
+    "^\"?[a-zA-Z]:\\\\ProgramData\\\\(CentraStage|Datto|Kaseya|N-able|N-Able|ConnectWise)\\\\[^\"\\r\\n]{0,160}\"?[^\\r\\n]{0,400}$"
+  ],
+  "_comment_lateral_share_benign_sources": "Phase 148 ALLOWLIST. Source addresses in 5140 / 5145 that are not 'from the network' at all - the local machine talking to itself, and the '-' the provider writes when there is no address. Not a path list and not attacker-controlled in any useful way, but anchored anyway.",
+  "lateral_share_benign_sources": [ "^-$", "^::1$", "^127\\.0\\.0\\.1$", "^0\\.0\\.0\\.0$", "^$" ],
+  "_comment_creddump_cmdline_rules": "Phase 149. The credential-dumping METHODS, matched against live command lines. Phase 106 owns .dmp files in the crash-dump directories and the named dumper tools; these are the no-tools-required techniques it cannot see, of which comsvcs.dll MiniDump is by far the most common. Anchored on the technique rather than on a tool name, because the tool is renamed and the technique is not.",
+  "creddump_cmdline_rules": [
+    { "Name": "comsvcs.dll MiniDump (LSASS)", "Pattern": "(?i)comsvcs\\.dll[^\\r\\n]{0,40}\\bMiniDump\\b", "Severity": "CRITICAL" },
+    { "Name": "MiniDumpWriteDump via rundll32", "Pattern": "(?i)rundll32[^\\r\\n]{0,80}(dbghelp|dbgcore)\\.dll[^\\r\\n]{0,40}MiniDumpWriteDump", "Severity": "CRITICAL" },
+    { "Name": "reg save of a credential hive", "Pattern": "(?i)\\breg(\\.exe)?\\b[^\\r\\n]{0,40}\\bsave\\b[^\\r\\n]{0,60}\\bhk(lm|ey_local_machine)\\\\+(sam|security|system)\\b", "Severity": "CRITICAL" },
+    { "Name": "ntdsutil IFM dump", "Pattern": "(?i)\\bntdsutil\\b[^\\r\\n]{0,160}\\b(ifm|create full)\\b", "Severity": "CRITICAL" },
+    { "Name": "esentutl copy of ntds.dit", "Pattern": "(?i)\\besentutl\\b[^\\r\\n]{0,120}ntds\\.dit", "Severity": "CRITICAL" },
+    { "Name": "copy from a shadow-copy device path", "Pattern": "(?i)\\\\\\\\\\?\\\\GLOBALROOT\\\\Device\\\\HarddiskVolumeShadowCopy[0-9]{1,3}", "Severity": "HIGH" },
+    { "Name": "DPAPI master-key or vault harvest", "Pattern": "(?i)\\b(dpapi::|sekurlsa::|lsadump::|vault::cred)\\S{0,32}", "Severity": "CRITICAL" },
+    { "Name": "procdump against LSA", "Pattern": "(?i)\\b-ma\\b[^\\r\\n]{0,20}\\blsass(\\.exe)?\\b", "Severity": "CRITICAL" }
+  ],
+  "_comment_creddump_hive_names": "Phase 149. Registry hive and directory-database file names that have exactly one legitimate home each. A copy anywhere else was made by something, and the only reason to copy SAM or ntds.dit is to read the credentials out of it offline. Matched whole-name against the file name.",
+  "creddump_hive_names": [
+    "^SAM$", "^SAM\\.(sav|bak|old|hiv|bin|txt)$", "^SECURITY$", "^SECURITY\\.(sav|bak|old|hiv)$",
+    "^SYSTEM$", "^SYSTEM\\.(sav|bak|old|hiv)$", "^ntds\\.dit$", "^ntds\\.(bak|old|dit\\.bak)$"
+  ],
+  "_comment_creddump_hive_benign_paths": "Phase 149 ALLOWLIST. The legitimate homes of the files above, plus the servicing and backup copies Windows makes itself. Path-only, which is the safe kind of allowlist - an attacker does not choose where Windows keeps its own hives. %WINDIR%\\repair is deliberately NOT allowlisted even though Windows XP and Server 2003 kept genuine backups there: modern builds leave the folder empty, so a hive in it is worth reporting, and the finding's own text tells the operator to check the dates before escalating.",
+  "creddump_hive_benign_paths": [
+    "(?i)\\\\Windows\\\\System32\\\\config\\\\",
+    "(?i)\\\\Windows\\\\System32\\\\Microsoft\\\\Protect\\\\",
+    "(?i)\\\\Windows\\\\SysWOW64\\\\config\\\\",
+    "(?i)\\\\Windows\\\\NTDS\\\\",
+    "(?i)\\\\Windows\\\\WinSxS\\\\",
+    "(?i)\\\\Windows\\\\servicing\\\\",
+    "(?i)\\\\Windows\\\\ServiceProfiles\\\\",
+    "(?i)\\\\\\$Recycle\\.Bin\\\\",
+    "(?i)\\\\System Volume Information\\\\"
+  ],
+  "_comment_creddump_search_roots_raw": "Phase 149. Where a staged hive or an LSA dump actually turns up. Env-var-expanded once, in the loader. Deliberately EXCLUDES %TEMP% and the CrashDumps directories - phase 106 already walks those for .dmp files and a second opinion on one artifact is the mistake phase 157 shipped.",
+  "creddump_search_roots_raw": [
+    "$env:USERPROFILE\\Downloads", "$env:USERPROFILE\\Desktop", "$env:USERPROFILE\\Documents",
+    "$env:PUBLIC", "$env:PROGRAMDATA", "$env:WINDIR\\Temp", "$env:SystemDrive\\PerfLogs",
+    "$env:SystemDrive\\Temp", "$env:SystemDrive\\Intel", "$env:SystemDrive\\Windows\\repair"
+  ],
+  "_comment_creddump_thresholds": "Phase 149. DumpMinBytes is the size below which a .dmp in a user-writable directory is almost certainly an application crash and not a process image - an LSASS dump on a live desktop runs 30-120 MB. MaxFiles caps the walk.",
+  "creddump_thresholds": [ { "DumpMinBytes": 20971520, "MaxFiles": 400, "MaxReported": 25 } ],
+  "_comment_kerberos_ticket_thresholds": "Phase 150. A Kerberos TGT issued by a real KDC lives 10 hours and renews for 7 days by default; no policy in the field stretches a single ticket past a few days. A forged ticket is minted with whatever lifetime the forger chose, and the default in the public tooling is ten YEARS. MaxTicketHours is therefore set well above any legitimate policy, so that crossing it is not a policy question. Measured against End Time minus Start Time, never against the wall clock.",
+  "kerberos_ticket_thresholds": [ { "MaxTicketHours": 720, "MaxRenewHours": 2160, "MaxTicketsParsed": 200 } ],
+  "_comment_kerberos_weak_etype_rules": "Phase 150. RC4-HMAC on a service ticket is the Kerberoasting request: the attacker asks for the weakest encryption type the KDC will issue because RC4 is what the offline cracker can attack. DES is worse and has no legitimate use at all. Matched against the ticket's 'KerbTicket Encryption Type' line as klist prints it, in both the friendly and the numeric spelling.",
+  "kerberos_weak_etype_rules": [
+    { "Name": "DES service ticket", "Pattern": "(?i)(DES-CBC|\\b0x1\\b|\\b0x3\\b)", "Severity": "HIGH" },
+    { "Name": "RC4-HMAC service ticket", "Pattern": "(?i)(RSADSI RC4-HMAC|RC4-HMAC|\\b0x17\\b|\\b0x18\\b)", "Severity": "POSSIBLE" }
+  ],
+  "_comment_kerberos_etype_benign_services": "Phase 150 ALLOWLIST. Service principals that legitimately still hold an RC4 ticket on a mixed-mode domain, where reporting them teaches the operator nothing. Anchored whole-string against the SPN as klist prints it.",
+  "kerberos_etype_benign_services": [
+    "^krbtgt/[A-Za-z0-9._-]{1,64}$",
+    "^cifs/[A-Za-z0-9._-]{1,64}$"
+  ],
+  "_comment_outbound_session_keys": "Phase 151. Where this machine remembers how to reach the rest of the network. None of these is a compromise on its own - the point of the phase is that patient zero's reach is an incident-scoping fact the responder needs on the first day, and it is knowable in seconds. Kind drives what the phase does with the key: MRU lists the subkey names, SECRET additionally reports any stored-secret value found under it.",
+  "outbound_session_keys": [
+    { "Hive": "CurrentUser", "SubKey": "Software\\Microsoft\\Terminal Server Client\\Servers", "Label": "cached RDP destinations", "Kind": "MRU" },
+    { "Hive": "CurrentUser", "SubKey": "Software\\Microsoft\\Terminal Server Client\\Default", "Label": "recent RDP destinations (MRU)", "Kind": "VALUES" },
+    { "Hive": "CurrentUser", "SubKey": "Software\\SimonTatham\\PuTTY\\Sessions", "Label": "saved PuTTY sessions", "Kind": "SECRET" },
+    { "Hive": "CurrentUser", "SubKey": "Software\\Martin Prikryl\\WinSCP 2\\Sessions", "Label": "saved WinSCP sessions", "Kind": "SECRET" },
+    { "Hive": "CurrentUser", "SubKey": "Network", "Label": "persistent mapped drives", "Kind": "MAPPED" }
+  ],
+  "_comment_outbound_session_secret_names": "Phase 151. Value names under a saved session that mean a credential was stored, not just a hostname. WinSCP's Password is a reversibly-obfuscated string, not a hash - anyone with the profile has the password. The phase reports that the value EXISTS and never reads or prints it (the same rule phase 147 follows for token caches).",
+  "outbound_session_secret_names": [ "^Password$", "^PasswordPlain$", "^ProxyPassword", "^TunnelPassword", "^PublicKeyFile$", "^ProxyPasswordPlain$" ],
+  "_comment_outbound_session_files_raw": "Phase 151. Connection managers that keep their session store in a file rather than the registry. Deliberately does NOT include winscp.ini: phase 129 already reads that file for cloud-remote configuration, and a second finding about one file is the duplication this project has been bitten by.",
+  "outbound_session_files_raw": [
+    "$env:APPDATA\\mRemoteNG\\confCons.xml",
+    "$env:APPDATA\\SuperPuTTY\\Sessions.xml",
+    "$env:USERPROFILE\\Documents\\RDCMan.settings"
+  ],
+  "_comment_outbound_session_file_rules": "Phase 151. A stored credential inside one of those files. The rules match the ELEMENT that holds a secret, not the secret, so a finding never reproduces the credential.",
+  "outbound_session_file_rules": [
+    { "Name": "mRemoteNG stored password", "Pattern": "(?i)Password=\"[^\"]{4,}\"", "Severity": "HIGH" },
+    { "Name": "RDCMan stored password", "Pattern": "(?i)<password[^>]{0,40}>\\S{4,}</password>", "Severity": "HIGH" },
+    { "Name": "SuperPuTTY stored password", "Pattern": "(?i)Password=\"[^\"]{4,}\"", "Severity": "HIGH" }
+  ],
+  "_comment_outbound_session_benign_paths": "Phase 151 ALLOWLIST. Path-only, and deliberately tiny - the branch exists to inventory what is there, so a wide allowlist would make the phase report nothing on the machines where the answer matters most.",
+  "outbound_session_benign_paths": [ "(?i)\\\\Windows\\\\Installer\\\\", "(?i)\\\\WinSxS\\\\" ],
+  "_comment_logon_anomaly_thresholds": "Phase 152. A password spray is many ACCOUNTS from one source in a short window; a brute force is many attempts against one account. The spray is the one worth reporting on an endpoint, because the endpoint is the thing being sprayed. SprayDistinctAccounts is the floor at which a failure cluster stops looking like one person mistyping their own password. MaxEvents caps every pull.",
+  "logon_anomaly_thresholds": [ { "SprayDistinctAccounts": 5, "SprayWindowMinutes": 30, "SprayMinFailures": 10, "MaxEvents": 3000, "MaxReported": 20 } ],
+  "_comment_logon_benign_accounts": "Phase 152 ALLOWLIST. Account names that appear in 4625 / 4648 / 4776 as a matter of routine on a healthy machine - the window-manager and font-driver pseudo-accounts, the anonymous logon, the empty and '-' placeholders, and computer accounts, which end in $ and authenticate to each other constantly. Anchored whole-name.",
+  "logon_benign_accounts": [ "^-$", "^$", "^ANONYMOUS LOGON$", "^SYSTEM$", "^LOCAL SERVICE$", "^NETWORK SERVICE$", "^DWM-[0-9]{1,3}$", "^UMFD-[0-9]{1,3}$", "^[A-Za-z0-9._-]{1,62}\\$$" ],
+  "_comment_logon_explicit_cred_benign_procs": "Phase 152 ALLOWLIST. Event 4648 - a logon with explicitly supplied credentials - is how runas, a scheduled task with a stored password, and every RMM agent authenticate, so on a managed endpoint the raw event is constant noise. These are the image paths that generate it legitimately. Path-only, which is the safe kind: an attacker chooses their command line, not where Windows installs svchost.",
+  "logon_explicit_cred_benign_procs": [
+    "(?i)\\\\Windows\\\\System32\\\\(svchost|lsass|services|taskhostw|winlogon|wininit|spoolsv|sihost|consent)\\.exe$",
+    "(?i)\\\\Windows\\\\System32\\\\(mmc|mstsc|taskeng)\\.exe$",
+    "(?i)\\\\Program Files( \\(x86\\))?\\\\(CentraStage|Datto|Kaseya|N-able|N-Able|SolarWinds MSP|ConnectWise|ScreenConnect|Automate)\\\\",
+    "(?i)\\\\Windows\\\\CCM\\\\",
+    "(?i)^-$"
   ]
 }
