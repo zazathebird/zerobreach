@@ -281,7 +281,9 @@ $allowCases = @(
             'C:\Users\Public\svchost.exe') }
   @{ Key='native_messaging_benign_hosts'
      Allow=@('com.1password.browserhelper','com.bitwarden.nativemessaging','com.google.chrome.example')
-     Deny=@('com.evil.helper','net.attacker.bridge') }
+     # entries are anchored host NAMES (2026-09-02): a vendor prefix buried inside an
+     # attacker-chosen name, or a look-alike prefix, must not be recognised
+     Deny=@('com.evil.helper','net.attacker.bridge','evil.com.microsoft.x','xcom.microsoft.foo','com.microsoft.') }
   @{ Key='shell_extension_benign_dlls'
      Allow=@('C:\Windows\System32\shell32.dll',
              'C:\Program Files\7-Zip\7-zip.dll',

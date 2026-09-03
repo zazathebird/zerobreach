@@ -1,5 +1,122 @@
 # CHANGELOG — Scythe V23
 
+## 2026-09-02 (evening) — the linter's 170 warnings: 140 fixed, 30 accepted with a reason, ceiling 0
+
+The morning's first lint run reported 0 errors and 170 warnings. This entry is what each class
+of warning turned out to mean and what changed. Verified: `dotnet build Scythe.sln` 0 warnings,
+Rules project 590 passed / 0 failed with `WarningCeiling = 0`, the PowerShell suite 27 files
+green, and the new test proven to bite by two injections (a bare `dell\b` back in
+`hidden_task_benign_paths`; phase 117 skipping on the host name again).
+
+### Five sets the loader pulled and no phase read — WIRED, not deleted
+
+`trojan_file_patterns`, `auto_elevate_bins`, `email_phishing_trojans`,
+`proactive_persistence_regs`, `proactive_lure_extensions` were wired in review #51 on the
+`session12/review-remediation-ws6` branch in June and that commit never reached this branch, so
+the data shipped for two months as dead weight that read like coverage. Ported, adapted to this
+branch (single-user hives, 64-bit registry view, no `Get-UserHives`/`Get-StableId`):
+
+- **74.6** recognises phishing/redirector FAMILIES in Defender history. A label is
+  `Prefix:Platform/Family.Variant`, so `Trojan:Script/Wacatac` in the list recognises
+  `Trojan:Win32/Wacatac.B!ml` on the box; `Generic` is never a family; mixed-vendor labels
+  (`HTML.Redirector`) stay whole-label prefixes. Sets `$global:EMAIL_PHISH_SEEN`.
+- **74.7 (a2)** autorun-surface census: INFO inventory of what each `proactive_persistence_regs`
+  key holds right now (HKLM through `Get-RegNames64`/`Get-RegVal64`; a new optional `Values`
+  array limits `HKCU\Environment` to `UserInitMprLogonScript` and `Windows NT\...\Windows` to
+  `Load`/`Run`, because listing PATH and TEMP is not a persistence census).
+- **74.7 (b2)** script-lure file associations: for each `proactive_lure_extensions` extension
+  whose handler executes, an opt-in `RunCmd` that repoints it at Notepad for this user. INFO —
+  or POSSIBLE when 74.6 saw a phishing family, which also lifts `HARDEN_WSH_DISABLE`. Never
+  auto-selected either way (`$phishSev` is asserted to be INFO or POSSIBLE only).
+- **90** trojan/tooling filename patterns over the same candidate set: validly signed →
+  POSSIBLE, unsigned → HIGH, **both `FixAction Info`** and the pass carries the `SIG_AUDIT`
+  budget. The branch shipped HIGH + Quarantine; `loader*.exe` is a mod loader on every gamer's
+  box, and new detection surface ships Info until an FP round says otherwise.
+- **92** live auto-elevating-binary check: one of `auto_elevate_bins` running from outside
+  System32/SysWOW64/WinSxS is HIGH, `FixAction Info` (the list includes `taskmgr.exe` and
+  `mmc.exe`; an auto-selected kill against those is what rule #1 forbids), and fails closed on a
+  missing `ExecutablePath`.
+
+`ShippedSignatureFileTests.TheEngineScanFindsTheCallSitesItExistsToFind` now **fails** on any
+pulled-but-unread set instead of printing it.
+
+### `trusted_root_ca_issuers` — phase 39 no longer decides trust by name
+
+Sixty of the 170 warnings and five of the seven "allowlist swallows detection" pairings were
+this one list: bare vendor words (`microsoft`, `windows`, `dell`, `apple`…) matched against
+root-store certificate subjects, so a rogue CA calling itself "Windows Update Root" was INFO.
+The HANDOFF called the honest fix a thumbprint check against the Microsoft CTL; that is what
+shipped:
+
+- **New data file `data/trusted_root_program.json`** — the CCADB "Included CA Certificate
+  Report for Microsoft" (549 roots, SHA-1 + SHA-256, status Included / Disabled / NotBefore),
+  retrieved 2026-09-02, plus `windows_shipped` (14 Microsoft roots that ship inside Windows
+  rather than through the CTL, thumbprints verified against
+  https://www.microsoft.com/pkiops/docs/repository.htm and the CCADB) and
+  `windows_shipped_legacy` (the four expired 1990s roots KB 293781 lists only by subject and
+  serial — matched on CN + serial AND `NotAfter` before a cutoff, so a live certificate reusing
+  the name does not qualify). **Regenerate only with `tools/Update-TrustedRoots.ps1`** (new; keeps
+  one entry per line so the diff stays readable, refuses a short or malformed report).
+- **`Resolve-RootCertTrust`** (loader, pure, unit-tested off Windows with fake certificates):
+  PrivateKey → HIGH; Shipped / Program / Distrusted / Legacy / AuthRoot → INFO; VendorName /
+  Unknown → POSSIBLE. A root whose **private key is on the machine** is HIGH whatever it is called
+  — the Superfish / eDellRoot shape — and is expected only on the CA server itself, which the
+  description says. `Distrusted` (program status Disabled) is INFO, not POSSIBLE: Windows keeps
+  disabled roots for legacy validation and a confident false finding on every box is the one
+  error class this tool cannot afford.
+- **Phase 39** classifies every root in `LocalMachine\Root` and `CurrentUser\Root` through it,
+  reads both `AuthRoot` stores once, and every finding is **`FixAction Info`** with the exact
+  `Remove-Item` in the description — the certificate store is a guard-protected target, so the
+  old `RunCmd` fix was a fix that could only ever report `blocked`.
+- `trusted_root_ca_issuers` stays in the file as a **reference set** (manifest), read with
+  `Get-Sig` and word-bounded; it now only chooses the wording of a POSSIBLE finding ("names a
+  known vendor — OEM, enterprise or impostor") and suppresses nothing.
+
+### Component anchoring — 70 entries
+
+- `hidden_task_benign_paths` (phase 104) rewritten from 26 bare words to 23 entries that start
+  at `\Tasks\` and end at a separator or the end of the path. A task NAME is attacker-chosen;
+  `dell\b` matched a task called "Dell Updater". Four entries under `\Microsoft\Windows\` were
+  already covered by the first entry and were dropped. Shapes not yet seen on a real box fail
+  CLOSED (the task shows as POSSIBLE for review), never open.
+- `infostealer_benign_paths` (phase 68): `cefcache` no longer excuses `cefcache_passwords.txt`,
+  `edge wallet` no longer excuses `edge wallet passwords.zip`. Component-anchored, file-name
+  entries `\\[^\\]*…$`.
+- `native_messaging_benign_hosts` (phase 117): 30 vendor prefixes → `^com\.vendor\.[A-Za-z0-9._-]+$`
+  (`evil.com.microsoft.x` and `xcom.microsoft.foo` used to match). **And the name no longer ends
+  the check**: phase 117 resolves the host binary first and reports HIGH when a trusted-named
+  host bridges to an unsigned executable in a user-writable path — `com.microsoft.backdoor`
+  pointing at `%APPDATA%\evil.exe` was never examined before. The sig loop carries the
+  `SIG_AUDIT` budget.
+- `hunt_task_benign_paths` (`^\\MicrosoftEdgeUpdateTask[^\\]*$`), the three `Temp\(pip|npm|…)`
+  group entries in `sideload_`/`exec_evidence_`/`webhook_c2_benign_paths`, and the
+  `shell_extension_benign_dlls` Program Files vendor group now end at a component
+  (`[^\\]*\\`).
+
+### 30 findings accepted with a reason, one mechanism
+
+`accepted_collisions` (one code) became **`accepted_findings`** `{code, set, entry, why}` for
+`IndicatorCollidesWithLegitimateName`, `IndicatorTooShort` and `AllowlistSwallowsDetection`
+(`lib/Scythe.Rules/Linting`; the legacy key still parses and maps to the collision code; an
+unknown code, a missing field or an empty `why` is a manifest error). The 28 `IndicatorTooShort`
+entries are all grammars, not literals — wallet addresses, JWTs, Slack tokens, UNC admin shares,
+`^SAM$`, `^UPX[0-9!]$`, a raw-IP URL — each accepted with the phase that scopes it. The one
+remaining swallow pairing (`logon_benign_accounts` `^SYSTEM$` against `creddump_hive_names`
+`^SYSTEM$`) is an account name against a file name in two different phases, recorded as such.
+`c2_pipe_patterns` `msf` is accepted because phase 62 bounds every entry with
+`(^|[^a-z0-9])…([^a-z0-9]|$)` — it cannot hit `MsFteWds`; the literal-set model is conservative.
+`Test-Signature-Lint.ps1` §3 checks every acceptance names a real set, a live entry, a valid
+code and a reason, and is not duplicated.
+
+### New test
+
+`tools/tests/Test-Allowlist-Anchors.ps1` (233 assertions, registered in `Run-SecurityTests.ps1`):
+the tightened allowlists against realistic Windows task, cache and host-name inputs in both
+directions; phase 117's new shape; `Resolve-RootCertTrust` run against fake certificates for
+every tier including the motivating case; the five sets read and their findings Info; the trust
+file well-formed and shipped. `Test-Extended-Band.ps1` gained the spoofed-prefix deny cases.
+
+
 ## 2026-09-02 (later) — the `lib/` linter meets the real signature file
 
 BLUEPRINT §10 item 6 said to start wiring `lib/` with the linter, and named one blocker: the

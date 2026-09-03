@@ -664,15 +664,35 @@ Out-Typewriter "  -> EMAIL ATTACHMENT SCAN COMPLETE." "VER"
 Show-PhaseHeader "PHASE 74.6" "MICROSOFT DEFENDER THREAT HISTORY CORRELATION" "DEFENDER"
 Out-Typewriter "CORRELATING WITH WINDOWS DEFENDER DETECTION HISTORY..." "HUNT"
 if (-not ($global:MSP_MODE -or $global:NONINTERACTIVE)) { Start-Sleep -Milliseconds 600 }
+$global:EMAIL_PHISH_SEEN = $false
 try {
     $threatNames = @{}
     foreach ($t in (Get-MpThreat -ErrorAction SilentlyContinue)) { $threatNames[[string]$t.ThreatID] = $t.ThreatName }
     $dets = @(Get-MpThreatDetection -ErrorAction Stop | Sort-Object InitialDetectionTime -Descending)
+    # Phishing/redirector FAMILY recognition (email_phishing_trojans — loaded but unread until
+    # 2026-09-02). A Defender label is Prefix:Platform/Family.Variant!Suffix; the list entry
+    # Trojan:Script/Wacatac must recognise Trojan:Win32/Wacatac.B!ml, so entries in that shape
+    # are matched on the FAMILY component and everything else (mixed-vendor labels such as
+    # HTML.Redirector) by whole-label prefix. 'Generic' is never a family. Knowing the box was
+    # PHISHED is what turns the 74.7 hardening from a checklist into a response.
+    $phishFams = @{}; $phishPrefixes = @()
+    foreach ($pf in @($EMAIL_PHISHING_TROJANS)) {
+        $pfs = "$pf".Trim(); if (-not $pfs) { continue }
+        if ($pfs -match '^[A-Za-z]+:[A-Za-z0-9_-]+/([A-Za-z0-9_-]+)') {
+            $fam = $Matches[1].ToLower()
+            if ($fam -ne 'generic') { $phishFams[$fam] = $true }
+        } else { $phishPrefixes += $pfs }
+    }
     $defHits = 0
     foreach ($d in $dets) {
         if (-not (Test-InScope $d.InitialDetectionTime)) { continue }
         $tname = if ($threatNames.ContainsKey([string]$d.ThreatID)) { $threatNames[[string]$d.ThreatID] } else { "ThreatID $($d.ThreatID)" }
         $when  = try { ([datetime]$d.InitialDetectionTime).ToString('yyyy-MM-dd HH:mm') } catch { "unknown" }
+        $isPhish = $false
+        if ("$tname" -match '^[A-Za-z]+:[A-Za-z0-9_-]+/([A-Za-z0-9_-]+)') { $isPhish = $phishFams.ContainsKey($Matches[1].ToLower()) }
+        if (-not $isPhish) { foreach ($pp in $phishPrefixes) { if ("$tname".StartsWith($pp, [StringComparison]::OrdinalIgnoreCase)) { $isPhish = $true; break } } }
+        if ($isPhish) { $global:EMAIL_PHISH_SEEN = $true }
+        $phishNote = if ($isPhish) { " '$tname' is a phishing/redirector family: this machine was PHISHED, so the 74.7 hardening below is a response, not a checklist." } else { '' }
         $emitted = $false
         foreach ($res in @($d.Resources)) {
             $path = ([string]$res) -replace '^(file|webfile|containerfile|amsi|behavior|process|regkey|fixpath|runkey):_?',''
@@ -681,13 +701,13 @@ try {
                 Out-Typewriter "  -> RESIDUAL FILE STILL ON DISK: $path" "CRIT"
                 Add-Finding -ID "DEFRES_$([Math]::Abs($path.GetHashCode()))" -Phase "PHASE 74.6" `
                     -ThreatType "Defender-Flagged Residual ($tname)" -Severity $SEV_CRITICAL `
-                    -Description "Defender flagged '$tname' on $when but the file is STILL PRESENT: $path" `
+                    -Description "Defender flagged '$tname' on $when but the file is STILL PRESENT: $path.$phishNote" `
                     -Target $path -FixAction "Quarantine" -FixParam $path -Group "Defender History / Residual Threats"
                 $global:TrojanHits++; $emitted = $true
             } elseif ($path -match '^[A-Za-z]:\\') {
                 Add-Finding -ID "DEFHIST_$([Math]::Abs(("$tname|$path").GetHashCode()))" -Phase "PHASE 74.6" `
-                    -ThreatType "Defender Detection (handled)" -Severity $SEV_INFO `
-                    -Description "Defender detected '$tname' on $when at $path (no longer on disk — verify quarantine)." `
+                    -ThreatType $(if ($isPhish) { "Defender Detection (handled, phishing family)" } else { "Defender Detection (handled)" }) -Severity $SEV_INFO `
+                    -Description "Defender detected '$tname' on $when at $path (no longer on disk — verify quarantine).$phishNote" `
                     -Target $path -FixAction "Info" -Group "Defender History / Residual Threats"
                 $emitted = $true
             }
@@ -723,19 +743,83 @@ foreach ($ok in $PROACTIVE_OFFICE_KEYS) {
         }
     } catch {}
 }
+# (a2) Autorun-surface census (proactive_persistence_regs — loaded but unread until 2026-09-02).
+# Not a detection: an INFO inventory of the autorun keys attackers actually use, with what each
+# one holds RIGHT NOW, so the technician can eyeball the persistence surface in one place after
+# remediation. Only non-empty keys are reported — an empty Run key is not news. HKLM keys are
+# read through the 64-bit view (a 32-bit host would otherwise be shown Wow6432Node's copy for
+# both entries); a key that names Values is limited to those, because HKCU\Environment holds
+# PATH and TEMP and only UserInitMprLogonScript executes. Read-only, INFO + Info throughout.
+$phishSev = if ($global:EMAIL_PHISH_SEEN) { $SEV_POSSIBLE } else { $SEV_INFO }
+$phishWhy = if ($global:EMAIL_PHISH_SEEN) { " Defender history shows a phishing-family detection on this machine (phase 74.6), so this is the vector that was used here." } else { '' }
+foreach ($pr in @($PROACTIVE_PERSIST_REGS)) {
+    try {
+        $prPath = "$($pr.Path)".Trim(); if (-not $prPath) { continue }
+        $onlyNames = @($pr.Values | Where-Object { "$_" })
+        $vals = @()
+        if ($prPath -match '^HKLM:\\(.+)$') {
+            $prSub = $Matches[1]
+            foreach ($vn in @(Get-RegNames64 -Hive 'LocalMachine' -SubKey $prSub)) {
+                if ($onlyNames.Count -and ($onlyNames -notcontains "$vn")) { continue }
+                $vals += "$vn = $(Get-RegVal64 -Hive 'LocalMachine' -SubKey $prSub -Name $vn)"
+            }
+        } else {
+            if (-not (Test-Path -LiteralPath $prPath)) { continue }
+            $pp = Get-ItemProperty -LiteralPath $prPath -ErrorAction SilentlyContinue
+            if ($pp) {
+                foreach ($pv in $pp.PSObject.Properties) {
+                    if ($pv.Name -like 'PS*') { continue }   # provider noise (PSPath/PSParentPath/...)
+                    if ($onlyNames.Count -and ($onlyNames -notcontains "$($pv.Name)")) { continue }
+                    $vals += "$($pv.Name) = $($pv.Value)"
+                }
+            }
+        }
+        if ($vals.Count -eq 0) { continue }
+        Add-Finding -ID "AUTORUNSURF_$([Math]::Abs($prPath.ToLower().GetHashCode()))" -Phase "PHASE 74.7" `
+            -ThreatType "Autorun Surface (inventory)" -Severity $SEV_INFO `
+            -Description "$($pr.Why). $($vals.Count) entr$(if ($vals.Count -eq 1) {'y'} else {'ies'}) present: $(($vals | Select-Object -First 8) -join ' ;; ')$(if ($vals.Count -gt 8) { " ;; (+$($vals.Count - 8) more)" })" `
+            -Target $prPath -FixAction "Info" -Group "Proactive Hardening"
+        $hardenHits++
+    } catch {}
+}
 # (b) Windows Script Host — disable .js/.vbs/.wsf double-click execution (commodity-malware delivery).
 try {
     $wshPath = "HKLM:\SOFTWARE\Microsoft\Windows Script Host\Settings"
     $wshEnabled = (Get-ItemProperty -LiteralPath $wshPath -Name "Enabled" -ErrorAction SilentlyContinue).Enabled
     if ($null -eq $wshEnabled -or [int]$wshEnabled -ne 0) {
-        Add-Finding -ID "HARDEN_WSH_DISABLE" -Phase "PHASE 74.7" -ThreatType "Script Host Exposure" -Severity $SEV_INFO `
-            -Description "Windows Script Host is enabled — .js/.jse/.vbs/.wsf files execute on double-click (top phishing delivery). Disabling blocks that vector." `
+        Add-Finding -ID "HARDEN_WSH_DISABLE" -Phase "PHASE 74.7" -ThreatType "Script Host Exposure" -Severity $phishSev `
+            -Description "Windows Script Host is enabled — .js/.jse/.vbs/.wsf files execute on double-click (top phishing delivery). Disabling blocks that vector.$phishWhy" `
             -Target $wshPath -FixAction "RunCmd" `
             -FixParam "New-Item -Path '$wshPath' -Force | Out-Null; Set-ItemProperty -Path '$wshPath' -Name 'Enabled' -Value 0 -Type DWord -Force" `
             -Group "Proactive Hardening"
         $hardenHits++
     }
 } catch {}
+# (b2) Script-lure file associations (proactive_lure_extensions — loaded but unread until
+# 2026-09-02). Disabling WSH above blocks the interpreter; this closes the other half of the same
+# vector by repointing the double-click handler for script/lure extensions at Notepad, so a .js
+# or .hta attachment OPENS instead of RUNS. Per-extension, per-user (HKCU), fully reversible, and
+# offered as an opt-in RunCmd at INFO (POSSIBLE once 74.6 has seen a phishing family) — never
+# auto-applied, because a shop with legitimate .vbs tooling would notice. Only offered for
+# extensions currently mapped to an executing handler. Reads the current user's hive only.
+foreach ($lx in @($PROACTIVE_LURE_EXTS)) {
+    try {
+        if (-not "$lx") { continue }
+        $lxKey = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\FileExts\$lx\UserChoice"
+        $curProgId = Get-RegVal -Path $lxKey -Name 'ProgId'
+        # Machine default when the user has made no explicit choice (64-bit view; HKLM\SOFTWARE).
+        if (-not $curProgId) { $curProgId = Get-RegVal64 -Hive 'LocalMachine' -SubKey "SOFTWARE\Classes\$lx" -Name '' }
+        if (-not $curProgId) { continue }                              # extension not registered at all
+        if ("$curProgId" -match '(?i)notepad|txtfile') { continue }    # already opens, does not run
+        Add-Finding -ID "HARDEN_LURE_$($lx -replace '[^a-z0-9]','')" -Phase "PHASE 74.7" `
+            -ThreatType "Script Lure Association" -Severity $phishSev `
+            -Description "Double-clicking a '$lx' file currently EXECUTES it (handler: $curProgId) — the standard phishing-attachment delivery path. Repointing this extension at Notepad for this user makes such an attachment open as text instead; reverse by deleting HKCU:\SOFTWARE\Classes\$lx.$phishWhy" `
+            -Target $lxKey -FixAction "RunCmd" `
+            -FixParam "New-Item -Path 'HKCU:\SOFTWARE\Classes\$lx' -Force | Out-Null; Set-ItemProperty -Path 'HKCU:\SOFTWARE\Classes\$lx' -Name '(default)' -Value 'txtfile' -Force" `
+            -Group "Proactive Hardening"
+        $hardenHits++
+    } catch {}
+}
 # (c) Defender posture + Attack Surface Reduction rules that kill the phishing-trojan kill chain.
 try {
     $mp = Get-MpPreference -ErrorAction Stop

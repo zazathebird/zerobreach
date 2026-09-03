@@ -1,68 +1,320 @@
 {
   "_comment": "Host manifest for lib/Scythe.Rules/Linting against data/detection_signatures.json. Read by lib/Scythe.Rules.Tests/Linting/ShippedSignatureFileTests.cs (dotnet test) and usable with LintTool --manifest. Two things are deliberately NOT listed here because the test derives them from the engine source and they cannot go stale: which sets are consumed (every Get-Sig / Join-AllowRegex call site whose loader variable is used somewhere) and which are allowlists (every Join-AllowRegex name). Only what the source cannot reveal - how the host MATCHES an entry - lives here. Classify a new set by reading its consumer, never by its name.",
   "shape": "flat",
-
   "_comment_allowlists": "Sets that suppress or skip a detection without going through Join-AllowRegex: -contains / -notin skip lists, the script's own-strings self-filter, the partner-vendor list, and the two regex skip lists phase 147/159 pass to Test-ScytheNameRule.",
   "allowlists": [
-    "winsock_lsp_benign", "remote_access_partner_vendors", "safeboot_default_entries",
-    "script_own_strings", "cloud_cred_never_read", "esp_expected_paths"
+    "winsock_lsp_benign",
+    "remote_access_partner_vendors",
+    "safeboot_default_entries",
+    "script_own_strings",
+    "cloud_cred_never_read",
+    "esp_expected_paths"
   ],
-
   "_comment_literal_sets": "Matched as escaped SUBSTRINGS: [regex]::Escape($_) inside -match, or bounded the same way (c2_pipe_patterns). The linter escapes these before compiling and runs the collision corpus on the escaped form - the same substring match the engine performs, which is why an entry here may not be a word that occurs inside a legitimate process name. A regex set listed here loses every regex check, so add a name ONLY after reading its consumer.",
   "literal_sets": [
-    "known_miner_procs", "known_rat_procs", "known_keylogger_procs", "loader_procs", "banking_trojan_procs",
-    "infostealer_procs", "wiper_procs", "script_own_strings", "banking_named_pipes", "c2_pipe_patterns",
-    "remote_access_partner_vendors", "known_c2_domains", "suspicious_dns_domains", "loader_c2_domains",
-    "infostealer_c2_domains", "email_phishing_trojans"
+    "known_miner_procs",
+    "known_rat_procs",
+    "known_keylogger_procs",
+    "loader_procs",
+    "banking_trojan_procs",
+    "infostealer_procs",
+    "wiper_procs",
+    "script_own_strings",
+    "banking_named_pipes",
+    "c2_pipe_patterns",
+    "remote_access_partner_vendors",
+    "known_c2_domains",
+    "suspicious_dns_domains",
+    "loader_c2_domains",
+    "infostealer_c2_domains",
+    "email_phishing_trojans"
   ],
-
   "_comment_equality_sets": "Compared as WHOLE values: -contains / -in / -eq, a hashtable key, a mutex name opened by exact name, or a path expanded and handed to Test-Path / Get-Item. Checked as ^escaped$, so '.bat' in an extension list does not collide with 'Adobe Acrobat' and a path list is not a detection an allowlist can swallow.",
   "equality_sets": [
-    "ransomware_extensions", "email_attach_extensions", "proactive_lure_extensions",
-    "office_addin_extensions", "webshell_extensions", "persist_dropper_extensions", "pe_extensions",
-    "pe_probe_extensions", "known_malware_hashes", "safeboot_default_entries", "sideload_dll_names",
-    "byovd_driver_names", "winsock_lsp_benign", "lateral_admin_shares", "lateral_remote_exec_children",
-    "esp_boot_binaries", "lolbas_expanded", "auto_elevate_bins", "known_malware_mutexes", "rat_reg_paths",
-    "uac_bypass_regs", "adware_pup_regs", "native_messaging_keys", "office_addin_keys",
-    "rat_config_paths_raw", "email_scan_paths_raw", "sideload_scan_roots_raw", "office_template_paths_raw",
-    "monitored_app_roots_raw", "webshell_roots_raw", "cloud_cred_paths_raw", "cloud_cred_staging_dirs_raw",
-    "devtool_paths_raw", "pe_scan_roots_hot_raw", "pe_scan_roots_app_raw", "creddump_search_roots_raw",
+    "ransomware_extensions",
+    "email_attach_extensions",
+    "proactive_lure_extensions",
+    "office_addin_extensions",
+    "webshell_extensions",
+    "persist_dropper_extensions",
+    "pe_extensions",
+    "pe_probe_extensions",
+    "known_malware_hashes",
+    "safeboot_default_entries",
+    "sideload_dll_names",
+    "byovd_driver_names",
+    "winsock_lsp_benign",
+    "lateral_admin_shares",
+    "lateral_remote_exec_children",
+    "esp_boot_binaries",
+    "lolbas_expanded",
+    "auto_elevate_bins",
+    "known_malware_mutexes",
+    "rat_reg_paths",
+    "uac_bypass_regs",
+    "adware_pup_regs",
+    "native_messaging_keys",
+    "office_addin_keys",
+    "rat_config_paths_raw",
+    "email_scan_paths_raw",
+    "sideload_scan_roots_raw",
+    "office_template_paths_raw",
+    "monitored_app_roots_raw",
+    "webshell_roots_raw",
+    "cloud_cred_paths_raw",
+    "cloud_cred_staging_dirs_raw",
+    "devtool_paths_raw",
+    "pe_scan_roots_hot_raw",
+    "pe_scan_roots_app_raw",
+    "creddump_search_roots_raw",
     "outbound_session_files_raw"
   ],
-
   "_comment_wildcard_sets": "-like globs, or paths carrying a * segment for Get-Item. The engine builds '^' + [regex]::Escape($_).Replace('\\*','.*') + '$' from them and so does the linter.",
   "wildcard_sets": [
-    "ransom_note_filenames", "cred_dump_tools", "tunneling_tools", "tunneling_tools_dualuse", "stego_tools",
-    "email_lure_filename_patterns", "infostealer_target_paths_raw", "trojan_file_patterns"
+    "ransom_note_filenames",
+    "cred_dump_tools",
+    "tunneling_tools",
+    "tunneling_tools_dualuse",
+    "stego_tools",
+    "email_lure_filename_patterns",
+    "infostealer_target_paths_raw",
+    "trojan_file_patterns"
   ],
-
-  "_comment_reference_sets": "Entries that name legitimate or structural things BY DESIGN: the system image names a masquerade check compares against, LOLBin and auto-elevate binaries, the child processes remote execution spawns, file extensions, kill-chain stage keywords matched against the tool's own finding text, and the dual-use tunnelling tools whose second list exists precisely to downgrade them. 'This matches real software' is the point. Compile, budget and duplicate checks still apply; the collision corpus, the length floor and the swallowed-detection pairing do not.",
+  "_comment_reference_sets": "Entries that name legitimate or structural things BY DESIGN: the system image names a masquerade check compares against, LOLBin and auto-elevate binaries, the child processes remote execution spawns, file extensions, kill-chain stage keywords matched against the tool's own finding text, and the dual-use tunnelling tools whose second list exists precisely to downgrade them. 'This matches real software' is the point. Compile, budget and duplicate checks still apply; the collision corpus, the length floor and the swallowed-detection pairing do not. trusted_root_ca_issuers joined this list on 2026-09-02 when phase 39 stopped using it as an allowlist: trust is decided by thumbprint (data/trusted_root_program.json + the AuthRoot store) and the vendor words only pick the wording of a POSSIBLE finding.",
   "reference_sets": [
-    "system_image_names", "pe_masquerade_names", "clr_unexpected_hosts", "lolbas_expanded", "auto_elevate_bins",
-    "lateral_remote_exec_children", "killchain_stages", "esp_boot_binaries", "sideload_dll_names",
-    "pe_extensions", "pe_probe_extensions", "email_attach_extensions", "office_addin_extensions",
-    "webshell_extensions", "persist_dropper_extensions", "proactive_lure_extensions",
-    "tunneling_tools", "tunneling_tools_dualuse"
+    "system_image_names",
+    "pe_masquerade_names",
+    "clr_unexpected_hosts",
+    "lolbas_expanded",
+    "auto_elevate_bins",
+    "lateral_remote_exec_children",
+    "killchain_stages",
+    "esp_boot_binaries",
+    "sideload_dll_names",
+    "pe_extensions",
+    "pe_probe_extensions",
+    "email_attach_extensions",
+    "office_addin_extensions",
+    "webshell_extensions",
+    "persist_dropper_extensions",
+    "proactive_lure_extensions",
+    "tunneling_tools",
+    "tunneling_tools_dualuse",
+    "trusted_root_ca_issuers"
   ],
-
-  "_comment_substring_allowlists": "Allowlists matched against text whose LOCATION the attacker does not choose (install paths, signer names) - CLAUDE.md's 'path-only allowlists are fine' rule. They are held to component anchoring (an entry begins and ends at a path separator or a real anchor) at warning level instead of ^...$ at error level. Every allowlist NOT listed here is compared against an attacker-chosen value (a run-key value, a command line, a service or file name, an account) and must be fully anchored. Two entries here are weaker than the rest and are recorded, not hidden: trusted_root_ca_issuers matches bare vendor words against root-store certificate subjects, which a rogue CA can name itself after, and native_messaging_benign_hosts matches host-name PREFIXES that an attacker registering a host can also choose. Both are heuristic by design and belong to the FP/hardening round (HANDOFF.md 2026-09-02).",
+  "_comment_substring_allowlists": "Allowlists matched against text whose LOCATION the attacker does not choose (install paths, signer names) - CLAUDE.md's 'path-only allowlists are fine' rule. They are held to component anchoring (an entry begins and ends at a path separator or a real anchor) at warning level instead of ^...$ at error level. Every allowlist NOT listed here is compared against an attacker-chosen value (a run-key value, a command line, a service or file name, an account) and must be fully anchored. Every entry in every list here is component-anchored as of 2026-09-02 (the lint reports any that is not). native_messaging_benign_hosts stays listed because its entries are anchored host NAMES (^vendor\\\\.rest$) rather than paths, and phase 117 no longer stops at the name match: the host binary is examined regardless.",
   "substring_allowlists": [
-    "cloud_cred_benign_paths", "creddump_hive_benign_paths", "devtool_benign_paths", "exec_evidence_benign_paths",
-    "hidden_task_benign_paths", "hunt_filename_benign_paths", "hunt_memory_benign_paths", "hunt_ppid_benign_paths",
-    "hunt_task_benign_paths", "hunt_timestomp_benign_paths", "infostealer_benign_paths", "keylogger_benign_paths",
-    "logon_explicit_cred_benign_procs", "miner_config_benign_paths", "native_messaging_benign_hosts",
-    "office_addin_benign_paths", "outbound_session_benign_paths", "packed_script_benign_paths",
-    "pe_packer_benign_paths", "persist_dll_benign_paths", "persist_profiler_benign_names", "sct_benign_paths",
-    "shell_extension_benign_dlls", "sideload_benign_paths", "spooler_benign_dlls", "trusted_root_ca_issuers",
-    "webhook_c2_benign_paths", "yara_benign_paths", "cloud_cred_never_read", "esp_expected_paths"
+    "cloud_cred_benign_paths",
+    "creddump_hive_benign_paths",
+    "devtool_benign_paths",
+    "exec_evidence_benign_paths",
+    "hidden_task_benign_paths",
+    "hunt_filename_benign_paths",
+    "hunt_memory_benign_paths",
+    "hunt_ppid_benign_paths",
+    "hunt_task_benign_paths",
+    "hunt_timestomp_benign_paths",
+    "infostealer_benign_paths",
+    "keylogger_benign_paths",
+    "logon_explicit_cred_benign_procs",
+    "miner_config_benign_paths",
+    "native_messaging_benign_hosts",
+    "office_addin_benign_paths",
+    "outbound_session_benign_paths",
+    "packed_script_benign_paths",
+    "pe_packer_benign_paths",
+    "persist_dll_benign_paths",
+    "persist_profiler_benign_names",
+    "sct_benign_paths",
+    "shell_extension_benign_dlls",
+    "sideload_benign_paths",
+    "spooler_benign_dlls",
+    "webhook_c2_benign_paths",
+    "yara_benign_paths",
+    "cloud_cred_never_read",
+    "esp_expected_paths"
   ],
-
-  "_comment_accepted_collisions": "Collisions with the legitimate-software corpus that were reviewed and kept. Reported at Info with the reason; editing the entry re-opens the question.",
-  "accepted_collisions": [
+  "_comment_accepted_findings": "Findings a maintainer reviewed and kept, each with the reason: IndicatorCollidesWithLegitimateName (the entry matches real software), IndicatorTooShort (the pattern guarantees no 4+ character literal), AllowlistSwallowsDetection (the linter paired an allowlist with an indicator another phase owns). Reported at Info with the reason appended. The entry must match verbatim, so editing the rule re-opens the question; a stale acceptance is reported as an error by tools/tests/Test-Signature-Lint.ps1. For a swallow, set/entry name the ALLOWLIST side.",
+  "accepted_findings": [
     {
+      "code": "IndicatorCollidesWithLegitimateName",
       "set": "lateral_movement_artifacts",
       "entry": "(?i)^[a-z]{8}\\.exe$",
       "why": "impacket's psexec/smbexec drop an 8-random-letter service binary and the shape is the only signal. The rule runs only over *.exe CREATED in System32 inside the scan window, at POSSIBLE with FixAction Info, so it is never auto-selected. Any 8-letter Windows binary (msconfig.exe, cleanmgr.exe, taskkill.exe) matches by shape on a machine serviced inside the window: expected noise for the FP round, not an action."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "email_lure_filename_patterns",
+      "entry": "*dhl*",
+      "why": "Courier-brand lure. Phase 74.5 applies the glob only to files inside the Outlook attachment cache and grades HIGH only when the file also carries an executable attachment extension; a bare name hit is POSSIBLE/Info."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "bits_suspicious_remote_regex",
+      "entry": "https?://(\\d{1,3}\\.){3}\\d{1,3}[:/]|\\\\\\\\(\\d{1,3}\\.){3}\\d{1,3}\\\\",
+      "why": "A raw-IP remote URL is a shape, not a literal; that shape is the whole signal for a BITS job (phase 31), which is corroborating evidence and never HIGH on its own."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "c2_pipe_patterns",
+      "entry": "msf",
+      "why": "Phase 62 does not substring-match this list: each entry is wrapped in (^|[^a-z0-9])...([^a-z0-9]|$), so 'msf' cannot hit the Windows Search pipe MsFteWds. The linter's literal model is conservative here."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "infostealer_behavior_rules",
+      "entry": "(mfa\\.[\\w-]{84}|[\\w-]{24}\\.[\\w-]{6}\\.[\\w-]{27,38})",
+      "why": "Discord token grammar. Matched only inside a process command line already flagged by an infostealer behaviour rule (phase 99.5); the token has no literal to require."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "ransom_note_content_rules",
+      "entry": "(?i)do\\s+not\\s+(contact|involve|go\\s+to)\\s+(the\\s+)?(police|fbi|law\\s+enforcement|authorities)",
+      "why": "Ransom-note phrasing; whitespace-flexible so the longest fixed run is short. Runs only over the CONTENT of files whose name already matches a ransom-note pattern (phase 53)."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "ransom_note_content_rules",
+      "entry": "(?i)(tox\\s*id|toxchat|qtox)\\b.{0,8}[0-9A-F]{40,}",
+      "why": "A Tox ID (40+ hex) after a Tox keyword; the id is the payload and has no fixed literal. Same phase-53 content scope."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "lnk_hijack_rules",
+      "entry": "(?i)cmd(\\.exe)?\\b[^\\n]{0,200}/c\\b[^\\n]{0,300}\\.(vbs|js|jse|hta|bat|cmd|ps1|scr|pif)\\b",
+      "why": "The signal is the SHAPE of a .lnk target (cmd /c ... script) not a literal; phase 118 matches it against the shortcut's own target+arguments, and .lnk files whose target is a shell are the phishing container it exists to catch."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "lnk_hijack_rules",
+      "entry": "(?i)(^|\\s|\")\\\\\\\\[a-z0-9._-]{2,}\\\\[^\\s\"]{1,120}\\.(exe|dll|scr|lnk|bat|cmd|vbs|js|hta)\\b",
+      "why": "A UNC-hosted executable as a .lnk target is a shape, not a literal. Phase 118 scope as above; POSSIBLE/Info."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "clipper_wallet_rules",
+      "entry": "(?<![A-Za-z0-9])(bc1[ac-hj-np-z02-9]{11,71}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})(?![A-Za-z0-9])",
+      "why": "Bitcoin address grammar. Phase 124 applies it to clipboard-monitor process memory strings and clipper config files, never to arbitrary files; an address has no literal to require."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "clipper_wallet_rules",
+      "entry": "(?<![A-Za-z0-9])0x[a-fA-F0-9]{40}(?![A-Za-z0-9])",
+      "why": "Ethereum address grammar; same phase-124 scope."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "clipper_wallet_rules",
+      "entry": "(?<![A-Za-z0-9])4[0-9AB][1-9A-HJ-NP-Za-km-z]{93}(?![A-Za-z0-9])",
+      "why": "Monero address grammar; same phase-124 scope."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "clipper_wallet_rules",
+      "entry": "(?<![A-Za-z0-9])T[1-9A-HJ-NP-Za-km-z]{33}(?![A-Za-z0-9])",
+      "why": "Tron address grammar; same phase-124 scope."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "exfil_archive_rules",
+      "entry": "(?i)^(backup|data|share|dump|exfil|files|docs|archive|db)[-_ ]?20[0-9]{2}[-_]?[01][0-9][-_]?[0-3][0-9]\\.(7z|zip|rar)$",
+      "why": "Date-stamped staging-archive NAME shape; the keyword alternation keeps the required run under four characters. Phase 129 grades it POSSIBLE/Info and only for recent archives in user paths."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "webshell_content_rules",
+      "entry": "(?i)(Chr\\s*\\(\\s*\\d{2,3}\\s*\\)\\s*[&+]\\s*){12,}",
+      "why": "Twelve or more Chr() concatenations is classic ASP web-shell obfuscation; the repeat is the signal. Runs only over files under web roots (phase 132)."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "lateral_movement_artifacts",
+      "entry": "(?i)\\\\\\\\[a-z0-9._-]{2,}\\\\(ADMIN\\$|C\\$|IPC\\$)\\\\",
+      "why": "An admin-share UNC path is a shape (\\\\host\\ADMIN$\\); phase 133 matches it against recent command lines and service binaries, POSSIBLE/Info."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "cloud_cred_content_rules",
+      "entry": "(?i)\\bxox[baprs]-[A-Za-z0-9-]{10,}",
+      "why": "Slack token grammar (xoxb-/xoxp-...). Phase 147 applies it only to files in the credential inventory and staging paths; the finding never quotes the match."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "cloud_cred_content_rules",
+      "entry": "(?i)\\beyJ[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9_-]{8,}",
+      "why": "JWT grammar (base64url header.payload.signature); same phase-147 scope."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "cloud_cred_content_rules",
+      "entry": "(?i)\\b(password|passwd|client_secret|api[_-]?key|access[_-]?token)\\b\\s{0,4}[:=]\\s{0,4}[\"']?[^\\s\"']{8,}",
+      "why": "Key=value secret assignment; the alternation of key names keeps the required literal short. Same phase-147 scope, never quotes the value."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "cloud_cred_staged_names",
+      "entry": "(?i)^(aws|azure|gcp|ssh|kube|creds?|secrets?)[-_ ]?(creds?|credentials|keys?|backup|dump|export)\\.(zip|7z|rar|tar|gz|txt|json)$",
+      "why": "Whole-name shape of a staged credential export; phase 147 branch (c) applies it only in staging directories (Temp, Downloads, Public, ProgramData)."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "devtool_hook_rules",
+      "entry": "(?i)\\|\\s{0,4}(bash|sh|zsh|powershell|pwsh|iex|Invoke-Expression)\\b",
+      "why": "Pipe-to-shell inside a git hook; the pipe is the signal. Phase 158 runs it only over non-.sample hook files."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "devtool_hook_rules",
+      "entry": "(?i)-(w(indowstyle)?)\\s{1,4}h(idden)?\\b",
+      "why": "PowerShell hidden-window switch in a hook; abbreviations keep it short. Same phase-158 hook scope."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "devtool_gitconfig_rules",
+      "entry": "(?im)^\\s{0,8}[A-Za-z0-9_-]{1,40}\\s{0,4}=\\s{0,4}![^\\r\\n]{2,}",
+      "why": "A git alias beginning with '!' runs a shell command; the '!' is the entire signal. Phase 158 reads only .git/config and the global config."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "pe_packer_section_names",
+      "entry": "^UPX[0-9!]$",
+      "why": "Whole-name match of a PE section (UPX0/UPX1/UPX!). Section names are eight bytes; phase 146 scores this as one signal of several and never reports it alone."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "lateral_remote_task_rules",
+      "entry": "(?i)\\\\\\\\[a-z0-9._-]{2,}\\\\[a-z0-9$._ -]{1,}\\\\",
+      "why": "A UNC path in a scheduled-task action is a shape; phase 148 applies it only to task XML actions."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "lateral_remote_task_rules",
+      "entry": "(?i)\\\\\\\\[a-z0-9._-]{2,}\\\\(ADMIN|C|IPC)\\$",
+      "why": "Admin-share UNC in a task action; same phase-148 scope."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "creddump_hive_names",
+      "entry": "^SAM$",
+      "why": "The file is literally called SAM. Whole-name anchored; phase 149 reports a copy only OUTSIDE its one legitimate home (creddump_hive_benign_paths)."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "kerberos_weak_etype_rules",
+      "entry": "(?i)(DES-CBC|\\b0x1\\b|\\b0x3\\b)",
+      "why": "klist prints weak etypes as DES-CBC or as the numeric ids 0x1/0x3; the ids are three characters by definition. Phase 150 matches klist output only."
+    },
+    {
+      "code": "IndicatorTooShort",
+      "set": "clickfix_runmru_rules",
+      "entry": "(?i)(#\\s*(verify|captcha|human|robot|ray\\s*id)|\\bI am not a robot\\b|✅|✔)",
+      "why": "ClickFix RunMRU bait: the comment marker and the checkmark glyphs are one or two characters by nature. Matched only against Explorer RunMRU values (phase 125), which a healthy machine does not fill with captcha prose."
+    },
+    {
+      "code": "AllowlistSwallowsDetection",
+      "set": "logon_benign_accounts",
+      "entry": "^SYSTEM$",
+      "why": "Phase 152 account-name allowlist paired by the file-global check with phase 149's creddump_hive_names ^SYSTEM$, a FILE name. Different consumers, different inputs; the pairing is a false positive of the linter's scope, recorded rather than hidden."
     }
   ]
 }

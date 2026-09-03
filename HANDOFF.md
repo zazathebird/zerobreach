@@ -1,8 +1,117 @@
 # HANDOFF
 
-## Session 2026-09-02 (later) — the `lib/` linter is wired to the real signature file
+## Session 2026-09-02 (evening) — the linter's 170 warnings are gone; ceiling is 0
 
 **Read this first. Everything below the next `---` is prior-session history.**
+
+### State
+
+Branch `security/audit-2026-08-18`, **committed and pushed to `origin`** (one commit; run
+`git log --oneline -1` to see it). The morning entry's five-item risk list is closed:
+
+| Morning item | What happened |
+|---|---|
+| 1. Five dead sets | **Wired** (74.6 phishing families, 74.7 autorun census + lure associations, 90 filename patterns, 92 live auto-elevate). The June review that wired them lived on `session12/review-remediation-ws6` and never reached this branch. All findings `FixAction Info`. The C# test now FAILS on any pulled-but-unread set. |
+| 2. `trusted_root_ca_issuers` name-based trust | **Replaced by thumbprints.** New `data/trusted_root_program.json` (CCADB report, 549 roots + 14 Windows-shipped + 4 legacy by subject/serial/expiry), `Resolve-RootCertTrust` in the loader, phase 39 rewritten, all Info. Regenerate with `tools/Update-TrustedRoots.ps1`. |
+| 3. `native_messaging_benign_hosts` skips on name | **Fixed in phase 117**: binary resolved first, trusted name excuses only a non-hijacked host; entries anchored `^vendor\.rest$`. |
+| 4. `hidden_task_benign_paths` bare words | **Anchored** to `\Tasks\…` components (26 → 23 entries). Shapes not yet seen on a real box fail CLOSED (POSSIBLE for review). |
+| 5. 8-letter service-binary rule | Unchanged; still the first item for the phase 133 FP round. |
+
+Plus: `infostealer_benign_paths`, `hunt_task_benign_paths`, three Temp-group entries and the
+Program Files vendor group component-anchored; `accepted_collisions` → **`accepted_findings`**
+(`{code, set, entry, why}`, three codes) with 30 acceptances, every one carrying the phase
+that scopes it; `WarningCeiling = 0`.
+
+Touched: `Scythe-V23.ps1` (trusted-root load, `Get-TrustedRootIndex`, `Resolve-RootCertTrust`,
+`$TRUSTED_ROOT_CA_RE` now reference words via `Get-Sig`); `engine/Phases-1.ps1` (39),
+`Phases-2.ps1` (74.6, 74.7), `Phases-3.ps1` (90, 92), `Phases-4.ps1` (117);
+`data/detection_signatures.json`, `data/signature_lint_manifest.json`, **new**
+`data/trusted_root_program.json`, **new** `tools/Update-TrustedRoots.ps1`,
+`tools/Build-Release.ps1`; `lib/Scythe.Rules/Linting/{LintManifest,LintOptions,LintTool,
+RuleFileLinter}.cs`, `lib/Scythe.Rules.Tests/Linting/{FlatShapeTests,ShippedSignatureFileTests,
+AcceptedFindingsTests(new)}.cs`; **new** `tools/tests/Test-Allowlist-Anchors.ps1` (233
+assertions, Strict, bite proven by two injections), `Test-Signature-Lint.ps1` §3,
+`Test-Extended-Band.ps1` (spoofed-prefix deny cases), `Run-SecurityTests.ps1`; `CHANGELOG.md`,
+`CLAUDE.md` (two new rule sections + linter section updated), this file.
+
+Verified: `dotnet build Scythe.sln` 0 warnings; Rules project **590 passed / 0 failed** with the
+shipped lint at 0 errors / 0 warnings / 30 info; PowerShell suite 27 files green under pwsh
+7.4.6 — the final run printed "All security regression tests passed" with 27 of 27 files PASS.
+
+### Things a Windows box must confirm before this is trusted
+
+Everything above ran only on Linux/pwsh. Specifically untested against a live machine:
+
+1. **Phase 39 on a real root store.** Expect: every root INFO on a stock Windows 11 box
+   except OEM roots (Dell/Lenovo/HP) → POSSIBLE `VendorName`. If a stock box shows a
+   POSSIBLE for a Microsoft root, that root belongs in `windows_shipped` — add it WITH the
+   `certutil`/PKI-page source. `HasPrivateKey` on `Root` store certificates is the one
+   property whose behaviour I could not observe; if it is true for a Windows-shipped root on a
+   clean box, the PrivateKey tier needs an "and not Shipped/Program" guard.
+2. **Phase 104's 23 task-path shapes.** Any hidden vendor task that now shows POSSIBLE tells
+   you the real shape; tighten the entry to it (fail-closed is the designed direction).
+3. **Phase 74.7 (a2)** on a domain workstation: the census should list Run/RunOnce contents;
+   confirm `Get-RegNames64` returns names for `Wow6432Node\...\Run`.
+4. **Phase 117** on a box with 1Password/Bitwarden hosts: they must not appear (signed, in
+   Program Files); an unsigned host under AppData must appear HIGH.
+
+### EXACT STATE AT INTERRUPTION (session hit its weekly limit, 2026-09-02 evening)
+
+**The lint round above is COMPLETE and VERIFIED. Nothing in it is half-finished.** The session
+stopped during the *next* task, which had produced no output at all. Resume as follows.
+
+**1. The tree is clean — everything is committed and pushed.** The round landed as one commit
+covering 25 paths (21 modified, 4 new: `data/trusted_root_program.json`,
+`tools/Update-TrustedRoots.ps1`, `tools/tests/Test-Allowlist-Anchors.ps1`,
+`lib/Scythe.Rules.Tests/Linting/AcceptedFindingsTests.cs`). To re-confirm the green state
+before building on it:
+
+```bash
+~/.dotnet/dotnet build Scythe.sln                       # expect 0 warnings, 0 errors
+~/.dotnet/dotnet test lib/Scythe.Rules.Tests            # expect 590 passed / 0 failed
+~/powershell/pwsh -NoProfile -File tools/tests/Run-SecurityTests.ps1   # expect 27/27 PASS
+```
+
+**2. The thing that was in flight, and produced NOTHING.** A read-only survey agent was
+launched to map `SignatureDb`, the `Scythe.Rules` (YARA/Sigma) and `Scythe.Formats` public
+APIs, and phase 146's PE parser, to ground BLUEPRINT §10 item 6's design decision. It died on
+the rate limit before writing a line. **There is no `docs/SIGNATUREDB_DESIGN.md` and no partial
+survey output — start that step from scratch.** What it was asked to report, so it need not be
+re-derived:
+
+- `SignatureDb`: where defined, public shape, which JSON it loads, every scanner that calls it,
+  and how a scanner reports a finding (result types, the `Completed`/`Inconclusive`/`Skipped`
+  status enum, deterministic finding ids).
+- `lib/Scythe.Rules`: YARA entry points (parse/compile a rule set, scan a buffer or file, what
+  a match returns), Sigma entry points (rule loading, the event shape evaluated against, match
+  result), the budgets/timeouts exposed, and any rule-corpus directory format.
+- `lib/Scythe.Formats`: the PE types (headers, sections, imports, entropy, overlay, certificate
+  table), how truncated or hostile input is handled, and its budgets.
+- Phase 146 in `engine/Phases-6.ps1`: each parser function and what it computes, plus the `pe_*`
+  keys it reads from `data/detection_signatures.json`.
+- What `docs/` and `BLUEPRINT.md` already decided about `SignatureDb`, YARA, Sigma and a rule
+  corpus.
+- How the native engine is built and shipped (single-file win-x64), to know whether a rule
+  corpus would be embedded resources or files beside the exe.
+
+Nothing else was started. No file is mid-edit.
+
+**3. Then the standing queue**, unchanged: the Windows-bound work (validation of 116-162, FP
+rounds — with the 8-letter service-binary rule and the four phase-39/104/74.7/117 items above as
+the opening list), and Linux-side, item 6 proper — the design decision itself, then folding
+phase 146's PE reader onto `Scythe.Formats`.
+
+### Operator preference recorded 2026-09-02
+
+Work at **low token usage and low priority** by default. Finishing a task slowly is preferred
+over finishing it fast and burning the weekly allowance; batch tool calls, keep subagents few
+and narrowly scoped, and prefer targeted reads over broad sweeps.
+
+---
+
+## Session 2026-09-02 (later) — the `lib/` linter is wired to the real signature file
+
+**(prior entry — its risk list is resolved by the entry above)**
 
 ### State
 

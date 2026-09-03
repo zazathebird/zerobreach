@@ -16,11 +16,16 @@ namespace Scythe.Rules.Linting;
 ///   "wildcard_sets": [...],       -like globs the host anchors and translates
 ///   "reference_sets": [...],      legitimate names by design; no collision/length checks
 ///   "substring_allowlists": [...], path-shaped allowlists held to component anchoring
+///   "accepted_findings": [ { "code": "...", "set": "...", "entry": "...", "why": "..." } ],
 ///   "accepted_collisions": [ { "set": "...", "entry": "...", "why": "..." } ] }
 /// </code>
-/// The original form, a bare JSON array, is the <c>consumed</c> list alone. Every key is
-/// optional; <c>_comment*</c> keys are documentation; any other unknown key is refused so a
-/// typo cannot quietly disable the section it was meant to fill.
+/// <c>accepted_findings</c> takes a <see cref="LintCode"/> name from
+/// <see cref="AcceptedFinding.AcceptableCodes"/>; <c>accepted_collisions</c> is the older
+/// spelling of the same thing with the code fixed at
+/// <see cref="LintCode.IndicatorCollidesWithLegitimateName"/>. Both may appear and are
+/// concatenated. The original form, a bare JSON array, is the <c>consumed</c> list alone.
+/// Every key is optional; <c>_comment*</c> keys are documentation; any other unknown key is
+/// refused so a typo cannot quietly disable the section it was meant to fill.
 /// </summary>
 public sealed record LintManifest(
     RuleFileShape? Shape,
@@ -31,12 +36,18 @@ public sealed record LintManifest(
     IReadOnlyList<string> WildcardSets,
     IReadOnlyList<string> ReferenceSets,
     IReadOnlyList<string> SubstringAllowlists,
-    IReadOnlyList<AcceptedCollision> AcceptedCollisions)
+    IReadOnlyList<AcceptedFinding> AcceptedFindings)
 {
+    private const string KnownKeys =
+        "shape, consumed, allowlists, literal_sets, equality_sets, wildcard_sets, reference_sets, substring_allowlists, accepted_findings, accepted_collisions";
+
+    private static readonly string AcceptableCodeNames =
+        string.Join(", ", AcceptedFinding.AcceptableCodes);
+
     public static LintManifest Empty { get; } = new(
         null, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
         Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
-        Array.Empty<AcceptedCollision>());
+        Array.Empty<AcceptedFinding>());
 
     /// <summary>Merges this manifest onto <paramref name="options"/>: lists are unioned,
     /// the shape is applied only when the manifest states one.</summary>
@@ -51,8 +62,8 @@ public sealed record LintManifest(
             }
         }
 
-        var accepted = new List<AcceptedCollision>(options.AcceptedCollisions);
-        accepted.AddRange(AcceptedCollisions);
+        var accepted = new List<AcceptedFinding>(options.AcceptedFindings);
+        accepted.AddRange(AcceptedFindings);
 
         return options with
         {
@@ -64,7 +75,7 @@ public sealed record LintManifest(
             WildcardSets = Union(options.WildcardSets, WildcardSets),
             ReferenceSets = Union(options.ReferenceSets, ReferenceSets),
             SubstringAllowlists = Union(options.SubstringAllowlists, SubstringAllowlists),
-            AcceptedCollisions = accepted,
+            AcceptedFindings = accepted,
         };
     }
 
@@ -98,11 +109,12 @@ public sealed record LintManifest(
 
         if (parse.Root is not JsonSourceObject obj)
         {
-            error.WriteLine($"error: manifest '{path}' must be a JSON array of set names or an object (shape, consumed, allowlists, literal_sets, equality_sets, wildcard_sets, reference_sets, substring_allowlists, accepted_collisions)");
+            error.WriteLine($"error: manifest '{path}' must be a JSON array of set names or an object ({KnownKeys})");
             return null;
         }
 
         var manifest = Empty;
+        var accepted = new List<AcceptedFinding>();
         foreach (var property in obj.Properties)
         {
             if (property.Name.StartsWith(RuleFileReader.CommentKeyPrefix, StringComparison.Ordinal))
@@ -122,18 +134,21 @@ public sealed record LintManifest(
                 continue;
             }
 
-            if (property.Name == "accepted_collisions")
+            if (property.Name is "accepted_findings" or "accepted_collisions")
             {
-                if (property.Value is not JsonSourceArray list ||
-                    ReadAcceptedCollisions(list, path, error) is not { } accepted)
+                bool isLegacyKey = property.Name == "accepted_collisions";
+                if (property.Value is not JsonSourceArray list)
                 {
-                    if (property.Value is not JsonSourceArray)
-                    {
-                        error.WriteLine($"error: manifest '{path}' 'accepted_collisions' must be an array of {{ set, entry, why }} objects");
-                    }
+                    error.WriteLine(isLegacyKey
+                        ? $"error: manifest '{path}' 'accepted_collisions' must be an array of {{ set, entry, why }} objects"
+                        : $"error: manifest '{path}' 'accepted_findings' must be an array of {{ code, set, entry, why }} objects");
                     return null;
                 }
-                manifest = manifest with { AcceptedCollisions = accepted };
+                if (ReadAcceptedFindings(list, property.Name, isLegacyKey, path, error) is not { } items)
+                {
+                    return null;
+                }
+                accepted.AddRange(items);
                 continue;
             }
 
@@ -162,11 +177,11 @@ public sealed record LintManifest(
                 continue;
             }
 
-            error.WriteLine($"error: manifest '{path}' has an unknown key '{property.Name}' (expected shape, consumed, allowlists, literal_sets, equality_sets, wildcard_sets, reference_sets, substring_allowlists, accepted_collisions)");
+            error.WriteLine($"error: manifest '{path}' has an unknown key '{property.Name}' (expected {KnownKeys})");
             return null;
         }
 
-        return manifest;
+        return manifest with { AcceptedFindings = accepted };
     }
 
     private static RuleFileShape? TryParseShape(string text) => text switch
@@ -193,41 +208,71 @@ public sealed record LintManifest(
         return names;
     }
 
-    private static IReadOnlyList<AcceptedCollision>? ReadAcceptedCollisions(
-        JsonSourceArray array, string path, TextWriter error)
+    /// <summary>
+    /// Reads one accepted-findings list. Under the legacy key (<paramref name="legacy"/>)
+    /// the code is fixed at <see cref="LintCode.IndicatorCollidesWithLegitimateName"/> and a
+    /// <c>code</c> field is refused; under <c>accepted_findings</c> it is required and must
+    /// name, case-sensitively, one of <see cref="AcceptedFinding.AcceptableCodes"/>.
+    /// </summary>
+    private static IReadOnlyList<AcceptedFinding>? ReadAcceptedFindings(
+        JsonSourceArray array, string key, bool legacy, string path, TextWriter error)
     {
-        var accepted = new List<AcceptedCollision>(array.Items.Count);
+        string expectedFields = legacy ? "set, entry, why" : "code, set, entry, why";
+        var accepted = new List<AcceptedFinding>(array.Items.Count);
         foreach (var item in array.Items)
         {
             if (item is not JsonSourceObject obj)
             {
-                error.WriteLine($"error: manifest '{path}' accepted_collisions entry at ({item.Location.Line},{item.Location.Column}) is not an object");
+                error.WriteLine($"error: manifest '{path}' {key} entry at ({item.Location.Line},{item.Location.Column}) is not an object");
                 return null;
             }
-            string? set = null, entry = null, why = null;
+            string? code = null, set = null, entry = null, why = null;
             foreach (var field in obj.Properties)
             {
                 if (field.Value is not JsonSourceString s)
                 {
-                    error.WriteLine($"error: manifest '{path}' accepted_collisions field '{field.Name}' at ({field.Value.Location.Line},{field.Value.Location.Column}) is not a string");
+                    error.WriteLine($"error: manifest '{path}' {key} field '{field.Name}' at ({field.Value.Location.Line},{field.Value.Location.Column}) is not a string");
                     return null;
                 }
                 switch (field.Name)
                 {
+                    case "code" when !legacy: code = s.Value; break;
                     case "set": set = s.Value; break;
                     case "entry": entry = s.Value; break;
                     case "why": why = s.Value; break;
                     default:
-                        error.WriteLine($"error: manifest '{path}' accepted_collisions has an unknown field '{field.Name}' (expected set, entry, why)");
+                        error.WriteLine(field.Name == "code"
+                            ? $"error: manifest '{path}' accepted_collisions entries carry no 'code' (they are always {LintCode.IndicatorCollidesWithLegitimateName}); use accepted_findings to accept another code"
+                            : $"error: manifest '{path}' {key} has an unknown field '{field.Name}' (expected {expectedFields})");
                         return null;
                 }
             }
-            if (set is null || entry is null || string.IsNullOrWhiteSpace(why))
+
+            LintCode parsedCode;
+            if (legacy)
             {
-                error.WriteLine($"error: manifest '{path}' accepted_collisions entry at ({item.Location.Line},{item.Location.Column}) needs set, entry and a non-empty why — an accepted collision without a reason is a suppression");
+                parsedCode = LintCode.IndicatorCollidesWithLegitimateName;
+            }
+            else if (code is null)
+            {
+                error.WriteLine($"error: manifest '{path}' accepted_findings entry at ({item.Location.Line},{item.Location.Column}) needs a 'code' — one of {AcceptableCodeNames}");
                 return null;
             }
-            accepted.Add(new AcceptedCollision(set, entry, why));
+            else if (!Enum.TryParse(code, ignoreCase: false, out parsedCode) ||
+                     parsedCode.ToString() != code || // TryParse also takes "11"; a name is required
+                     !AcceptedFinding.IsAcceptable(parsedCode))
+            {
+                error.WriteLine($"error: manifest '{path}' accepted_findings entry at ({item.Location.Line},{item.Location.Column}) has code \"{code}\", which cannot be accepted — only {AcceptableCodeNames} can; every other code is a defect");
+                return null;
+            }
+
+            if (set is null || entry is null || string.IsNullOrWhiteSpace(why))
+            {
+                string needs = legacy ? "set, entry and a non-empty why" : "code, set, entry and a non-empty why";
+                error.WriteLine($"error: manifest '{path}' {key} entry at ({item.Location.Line},{item.Location.Column}) needs {needs} — an accepted finding without a reason is a suppression");
+                return null;
+            }
+            accepted.Add(new AcceptedFinding(parsedCode, set, entry, why));
         }
         return accepted;
     }

@@ -148,11 +148,18 @@ if ($PhasePlan.Extended) {
     Show-PhaseHeader "PHASE 117" "NATIVE MESSAGING HOSTS & BROWSER DEBUG-PORT ABUSE" "BROWSER"
     Out-Typewriter "CHECKING EXTENSION-TO-NATIVE-BINARY BRIDGES AND LIVE BROWSER SWITCHES..." "HUNT"
     $nmHits = 0
+    # Sig budget for the host-binary check (CLAUDE.md: any loop calling Get-AuthSig carries the
+    # SIG_AUDIT budget). There are rarely more than a dozen hosts, but the budget costs nothing.
+    $nmSigSeen = 0; $nmSigSw = [System.Diagnostics.Stopwatch]::StartNew()
     foreach ($nk in @($NATIVE_MSG_KEYS)) {
         if (-not (Test-Path -LiteralPath $nk)) { continue }
         foreach ($hostKey in @(Get-ChildItem -LiteralPath $nk -ErrorAction SilentlyContinue)) {
             $hostName = $hostKey.PSChildName
-            if ($hostName -match $NATIVE_MSG_BENIGN_RE) { continue }
+            # A recognised vendor NAME no longer ends the check (2026-09-02). The name is the one
+            # thing the attacker registering a host chooses, so 'com.microsoft.backdoor' used to
+            # skip straight past the binary. Resolve the binary first; a trusted name only excuses
+            # a host whose binary is not an unsigned executable in a user-writable path.
+            $nameBenign = ("$hostName" -match $NATIVE_MSG_BENIGN_RE)
             $manifest = Get-RegVal -Path $hostKey.PSPath -Name '(default)'
             if (-not $manifest) { continue }
             $hostExe = ''
@@ -167,16 +174,26 @@ if ($PhasePlan.Extended) {
             } catch {}
             $userPath = ($hostExe -match '(?i)\\(AppData|Temp|Downloads|Users\\Public|ProgramData)\\')
             $unsigned = $false
-            if ($hostExe -and (Test-Path -LiteralPath $hostExe)) {
+            if ($hostExe -and $userPath -and (Test-Path -LiteralPath $hostExe) -and
+                $nmSigSeen -lt $global:SIG_AUDIT_MAX_FILES -and $nmSigSw.Elapsed.TotalSeconds -lt $global:SIG_AUDIT_DEADLINE_S) {
+                $nmSigSeen++
                 $nv = Get-SignatureVerdict $hostExe
                 $unsigned = ($nv.Status -ne 'Valid')
             }
-            $nsev = if ($unsigned -and $userPath) { $SEV_HIGH } else { $SEV_POSSIBLE }
+            $hijacked = ($unsigned -and $userPath)
+            if ($nameBenign -and -not $hijacked) { continue }
+            $nsev = if ($hijacked) { $SEV_HIGH } else { $SEV_POSSIBLE }
             $nmHits++
-            Out-Typewriter "  -> NATIVE MESSAGING HOST: $hostName -> $(if($hostExe){$hostExe}else{$manifest})" "WARN"
+            $shown = if ($hostExe) { $hostExe } else { $manifest }
+            Out-Typewriter "  -> NATIVE MESSAGING HOST: $hostName -> $shown" "WARN"
+            $ndesc = if ($nameBenign) {
+                "Native-messaging host '$hostName' is registered under a TRUSTED vendor name, but the binary it bridges the browser to is an unsigned executable in a user-writable path: $shown. A vendor never ships that; treat it as a hijacked or impersonated host — the extension talking to it can read what it returns. Verify the file's origin, then remove the registration by hand: Remove-Item -LiteralPath '$nk\$hostName' -Recurse"
+            } else {
+                "Unrecognised native-messaging host '$hostName' registered under $nk, bridging a browser extension to the local binary '$shown'$(if($unsigned){' (executable is NOT validly signed)'})$(if($userPath){' (executable lives in a user-writable path)'}). Password managers, PDF tools and meeting apps register hosts legitimately; a stealer uses the same bridge to hand cookies and passwords to a process the browser sandbox cannot see. Confirm the vendor before removing: Remove-Item -LiteralPath '$nk\$hostName' -Recurse"
+            }
             Add-Finding -ID "NMH117_$([Math]::Abs("$nk$hostName".GetHashCode()))" -Phase "PHASE 117" `
                 -ThreatType "Browser Hijack / Adware" -Severity $nsev `
-                -Description "Unrecognised native-messaging host '$hostName' registered under $nk, bridging a browser extension to the local binary '$(if($hostExe){$hostExe}else{$manifest})'$(if($unsigned){' (executable is NOT validly signed)'}). This is how a malicious extension escapes the browser sandbox and runs code. Manual: Remove-Item -LiteralPath '$($hostKey.PSPath)' -Recurse" `
+                -Description $ndesc `
                 -Target "$nk\$hostName" -FixAction "Info" -Group "Native Messaging Hosts"
         }
     }

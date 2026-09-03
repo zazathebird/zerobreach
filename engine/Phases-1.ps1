@@ -1123,35 +1123,60 @@ Show-SectionBanner "CERTIFICATE & CRYPTO TRUST CHAIN"
 
 Show-PhaseHeader "PHASE 39" "ROGUE ROOT CERTIFICATE AUDIT (LM + USER)"
 Invoke-QuantumBar "AUDITING CERTIFICATE STORES" 10 130
-# Every Windows box ships ~100 legitimate trusted roots (Microsoft Trusted Root Program) + vendor
-# driver roots. Flagging them all as "rogue/CRITICAL" buries the one that actually matters and would
-# (absent the safety guard) offer to nuke the entire trust store. Allowlist well-known CA/vendor
-# issuers -> INFO; only an *unrecognized* root is surfaced for review (POSSIBLE, not CRITICAL).
-$lmCerts = Get-ChildItem Cert:\LocalMachine\Root -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.NotBefore }
-foreach ($cert in $lmCerts) {
-    $certKnown = ("$($cert.Subject) $($cert.Issuer)" -match $TRUSTED_ROOT_CA_RE)
-    $certSev   = if ($certKnown) { $SEV_INFO } else { $SEV_POSSIBLE }
-    $certDesc  = if ($certKnown) { "Trusted root CA in LocalMachine store: $($cert.Subject)" } else { "UNRECOGNIZED root CA in LocalMachine store (verify before removing): $($cert.Subject)" }
-    Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROOT CERT] "
-    Add-Finding -ID "CERT_LM_$($cert.Thumbprint.Substring(0,8))" -Phase "PHASE 39" -ThreatType "Rogue Certificate" `
-        -Severity $certSev -Description $certDesc `
-        -Target "Cert:\LocalMachine\Root\$($cert.Thumbprint)" -FixAction "RunCmd" `
-        -FixParam "Remove-Item 'Cert:\LocalMachine\Root\$($cert.Thumbprint)' -Force" -Group "Rogue Certificates"
+# Every Windows box carries ~100 legitimate roots (Microsoft Trusted Root Program, Windows'
+# own roots, OEM driver roots). Until 2026-09-02 "legitimate" was decided by matching vendor
+# WORDS against the subject — so a rogue CA calling itself "Windows Update Root" was reported
+# INFO. Trust is now decided by THUMBPRINT (Resolve-RootCertTrust in the loader: the program
+# list in data\trusted_root_program.json, the Windows-shipped roots, the machine's own AuthRoot
+# store), and a root whose PRIVATE KEY is on the box is HIGH whatever it is called — that is
+# the Superfish / eDellRoot shape. Unknown roots are POSSIBLE for review, never auto-acted:
+# the certificate store is a guard-protected target, so every finding is FixAction Info with
+# the exact removal command in its description.
+$rootIndex = Get-TrustedRootIndex
+$authRootThumbs = @{}
+foreach ($arStore in @('Cert:\LocalMachine\AuthRoot','Cert:\CurrentUser\AuthRoot')) {
+    foreach ($ar in @(Get-ChildItem $arStore -ErrorAction SilentlyContinue)) {
+        $arT = "$($ar.Thumbprint)".Trim().ToUpper()
+        if ($arT) { $authRootThumbs[$arT] = $true }
+    }
 }
-$userCerts = Get-ChildItem Cert:\CurrentUser\Root -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.NotBefore }
-foreach ($cert in $userCerts) {
-    $certKnown = ("$($cert.Subject) $($cert.Issuer)" -match $TRUSTED_ROOT_CA_RE)
-    # A user-store root added outside the OS program is the classic adversary trick, so an
-    # unrecognized one here is slightly more notable than in LM, but still POSSIBLE (not auto-acted).
-    $certSev   = if ($certKnown) { $SEV_INFO } else { $SEV_POSSIBLE }
-    $certDesc  = if ($certKnown) { "Trusted root CA in CurrentUser store: $($cert.Subject)" } else { "UNRECOGNIZED root CA in CurrentUser store (verify before removing): $($cert.Subject)" }
-    Out-Decrypt -Text "$($cert.Subject) | $($cert.Thumbprint)" -Prefix "  [ROOT CERT] "
-    Add-Finding -ID "CERT_USER_$($cert.Thumbprint.Substring(0,8))" -Phase "PHASE 39" -ThreatType "Rogue Certificate" `
-        -Severity $certSev -Description $certDesc `
-        -Target "Cert:\CurrentUser\Root\$($cert.Thumbprint)" -FixAction "RunCmd" `
-        -FixParam "Remove-Item 'Cert:\CurrentUser\Root\$($cert.Thumbprint)' -Force" -Group "Rogue Certificates"
+if (-not $rootIndex.Sha256.Count) { Out-Typewriter "  -> TRUSTED ROOT LIST UNAVAILABLE — roots judged by AuthRoot membership and vendor name only (weaker)." "WARN" }
+$rootsSeen = 0; $rootsFlagged = 0
+foreach ($rs in @(@{ Path = 'Cert:\LocalMachine\Root'; Id = 'LM';   Label = 'LocalMachine' },
+                  @{ Path = 'Cert:\CurrentUser\Root';  Id = 'USER'; Label = 'CurrentUser' })) {
+    foreach ($cert in @(Get-ChildItem $rs.Path -ErrorAction SilentlyContinue | Where-Object { Test-InScope $_.NotBefore })) {
+        $rootsSeen++
+        $v = Resolve-RootCertTrust -Cert $cert -Index $rootIndex -AuthRootThumbs $authRootThumbs -NameRx $TRUSTED_ROOT_CA_RE
+        $thumb = "$($cert.Thumbprint)"
+        $idStem = if ($thumb.Length -ge 8) { $thumb.Substring(0,8) } else { [Math]::Abs("$($cert.Subject)".GetHashCode()) }
+        $removeCmd = "Remove-Item 'Cert:\$($rs.Label)\Root\$thumb' -Force"
+        Out-Decrypt -Text "$($cert.Subject) | $thumb | $($v.Tier)" -Prefix "  [ROOT CERT] "
+        switch ($v.Tier) {
+            'PrivateKey' {
+                $rootsFlagged++
+                Out-Glitch "  [ROOT CA WITH PRIVATE KEY ON THIS MACHINE: $($cert.Subject)]" Red
+                Add-Finding -ID "CERT_$($rs.Id)_KEY_$idStem" -Phase "PHASE 39" -ThreatType "Rogue Certificate" -Severity $v.Severity `
+                    -Description "Root CA in the $($rs.Label) store $($v.Basis): $($cert.Subject) [$thumb]. Expected ONLY on a certificate-authority server; on any other machine this is an interception root (Superfish, eDellRoot) and every TLS connection and code signature on the box can be forged by whoever holds the box. Verify with the owner, then remove by hand: $removeCmd — and if this machine IS the CA, note it and move on." `
+                    -Target "Cert:\$($rs.Label)\Root\$thumb" -FixAction "Info" -Group "Rogue Certificates"
+            }
+            { $_ -in @('VendorName','Unknown') } {
+                $rootsFlagged++
+                $vendorHint = if ($v.Tier -eq 'VendorName') { " If this is a Dell/Lenovo/HP/Intel/NVIDIA-class OEM root or your own enterprise CA, confirm the thumbprint with the vendor or the PKI owner and record it; otherwise remove it." } else { " Nothing on this machine or in the Microsoft program vouches for it; confirm who installed it before trusting it." }
+                Add-Finding -ID "CERT_$($rs.Id)_$idStem" -Phase "PHASE 39" -ThreatType "Rogue Certificate" -Severity $v.Severity `
+                    -Description "Root CA in the $($rs.Label) store $($v.Basis): $($cert.Subject) [$thumb], issued by $($cert.Issuer), valid $($cert.NotBefore.ToString('yyyy-MM-dd')) to $($cert.NotAfter.ToString('yyyy-MM-dd')).$vendorHint Remove by hand with: $removeCmd" `
+                    -Target "Cert:\$($rs.Label)\Root\$thumb" -FixAction "Info" -Group "Rogue Certificates"
+            }
+            default {
+                Add-Finding -ID "CERT_$($rs.Id)_$idStem" -Phase "PHASE 39" -ThreatType "Rogue Certificate" -Severity $v.Severity `
+                    -Description "Root CA in the $($rs.Label) store $($v.Basis): $($cert.Subject) [$thumb]" `
+                    -Target "Cert:\$($rs.Label)\Root\$thumb" -FixAction "Info" -Group "Rogue Certificates"
+            }
+        }
+    }
 }
-if ($lmCerts.Count -eq 0 -and $userCerts.Count -eq 0) { Out-Typewriter "  -> [OK] CERTIFICATE STORES CLEAN." "GOOD" }
+if ($rootsSeen -eq 0) { Out-Typewriter "  -> [OK] NO ROOT CERTIFICATES IN THE TIME WINDOW." "GOOD" }
+elseif ($rootsFlagged -eq 0) { Out-Typewriter "  -> [OK] ALL $rootsSeen ROOT CERTIFICATE(S) VERIFIED BY THUMBPRINT." "GOOD" }
+else { Out-Typewriter "  -> $rootsFlagged OF $rootsSeen ROOT CERTIFICATE(S) NEED REVIEW." "WARN" }
 
 Show-PhaseHeader "PHASE 40" "BCD STORE — DRIVER SIGNING / TESTSIGNING AUDIT"
 Out-Typewriter "AUDITING BCD STORE FOR SIGNING BYPASS..." "INFO"

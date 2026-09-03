@@ -331,6 +331,11 @@ mapping is a follow-on audit.
      "allowlist must not swallow its own detection branch" check — and `LintTool` is already
      CLI-shaped with 0/1/2 exit codes. Pointing it at `data/detection_signatures.json` is the
      highest-value, lowest-risk wiring available, and it improves the **PS** engine from C#.
+     **Done 2026-09-02**: the linter runs on every `dotnet test` against the flat file with a
+     host manifest, and its first 170 warnings were worked to zero the same day (five dead
+     sets wired, root-store trust moved from vendor words to thumbprints, 70 allowlist
+     entries component-anchored, 30 grammars accepted with reasons). Next is the design
+     decision itself.
    - **Done 2026-09-02.** The blocker was the schema: the linter expected allowlists under an
      `fp_allowlists` object and the shipped file is flat. The file stays flat; the linter gained
      `RuleFileShape.Flat` and a host manifest (`data/signature_lint_manifest.json`) that says how

@@ -23,6 +23,7 @@ if ($PhasePlan.Advanced) {
     $yaraRoots = @($env:TEMP,$env:LOCALAPPDATA,$env:APPDATA,"$env:USERPROFILE\Downloads","$env:USERPROFILE\Desktop")
     $yaraExt   = @(".exe",".dll",".scr",".ps1",".vbs",".js",".hta",".bat",".cmd",".bin",".htm",".html",".jse",".vbe",".wsf",".svg")
     $yaraHits  = 0
+    $trojSigSeen = 0; $trojSigSw = [System.Diagnostics.Stopwatch]::StartNew()   # SIG_AUDIT budget for the name-pattern pass
     # Single bounded walk across all roots (was per-root recursion x5, -First 200 each).
     $candidates = (Get-ScanFiles -Path $yaraRoots -TimeScoped) |
         Where-Object { ($yaraExt -contains $_.Extension.ToLower()) -and $_.Length -lt 10MB } |
@@ -81,6 +82,26 @@ if ($PhasePlan.Advanced) {
                         }
                     } catch {}
                 }
+                # Known trojan/tooling FILENAME patterns (trojan_file_patterns — loaded but unread
+                # until 2026-09-02). A name alone is weak evidence: agent*.exe / loader*.exe /
+                # *invoice*.exe match plenty of legitimate software, so a validly signed binary is
+                # POSSIBLE and an unsigned one HIGH — both FixAction Info, because this branch has
+                # never met a real fleet (the extended-band rule) and the reversible Quarantine it
+                # should grow into is a decision for the FP round, not for the first commit.
+                foreach ($tfp in @($TROJAN_FILE_PATTERNS)) {
+                    if (-not "$tfp" -or $cand.Name -notlike "$tfp") { continue }
+                    if ($trojSigSeen -ge $global:SIG_AUDIT_MAX_FILES -or $trojSigSw.Elapsed.TotalSeconds -ge $global:SIG_AUDIT_DEADLINE_S) { break }
+                    $trojSigSeen++
+                    $tsig = Get-AuthSig $cand.FullName
+                    $tSigned = ($tsig -and $tsig.Status -eq 'Valid')
+                    Out-Decrypt -Text "trojan-pattern filename ('$tfp'): $($cand.FullName)" -Prefix "  [NAME HIT] "
+                    Add-Finding -ID "TROJNAME_$([Math]::Abs($cand.FullName.ToLower().GetHashCode()))" -Phase "PHASE 90" `
+                        -ThreatType "Suspicious Filename" -Severity $(if ($tSigned) { $SEV_POSSIBLE } else { $SEV_HIGH }) `
+                        -Description "$(if ($tSigned) { 'Validly signed file whose' } else { 'UNSIGNED file whose' }) name matches a known malware/tooling naming pattern ('$tfp'): $($cand.FullName)$(if ($tSigned) { ' — the signature argues for a legitimate product; review only.' } else { ' — verify its origin; if unknown, quarantine it from the console (reversible) rather than deleting it.' })" `
+                        -Target $cand.FullName -FixAction "Info" -Group "Suspicious Filenames"
+                    $yaraHits++; if (-not $tSigned) { $global:TrojanHits++ }
+                    break
+                }
             } catch {}
         }
     if ($yaraHits -eq 0) { Out-Typewriter "  -> [OK] NO YARA-LITE MATCHES." "GOOD" }
@@ -121,6 +142,27 @@ if ($PhasePlan.Advanced) {
                 $global:UACBypassHits++; $uacFound = $true
             }
         }
+    }
+    # Live auto-elevating-binary check (auto_elevate_bins — loaded but unread until 2026-09-02).
+    # The registry staging above catches the hijack at rest; this catches the bypass mid-flight.
+    # These binaries auto-elevate WITHOUT a UAC prompt, so malware launches one after hijacking a
+    # protocol/class handler, or drops a copy of its own under the same name. A user-path image
+    # for one of these names is the give-away — the genuine articles live in System32/SysWOW64.
+    # FAIL CLOSED on a missing ExecutablePath (cannot prove it is NOT the genuine binary), and
+    # FixAction Info: the list includes taskmgr.exe, mmc.exe and msconfig.exe, and a kill that is
+    # auto-selected against one of those on a healthy box is exactly what rule #1 forbids.
+    foreach ($aep in @((Get-ProcSnapshot))) {
+        $aepName = "$($aep.Name)"
+        if (-not $aepName -or ($AUTO_ELEVATE_BINS -notcontains $aepName)) { continue }
+        $aepExe = "$($aep.ExecutablePath)"
+        if (-not $aepExe) { continue }
+        if ($aepExe -match '(?i)^[A-Za-z]:\\Windows\\(System32|SysWOW64|WinSxS)\\') { continue }   # the real one
+        Out-ThreatBanner "AUTO-ELEVATING BINARY FROM NON-SYSTEM PATH" "$aepName (PID $($aep.ProcessId)) @ $aepExe"
+        Add-Finding -ID "AUTOELEV_$($aep.ProcessId)_$($aepName -replace '[^a-z0-9]','')" -Phase "PHASE 92" `
+            -ThreatType "UAC Bypass" -Severity $SEV_HIGH `
+            -Description "Auto-elevating Windows binary '$aepName' is running from a non-System32 path (PID $($aep.ProcessId)): $aepExe. These images elevate without a UAC prompt, so a copy outside System32 is either a masquerading dropper or a hijacked handler mid-bypass. Inspect the file, then stop it by hand if it is not yours: Stop-Process -Id $($aep.ProcessId) -Force" `
+            -Target "PID:$($aep.ProcessId)" -FixAction "Info" -Group "UAC Bypass"
+        $global:UACBypassHits++; $uacFound = $true
     }
     $enableLua = Get-RegVal "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableLUA"
     if ($enableLua -eq 0) {

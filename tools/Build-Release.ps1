@@ -68,6 +68,7 @@ $requiredFiles = @(
     'data\ioc_defaults.json'
     'data\integrity_manifest.json'
     'data\permission_baseline.json'
+    'data\trusted_root_program.json'
 )
 # Optional extras packed if present (not fatal when missing)
 $optionalFiles = @('data\coverage_matrix.json')

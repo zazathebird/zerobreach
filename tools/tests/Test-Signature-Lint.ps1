@@ -9,7 +9,7 @@
     only complete if every call site really is a constant string, so this test walks the AST
     and asserts exactly that. It also checks data/signature_lint_manifest.json - the host's
     own description of HOW each set is matched - against the signature file: every name it
-    lists exists, no set claims two match kinds, and every accepted collision quotes an entry
+    lists exists, no set claims two match kinds, and every accepted finding quotes an entry
     that is still in the file. A manifest that names a set which no longer exists silently
     puts the real set back under the wrong checks; that is the failure this guards.
 #>
@@ -92,16 +92,29 @@ foreach ($f in $files) {
 $notAllow = @($man.substring_allowlists | Where-Object { -not ($engineAllow.Contains($_) -or (@($man.allowlists) -contains $_)) })
 Assert-That "every substring_allowlists entry is an allowlist (Join-AllowRegex or manifest.allowlists)" ($notAllow -join ',') ''
 
-# ── 3. Accepted collisions quote entries that are still in the file, verbatim ────────────
-foreach ($ac in @($man.accepted_collisions)) {
-    Assert-True "accepted_collisions.$($ac.set): has a reason" (-not [string]::IsNullOrWhiteSpace($ac.why))
+# ── 3. Accepted findings quote entries that are still in the file, verbatim ──────────────
+# accepted_findings (2026-09-02) generalises accepted_collisions: {code, set, entry, why}, code one
+# of the three codes the linter lets a maintainer accept. For AllowlistSwallowsDetection the
+# set/entry name the ALLOWLIST side. A stale acceptance (rule edited, list renamed) is a bug here.
+$okCodes = @('IndicatorCollidesWithLegitimateName','IndicatorTooShort','AllowlistSwallowsDetection')
+Assert-True "manifest carries accepted_findings" ($null -ne $man.accepted_findings)
+Assert-True "manifest no longer carries the legacy accepted_collisions key" ($null -eq $man.accepted_collisions)
+$acSeen = @{}
+foreach ($ac in @($man.accepted_findings)) {
+    $tag = "accepted_findings.$($ac.code).$($ac.set)"
+    Assert-True "$tag`: code is one the linter accepts" ($okCodes -contains "$($ac.code)")
+    Assert-True "$tag`: has a reason" (-not [string]::IsNullOrWhiteSpace($ac.why))
+    Assert-True "$tag`: names a set the file carries" ($sigKeys.Contains("$($ac.set)"))
+    $dupKey = "$($ac.code)|$($ac.set)|$($ac.entry)"
+    Assert-True "$tag`: not accepted twice" (-not $acSeen.ContainsKey($dupKey)); $acSeen[$dupKey] = $true
     $found = $false
     foreach ($item in @($sig.($ac.set))) {
         if ($item -is [string]) { if ($item -ceq $ac.entry) { $found = $true } }
         else { foreach ($p in $item.PSObject.Properties) { if ($p.Value -is [string] -and $p.Value -ceq $ac.entry) { $found = $true } } }
     }
-    Assert-True "accepted_collisions.$($ac.set): entry still present verbatim" $found
+    Assert-True "$tag`: entry still present verbatim" $found
 }
+Assert-True "accepted_findings covers every IndicatorTooShort the file has (>= 28)" (@($man.accepted_findings | Where-Object { $_.code -eq 'IndicatorTooShort' }).Count -ge 28)
 
 # ── 4. The C# side reads the same two files this test just validated ─────────────────────
 $cs = Get-Content -LiteralPath (Join-Path $root 'lib\Scythe.Rules.Tests\Linting\ShippedSignatureFileTests.cs') -Raw

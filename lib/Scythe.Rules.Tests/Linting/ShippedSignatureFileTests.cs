@@ -184,6 +184,10 @@ public class ShippedSignatureFileTests
         Assert.Subset(new HashSet<string>(scan.Consumed), new HashSet<string>(scan.Allowlists));
         _output.WriteLine("pulled by the loader but read by no phase: " +
             (scan.PulledButUnused.Count == 0 ? "(none)" : string.Join(", ", scan.PulledButUnused)));
+        // Five sets sat here unread for two months (2026-09-02). A set the loader pulls and no
+        // phase reads is dead data that looks like coverage; wire it or delete it.
+        Assert.True(scan.PulledButUnused.Count == 0,
+            "sets pulled by the loader but read by no phase: " + string.Join(", ", scan.PulledButUnused));
     }
 
     [Fact]
@@ -236,5 +240,11 @@ public class ShippedSignatureFileTests
         Assert.True(warnings <= WarningCeiling, $"{warnings} warnings, ceiling is {WarningCeiling}; see the report above");
     }
 
-    public const int WarningCeiling = 185;
+    /// <summary>
+    /// Ratchet. 185 when the linter first met the file (2026-09-02, morning); 0 by that evening
+    /// after the 170 warnings were fixed or accepted with a reason (see
+    /// data/signature_lint_manifest.json accepted_findings). Raise it only with a CHANGELOG entry
+    /// naming the entries that earned the warnings.
+    /// </summary>
+    public const int WarningCeiling = 0;
 }

@@ -29,7 +29,9 @@ public static class LintTool
         "  --fail-on-warning    exit 1 on warning-level findings too\n" +
         "  --manifest <file>    what the host says about itself: a JSON array of the set\n" +
         "                       names it consumes, or an object with \"shape\" (flat|nested),\n" +
-        "                       \"consumed\", \"allowlists\" and \"literal_sets\"";
+        "                       \"consumed\", \"allowlists\", \"literal_sets\", ... and\n" +
+        "                       \"accepted_findings\" ([{ code, set, entry, why }] — reviewed\n" +
+        "                       findings reported at Info with the reason)";
 
     public static int Run(string[] args, TextWriter stdout, TextWriter stderr)
     {

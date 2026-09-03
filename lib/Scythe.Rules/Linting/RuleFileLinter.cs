@@ -215,7 +215,7 @@ public static class RuleFileLinter
             return OverBudget();
         }
 
-        LintSwallowedDetections(indicators, allowlists, fileName, findings,
+        LintSwallowedDetections(indicators, allowlists, fileName, options, findings,
             () => stopwatch.Elapsed > options.TotalDeadline, out bool cutShort);
         return cutShort ? OverBudget() : null;
     }
@@ -332,11 +332,11 @@ public static class RuleFileLinter
 
         if (literal.Length < options.MinIndicatorLiteralLength)
         {
-            findings.Add(new LintFinding(
+            findings.Add(Accepted(
                 LintSeverity.Warning, LintCode.IndicatorTooShort,
                 $"literal indicator \"{literal}\" in \"{set.Name}\" is shorter than {options.MinIndicatorLiteralLength} characters; " +
                 "as a substring it will occur inside legitimate names",
-                fileName, entry.Location, SetName: set.Name, Entry: literal));
+                fileName, entry.Location, set.Name, literal, options));
         }
 
         ReportCollisions(set, entry, regex, wholeValue ? "equals" : "is a substring of", fileName, options, findings);
@@ -350,11 +350,11 @@ public static class RuleFileLinter
         if (ast is not null &&
             PatternInsight.LongestRequiredLiteralRun(ast) < options.MinIndicatorLiteralLength)
         {
-            findings.Add(new LintFinding(
+            findings.Add(Accepted(
                 LintSeverity.Warning, LintCode.IndicatorTooShort,
                 $"indicator \"{entry.Value}\" in \"{set.Name}\" guarantees no literal of {options.MinIndicatorLiteralLength}+ characters in what it matches; " +
                 "indicators this generic collide with legitimate software",
-                fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
+                fileName, entry.Location, set.Name, entry.Value, options));
         }
 
         if (blewBudget)
@@ -388,21 +388,31 @@ public static class RuleFileLinter
         string message =
             $"indicator \"{entry.Value}\" in \"{set.Name}\" {verb} \"{firstHit}\"{more} — the name of real, common software; this detection would fire on a healthy machine";
 
-        var accepted = options.AcceptedCollisions.FirstOrDefault(a =>
-            string.Equals(a.Set, set.Name, StringComparison.Ordinal) &&
-            string.Equals(a.Entry, entry.Value, StringComparison.Ordinal));
-        if (accepted is not null)
-        {
-            findings.Add(new LintFinding(
-                LintSeverity.Info, LintCode.IndicatorCollidesWithLegitimateName,
-                message + $" [accepted: {accepted.Why}]",
-                fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
-            return;
-        }
-
-        findings.Add(new LintFinding(
+        findings.Add(Accepted(
             LintSeverity.Error, LintCode.IndicatorCollidesWithLegitimateName,
-            message, fileName, entry.Location, SetName: set.Name, Entry: entry.Value));
+            message, fileName, entry.Location, set.Name, entry.Value, options));
+    }
+
+    /// <summary>
+    /// Builds a finding for one of the acceptable codes, downgrading it to Info with the
+    /// maintainer's reason appended when <see cref="LintOptions.AcceptedFindings"/> carries a
+    /// matching (code, set, entry). The match is exact and ordinal: editing the entry
+    /// re-opens the question. Codes outside <see cref="AcceptedFinding.AcceptableCodes"/>
+    /// never reach here — they cannot be accepted.
+    /// </summary>
+    private static LintFinding Accepted(
+        LintSeverity severity, LintCode code, string message, string fileName,
+        LintLocation location, string setName, string entry, LintOptions options)
+    {
+        Debug.Assert(AcceptedFinding.IsAcceptable(code), $"{code} is not an acceptable code");
+        var accepted = options.AcceptedFindings.FirstOrDefault(a =>
+            a.Code == code &&
+            string.Equals(a.Set, setName, StringComparison.Ordinal) &&
+            string.Equals(a.Entry, entry, StringComparison.Ordinal));
+        return accepted is null
+            ? new LintFinding(severity, code, message, fileName, location, SetName: setName, Entry: entry)
+            : new LintFinding(LintSeverity.Info, code, message + $" [accepted: {accepted.Why}]",
+                fileName, location, SetName: setName, Entry: entry);
     }
 
     private static void LintAllowlistEntry(
@@ -500,7 +510,7 @@ public static class RuleFileLinter
 
     private static void LintSwallowedDetections(
         List<AnalyzedEntry> indicators, List<AnalyzedEntry> allowlists, string fileName,
-        List<LintFinding> findings, Func<bool> overDeadline, out bool cutShort)
+        LintOptions options, List<LintFinding> findings, Func<bool> overDeadline, out bool cutShort)
     {
         cutShort = false;
         var universal = new HashSet<AnalyzedEntry>(
@@ -534,11 +544,11 @@ public static class RuleFileLinter
                 }
                 if (SafeIsMatch(allow.Regex, witness))
                 {
-                    findings.Add(new LintFinding(
+                    // Accepted on the ALLOWLIST's (set, entry) — the pair the finding reports.
+                    findings.Add(Accepted(
                         LintSeverity.Warning, LintCode.AllowlistSwallowsDetection,
                         $"allowlist entry \"{allow.Entry.Value}\" in \"{allow.Set.Name}\" matches \"{witness}\", a string indicator \"{indicator.Entry.Value}\" in \"{indicator.Set.Name}\" exists to catch; that detection branch is unreachable",
-                        fileName, allow.Entry.Location, SetName: allow.Set.Name,
-                        Entry: allow.Entry.Value));
+                        fileName, allow.Entry.Location, allow.Set.Name, allow.Entry.Value, options));
                 }
             }
         }

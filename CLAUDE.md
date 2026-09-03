@@ -216,7 +216,12 @@ PowerShell 5.1+, admin rights.
 │   ├── mitre_mapping.json           MITRE ATT&CK technique map (wired into findings)
 │   ├── coverage_matrix.json         Phase-by-phase coverage/gap matrix (WS0 reference — re-audit
 │   │                                pending; was generated against the work-rig engine)
-│   └── permission_baseline.json     ACL/owner baseline for the perm-integrity phases (108-115)
+│   ├── permission_baseline.json     ACL/owner baseline for the perm-integrity phases (108-115)
+│   ├── signature_lint_manifest.json HOW each signature set is matched (for the C# linter) +
+│   │                                accepted_findings with reasons. See "linted from C#".
+│   └── trusted_root_program.json    Microsoft Trusted Root Program fingerprints + the roots
+│                                    Windows ships (phase 39). Regenerate ONLY with
+│                                    tools/Update-TrustedRoots.ps1.
 └── reports/                    Auto-created; scan JSON, quarantine vault, durable server logs
 ```
 
@@ -877,34 +882,85 @@ the rules that keep it true:
   `equality_sets` (`-contains`/`-in`/hashtable key/`Test-Path`), `wildcard_sets` (`-like`),
   `reference_sets` (entries that name legitimate things *by design* — system image names,
   LOLBins, extensions, kill-chain keywords), `substring_allowlists` (path-shaped, held to
-  component anchoring at Warning) and `accepted_collisions` (each with a `why`; the entry must
-  match verbatim, so editing the rule re-opens the question). **Classify a new set by reading
+  component anchoring at Warning) and `accepted_findings` (`{code, set, entry, why}` for
+  `IndicatorCollidesWithLegitimateName`, `IndicatorTooShort` or `AllowlistSwallowsDetection`;
+  reported at Info with the reason; the entry must match verbatim, so editing the rule re-opens
+  the question; for a swallow, set/entry name the ALLOWLIST side. The older
+  `accepted_collisions` key still parses and means the collision code). **Classify a new set by reading
   its consumer, never by its name.** A regex set listed as literal loses every regex check; a
   detection listed as reference loses the collision check; both fail open.
 - **Every `Get-Sig` / `Join-AllowRegex` call site is a constant string** — that is what makes the
   source scan complete, and `tools/tests/Test-Signature-Lint.ps1` walks the AST to assert it
   (the two helper bodies are the only exceptions). The same test checks every manifest name
-  against the file, that no set claims two match kinds, and that every accepted collision still
-  quotes an entry that exists.
+  against the file, that no set claims two match kinds, and that every accepted finding names a
+  valid code, a real set, a live entry and a reason.
 - **An allowlist not declared `substring_allowlists` must be fully `^…$`-anchored, or the build
   fails.** That is the existing "pin the ENTIRE string" rule, now enforced. Declaring a list as
   substring is a statement that the attacker does not choose where the matched text lives
-  (install paths, signer names); the manifest records the two that are weaker than that
-  (`trusted_root_ca_issuers`, `native_messaging_benign_hosts`) rather than hiding them.
+  (install paths); every entry in every substring list is component-anchored as of 2026-09-02
+  and the lint warns on any that is not. **A task name, a native-messaging host name and a
+  certificate subject are all attacker-chosen**, which is why `hidden_task_benign_paths` starts
+  every entry at `\Tasks\`, `native_messaging_benign_hosts` is `^vendor\.rest$`, and
+  `trusted_root_ca_issuers` is no longer an allowlist at all (next section).
 - **The swallow check is file-global and its warnings are expected to include cross-phase
   pairings** (`trusted_root_ca_issuers` "nvidia" against `leaked_cert_issuers`). The linter does
   not know which phase pairs which list; a warning there is a prompt to read both consumers,
   not a bug in either. Equality sets, path lists and globs are excluded from the indicator side
   because a path handed to `Test-Path` is not a detection an allowlist can swallow.
-- **A set the loader pulls but no phase reads is reported as an orphan.** Five exist today
-  (`auto_elevate_bins`, `email_phishing_trojans`, `proactive_lure_extensions`,
-  `proactive_persistence_regs`, `trojan_file_patterns`); they are dead data until someone
-  either wires them or deletes them, and the test names them on every run.
-- **Warnings are ratcheted, not ignored.** `ShippedSignatureFileTests.WarningCeiling` fails the
-  test if the count grows past it; lower it as lists are tightened, raise it only with a
-  `CHANGELOG.md` entry naming the entries that earned the warnings.
+- **A set the loader pulls but no phase reads FAILS the test.** Five sat that way for two
+  months (`auto_elevate_bins`, `email_phishing_trojans`, `proactive_lure_extensions`,
+  `proactive_persistence_regs`, `trojan_file_patterns` — wired in a June review on the
+  `session12` branch that never reached `main`; ported 2026-09-02 into 74.6, 74.7, 90 and 92,
+  every finding `FixAction Info`). Dead data reads like coverage; wire it or delete it, in the
+  same commit that adds the `Get-Sig` line.
+- **Warnings are ratcheted, not ignored, and the ceiling is 0.** `ShippedSignatureFileTests.
+  WarningCeiling` went 185 → 0 on 2026-09-02 (140 fixed, 30 accepted with a reason). A new
+  warning is either fixed or accepted in `accepted_findings` with a `why`; raise the ceiling
+  only with a `CHANGELOG.md` entry naming the entries that earned it.
 - Run it with `dotnet test lib/Scythe.Rules.Tests --filter ShippedSignatureFileTests --logger
-  "console;verbosity=detailed"` to see the full report; the whole Rules project is 563 tests.
+  "console;verbosity=detailed"` to see the full report; the whole Rules project is 590 tests.
+
+### Root-store trust is decided by thumbprint, never by name (added 2026-09-02)
+
+Phase 39 used to call a root "known" when its subject contained a vendor word from
+`trusted_root_ca_issuers`. A rogue CA calling itself "Windows Update Root" was INFO. Now:
+
+- **`data/trusted_root_program.json` is the trust decision.** `program` is the CCADB "Included
+  CA Certificate Report for Microsoft" (SHA-1 + SHA-256 + status); `windows_shipped` is the 14
+  Microsoft roots that ship inside Windows rather than through the CTL, verified against
+  https://www.microsoft.com/pkiops/docs/repository.htm; `windows_shipped_legacy` is the four
+  expired 1990s roots KB 293781 publishes only by subject + serial, matched on CN + serial
+  **and** expiry so a live look-alike cannot qualify. **Regenerate `program` only with
+  `tools/Update-TrustedRoots.ps1`**; never hand-edit it, and never add a thumbprint to the
+  shipped blocks without a Microsoft source in the commit message. The machine's own
+  `AuthRoot` stores vouch for a root added to the program after the snapshot.
+- **`Resolve-RootCertTrust` (loader) is pure and its tiers are the contract:** PrivateKey HIGH;
+  Shipped / Program / Distrusted / Legacy / AuthRoot INFO; VendorName / Unknown POSSIBLE.
+  `Test-Allowlist-Anchors.ps1` runs it against fake certificates for every tier. Do not put I/O
+  in it — that is what keeps it testable off Windows.
+- **A root whose private key is on the box is HIGH whatever it is called** (Superfish,
+  eDellRoot). It is expected on the CA server itself and nowhere else; the description says so
+  rather than the code guessing.
+- **`Distrusted` (program status Disabled) is INFO, not POSSIBLE.** Windows keeps disabled roots
+  for legacy validation; a confident false finding on every healthy box is the one error class
+  an IR tool cannot afford.
+- **Every phase 39 finding is `FixAction Info`.** The certificate store is a guard-protected
+  target, so the old `RunCmd Remove-Item` was a fix that could only ever report `blocked`. The
+  exact command is in the description.
+- `trusted_root_ca_issuers` stays as a **reference set** (word-bounded, read with `Get-Sig`)
+  that only chooses the wording of a POSSIBLE finding. Do not route it back through
+  `Join-AllowRegex`; the lint would then demand `^…$` anchoring on words that cannot have it,
+  and the test asserts the call site.
+
+### A recognised vendor NAME never ends a check (added 2026-09-02)
+
+Phase 117 skipped any native-messaging host whose name matched a vendor prefix before looking
+at the binary, so `com.microsoft.backdoor` → `%APPDATA%\evil.exe` was never examined. The
+name is the one thing an attacker registering a host chooses. Rule: **an allowlist over an
+attacker-chosen name may downgrade, never skip** — resolve the artifact (binary path, signature,
+location) first, and let the name excuse only a host whose binary is not an unsigned executable
+in a user-writable path. Same reasoning applies to task names (phase 104) and service names.
+`Test-Allowlist-Anchors.ps1` asserts the order of the two checks in phase 117.
 
 ### Authenticode memo (WS4, added 2026-08-19)
 - **`Get-AuthSig` is memoised per path** (`$global:AUTHSIG_CACHE`, case-insensitive key,
@@ -917,8 +973,10 @@ the rules that keep it true:
   wrapper. The suite asserts that count.
 
 ### Security regression suite
-- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 1,500+
-  assertions across 26 test files, covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
+- `powershell -NoProfile -File tools\tests\Run-SecurityTests.ps1` from the project root — 1,700+
+  assertions across 27 test files (the 27th, `Test-Allowlist-Anchors.ps1`, guards the 2026-09-02
+  lint round: component-anchored allowlists, phase 117's order of checks, and
+  `Resolve-RootCertTrust` run against fake certificates for every trust tier), covering C1/H1/H2/H5/H7/H7b/H8, M1-M11, the §5 FP anchors, the WS6 extended band + the WS7 HUNT band
   (incl. RUNTIME tests of correlation, of the signature-set integrity gate, and of the phase 146
   PE parser against fixture-built PEs — `Test-Pe-Parser.ps1`, a PS port of
   `PeFixtureBuilder.cs` with a byte-by-byte truncation sweep) + WS4 signature

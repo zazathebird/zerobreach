@@ -211,19 +211,19 @@ public class FlatShapeTests
     }
 
     [Fact]
-    public void AcceptedCollisionsAreReportedAtInfoWithTheReasonAndOnlyForTheExactEntry()
+    public void CollisionAcceptancesAreReportedAtInfoWithTheReasonAndOnlyForTheExactEntry()
     {
         string json = """{ "artifacts": [ { "Name": "n", "Rx": "(?i)^[a-z]{8}\\.exe$" } ] }""";
-        var accepted = new AcceptedCollision("artifacts", "(?i)^[a-z]{8}\\.exe$", "shape is the only signal; Info severity");
-        var result = Lint(json, Flat with { AcceptedCollisions = new[] { accepted } });
+        var accepted = new AcceptedFinding(LintCode.IndicatorCollidesWithLegitimateName, "artifacts", "(?i)^[a-z]{8}\\.exe$", "shape is the only signal; Info severity");
+        var result = Lint(json, Flat with { AcceptedFindings = new[] { accepted } });
         var finding = result.Single(LintCode.IndicatorCollidesWithLegitimateName);
         Assert.Equal(LintSeverity.Info, finding.Severity);
         Assert.Contains("[accepted: shape is the only signal", finding.Message);
 
         // A different entry text — the rule was edited — re-opens the question.
-        var stale = new AcceptedCollision("artifacts", "(?i)^[a-z]{7}\\.exe$", "old reason");
+        var stale = new AcceptedFinding(LintCode.IndicatorCollidesWithLegitimateName, "artifacts", "(?i)^[a-z]{7}\\.exe$", "old reason");
         Assert.Equal(LintSeverity.Error,
-            Lint(json, Flat with { AcceptedCollisions = new[] { stale } }).Single(LintCode.IndicatorCollidesWithLegitimateName).Severity);
+            Lint(json, Flat with { AcceptedFindings = new[] { stale } }).Single(LintCode.IndicatorCollidesWithLegitimateName).Severity);
     }
 
     [Fact]
@@ -248,7 +248,9 @@ public class FlatShapeTests
         Assert.Contains("e", options.WildcardSets);
         Assert.Contains("f", options.ReferenceSets);
         Assert.Contains("g", options.SubstringAllowlists);
-        Assert.Equal("w", Assert.Single(options.AcceptedCollisions).Why);
+        var legacy = Assert.Single(options.AcceptedFindings);
+        Assert.Equal("w", legacy.Why);
+        Assert.Equal(LintCode.IndicatorCollidesWithLegitimateName, legacy.Code);
 
         Assert.Null(LintManifest.Parse("""{ "literal-sets": ["c"] }""", "m.json", new StringWriter()));
         Assert.Null(LintManifest.Parse("""{ "shape": "round" }""", "m.json", new StringWriter()));

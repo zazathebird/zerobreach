@@ -111,13 +111,32 @@ public sealed record LintOptions
     public IReadOnlyCollection<string> SubstringAllowlists { get; init; } = Array.Empty<string>();
 
     /// <summary>
-    /// Collisions with the legitimate-name corpus that a maintainer has reviewed and kept,
-    /// each with the reason. A matching finding is reported at Info with the reason
-    /// appended, so it stays visible without failing the lint. The entry must match
-    /// exactly: editing the pattern re-opens the question.
+    /// Findings a maintainer has reviewed and kept, each with the reason. A matching finding
+    /// is reported at Info with the reason appended, so it stays visible without failing the
+    /// lint. Only the three judgement-call codes can be accepted
+    /// (<see cref="AcceptedFinding.AcceptableCodes"/>); a compile failure or a universal
+    /// allowlist is a defect, not an opinion. The entry must match exactly: editing the
+    /// pattern re-opens the question.
     /// </summary>
-    public IReadOnlyList<AcceptedCollision> AcceptedCollisions { get; init; } = Array.Empty<AcceptedCollision>();
+    public IReadOnlyList<AcceptedFinding> AcceptedFindings { get; init; } = Array.Empty<AcceptedFinding>();
 }
 
-/// <summary>One reviewed collision: the set and exact entry it applies to, and why it stays.</summary>
-public sealed record AcceptedCollision(string Set, string Entry, string Why);
+/// <summary>
+/// One reviewed finding: the code, the set and exact entry it applies to, and why it stays.
+/// For <see cref="LintCode.AllowlistSwallowsDetection"/> the set and entry are the
+/// <i>allowlist's</i> — what the finding itself reports as <see cref="LintFinding.SetName"/>
+/// and <see cref="LintFinding.Entry"/>.
+/// </summary>
+public sealed record AcceptedFinding(LintCode Code, string Set, string Entry, string Why)
+{
+    /// <summary>The codes a maintainer may accept. Every other code is a defect the linter
+    /// will not let a manifest talk it out of.</summary>
+    public static IReadOnlyList<LintCode> AcceptableCodes { get; } = new[]
+    {
+        LintCode.IndicatorCollidesWithLegitimateName,
+        LintCode.IndicatorTooShort,
+        LintCode.AllowlistSwallowsDetection,
+    };
+
+    public static bool IsAcceptable(LintCode code) => AcceptableCodes.Contains(code);
+}

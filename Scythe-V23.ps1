@@ -1110,7 +1110,14 @@ function Join-AllowRegex {
     if ($keep.Count -eq 0) { return '(?!)' }
     return ($keep -join '|')
 }
-$TRUSTED_ROOT_CA_RE     = Join-AllowRegex 'trusted_root_ca_issuers'
+# Phase 39 REFERENCE words, not an allowlist (2026-09-02). Trust itself is decided by thumbprint in
+# Resolve-RootCertTrust (data\trusted_root_program.json + the machine's AuthRoot store); these words
+# only choose the WORDING of a POSSIBLE finding for a root the program does not know. Word-bounded so
+# 'dell' does not light up inside 'Modellbau'. Empty list -> '(?!)' (names nothing).
+$TRUSTED_ROOT_CA_RE     = $(
+    $trcWords = @(@(Get-Sig 'trusted_root_ca_issuers') | Where-Object { -not [string]::IsNullOrWhiteSpace("$_") } | ForEach-Object { [regex]::Escape("$_".Trim()) })
+    if ($trcWords.Count) { '\b(' + ($trcWords -join '|') + ')\b' } else { '(?!)' }
+)
 $CLOAKED_BENIGN_RE      = Join-AllowRegex 'cloaked_benign_names'
 $INFOSTEALER_BENIGN_RE  = Join-AllowRegex 'infostealer_benign_paths'
 $SAFEBOOT_DEFAULTS      = @((Get-Sig 'safeboot_default_entries') | ForEach-Object { "$_".ToLower() })
@@ -1366,6 +1373,106 @@ if (Test-Path -LiteralPath $PermPath) {
     Write-Host "[Scythe] WARNING: permission baseline missing: $PermPath - permission/integrity phases limited." -ForegroundColor Yellow
 }
 function Get-Perm([string]$Name) { if ($PERM -and $null -ne $PERM.$Name) { @($PERM.$Name) } else { @() } }
+
+# ══════════════════════════════════════════════════════════════════
+#  TRUSTED ROOT PROGRAM (phase 39 — added 2026-09-02)
+#  data\trusted_root_program.json: the Microsoft Trusted Root Program list (CCADB report,
+#  refreshed by tools\Update-TrustedRoots.ps1) plus the Microsoft roots that ship inside
+#  Windows. Thumbprints and names of things that are ALLOWED — not signatures. Phase 39 used
+#  to decide trust by matching vendor WORDS against the subject, which a rogue CA can name
+#  itself after; now a root is known by its hash or not at all.
+# ══════════════════════════════════════════════════════════════════
+$TrustedRootsPath = Join-Path $PSScriptRoot 'data\trusted_root_program.json'
+$TRUSTED_ROOTS = $null
+if (Test-Path -LiteralPath $TrustedRootsPath) {
+    try   { $TRUSTED_ROOTS = Get-Content -LiteralPath $TrustedRootsPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { $TRUSTED_ROOTS = $null; Write-Host "[Scythe] WARNING: could not parse $TrustedRootsPath ($($_.Exception.Message)) - phase 39 will judge roots by AuthRoot membership and name only." -ForegroundColor Red }
+} else {
+    Write-Host "[Scythe] WARNING: trusted root list missing: $TrustedRootsPath - phase 39 will judge roots by AuthRoot membership and name only." -ForegroundColor Yellow
+}
+function Get-TrustedRootIndex {
+    # Lookup tables built once per run: Sha256 -> program entry, Sha1 -> Windows-shipped
+    # entry, Legacy -> the subject/serial/expiry rows for the four expired roots Microsoft
+    # publishes without a thumbprint. Returns empty tables (never $null) when the file is
+    # absent, so phase 39 degrades to the weaker tiers instead of failing.
+    $idx = @{ Sha256 = @{}; Sha1 = @{}; Legacy = @() }
+    if (-not $TRUSTED_ROOTS) { return $idx }
+    foreach ($r in @($TRUSTED_ROOTS.program)) {
+        $h = "$($r.sha256)".Trim().ToUpper()
+        if ($h.Length -ne 64) { continue }
+        $idx.Sha256[$h] = @{ Name = "$($r.name)"; Status = "$($r.status)" }
+    }
+    foreach ($r in @($TRUSTED_ROOTS.windows_shipped)) {
+        $h = "$($r.sha1)".Trim().ToUpper()
+        if ($h.Length -ne 40) { continue }
+        $idx.Sha1[$h] = @{ Name = "$($r.name)" }
+    }
+    foreach ($r in @($TRUSTED_ROOTS.windows_shipped_legacy)) {
+        if ("$($r.cn)" -and "$($r.expires_before)") { $idx.Legacy = @($idx.Legacy) + @($r) }
+    }
+    return $idx
+}
+function Resolve-RootCertTrust {
+    # Pure classification of ONE root-store certificate — no I/O, so it is unit-testable off
+    # Windows with a fake certificate object. Tiers, first match wins:
+    #   PrivateKey  HIGH      the root's private key is on this machine (Superfish / eDellRoot
+    #                         shape: anyone with the box can mint a certificate for any site).
+    #                         Expected only on the CA server itself.
+    #   Shipped     INFO      SHA-1 matches a Microsoft root that ships inside Windows.
+    #   Program     INFO      SHA-256 is in the Microsoft Trusted Root Program (Included /
+    #                         NotBefore).
+    #   Distrusted  INFO      In the program but Disabled — Windows keeps it for legacy
+    #                         validation; reported so the operator knows it is there.
+    #   Legacy      INFO      One of the four expired Windows-shipped roots Microsoft lists
+    #                         only by subject + serial; must ALSO be expired, so a live
+    #                         certificate reusing the name does not qualify.
+    #   AuthRoot    INFO      Not in the snapshot, but the machine's AuthRoot store (the CTL
+    #                         download store) holds the same thumbprint — a root added to the
+    #                         program after this snapshot.
+    #   VendorName  POSSIBLE  Unknown hash; subject names a known vendor — an OEM, enterprise
+    #                         or driver-vendor root, or an impostor using the name.
+    #   Unknown     POSSIBLE  None of the above.
+    param($Cert, $Index, [hashtable]$AuthRootThumbs, [string]$NameRx)
+    $sha1 = "$($Cert.Thumbprint)".Trim().ToUpper()
+    $sha256 = ''
+    try {
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try { $sha256 = ([BitConverter]::ToString($sha.ComputeHash([byte[]]$Cert.RawData))) -replace '-','' } finally { $sha.Dispose() }
+    } catch { $sha256 = '' }
+    $cn = ''
+    try { $cn = "$($Cert.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false))" } catch { $cn = '' }
+    if (-not $cn) { $cn = "$($Cert.Subject)" }
+    $hasKey = $false
+    try { $hasKey = [bool]$Cert.HasPrivateKey } catch { $hasKey = $false }
+    $mk = { param($t, $sev, $basis) [pscustomobject]@{ Tier = $t; Severity = $sev; Basis = $basis; Sha256 = $sha256 } }
+    if ($hasKey) { return (& $mk 'PrivateKey' $SEV_HIGH 'the private key for this ROOT is present on this machine, so anything on it can mint a certificate for any site or publisher') }
+    if ($Index -and $Index.Sha1 -and $Index.Sha1.ContainsKey($sha1)) {
+        return (& $mk 'Shipped' $SEV_INFO "ships inside Windows ($($Index.Sha1[$sha1].Name))")
+    }
+    if ($Index -and $Index.Sha256 -and $sha256 -and $Index.Sha256.ContainsKey($sha256)) {
+        $st = "$($Index.Sha256[$sha256].Status)"
+        if ($st -eq 'Disabled') { return (& $mk 'Distrusted' $SEV_INFO 'is in the Microsoft Trusted Root Program but marked Disabled (Microsoft no longer trusts new issuance from it; Windows keeps it for legacy validation)') }
+        return (& $mk 'Program' $SEV_INFO "is a Microsoft Trusted Root Program member (status $st)")
+    }
+    if ($Index -and $Index.Legacy) {
+        foreach ($lg in @($Index.Legacy)) {
+            $expBefore = $null
+            try { $expBefore = [datetime]::Parse("$($lg.expires_before)", [System.Globalization.CultureInfo]::InvariantCulture) } catch { $expBefore = $null }
+            if (-not $expBefore) { continue }
+            $serialOk = ((("$($Cert.SerialNumber)" -replace '^0+','').ToUpper()) -eq (("$($lg.serial)" -replace '^0+','').ToUpper()))
+            if ($cn -eq "$($lg.cn)" -and $serialOk -and $Cert.NotAfter -lt $expBefore) {
+                return (& $mk 'Legacy' $SEV_INFO "is a Windows-shipped legacy root (KB 293781), expired $($Cert.NotAfter.ToString('yyyy-MM-dd'))")
+            }
+        }
+    }
+    if ($AuthRootThumbs -and $sha1 -and $AuthRootThumbs.ContainsKey($sha1)) {
+        return (& $mk 'AuthRoot' $SEV_INFO 'is also present in the AuthRoot store, i.e. it was delivered by the Microsoft CTL after this build''s snapshot')
+    }
+    if ($NameRx -and ("$($Cert.Subject) $($Cert.Issuer)" -match $NameRx)) {
+        return (& $mk 'VendorName' $SEV_POSSIBLE "is NOT in the Microsoft Trusted Root Program; its subject names a known vendor ('$($Matches[0])'), which is what an OEM, enterprise or driver-vendor root looks like — and also what a rogue root naming itself after one looks like")
+    }
+    return (& $mk 'Unknown' $SEV_POSSIBLE 'is NOT in the Microsoft Trusted Root Program, was not delivered through AuthRoot, and names no known vendor')
+}
 
 # Expand %WINDIR% / %ProgramFiles% / %SystemDrive% style tokens to real paths.
 function Expand-EnvPath { param([string]$P)
