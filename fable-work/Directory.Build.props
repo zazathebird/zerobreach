@@ -1,0 +1,39 @@
+<Project>
+
+  <!--
+    Every project in this package inherits these. They are the mechanical half of the
+    rules in CLAUDE.md, put here so thirty-seven .csproj files cannot each spell them
+    slightly differently:
+
+      TargetFramework        net8.0, NOT net8.0-windows. The whole package must build
+                             and test on Linux; a Windows target would let a P/Invoke
+                             or a registry call compile, and neither is allowed here.
+      TreatWarningsAsErrors  "zero warnings" is a stated bar in CLAUDE.md and the
+                             README's definition of done. A bar nothing enforces is a
+                             bar that erodes one project at a time.
+      Nullable               a reader over input the tool did not author returns
+                             absence constantly; the compiler should be tracking it.
+
+    Do not override these in an individual .csproj. If one genuinely cannot hold,
+    say so in HANDOFF.md rather than switching it off quietly.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+
+  <!--
+    Deterministic output. Several tasks here produce digests or serialised records that
+    tests compare byte-for-byte; a build that embeds a machine-specific path makes that
+    comparison pass locally and fail everywhere else.
+  -->
+  <PropertyGroup>
+    <Deterministic>true</Deterministic>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

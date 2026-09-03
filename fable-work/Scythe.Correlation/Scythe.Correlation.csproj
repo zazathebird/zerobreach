@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Scythe.Correlation</AssemblyName>
+    <RootNamespace>Scythe.Correlation</RootNamespace>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Scythe.TestKit</AssemblyName>
+    <RootNamespace>Scythe.TestKit</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <!--
+      This project references xunit as a *library*, so `dotnet test` on the solution would
+      otherwise try to run it as a test assembly and fail the whole run. It carries no tests
+      of its own; Scythe.TestKit.Tests holds those.
+    -->
+    <IsTestProject>false</IsTestProject>
+  </PropertyGroup>
+
+  <!--
+    Test-only support: referenced by *.Tests projects, never by a library, ships in nothing.
+    xunit is referenced (at the package's one pinned version) because the differential runner
+    provides a [DifferentialFact] that reports a missing reference tool as a visible skip —
+    see reference/17.4_differential.md. That attribute cannot exist without xunit's
+    extensibility types.
+  -->
+  <ItemGroup>
+    <PackageReference Include="xunit" Version="2.6.6" />
+  </ItemGroup>
+
+</Project>

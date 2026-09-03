@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Scythe.Scoring</AssemblyName>
+    <RootNamespace>Scythe.Scoring</RootNamespace>
+  </PropertyGroup>
+
+</Project>

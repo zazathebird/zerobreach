@@ -1,0 +1,14 @@
+# Build output. Every project here is net8.0; bin/ and obj/ are reproducible
+# from source and would otherwise dominate the diff at merge.
+bin/
+obj/
+[Bb]uild/
+*.user
+
+# Python bytecode from tools/
+__pycache__/
+*.pyc
+
+# Test result output
+TestResults/
+*.trx

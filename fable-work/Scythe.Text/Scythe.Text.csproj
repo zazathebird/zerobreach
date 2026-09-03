@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>Scythe.Text</AssemblyName>
+    <RootNamespace>Scythe.Text</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The determinism suite re-runs single-byte scoring with the candidate list reversed,
+         which needs the internal scorer entry point. -->
+    <InternalsVisibleTo Include="Scythe.Text.Tests" />
+  </ItemGroup>
+
+</Project>
